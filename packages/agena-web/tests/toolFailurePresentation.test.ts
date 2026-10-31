@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { i18n } from '../src/i18n'
 import { toolFailurePresentation } from '../src/lib/toolFailures'
 import { projectLocalPart } from '../src/pages/chat/transcriptProjection'
-import { operationPresentation } from '../src/pages/chat/transcriptPartPresentation'
+import { errorPresentation, operationPresentation } from '../src/pages/chat/transcriptPartPresentation'
 
 const publicProblem = {
   id: '0f9ad8bb-c04c-4e99-a82c-9fabf4411b13',
@@ -35,7 +35,10 @@ describe('public tool failure presentation', () => {
     ['fs.read_media', "$: Additional properties are not allowed ('file_path' was unexpected)"],
     ['fs.read_media', 'fs.read_media requires an active conversation model route'],
     ['chatgpt.image_understanding', '$: "inputs" is a required property'],
-    ['chatgpt.image_understanding', 'cloud media analysis returned HTTP 400 Bad Request; inspect status before retrying'],
+    [
+      'chatgpt.image_understanding',
+      'cloud media analysis returned HTTP 400 Bad Request; inspect status before retrying',
+    ],
   ])('%s exposes the supplied public reason even when Output is null', (name, message) => {
     const problem = { ...publicProblem, user: { ...publicProblem.user, fallback: message } }
     const display = failedTool(name, { failure: problem })
@@ -49,7 +52,7 @@ describe('public tool failure presentation', () => {
     expect(display.source).toEqual(original)
   })
 
-  test('Failure, problem and direct UserProblem envelopes expose only public fields', () => {
+  test('the current OperationError exposes only public Failure fields', () => {
     const value = {
       ...publicProblem,
       model: { text: 'PRIVATE_MODEL_SENTINEL', policy: 'PRIVATE_POLICY_SENTINEL' },
@@ -57,11 +60,9 @@ describe('public tool failure presentation', () => {
       cause: 'PRIVATE_CAUSE_SENTINEL',
       user: { ...publicProblem.user, diagnostic: 'PRIVATE_USER_EXTENSION_SENTINEL' },
     }
-    for (const error of [{ failure: value }, { problem: value }, value]) {
-      const result = toolFailurePresentation(error)
-      expect(result).toEqual({ message: publicProblem.user.fallback, details: publicProblem })
-      expect(JSON.stringify(result)).not.toContain('PRIVATE_')
-    }
+    const result = toolFailurePresentation({ failure: value })
+    expect(result).toEqual({ message: publicProblem.user.fallback, details: publicProblem })
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_')
   })
 
   test('failed states with absent or malformed public reasons explain the missing information', () => {
@@ -82,15 +83,60 @@ describe('public tool failure presentation', () => {
     }
   })
 
-  test('legacy public messages stay readable without copying private extensions', () => {
-    expect(toolFailurePresentation({ message: 'Command failed.', diagnostic: 'PRIVATE' })).toEqual({
-      message: 'Command failed.',
-      details: { message: 'Command failed.' },
-    })
-    expect(toolFailurePresentation({ failure: { message: 'File not found.' } })).toEqual({
-      message: 'File not found.',
-      details: { message: 'File not found.' },
-    })
+  test('retired error envelopes do not become public reasons', () => {
+    for (const error of [
+      { message: 'PRIVATE_MESSAGE', diagnostic: 'PRIVATE_DIAGNOSTIC' },
+      { detail: 'PRIVATE_DETAIL' },
+      { failure: { message: 'PRIVATE_MESSAGE' } },
+      { problem: publicProblem },
+      publicProblem,
+    ]) {
+      expect(toolFailurePresentation(error)).toEqual({ message: '', details: null })
+      const operation = operationPresentation(failedTool('shell.exec', error))
+      expect(operation.error).toBe(i18n.global.t('chat.toolDetails.errorUnavailable'))
+      expect(JSON.stringify(operation.errorDetails)).not.toContain('PRIVATE_')
+    }
+  })
+
+  test('standalone error parts use their public problem, without tool-envelope or message aliases', () => {
+    const part = projectLocalPart(
+      {
+        id: 'failure',
+        agenaKind: 'error',
+        partState: 'failed',
+        agenaContent: {
+          problem: {
+            ...publicProblem,
+            correlation_id: 'RETIRED_ID',
+            diagnostic: 'PRIVATE_DIAGNOSTIC',
+            model: { text: 'PRIVATE_MODEL' },
+          },
+          message: 'PRIVATE_MESSAGE',
+        },
+      },
+      'assistant',
+    )
+    const error = errorPresentation(part)
+    expect(error.message).toBe(publicProblem.user.fallback)
+    expect(error.correlationId).toBe(publicProblem.id)
+    expect(error.details).toEqual(publicProblem)
+    expect(JSON.stringify(error)).not.toContain('PRIVATE_')
+    expect(part.copyText).toContain(publicProblem.id)
+    expect(part.copyText).not.toContain('PRIVATE_')
+    expect(part.copyText).not.toContain('RETIRED_ID')
+
+    const unsupported = projectLocalPart(
+      {
+        id: 'old-failure',
+        agenaKind: 'error',
+        partState: 'failed',
+        agenaContent: { message: 'PRIVATE_MESSAGE', problem: { message: 'PRIVATE_DETAIL' } },
+      },
+      'assistant',
+    )
+    expect(errorPresentation(unsupported).message).toBe(i18n.global.t('chat.partStatus.failed'))
+    expect(errorPresentation(unsupported).details).toEqual({})
+    expect(unsupported.copyText).not.toContain('PRIVATE_')
   })
 
   test('the main error is not repeated as a body block, but distinct stderr and partial media remain', () => {

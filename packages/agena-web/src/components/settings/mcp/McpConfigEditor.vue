@@ -25,7 +25,7 @@ const registrationOpen = ref(Boolean(auth.value.client_id || auth.value.client_s
 watch(() => Boolean(auth.value.client_id || auth.value.client_secret || auth.value.client_metadata_url), (configured) => {
   if (configured) registrationOpen.value = true
 })
-const authKind = computed(() => { const kind = String(auth.value.kind || 'none'); return kind === 'oauth' ? 'o_auth' : kind })
+const authKind = computed(() => String(auth.value.kind || 'none'))
 const authOptions = computed(() => [
   { value: 'none', label: st('No authentication') },
   { value: 'bearer', label: st('Bearer token') },

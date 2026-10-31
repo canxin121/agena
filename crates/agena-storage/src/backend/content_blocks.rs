@@ -1,4 +1,4 @@
-//! Immutable UTF-8 blocks for the session-kernel storage prototype.
+//! Immutable UTF-8 blocks for session-kernel storage.
 //!
 //! Physical boundaries depend on stream bytes and checkpoint policy, never on
 //! producer packet boundaries. This is an infrastructure primitive, not a
@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
-use crate::store::StoreError;
+/// A content block failed its range, byte encoding, size or digest invariant.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("constraint violation: {0}")]
+pub struct ContentBlockError(String);
 
 pub const DEFAULT_TEXT_BLOCK_BYTES: usize = 32 * 1024;
 const MAX_TEXT_BLOCK_BYTES: usize = 1024 * 1024;
@@ -30,14 +33,14 @@ impl ImmutableTextBlock {
         end: u64,
         bytes: Vec<u8>,
         digest: [u8; 32],
-    ) -> Result<Self, StoreError> {
+    ) -> Result<Self, ContentBlockError> {
         if bytes.is_empty()
             || bytes.len() > MAX_TEXT_BLOCK_BYTES
             || start.checked_add(bytes.len() as u64) != Some(end)
             || std::str::from_utf8(&bytes).is_err()
             || <[u8; 32]>::from(Sha256::digest(&bytes)) != digest
         {
-            return Err(StoreError::Constraint(
+            return Err(ContentBlockError(
                 "invalid text block range, UTF-8 or checksum".into(),
             ));
         }
@@ -64,9 +67,9 @@ impl ImmutableTextBlock {
 
     /// Byte readers may request ranges inside a code point. Text readers build
     /// valid UTF-8 pages at their own boundary, without changing these bytes.
-    pub fn range(&self, start: u64, end: u64) -> Result<&[u8], StoreError> {
+    pub fn range(&self, start: u64, end: u64) -> Result<&[u8], ContentBlockError> {
         if start > end || start < self.start || end > self.end {
-            return Err(StoreError::Constraint(
+            return Err(ContentBlockError(
                 "range is outside its content block".into(),
             ));
         }
@@ -90,9 +93,9 @@ pub struct TextBlockAssembler {
 }
 
 impl TextBlockAssembler {
-    pub fn new(start: u64, target_bytes: usize) -> Result<Self, StoreError> {
+    pub fn new(start: u64, target_bytes: usize) -> Result<Self, ContentBlockError> {
         if !(4..=MAX_TEXT_BLOCK_BYTES).contains(&target_bytes) {
-            return Err(StoreError::Constraint(
+            return Err(ContentBlockError(
                 "text block size must be 4 bytes to 1 MiB".into(),
             ));
         }
@@ -114,15 +117,13 @@ impl TextBlockAssembler {
         self.emitted_head + self.pending.len() as u64
     }
 
-    pub fn push(&mut self, input: &str) -> Result<TextBlockPush, StoreError> {
+    pub fn push(&mut self, input: &str) -> Result<TextBlockPush, ContentBlockError> {
         let mut take = input.len().min(self.target_bytes - self.pending.len());
         while !input.is_char_boundary(take) {
             take -= 1;
         }
         if self.accepted_head().checked_add(take as u64).is_none() {
-            return Err(StoreError::Constraint(
-                "text content position overflow".into(),
-            ));
+            return Err(ContentBlockError("text content position overflow".into()));
         }
         self.pending.push_str(&input[..take]);
         // Flush just before a code point which cannot fit in the remaining

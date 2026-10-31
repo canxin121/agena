@@ -97,11 +97,15 @@ fn managed_scopes_override_without_losing_disabled_or_shadowed_entries() {
 }
 
 #[test]
-fn explicit_enable_overrides_legacy_disabled_names() {
+fn explicit_enable_overrides_configured_disabled_names() {
     let fixture = fixture();
     let path = fixture.workspace.join(".agena/skills/review-evidence");
     std::fs::create_dir_all(&path).unwrap();
-    std::fs::write(path.join("SKILL.md"), document("review-evidence", "Legacy")).unwrap();
+    std::fs::write(
+        path.join("SKILL.md"),
+        document("review-evidence", "Configured name policy"),
+    )
+    .unwrap();
     let manager = fixture
         .manager
         .clone()

@@ -184,19 +184,30 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout
 
-    def test_legacy_password_state_migrates_to_shared_server_password(self):
+    def test_installer_state_requires_the_current_password_field_without_importing_it(self):
         self.install()
         state = self.install_dir / "install-state.env"
-        text = state.read_text()
-        text = text.replace("SERVER_PASSWORD=''", "UI_PASSWORD=legacy-shared-password")
-        self.assertIn("UI_PASSWORD=legacy-shared-password", text)
+        text = state.read_text().replace("SERVER_PASSWORD=''", "UI_PASSWORD=retired-private-value")
+        self.assertIn("UI_PASSWORD=retired-private-value", text)
         state.write_text(text)
-        self.invoke("reinstall", "--archive", self.archive)
-        self.assertEqual(self.state_value("SERVER_PASSWORD"), "legacy-shared-password")
-        self.assertNotIn("\nUI_PASSWORD=", state.read_text())
+        calls = self.calls_path.read_text()
         client_env = (self.install_dir / "client-env.sh").read_text()
-        self.assertIn("export AGENA_SERVER_PASSWORD=legacy-shared-password", client_env)
-        self.assertNotIn("AGENA_SERVER_UI_PASSWORD", client_env)
+        binary = (self.install_dir / "bin/agena").read_bytes()
+        result = self.invoke("reinstall", "--archive", self.archive, success=False)
+        self.assertIn("installer state is incompatible", result.stdout)
+        self.assertNotIn("retired-private-value", result.stdout)
+        self.assertEqual(state.read_text(), text)
+        self.assertEqual(self.calls_path.read_text(), calls)
+        self.assertEqual((self.install_dir / "client-env.sh").read_text(), client_env)
+        self.assertEqual((self.install_dir / "bin/agena").read_bytes(), binary)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_retired_password_flag_is_rejected_before_installation(self):
+        result = self.invoke("install", "--ui-password", "retired-private-value", success=False)
+        self.assertIn("unknown argument: --ui-password", result.stdout)
+        self.assertNotIn("retired-private-value", result.stdout)
+        self.assertFalse(self.install_dir.exists())
+        self.assertFalse(self.calls_path.exists())
 
     def test_fresh_install_reads_canonical_password_environment(self):
         self.invoke(

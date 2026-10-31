@@ -9,8 +9,8 @@
 //!
 //! - [`SeaModelCatalogRepository`], [`SeaWorkspaceRepository`],
 //!   [`SeaPermissionRuleRepository`] — SQLite-backed infrastructure repositories.
-//! - [`initialize_schema`] — create an empty instance database or validate its
-//!   complete schema exactly, including scheduler and application state.
+//! - [`KernelDatabase::open`] — create an empty instance database or validate
+//!   its baseline and complete schema, including scheduler and application state.
 //! - [`ServerStateRepository`] — instance-scoped JSON state on the same pool.
 //!
 //! The session-kernel schema enforces ownership, immutable content, and fact
@@ -25,16 +25,14 @@ mod server_state_repository;
 mod transaction;
 mod workspace_repository;
 
-pub use connection::{KernelDatabase, connect_owned_database, is_memory_database};
+pub use connection::{KernelDatabase, is_memory_database};
 pub use kernel::{
     KernelDiagnostics, KernelMetricsSnapshot, ReadCacheSnapshot, SqliteKernel, open_kernel_runtime,
-    open_session_kernel,
 };
 pub use model_catalog_repository::SeaModelCatalogRepository;
 pub use permission_rule_repository::{
     SeaPermissionRuleRepository, SeaPermissionRuleTransactionWriter,
 };
-pub use schema::initialize_schema;
 pub use server_state_repository::ServerStateRepository;
 pub use transaction::{
     acquire_write_lock, acquire_write_permit, is_sqlite_busy, is_write_admission_busy,

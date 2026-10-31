@@ -1,10 +1,10 @@
 import { i18n } from '@/i18n'
-import type { StagedAttachment } from './attachmentIngestion'
+import type { ComposerAttachment } from './attachmentIngestion'
 import type { ComposerSegment } from './composerInput'
 export type FailedAttachmentDraft = {
   sessionId: string
   text: string
-  files: StagedAttachment[]
+  files: ComposerAttachment[]
   segments?: ComposerSegment[]
 }
 /** Bounded recovery slot. It is local UI state, never an automatic retry. */
@@ -22,7 +22,7 @@ export function createFailedAttachmentDraftSlot() {
       }
     },
     peek: () => draft,
-    take(sessionId: string, currentText: string, currentFiles: StagedAttachment[]) {
+    take(sessionId: string, currentText: string, currentFiles: ComposerAttachment[]) {
       if (!draft || draft.sessionId !== sessionId || currentText || currentFiles.length) return null
       const result = draft
       draft = null

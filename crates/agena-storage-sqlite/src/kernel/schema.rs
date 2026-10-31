@@ -1,5 +1,5 @@
-//! The new kernel's durable declarations. Never installed beside the old Part
-//! schema: each database has one exact schema and one fact authority.
+//! Complete session-kernel declarations for the current instance baseline.
+//! Each database has one exact schema and one fact authority.
 
 use crate::schema::validation::{declaration, schema_objects};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, TransactionTrait};
@@ -61,7 +61,6 @@ pub(super) const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_round_active ON agena_rounds(execution_id,generation,id) WHERE phase='running'",
     "CREATE INDEX IF NOT EXISTS idx_agena_attempt_running ON agena_attempts(execution_id,generation) WHERE phase='running'",
     "CREATE INDEX IF NOT EXISTS idx_agena_content_active ON agena_content_streams(execution_id,generation,id) WHERE capture_state='open'",
-    "CREATE INDEX IF NOT EXISTS idx_agena_interaction_tool ON agena_interactions(tool_id,id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_interaction_pending ON agena_interactions(tool_id,id) WHERE decision_json IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_agena_interaction_pending_session ON agena_interactions(session_id,id,request_bytes) WHERE decision_json IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_agena_interaction_attempt ON agena_interactions(execution_id,generation,session_id)",
@@ -186,12 +185,9 @@ fn summary_triggers() -> Vec<String> {
     triggers
 }
 
-pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbErr> {
-    // One database owner installs and validates the complete instance schema.
-    // Repositories never initialize their own tables after composition.
+fn declarations() -> impl Iterator<Item = String> {
     let infrastructure = crate::schema::TABLES.iter().chain(crate::schema::INDEXES);
-    let summary_triggers = summary_triggers();
-    let declarations = TABLES
+    TABLES
         .iter()
         .copied()
         .chain(INDEXES.iter().copied())
@@ -199,23 +195,53 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
         .chain(infrastructure.copied())
         .chain(agena_scheduler::schema::declarations())
         .map(str::to_owned)
-        .chain(summary_triggers);
+        .chain(std::iter::once(crate::schema::instance_table()))
+        .chain(summary_triggers())
+}
+
+fn incompatible_database(reason: &str) -> DbErr {
+    DbErr::Custom(format!(
+        "{reason}; use a new empty data directory; the existing database has not been modified"
+    ))
+}
+
+async fn validate_objects(
+    database: &DatabaseConnection,
+    actual: std::collections::BTreeMap<(String, String), String>,
+) -> Result<(), DbErr> {
+    let expected = declarations()
+        .map(|sql| {
+            let d = declaration(&sql)?;
+            Ok(((d.kind.to_owned(), d.name.to_owned()), d.stored_sql))
+        })
+        .collect::<Result<std::collections::BTreeMap<_, _>, DbErr>>()?;
+    if expected != actual {
+        return Err(incompatible_database(
+            "database schema does not match the current Agena baseline",
+        ));
+    }
+    instance_id(database).await?;
+    Ok(())
+}
+
+/// A read-only probe must reject even a nonempty file with no user tables.
+/// Only a new, empty file may enter the initialization path below.
+pub(crate) async fn validate_existing(database: &DatabaseConnection) -> Result<(), DbErr> {
+    validate_objects(database, schema_objects(database).await?).await
+}
+
+pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbErr> {
+    // One database owner installs and validates the complete instance schema.
+    // Repositories never initialize their own tables after composition.
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
-        let expected = declarations
-            .map(|sql| {
-                let d = declaration(&sql)?;
-                Ok(((d.kind.to_owned(), d.name.to_owned()), d.stored_sql))
-            })
-            .collect::<Result<std::collections::BTreeMap<_, _>, DbErr>>()?;
-        if expected != actual {
-            return Err(DbErr::Custom("database schema does not match this Agena build; open a fresh database path; the existing database has not been modified".into()));
-        }
-        instance_id(database).await?;
-        return Ok(());
+        return validate_objects(database, actual).await;
     }
+    // The full schema and baseline identity reach the main database together,
+    // before the connection owner enables WAL. Immutable preflight reads can
+    // therefore identify this baseline even after an uncheckpointed WAL crash.
     let transaction = database.begin().await?;
-    for sql in declarations.chain(
+    for sql in declarations().chain(
         [
             "INSERT INTO agena_commits VALUES (1,0)",
             "INSERT INTO agena_blob_gc_state VALUES (1,'')",
@@ -231,8 +257,9 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     transaction
         .execute(Statement::from_sql_and_values(
             database.get_database_backend(),
-            "INSERT INTO agena_instance (id, instance_id, created_at_ms) VALUES (1, ?, ?)",
+            "INSERT INTO agena_instance (id, schema_baseline, instance_id, created_at_ms) VALUES (1, ?, ?, ?)",
             [
+                crate::schema::SCHEMA_BASELINE.into(),
                 uuid::Uuid::new_v4().to_string().into(),
                 chrono::Utc::now().timestamp_millis().into(),
             ],
@@ -242,23 +269,24 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
 }
 
 pub(crate) async fn instance_id(database: &DatabaseConnection) -> Result<String, DbErr> {
-    let id: String = database
+    let row = database
         .query_one(Statement::from_string(
             database.get_database_backend(),
-            "SELECT instance_id FROM agena_instance WHERE id=1",
+            "SELECT schema_baseline, instance_id FROM agena_instance WHERE id=1",
         ))
         .await?
-        .ok_or_else(|| {
-            DbErr::Custom("instance identity is missing; open a fresh database path".into())
-        })?
-        .try_get("", "instance_id")?;
-    let parsed = uuid::Uuid::parse_str(&id).map_err(|_| {
-        DbErr::Custom("instance identity is invalid; open a fresh database path".into())
-    })?;
-    if parsed.get_version_num() != 4 || parsed.to_string() != id {
-        return Err(DbErr::Custom(
-            "instance identity is invalid; open a fresh database path".into(),
+        .ok_or_else(|| incompatible_database("instance identity is missing"))?;
+    let baseline: String = row.try_get("", "schema_baseline")?;
+    if baseline != crate::schema::SCHEMA_BASELINE {
+        return Err(incompatible_database(
+            "database identity does not match the current Agena baseline",
         ));
+    }
+    let id: String = row.try_get("", "instance_id")?;
+    let parsed = uuid::Uuid::parse_str(&id)
+        .map_err(|_| incompatible_database("instance identity is invalid"))?;
+    if parsed.get_version_num() != 4 || parsed.to_string() != id {
+        return Err(incompatible_database("instance identity is invalid"));
     }
     Ok(id)
 }

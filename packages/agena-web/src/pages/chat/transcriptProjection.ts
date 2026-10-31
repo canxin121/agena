@@ -15,8 +15,9 @@ import {
   isRunInFlight,
   normalizeRunState,
 } from '../../lib/chatRunState'
-import { attachmentLabel, attachmentLabelFromRecord } from '../../lib/attachmentLabels'
+import { attachmentLabelFromRecord } from '../../lib/attachmentLabels'
 import { toolInputRecord } from '../../lib/toolInput'
+import { publicUserProblem } from '../../lib/toolFailures'
 import { hasToolAttachmentOutput } from '../../lib/toolAttachments'
 import type { JsonValue } from '@/types/json'
 import { pendingPartInteractions } from '../../lib/interactiveRequests'
@@ -153,7 +154,7 @@ export function transcriptPartText(part: MessagePartLike): string {
   if (kind === 'error') {
     const problem = record(content.problem)
     const user = record(problem.user)
-    return firstText(user, ['fallback']) || firstText(problem, ['message']) || firstText(content, ['message'])
+    return firstText(user, ['fallback'])
   }
   return rawText(part.text)
 }
@@ -190,17 +191,8 @@ function operationCopyText(part: MessagePartLike): string {
 }
 
 function attachmentLabels(part: MessagePartLike): string[] {
-  const content = durablePartContent(part)
-  const attachments = Array.isArray(content.attachments) ? content.attachments : []
-  const labels = attachments.map(attachmentLabelFromRecord).filter(Boolean)
-  const own = attachmentLabel({
-    title: content.title,
-    filename: part.filename,
-    name: content.name,
-    path: content.path,
-  })
-  if (own && !labels.includes(own)) labels.unshift(own)
-  return labels
+  const attachments = durablePartContent(part).attachments
+  return Array.isArray(attachments) ? attachments.map(attachmentLabelFromRecord).filter(Boolean) : []
 }
 
 /**
@@ -219,13 +211,8 @@ export function userInputOrder(parts: TranscriptDisplayPart[]): TranscriptDispla
 }
 
 function commandLabels(part: MessagePartLike): string[] {
-  const content = durablePartContent(part)
-  const raw = Array.isArray(content.commands) ? content.commands : content.skills
-  const commands = Array.isArray(raw) ? raw : []
-  const labels = commands.map((value) => firstText(record(value), ['name'])).filter(Boolean)
-  const own = firstText(content, ['command', 'skill', 'name'])
-  if (own && !labels.includes(own)) labels.unshift(own)
-  return labels
+  const commands = durablePartContent(part).commands
+  return Array.isArray(commands) ? commands.map((value) => text(record(value).name)).filter(Boolean) : []
 }
 
 function noticeTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels): string {
@@ -367,10 +354,11 @@ function displayFields(
   }
   if (kind === 'error') {
     const body = transcriptPartText(part) || text(presentationLabels?.runFailed) || 'The run failed.'
+    const problem = publicUserProblem(durablePartContent(part).problem)
     return {
       title: presentedTitle || text(presentationLabels?.error) || 'Error',
       summary: presentedSummary || body,
-      copyText: `${body}\n${prettyJson(durablePartContent(part))}`,
+      copyText: Object.keys(problem).length ? `${body}\n${prettyJson(problem)}` : body,
     }
   }
   if (kind === 'notice' || kind === 'compaction') {
@@ -582,21 +570,14 @@ function expandComposerActivities(part: MessagePartLike): MessagePartLike[] {
         mime: text(payload.media_type),
         serverPath: path,
         url: url || path,
-        agenaContent: {
-          ...payload,
-          name: payload.name ?? '',
-          path,
-          url,
-          mime: payload.media_type ?? '',
-          attachments: [attachment],
-        },
+        agenaContent: { attachments: [attachment] },
       })
     } else if (payload.activity_type === 'command_reference') {
       activities.push({
         ...base,
         type: 'tool',
         agenaKind: 'skill_ref',
-        agenaContent: { ...payload, command: payload.name },
+        agenaContent: { commands: [payload] },
       })
     } else if (payload.activity_type === 'text_artifact') {
       activities.push({

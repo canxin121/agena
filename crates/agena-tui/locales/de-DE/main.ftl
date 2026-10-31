@@ -2720,7 +2720,6 @@ timeline-label-role = Rolle
 timeline-label-state = Status
 timeline-label-revision = Revision
 timeline-label-run = Durchlauf
-timeline-label-parent-part = Übergeordneter Teil
 
 flash-session-view-mode = Sitzungsansicht: {$mode}
 flash-session-title-empty = Der Sitzungstitel darf nicht leer sein.

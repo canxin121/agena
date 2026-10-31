@@ -36,8 +36,6 @@ export const localStorageKeys = {
     currentDirectoryByWindow: namespacedKey('directory.current-directory-by-window'),
   },
   chat: {
-    lastSessionId: namespacedKey('chat.last-session-id'),
-    lastSessionIdByWindow: namespacedKey('chat.last-session-id-by-window'),
     sessionRunConfig: namespacedKey('chat.session-run-config'),
     composerUserHeight: namespacedKey('chat.composer.user-height'),
     promptHistory: namespacedKey('chat.prompt-history'),
@@ -74,7 +72,6 @@ export const localStorageKeys = {
     delivered: namespacedKey('notifications.delivered'),
   },
   auth: {
-    // Keep the persisted key compatible with existing server login sessions.
     serverTokenByBaseUrl: namespacedKey('auth.ui-token-by-base-url'),
   },
   broadcast: {

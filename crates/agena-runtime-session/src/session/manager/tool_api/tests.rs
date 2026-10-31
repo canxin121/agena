@@ -637,3 +637,101 @@ async fn operator_execution_history_uses_an_explicit_protocol_envelope() {
     drop(prompt);
     fixture.shutdown().await;
 }
+
+#[tokio::test]
+async fn failed_inline_ui_feedback_survives_current_history_hydration() {
+    for (name, report, expected) in [
+        (
+            "agena.inline_ui.prepare",
+            json!({
+                "code":"invalid_ui", "applied":false, "truncated":false,
+                "issues":[{"path":"document.blocks[0].program.nodes[2].props.style",
+                    "reason":"unsupported property", "fix":"Remove the unsupported property."}]
+            }),
+            vec![
+                "document.blocks[0].program.nodes[2].props.style",
+                "Remove the unsupported property.",
+                "invalid_ui",
+            ],
+        ),
+        (
+            "agena.inline_ui.update",
+            json!({
+                "code":"revision_conflict", "applied":false, "truncated":false,
+                "expected_revision":1, "current_revision":2,
+                "issues":[{"path":"update.expected_revision", "reason":"expected 1, current 2",
+                    "fix":"Read current UI and reconcile before retrying."}]
+            }),
+            vec![
+                "revision_conflict",
+                "update.expected_revision",
+                "expected 1",
+                "current 2",
+                "reconcile",
+            ],
+        ),
+    ] {
+        let mut sdk = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
+            "private-diagnostic-sentinel",
+            json!({"agena_inline_ui_error":report, "private_detail":"private-payload-sentinel"}),
+        );
+        sdk.failure.user = agena_failure::UserPresentation::validated(
+            "inline_ui.error",
+            "The plugin input is invalid.",
+        );
+        let failure =
+            super::super::tool_error(crate::tool::ToolError::from_plugin_error(sdk)).failure();
+        let fixture = Fixture::new().await;
+        let tool = fixture
+            .begin_call(
+                ToolApiFunction::Call.function_name(),
+                json!({"tool":name,"input":{}}),
+            )
+            .await;
+        tool.complete(RequestId::new(), ToolResult {
+            phase: ToolPhase::Failed,
+            value: json!({
+                "error":agena_failure::UserProblem::from(&failure), "failure":failure,
+                "invocation":agena_domain::ToolInvocation::new(name, Default::default()), "metadata":{},
+            }),
+        }).await.unwrap();
+        let prompt = fixture.prompt().await;
+        let output_json = prompt
+            .turns()
+            .iter()
+            .flat_map(agena_runtime_provider::provider::wire_message::project)
+            .find_map(|part| match part {
+                agena_runtime_provider::provider::wire_message::WirePart::ToolResult {
+                    status,
+                    output_json,
+                    ..
+                } => {
+                    assert_eq!(
+                        status,
+                        agena_provider::CompletionInputToolResultStatus::Failed
+                    );
+                    Some(output_json)
+                }
+                _ => None,
+            })
+            .expect("the current kernel must retain the failed protocol result");
+        let output: Value = serde_json::from_str(&output_json).unwrap();
+        let restored: agena_failure::Failure =
+            serde_json::from_value(output["result"]["failure"].clone()).unwrap();
+        let model_text = restored
+            .model
+            .expect("reviewed corrective feedback survives replay")
+            .message();
+        for expected in expected {
+            assert!(model_text.contains(expected), "{model_text}");
+            assert!(output_json.contains(expected), "{output_json}");
+        }
+        assert!(model_text.len() < 450);
+        assert!(!output_json.contains("agena_inline_ui_error"));
+        assert!(!output_json.contains("private-diagnostic-sentinel"));
+        assert!(!output_json.contains("private-payload-sentinel"));
+        assert!(output["result"]["error"].get("model").is_none());
+        drop(prompt);
+        fixture.shutdown().await;
+    }
+}

@@ -108,9 +108,9 @@ update endpoint, `PUT /api/v1/sessions/{id}`, distinguishes three update states:
 | `{"additional_system_prompt":""}` | Disable inherited additional instructions. |
 | `{"additional_system_prompt":"Use concise examples."}` | Set a session override. |
 
-Prompt and metadata changes in one update are committed atomically. The existing
-session-configuration size limit still applies. Older sessions without the field
-inherit normally; no database migration is required.
+Prompt and metadata changes in one update are committed atomically. The
+session-configuration size limit applies. A session configuration that omits
+the optional field inherits normally.
 
 `GET /api/v1/sessions/{id}/state` returns:
 

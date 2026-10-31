@@ -180,7 +180,7 @@ impl ApplicationService {
         }
         let mut request_override = thinking_request_override.merged_with(&speed_request_override);
         let metadata = provider_options.metadata;
-        request_override.remove_legacy_parallel_tool_calls_patch();
+        request_override.remove_reserved_parallel_tool_calls_patch();
         let supported_verbosity_levels =
             metadata.supported_verbosity_levels_for_model(&model.model_id);
         if let Some(verbosity) = requested_verbosity.as_deref()

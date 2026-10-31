@@ -1,6 +1,5 @@
 //! Session timeline presentation: the human-visible part the terminal
-//! consumes, plus the mapping from the runtime's `SessionPartView` projection
-//! (the mapping stays in the TUI per the R7 brief).
+//! consumes, plus the mapping from the public `PartResource` projection.
 
 use anyhow::Result;
 
@@ -14,7 +13,6 @@ pub struct SessionTimelineEntry {
     pub state: String,
     pub summary: Option<String>,
     pub content: serde_json::Value,
-    pub parent_part_id: Option<i64>,
     pub run_id: Option<i64>,
     pub revision: i64,
     pub created_at_ms: i64,
@@ -42,7 +40,6 @@ pub(crate) async fn list_session_timeline(
             state: part.state,
             summary: part.summary,
             content: part.content,
-            parent_part_id: part.parent_part_id,
             run_id: part.run_id,
             revision: part.revision,
             created_at_ms: part.created_at_ms,

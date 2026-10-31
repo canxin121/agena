@@ -212,11 +212,7 @@ impl KernelPromptHydrator {
                 .as_ref()
                 .and_then(|result| result.get("invocation"))
             {
-                let mut value = value.clone();
-                if let Some(object) = value.as_object_mut() {
-                    object.remove("tool_api_call");
-                }
-                serde_json::from_value(value)
+                serde_json::from_value(value.clone())
                     .map_err(|error| invalid(format!("invalid execution invocation: {error}")))?
             } else if tool.call.name == agena_domain::ToolApiFunction::Call.function_name() {
                 let arguments = agena_domain::StructuredObject::try_from(tool.call.input.clone())

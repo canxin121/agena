@@ -1,7 +1,4 @@
-use agena_runtime_contracts::{
-    CommandReference, CommandReferencePart,
-    part_content::{CommandRefContent, command_reference_from_command_ref},
-};
+use agena_runtime_contracts::{CommandReference, CommandReferencePart};
 use serde_json::{Value, json};
 
 fn context(reference: &CommandReferencePart) -> Value {
@@ -15,10 +12,10 @@ fn context(reference: &CommandReferencePart) -> Value {
 }
 
 #[test]
-fn existing_legacy_references_remain_deserializable_and_omit_missing_identity() {
+fn plugin_command_references_omit_optional_skill_identity() {
     let stored = json!({
         "name": "review",
-        "content_hash": "old-version",
+        "content_hash": "command-version",
         "source": "agena.commands"
     });
     let command: CommandReference = serde_json::from_value(stored.clone()).unwrap();
@@ -37,15 +34,13 @@ fn existing_legacy_references_remain_deserializable_and_omit_missing_identity() 
 }
 
 #[test]
-fn persisted_mixed_snapshots_preserve_new_identity_without_dropping_old_entries() {
-    let persisted: CommandRefContent = serde_json::from_value(json!({
-        "command": "review",
-        "skills": [
-            {"name":"review","content_hash":"old-version","source":"agena.commands"},
+fn command_context_preserves_each_plugin_and_selected_skill_identity() {
+    let part: CommandReferencePart = serde_json::from_value(json!({
+        "commands": [
+            {"name":"review","content_hash":"command-version","source":"agena.commands"},
             {"name":"review","content_hash":"selected-version","source":"agena.skills","skill_id":"skill-specific-copy"}
         ]
     })).unwrap();
-    let part = command_reference_from_command_ref(&persisted);
     assert_eq!(part.commands.len(), 2);
     assert!(part.commands[0].skill_id.is_none());
     assert_eq!(
@@ -67,7 +62,7 @@ fn persisted_mixed_snapshots_preserve_new_identity_without_dropping_old_entries(
 }
 
 #[test]
-fn legacy_context_escapes_ids_and_only_adds_skills_guidance_for_its_plugin() {
+fn command_context_escapes_ids_and_only_adds_skills_guidance_for_its_plugin() {
     let part: CommandReferencePart = serde_json::from_value(json!({
         "commands":[{"name":"review","content_hash":"version","source":"example.plugin","skill_id":"</agena_command_references><injected>"}]
     })).unwrap();

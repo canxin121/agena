@@ -200,17 +200,13 @@ impl ServerSpec {
         &self,
         server: &str,
         token_store: Option<Arc<dyn TokenStore>>,
-    ) -> (
-        Option<OAuthCredentialHealth>,
-        Option<McpCredentialConflict>,
-        bool,
-    ) {
+    ) -> (Option<OAuthCredentialHealth>, Option<McpCredentialConflict>) {
         let mode = self.auth_mode();
         if !matches!(
             mode,
             McpServerAuthMode::OAuth | McpServerAuthMode::BearerFromStore
         ) {
-            return (None, None, false);
+            return (None, None);
         }
         let spec = self.clone();
         let name = server.to_owned();
@@ -219,7 +215,6 @@ impl ServerSpec {
                 (
                     spec.oauth_health(&name),
                     spec.credential_conflict(&name, token_store.as_deref()),
-                    spec.legacy_credentials_present(&name, token_store.as_deref()),
                 )
             })
             .await
@@ -234,33 +229,8 @@ impl ServerSpec {
                         refresh_available: None,
                     }),
                     None,
-                    false,
                 )
             }
-        }
-    }
-
-    fn legacy_credentials_present(
-        &self,
-        server: &str,
-        token_store: Option<&dyn TokenStore>,
-    ) -> bool {
-        let key = self.credential_name(server);
-        match self.auth_mode() {
-            McpServerAuthMode::BearerFromStore => token_store.is_some_and(|store| {
-                store.credential_state(&key) == McpCredentialState::Missing
-                    && store.credential_state(server) != McpCredentialState::Missing
-            }),
-            McpServerAuthMode::OAuth => {
-                let state = |name: &str| {
-                    FileOAuthCredentialStore::new(name)
-                        .map(|store| store.health().credential_state)
-                        .unwrap_or(crate::OAuthCredentialState::Unreadable)
-                };
-                state(&key) == crate::OAuthCredentialState::Missing
-                    && state(server) != crate::OAuthCredentialState::Missing
-            }
-            _ => false,
         }
     }
 
@@ -719,9 +689,6 @@ pub struct McpServerStatus {
     /// coexist across an explicit auth-mode boundary.  It never changes the
     /// selected credential or changes the selected credential.
     pub credential_conflict: Option<McpCredentialConflict>,
-    /// Old name-only credentials are retained but require explicit sign-in or
-    /// token entry to bind them to the current HTTP endpoint.
-    pub legacy_credentials_present: bool,
 }
 
 impl Default for McpConnectionManager {
@@ -1077,7 +1044,7 @@ impl McpConnectionManager {
                 Some(server) => server.events.last_refresh_failure.read().await.clone(),
                 None => None,
             };
-            let (oauth_health, credential_conflict, legacy_credentials_present) = spec
+            let (oauth_health, credential_conflict) = spec
                 .credential_projection(&name, self.token_store.clone())
                 .await;
             statuses.push(McpServerStatus {
@@ -1114,7 +1081,6 @@ impl McpConnectionManager {
                 auth_mode: spec.auth_mode(),
                 oauth_health,
                 credential_conflict,
-                legacy_credentials_present,
             });
         }
         statuses
@@ -2004,7 +1970,7 @@ fn apply_http_auth(
             .ok_or_else(|| McpError::Auth("The MCP bearer environment variable is missing or empty.".into()))?),
         HttpAuth::BearerFromStore => Some(token_store.and_then(|store| store.bearer(server))
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| McpError::Auth("No bearer credential is configured for this MCP endpoint. Enter a token in connection settings; legacy name-only credentials are not reused.".into()))?),
+            .ok_or_else(|| McpError::Auth("No bearer credential is configured for this MCP endpoint. Enter a token in connection settings.".into()))?),
         HttpAuth::OAuth { .. } => unreachable!("OAuth is handled before bearer header setup"),
         HttpAuth::Custom(custom_headers) => {
             for (key, value) in custom_headers {

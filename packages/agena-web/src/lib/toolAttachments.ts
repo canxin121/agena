@@ -8,19 +8,14 @@ function record(value: unknown): RecordValue {
  * deferred. In particular, payload:null does not mean there is no attachment. */
 export function toolOutputAttachments(output: unknown): RecordValue[] {
   const value = record(output)
-  const attachments = value.attachments ?? record(value.raw_output).attachments
+  const attachments = value.attachments
   return Array.isArray(attachments) ? attachments.map(record).filter((item) => Object.keys(item).length > 0) : []
 }
 
 export function hasToolAttachmentOutput(content: unknown, presentation: unknown): boolean {
   if (toolOutputAttachments(record(content).output).length > 0) return true
   const blocks = record(presentation).blocks
-  return (
-    Array.isArray(blocks) &&
-    blocks.some((block) =>
-      ['media', 'image', 'audio', 'video', 'file'].includes(String(record(block).type ?? record(block).kind ?? '')),
-    )
-  )
+  return Array.isArray(blocks) && blocks.some((block) => record(block).type === 'media')
 }
 
 /** A list snapshot carries only attachment descriptors. The output section

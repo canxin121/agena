@@ -930,11 +930,7 @@ pub(super) mod tests {
     pub(crate) async fn test_registry(
         root: &Path,
     ) -> (Arc<ServerStateDb>, Arc<WorkspacePreviewRegistry>) {
-        let db = Arc::new(
-            ServerStateDb::from_store(Arc::new(TestStore::new(root)))
-                .await
-                .unwrap(),
-        );
+        let db = Arc::new(ServerStateDb::new(Arc::new(TestStore::new(root))));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db.clone()));
         (db, registry)
     }
@@ -1026,7 +1022,7 @@ pub(super) mod tests {
     async fn cancelling_a_config_update_keeps_start_behind_its_commit() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db));
         create_session(&registry, directory.path(), "updated", "exec sleep 30").await;
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
@@ -1214,7 +1210,7 @@ pub(super) mod tests {
     async fn process_exit_diagnostic_survives_a_failed_persistence_attempt() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db));
         create_session(&registry, directory.path(), "retry", "sleep 0.2; exit 7").await;
         let runtime = WorkspacePreviewRuntime::new(registry.clone());
@@ -1301,7 +1297,7 @@ pub(super) mod tests {
     async fn delete_waits_for_an_in_flight_start_and_cleans_up_that_launch() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db));
         create_session(&registry, directory.path(), "deleting", "exec sleep 30").await;
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
@@ -1333,7 +1329,7 @@ pub(super) mod tests {
     async fn delete_keeps_the_gate_through_stop_and_record_removal() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db));
         create_session(&registry, directory.path(), "deleting", "exec sleep 30").await;
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
@@ -1368,7 +1364,7 @@ pub(super) mod tests {
     {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db));
         create_session(&registry, directory.path(), "blocked", "exec sleep 30").await;
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
@@ -1421,7 +1417,7 @@ pub(super) mod tests {
     async fn cancelling_start_during_persistence_cleans_up_the_owned_tree() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db));
         create_session(&registry, directory.path(), "cancelled", "exec sleep 30").await;
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));

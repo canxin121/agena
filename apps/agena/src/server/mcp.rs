@@ -241,30 +241,6 @@ async fn validate_mcp_host_origin(
     next.run(request).await
 }
 
-/// Authentication selector written by releases that let operators choose an MCP
-/// authentication mode.
-///
-/// Agena no longer offers selectable authentication modes. The MCP surface
-/// always serves the OAuth discovery/authorization surface, always keeps
-/// protocol discovery anonymous, and decides per tool whether a call needs a
-/// bearer token. This type exists only so control records written by older
-/// releases still deserialize; its value is reported once and ignored.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum LegacyMcpAuthMode {
-    None,
-    Oauth,
-    Mixed,
-}
-
-/// Legacy companion selector of [`LegacyMcpAuthMode::Mixed`].
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum LegacyMcpAnonymousAccess {
-    None,
-    ReadOnly,
-}
-
 struct McpControlState {
     enabled: std::sync::atomic::AtomicBool,
     configured_resource: RwLock<Option<String>>,
@@ -284,15 +260,6 @@ struct McpReadiness {
 struct PersistedMcpServerControl {
     enabled: bool,
     public_url: Option<String>,
-    /// Removed selector. Parsed for backward compatibility and never written.
-    #[serde(default, skip_serializing)]
-    auth_mode: Option<LegacyMcpAuthMode>,
-    /// Removed selector. Parsed for backward compatibility and never written.
-    #[serde(default, skip_serializing)]
-    anonymous_access: Option<LegacyMcpAnonymousAccess>,
-    /// Legacy independent password: deserialize only to discard it on upgrade.
-    #[serde(default, skip_serializing)]
-    oauth_password_phc: Option<serde_json::Value>,
     #[serde(default)]
     server_password_fingerprint: Option<String>,
     oauth_issuer_url: Option<String>,
@@ -435,19 +402,16 @@ impl McpServerState {
             .get_json::<PersistedMcpServerControl>(KV_KEY_MCP_SERVER_CONTROL)
             .await?;
         let had_persisted_control = persisted.is_some();
-        let (mut enabled, configured_public_url, configured_issuer_url, legacy_selectors) =
-            match persisted.as_ref() {
-                Some(persisted) => (
-                    persisted.enabled,
-                    persisted.public_url.clone(),
-                    persisted.oauth_issuer_url.clone(),
-                    Some((persisted.auth_mode, persisted.anonymous_access)),
-                ),
-                None => (true, None, None, None),
-            };
+        let (mut enabled, configured_public_url, configured_issuer_url) = match persisted.as_ref() {
+            Some(persisted) => (
+                persisted.enabled,
+                persisted.public_url.clone(),
+                persisted.oauth_issuer_url.clone(),
+            ),
+            None => (true, None, None),
+        };
         let credential_changed = persisted.as_ref().is_some_and(|control| {
-            control.oauth_password_phc.is_some()
-                || control.server_password_fingerprint != server_auth.credential_fingerprint()
+            control.server_password_fingerprint != server_auth.credential_fingerprint()
         });
         let mut configured_resource = configured_public_url
             .map(|value| normalize_public_mcp_url(value.as_str()))
@@ -483,7 +447,8 @@ impl McpServerState {
         if let Some(server_url) = startup.server_url {
             if startup.public_url.is_some() || startup.oauth_issuer_url.is_some() {
                 return Err(
-                    "MCP server URL cannot be combined with legacy public/issuer URLs".to_owned(),
+                    "MCP server URL cannot be combined with explicit public/issuer URL overrides"
+                        .to_owned(),
                 );
             }
             configured_resource = Some(append_public_endpoint(
@@ -551,14 +516,6 @@ impl McpServerState {
             state
                 .persist_control(enabled, configured_resource, configured_issuer)
                 .await?;
-        }
-        if let Some((auth_mode, anonymous_access)) = legacy_selectors {
-            tracing::warn!(
-                target: "agena::server::mcp",
-                auth_mode = ?auth_mode,
-                anonymous_access = ?anonymous_access,
-                "ignoring removed MCP authentication selectors; the unified policy applies"
-            );
         }
         Ok(state)
     }
@@ -843,11 +800,8 @@ impl McpServerState {
                 KV_KEY_MCP_SERVER_CONTROL,
                 PersistedMcpServerControl {
                     enabled,
-                    auth_mode: None,
-                    anonymous_access: None,
                     public_url,
                     oauth_issuer_url,
-                    oauth_password_phc: None,
                     server_password_fingerprint: self.server_auth.credential_fingerprint(),
                 },
             )
@@ -937,20 +891,13 @@ pub(crate) struct UpdateMcpServerControlRequest {
     #[serde(default)]
     enabled: Option<bool>,
     /// One Agena origin determines both `/mcp` and the OAuth issuer. Supplying
-    /// this field also removes any legacy split-issuer configuration.
+    /// this field also clears the explicit resource and issuer overrides.
     #[serde(default, deserialize_with = "deserialize_nullable_update")]
     server_url: Option<Option<String>>,
     /// `None` means "leave unchanged"; `Some(None)` explicitly clears the
     /// configured public URL and returns to the listener-local fallback.
     #[serde(default, deserialize_with = "deserialize_nullable_update")]
     public_url: Option<Option<String>>,
-    /// Removed selector. Accepted so clients built against an older control API
-    /// keep working; the value is ignored.
-    #[serde(default)]
-    auth_mode: Option<serde_json::Value>,
-    /// Removed selector. Accepted for backward compatibility and ignored.
-    #[serde(default)]
-    anonymous_access: Option<serde_json::Value>,
     /// `None` means "leave unchanged"; `Some(None)` clears the configured
     /// issuer and returns to the resource-derived issuer.
     #[serde(default, deserialize_with = "deserialize_nullable_update")]
@@ -979,12 +926,6 @@ pub(crate) async fn update_mcp_server_control(
     let enabled = request
         .enabled
         .unwrap_or_else(|| state.mcp_server.is_enabled());
-    if request.auth_mode.is_some() || request.anonymous_access.is_some() {
-        tracing::debug!(
-            target: "agena::server::mcp",
-            "ignoring removed MCP authentication selectors from the control request"
-        );
-    }
     let (configured_resource, configured_issuer) = match resolve_control_identity(
         &request,
         state.mcp_server.configured_public_url(),
@@ -2688,9 +2629,7 @@ struct RefreshTokenRecord {
 struct PersistedOAuthRuntime {
     refresh_tokens: HashMap<String, RefreshTokenRecord>,
     revoked_jti: HashMap<String, u64>,
-    #[serde(default)]
     clients: Vec<RegisteredClient>,
-    #[serde(default)]
     token_generation: String,
 }
 
@@ -2705,7 +2644,6 @@ struct AccessTokenClaims {
     nbf: u64,
     exp: u64,
     jti: String,
-    #[serde(default)]
     generation: String,
 }
 
@@ -2733,7 +2671,7 @@ impl OAuthState {
         let token_generation = persisted
             .as_ref()
             .map(|runtime| runtime.token_generation.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(crate::server::issue_token);
         let state = Self {
             cimd_clients: DashMap::new(),
             registered_clients: DashMap::new(),
@@ -4311,10 +4249,10 @@ mod tests {
             resolve_control_identity(&unified, resource.clone(), issuer.clone()).unwrap(),
             (Some("https://new.example.com/mcp".to_owned()), None)
         );
-        let legacy_clear: UpdateMcpServerControlRequest =
+        let explicit_clear: UpdateMcpServerControlRequest =
             serde_json::from_str(r#"{"publicUrl":null,"oauthIssuerUrl":null}"#).unwrap();
         assert_eq!(
-            resolve_control_identity(&legacy_clear, resource, issuer).unwrap(),
+            resolve_control_identity(&explicit_clear, resource, issuer).unwrap(),
             (None, None)
         );
         let conflicting: UpdateMcpServerControlRequest =
@@ -4563,9 +4501,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_password_version_survives_restart_and_changes_with_the_credential() {
-        let database = ServerStateDb::from_store(Arc::new(TestInstanceStateStore::default()))
-            .await
-            .unwrap();
+        let database = ServerStateDb::new(Arc::new(TestInstanceStateStore::default()));
         let first = auth::init_server_auth_async(Some("shared-test-password".into()), &database)
             .await
             .unwrap();
@@ -4619,26 +4555,37 @@ mod tests {
     }
 
     #[test]
-    fn legacy_independent_password_is_read_only_for_migration() {
-        let control: PersistedMcpServerControl = serde_json::from_value(serde_json::json!({
+    fn current_mcp_control_round_trips_and_rejects_retired_fields() {
+        let current = serde_json::json!({
             "enabled": true,
-            "public_url": null,
-            "oauth_issuer_url": null,
-            "oauth_password_phc": "legacy-verifier-is-never-used",
-        }))
-        .unwrap();
-        assert!(control.oauth_password_phc.is_some());
-        let saved = serde_json::to_value(control).unwrap();
-        assert!(saved.get("oauth_password_phc").is_none());
+            "public_url": "https://tunnel.example.com/v1/mcp/connection",
+            "oauth_issuer_url": "https://auth.example.com",
+            "server_password_fingerprint": "current-fingerprint",
+        });
+        let control: PersistedMcpServerControl = serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(serde_json::to_value(control).unwrap(), current);
+        for field in ["auth_mode", "anonymous_access", "oauth_password_phc"] {
+            let mut retired = current.clone();
+            retired[field] = serde_json::json!("retired-private-value");
+            let error = serde_json::from_value::<PersistedMcpServerControl>(retired).unwrap_err();
+            assert!(error.to_string().contains("unknown field"));
+            assert!(!error.to_string().contains("retired-private-value"));
+        }
+        for field in ["authMode", "anonymousAccess", "oauthPassword"] {
+            let mut request = serde_json::json!({"enabled": true});
+            request[field] = serde_json::json!("retired-private-value");
+            let error =
+                serde_json::from_value::<UpdateMcpServerControlRequest>(request).unwrap_err();
+            assert!(error.to_string().contains("unknown field"));
+            assert!(!error.to_string().contains("retired-private-value"));
+        }
     }
 
     #[tokio::test]
     async fn resetting_oauth_invalidates_signed_tokens_across_restarts() {
-        let database = Arc::new(
-            ServerStateDb::from_store(Arc::new(TestInstanceStateStore::default()))
-                .await
-                .unwrap(),
-        );
+        let database = Arc::new(ServerStateDb::new(Arc::new(
+            TestInstanceStateStore::default(),
+        )));
         let key = OAuthSigningKey::generate().unwrap();
         let oauth = OAuthState::new(key.clone(), Some(database.clone()), None);
         let issued = oauth
@@ -4677,12 +4624,45 @@ mod tests {
     }
 
     #[test]
-    fn legacy_oauth_runtime_without_a_generation_still_deserializes() {
-        let runtime: PersistedOAuthRuntime = serde_json::from_value(serde_json::json!({
-            "refresh_tokens": {}, "revoked_jti": {}, "clients": []
-        }))
-        .unwrap();
-        assert_eq!(runtime.token_generation, "");
+    fn oauth_runtime_requires_current_clients_and_token_generation() {
+        let current = serde_json::json!({
+            "refresh_tokens": {}, "revoked_jti": {}, "clients": [],
+            "token_generation": "current-generation"
+        });
+        let runtime: PersistedOAuthRuntime = serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(serde_json::to_value(runtime).unwrap(), current);
+        for field in ["clients", "token_generation"] {
+            let mut missing = current.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            let error = serde_json::from_value::<PersistedOAuthRuntime>(missing).unwrap_err();
+            assert!(error.to_string().contains(field));
+        }
+    }
+
+    #[test]
+    fn signed_access_tokens_require_the_current_generation_claim() {
+        let oauth = test_oauth_state();
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .unwrap();
+        assert!(oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
+        let mut claims =
+            jsonwebtoken::dangerous::insecure_decode::<serde_json::Value>(&issued.access_token)
+                .unwrap()
+                .claims;
+        assert!(!claims["generation"].as_str().unwrap().is_empty());
+        claims.as_object_mut().unwrap().remove("generation");
+        let mut header = Header::new(Algorithm::EdDSA);
+        header.kid = Some(oauth.signing_key.kid.clone());
+        let token = encode(&header, &claims, &oauth.signing_key.encoding_key().unwrap()).unwrap();
+        assert!(!oauth.validate_access_token(&token, TEST_ISSUER, TEST_RESOURCE));
+        assert!(oauth.verified_access_token_claims(&token).is_none());
     }
 
     #[tokio::test]

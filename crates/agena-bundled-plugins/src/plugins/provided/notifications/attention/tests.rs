@@ -465,11 +465,11 @@ async fn host_queue_does_not_resurrect_a_resolved_request_during_replay() {
 }
 
 #[tokio::test]
-async fn legacy_browser_tracking_migrates_without_changing_subscription_state() {
+async fn browser_subscription_state_is_not_an_attention_recovery_source() {
     let (kernel, observer, host) = fixture().await;
     let sid = session(&kernel).await;
     let attempt = attempt(&kernel, sid).await;
-    let legacy = serde_json::json!({
+    let browser_state = serde_json::json!({
         "active": BTreeMap::from([(attempt.execution_id(), sid)]),
         "subscribers": {"preserved": {"endpoint": "preserved"}},
     })
@@ -477,28 +477,25 @@ async fn legacy_browser_tracking_migrates_without_changing_subscription_state() 
     observer
         .source
         .state
-        .set_payload("notifications.webPush", legacy.clone())
+        .set_payload("notifications.webPush", browser_state.clone())
         .await
         .unwrap();
     attempt
         .finish(RequestId::new(), ExecutionPhase::Succeeded)
         .await
         .unwrap();
-    let mut migrated = Observer::load(observer.source, host).await.unwrap();
-    migrated.recover().await.unwrap();
-    assert_eq!(migrated.state.recent.len(), 1);
+    let mut reloaded = Observer::load(observer.source, host).await.unwrap();
+    reloaded.recover().await.unwrap();
+    assert!(reloaded.state.active.is_empty());
+    assert!(reloaded.state.recent.is_empty());
     assert_eq!(
-        migrated.state.recent[0].attention.as_ref().unwrap().kind,
-        AttentionKind::Completed
-    );
-    assert_eq!(
-        migrated
+        reloaded
             .source
             .state
             .get_payload("notifications.webPush")
             .await
             .unwrap(),
-        Some(legacy)
+        Some(browser_state)
     );
 }
 

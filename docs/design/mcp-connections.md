@@ -88,10 +88,12 @@ flow. OAuth logout deletes the OAuth record without deleting a stored bearer.
 
 Stored credentials are bound to both connection name and endpoint. OAuth records
 also bind scopes and registration settings; changing them requires a new
-sign-in. Older name-only records remain untouched but are not sent to a new or
-changed endpoint. Existing installations using those records must enter the
-bearer token again or sign in once. No credential is returned by credential
-management operations.
+sign-in. Connections inspect only their endpoint identity. Authorization loads,
+saves and clears only the current bound OAuth document; incompatible documents
+are rejected without being rewritten or deleted. Explicit logout can remove
+the OAuth record and leaves the separate bearer record untouched. Redacted
+health inspection reports invalid documents without exposing credential material.
+No credential is returned by credential management operations.
 
 ## Import and AI tools
 

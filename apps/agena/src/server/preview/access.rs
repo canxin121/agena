@@ -337,7 +337,8 @@ mod tests {
     use super::*;
     fn record() -> PreviewSessionRecord {
         serde_json::from_value(serde_json::json!({
-            "id":"demo", "directory":"/work", "runDirectory":"/work",
+            "id":"demo", "instanceId":"b7e50042-1580-42df-9a0a-b2e42e0314f0",
+            "directory":"/work", "runDirectory":"/work",
             "agenaSessionId":"7", "state":"running",
             "proxyBasePath":"/api/v1/workbench/preview/s/demo/",
             "targetUrl":"http://127.0.0.1:5173/", "pid":123,

@@ -78,30 +78,6 @@ fn every_wire_activity_retains_a_title_and_content_summary_when_open_or_closed()
             "Inspect streaming",
         ),
         (
-            "file_ref",
-            json!({"title": " ", "name": "report.txt", "path": "/tmp/report.txt"}),
-            "Attachment",
-            "report.txt",
-        ),
-        (
-            "file_ref",
-            json!({"name": "# report_`$i`.txt", "path": "/tmp/report.txt"}),
-            "Attachment",
-            "# report_`$i`.txt",
-        ),
-        (
-            "skill_ref",
-            json!({"command": "review", "description": "Review changes"}),
-            "Command",
-            "review",
-        ),
-        (
-            "paste_ref",
-            json!({"label": " ", "text": "Pasted snippet\nFull snippet"}),
-            "Pasted text",
-            "Pasted snippet",
-        ),
-        (
             "notice",
             json!({"title": " ", "summary": "", "detail": "Notice details\nMore details"}),
             "Notice",
@@ -145,6 +121,67 @@ fn every_wire_activity_retains_a_title_and_content_summary_when_open_or_closed()
             if !expanded {
                 assert_eq!(rendered.lines.len(), 2, "{kind}");
             }
+        }
+    }
+}
+
+#[test]
+fn user_document_activities_keep_titles_summaries_and_copy_text_when_folded() {
+    for (payload, title, summary) in [
+        (
+            json!({"activity_type":"resource","kind":"file","name":"report.txt",
+            "reference":{"reference_type":"workspace_path","path":"/tmp/report.txt"}}),
+            "Attachment",
+            "report.txt",
+        ),
+        (
+            json!({"activity_type":"resource","kind":"file","name":"# report_`$i`.txt",
+            "reference":{"reference_type":"workspace_path","path":"/tmp/report.txt"}}),
+            "Attachment",
+            "# report_`$i`.txt",
+        ),
+        (
+            json!({"activity_type":"command_reference","name":"review","description":"Review changes",
+            "content_hash":"fixture","source":"agena.skills"}),
+            "Command",
+            "review",
+        ),
+        (
+            json!({"activity_type":"text_artifact","label":" ","text":"Pasted snippet\nFull snippet"}),
+            "Pasted text",
+            "Pasted snippet",
+        ),
+    ] {
+        let mut part = wire(
+            "text",
+            json!({"document":[{
+                "type":"activity", "activity":{"id":agena_domain::ActivityId::new(),"payload":payload}
+            }]}),
+        );
+        part.role = "user".into();
+        let mut entry = projected(part);
+        assert_eq!(entry.parts.len(), 2);
+        assert!(matches!(
+            entry.parts[0].content,
+            TranscriptPartContent::UserDocument(_)
+        ));
+        // The attachment/command/snippet is projected from the same canonical
+        // document as the inline chip. Inspect its activity layout in isolation.
+        entry.parts.remove(0);
+        for expanded in [false, true] {
+            let rendered = render(&entry, expanded, 100, &I18n::english());
+            let node = rendered
+                .nodes
+                .iter()
+                .find(|node| matches!(node.key, TranscriptNodeKey::Activity { .. }))
+                .unwrap();
+            let headline = &rendered.lines[node.start_line];
+            assert!(headline.text.contains(title), "{}", headline.text);
+            assert!(headline.text.contains(summary), "{}", headline.text);
+            assert_eq!(
+                headline.copy_text,
+                headline.text.chars().skip(4).collect::<String>()
+            );
         }
     }
 }

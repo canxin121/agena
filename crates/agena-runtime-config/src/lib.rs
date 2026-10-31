@@ -39,9 +39,7 @@ pub use config_override::{
     ConfigOverride, LoadConfigRequest, RuntimeConfigOverrideError,
     parse_config_override_expressions,
 };
-pub use config_paths::{
-    default_config_path, default_workspace_root, project_config_path, try_default_workspace_root,
-};
+pub use config_paths::{default_config_path, project_config_path, try_default_workspace_root};
 pub use config_values::*;
 pub use lsp_config::*;
 pub use mcp_config::*;

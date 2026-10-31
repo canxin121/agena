@@ -33,7 +33,6 @@ pub use memory_store::MemoryStore;
 pub mod backend;
 pub mod instance_state;
 pub mod kernel;
-pub mod store;
 
 /// Unified database storage configuration.
 ///

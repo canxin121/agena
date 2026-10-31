@@ -196,7 +196,7 @@ impl SkillManager {
             .into_iter()
             .map(|entry| {
                 let mut summary = declared_summary(entry);
-                summary.enabled = !self.legacy_disabled(&summary.name);
+                summary.enabled = !self.disabled_by_name(&summary.name);
                 summary
             })
             .collect::<Vec<_>>();
@@ -230,7 +230,7 @@ impl SkillManager {
     pub fn get(&self, id: &str) -> Result<SkillDetail> {
         if let Some(declared) = self.declared.iter().find(|entry| declared_id(entry) == id) {
             let mut detail = declared_detail(declared);
-            detail.summary.enabled = !self.legacy_disabled(&detail.summary.name);
+            detail.summary.enabled = !self.disabled_by_name(&detail.summary.name);
             if self.read_filter.is_none() {
                 detail.summary.shadowed = self
                     .list()?
@@ -753,7 +753,7 @@ impl SkillManager {
         } else if explicit_state {
             state.enabled
         } else {
-            !self.legacy_disabled(&name)
+            !self.disabled_by_name(&name)
         };
         Ok((
             SkillSummary {
@@ -814,7 +814,7 @@ impl SkillManager {
         Ok(path)
     }
 
-    fn legacy_disabled(&self, name: &str) -> bool {
+    fn disabled_by_name(&self, name: &str) -> bool {
         self.disabled_names
             .iter()
             .any(|disabled| disabled.trim().eq_ignore_ascii_case(name))

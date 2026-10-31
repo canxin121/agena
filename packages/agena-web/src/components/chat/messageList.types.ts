@@ -25,7 +25,6 @@ export type MessagePartLike = {
   agenaSections?: Array<{ section: 'metadata' | 'input' | 'output' | 'presentation'; revision: number }>
   agenaPresentation?: JsonValue
   runId?: number | null
-  parentPartId?: number | null
   time?: { start?: number; end?: number }
   [k: string]: JsonValue
 }

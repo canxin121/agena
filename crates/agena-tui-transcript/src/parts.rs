@@ -27,9 +27,8 @@ use agena_api::{
 use agena_domain::AssistantReplyId;
 use agena_domain::TextSegmentActivity;
 use agena_runtime_contracts::part_content::{
-    CommandRefContent, CompactionContent, FileRefContent, HookContent, NoticeContent,
-    PasteRefContent, SystemNotificationContent, TextContent, ThinkContent, ToolCallContent,
-    attachment_source_from_file_ref, operation_from_tool_call,
+    CompactionContent, HookContent, NoticeContent, SystemNotificationContent, TextContent,
+    ThinkContent, ToolCallContent, operation_from_tool_call,
 };
 use serde_json::Value;
 
@@ -363,18 +362,6 @@ fn part_summary(part: &PartResource) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Attachment kind as the part stores it. The runtime writes the resolved
-/// kind; rebuilds that guess from the file name lose it.
-fn attachment_kind_from_value(content: &serde_json::Value) -> Option<PartAttachmentKind> {
-    match string_field(content, "kind")?.as_str() {
-        "image" => Some(PartAttachmentKind::Image),
-        "audio" => Some(PartAttachmentKind::Audio),
-        "video" => Some(PartAttachmentKind::Video),
-        "pdf" => Some(PartAttachmentKind::Pdf),
-        _ => Some(PartAttachmentKind::File),
-    }
-}
-
 pub(crate) fn resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
     let kind = match resource.kind {
         agena_domain::ResourceKind::Image => PartAttachmentKind::Image,
@@ -400,9 +387,14 @@ pub(crate) fn resource_attachment(resource: &agena_domain::ResourceActivity) -> 
         agena_domain::ResourceReference::WorkspacePath { path } => {
             (PartAttachmentSource::LocalPath { path: path.clone() }, None)
         }
-        agena_domain::ResourceReference::Url { url } => {
-            (PartAttachmentSource::Url { url: url.clone() }, None)
-        }
+        agena_domain::ResourceReference::Url { url } => (
+            if url.starts_with("data:") {
+                PartAttachmentSource::DataUrl { url: url.clone() }
+            } else {
+                PartAttachmentSource::Url { url: url.clone() }
+            },
+            None,
+        ),
         agena_domain::ResourceReference::ProviderFile { file_id, .. } => (
             PartAttachmentSource::FileId {
                 file_id: file_id.clone(),
@@ -427,7 +419,7 @@ pub(crate) fn resource_attachment(resource: &agena_domain::ResourceActivity) -> 
 
 fn entry_parts(part: &PartResource) -> Vec<TranscriptEntryPart<'static>> {
     let mut projected = vec![entry_part(part)];
-    if part.role != "user" {
+    if part.kind != "text" || part.role != "user" {
         return projected;
     }
     let Some(document) = part
@@ -621,75 +613,6 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
                 synthetic: false,
             })
         }
-        "file_ref" => {
-            let Some(content) = decode_part_content::<FileRefContent>(part) else {
-                return fallback_text_part(part);
-            };
-            // The canonical reader understands every source shape the composer
-            // can persist, including a provider-bound upload or one that has
-            // since degraded. Rebuilding the source from `path` alone dropped
-            // those attachments from the transcript entirely.
-            let source = PartAttachmentSource::from(&attachment_source_from_file_ref(&content));
-            TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(
-                AttachmentPartResource {
-                    attachments: vec![PartAttachment {
-                        kind: attachment_kind_from_value(&part.content)
-                            .unwrap_or(PartAttachmentKind::File),
-                        mime: content.mime.clone().unwrap_or_default(),
-                        source,
-                        filename: content.name,
-                        title: string_field(&part.content, "title"),
-                        size_bytes: part
-                            .content
-                            .get("size_bytes")
-                            .and_then(serde_json::Value::as_u64),
-                        sha256: content.sha,
-                        width: part
-                            .content
-                            .get("width")
-                            .and_then(serde_json::Value::as_u64)
-                            .map(|value| value as u32),
-                        height: part
-                            .content
-                            .get("height")
-                            .and_then(serde_json::Value::as_u64)
-                            .map(|value| value as u32),
-                        duration_ms: None,
-                        page_count: None,
-                    }],
-                },
-            ))
-        }
-        "paste_ref" => {
-            let Some(content) = decode_part_content::<PasteRefContent>(part) else {
-                return fallback_text_part(part);
-            };
-            TranscriptPartContent::Activity(TranscriptActivityContent::TextArtifact(Box::new(
-                agena_domain::TextArtifactActivity {
-                    text: content.text,
-                    label: string_field(&part.content, "label"),
-                    language: string_field(&part.content, "language"),
-                },
-            )))
-        }
-        "skill_ref" => {
-            let Some(content) = decode_part_content::<CommandRefContent>(part) else {
-                return fallback_text_part(part);
-            };
-            TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(
-                CommandReferencePartResource {
-                    commands: vec![PartCommandReference {
-                        name: content.command.unwrap_or_default(),
-                        description: string_field(&part.content, "description").unwrap_or_default(),
-                        content_hash: string_field(&part.content, "content_hash")
-                            .unwrap_or_default(),
-                        source: string_field(&part.content, "source").unwrap_or_default(),
-                        skill_id: string_field(&part.content, "skill_id"),
-                        aliases: Vec::new(),
-                    }],
-                },
-            ))
-        }
         "notice" => match decode_part_content::<NoticeContent>(part) {
             Some(content) => TranscriptPartContent::Activity(TranscriptActivityContent::Notice(
                 Box::new(NoticeContent {
@@ -745,12 +668,12 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
                         "failed to decode a persisted transcript error part",
                         &error,
                     ),
-                    "rendering malformed transcript error content as plain text"
+                    "rendering a safe placeholder for malformed transcript error content"
                 );
                 TranscriptPartContent::Text(TextPartResource {
-                    text: string_field(&part.content, "message")
-                        .or_else(|| string_field(&part.content, "summary"))
-                        .unwrap_or_else(|| fallback_json_text(&part.content)),
+                    // Error payloads may contain provider diagnostics or model
+                    // feedback. Only a decoded public UserProblem is displayable.
+                    text: "Error details are unavailable.".into(),
                     synthetic: false,
                 })
             }

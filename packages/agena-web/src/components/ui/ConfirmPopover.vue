@@ -44,8 +44,8 @@ const props = withDefaults(
   }>(),
   {
     open: null,
-    confirmText: 'Confirm',
-    cancelText: 'Cancel',
+    confirmText: '',
+    cancelText: '',
     variant: 'default',
     anchorToCursor: true,
     forceDialog: false,
@@ -99,16 +99,12 @@ const dialogContentClass = computed(() =>
 
 const effectiveConfirmText = computed(() => {
   const raw = String(props.confirmText || '').trim()
-  // Backwards-compatible: map old defaults to i18n.
-  if (!raw || raw === 'Confirm') return t('common.confirm')
-  return raw
+  return raw || t('common.confirm')
 })
 
 const effectiveCancelText = computed(() => {
   const raw = String(props.cancelText || '').trim()
-  // Backwards-compatible: map old defaults to i18n.
-  if (!raw || raw === 'Cancel') return t('common.cancel')
-  return raw
+  return raw || t('common.cancel')
 })
 
 const anchorRect = ref<DOMRect | null>(null)
@@ -141,7 +137,9 @@ const POPOVER_SIDE_OFFSET_PX = 5
 const viewportVersion = ref(0)
 useViewportObserver(
   () => openModel.value && !useDialog.value && Boolean(anchorRect.value),
-  () => { viewportVersion.value += 1 },
+  () => {
+    viewportVersion.value += 1
+  },
 )
 
 const popoverSide = computed<'top' | 'bottom'>(() => {

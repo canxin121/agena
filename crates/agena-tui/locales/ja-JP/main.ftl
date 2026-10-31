@@ -2154,7 +2154,6 @@ timeline-label-role = ロール
 timeline-label-state = 状態
 timeline-label-revision = リビジョン
 timeline-label-run = 実行
-timeline-label-parent-part = 親パート
 transcript-alert-note = 注記
 transcript-alert-tip = ヒント
 transcript-alert-important = 重要

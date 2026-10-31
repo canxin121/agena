@@ -290,7 +290,7 @@ async fn editing_queued_input_rejects_the_previous_title_result() {
 }
 
 #[tokio::test]
-async fn title_state_survives_database_reopen_and_legacy_config_stays_manual() {
+async fn title_state_survives_database_reopen_and_default_config_stays_manual() {
     let directory = tempfile::tempdir().unwrap();
     let url = format!(
         "sqlite://{}?mode=rwc",
@@ -341,7 +341,7 @@ async fn title_state_survives_database_reopen_and_legacy_config_stays_manual() {
             .checked_user_messages,
         1
     );
-    let legacy: SessionConfiguration = serde_json::from_str("{}").unwrap();
-    assert_eq!(legacy.title_state.source, SessionTitleSource::Manual);
+    let default: SessionConfiguration = serde_json::from_str("{}").unwrap();
+    assert_eq!(default.title_state.source, SessionTitleSource::Manual);
     runtime.ports.clone().shutdown().await.unwrap();
 }

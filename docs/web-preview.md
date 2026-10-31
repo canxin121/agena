@@ -37,7 +37,7 @@ cannot fall through to the control API or workbench. Requests to the control
 origin whose `Origin` identifies a preview, or an opaque `null` origin, are also
 rejected. Main API authentication remains separate.
 
-Both the isolated gateway and the legacy proxy reject an upstream targeting the
+Both the isolated gateway and the authenticated control proxy reject an upstream targeting the
 actual Agena control listening port. That boundary uses the server's configured
 listener, not the client-supplied `Host` header. Upstream URLs containing userinfo
 (a username or password) are rejected as well.
@@ -172,21 +172,20 @@ same-origin behavior within the separate preview origin, and downloads. Its
 parent cannot directly inspect the app DOM across the origin boundary; browser
 automation uses CDP rather than relying on that access.
 
-### Legacy path compatibility
+### Authenticated control proxy
 
-The older control-origin route
-`/api/v1/workbench/preview/s/{id}/...` remains available for compatibility and
-authenticated diagnostics. It is not the workbench's normal iframe source.
-Executable documents returned through that route receive a CSP sandbox without
-`allow-same-origin`, producing an opaque document origin. This intentionally
-restricts storage and other origin-dependent features on that compatibility
-route.
+The control-origin route `/api/v1/workbench/preview/s/{id}/...` serves the
+workbench's authenticated readiness probes and diagnostics. The iframe uses
+the separate preview origin. Executable documents opened through the control
+route receive a CSP sandbox without `allow-same-origin`, producing an opaque
+document origin that restricts storage and other origin-dependent features.
 
 Diagnostics accept only relative control proxy paths and never follow redirects
 with the control bearer token. A manual redirect counts as an upstream readiness
 response. The dock retries temporary startup failures for at most 18 seconds;
-selection changes, hidden panes or tabs, and unmounting cancel that wait. The legacy HTML/CSS rewriting path has a bounded buffer;
-new isolated previews use streaming proxy responses instead.
+selection changes, hidden panes or tabs, and unmounting cancel that wait. The
+control proxy bounds its HTML/CSS rewrite buffer and body-read deadline. The
+isolated preview gateway streams upstream responses.
 
 ## Managed browser access
 
@@ -277,7 +276,7 @@ back the services started by that operation and leaves logs available for
 diagnosis.
 
 The human preview's readiness probe has a different purpose: it establishes that
-the application can answer. The authenticated legacy proxy marks actual upstream
+the application can answer. The authenticated control proxy marks actual upstream
 responses with `x-agena-preview-upstream: 1`, allowing a login challenge or an app
 error page to render in the isolated iframe. Control authentication and gateway
 connection failures do not carry that marker. Health probes cancel when a run,
@@ -329,7 +328,7 @@ profile. It checks password authentication, parent-origin isolation, application
 cookies and authorization, root assets, nested redirects, Vite-style WebSocket
 messages, and grant revocation without touching the active workbench instance.
 It also exercises cookie mount paths, raw encoded request paths, partial/encoded
-legacy responses, HTTP/SSE revocation, pending-header cancellation, rejection of
+control-proxy responses, HTTP/SSE revocation, pending-header cancellation, rejection of
 stopped managed targets, and SIGTERM cleanup with a preview still running.
 It also invokes the actual operator browser tools to verify owner/workspace
 discovery, `browser_open` by preview ID, snapshots, clicks, CSP enforcement, and

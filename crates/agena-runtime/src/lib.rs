@@ -116,6 +116,7 @@ pub use runtime::bootstrap_application_services;
 pub use activity::{ActivityControlError, RuntimeActivityService};
 pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin};
 pub use agena_runtime_config::default_config_path;
+pub(crate) use agena_runtime_config::project_config_path;
 pub use agena_runtime_config::runtime_config_settings_service::list_json_path;
 pub use agena_runtime_config::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, ConfigResolution,
@@ -152,7 +153,6 @@ pub(crate) use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig};
 pub use agena_runtime_config::{
     RuntimeConfigurationError, RuntimeConfigurationService, RuntimeConfigurationSnapshot,
 };
-pub(crate) use agena_runtime_config::{default_workspace_root, project_config_path};
 pub(crate) use agena_runtime_plugins::CallbackOnDrop;
 pub(crate) use agena_runtime_plugins::plugin_config::{
     dispatch_config_if_nonempty, merge_bundled_plugin_config,

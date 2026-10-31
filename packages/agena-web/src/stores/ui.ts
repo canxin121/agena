@@ -103,10 +103,9 @@ function normalizeRouteQueryRecord(raw: unknown): Record<string, string> {
     const k = String(key || '').trim()
     if (!k) continue
     if (k === 'windowId' || k === 'agenaEmbed') continue
-    const canonicalKey = k
     const normalized = normalizeQueryValue(value)
     if (!normalized) continue
-    out[canonicalKey] = normalized
+    out[k] = normalized
   }
   return out
 }
@@ -127,12 +126,6 @@ function areStringRecordsEqual(a: Record<string, string>, b: Record<string, stri
   return true
 }
 
-function queryMatchAliasesForKey(key: string): string[] {
-  const normalized = String(key || '').trim()
-  if (!normalized) return []
-  return [normalized]
-}
-
 function normalizeMatchQueryValue(key: string, value: string): string {
   const normalizedKey = String(key || '').trim()
   const normalizedValue = String(value || '').trim()
@@ -146,13 +139,8 @@ function normalizeMatchQueryValue(key: string, value: string): string {
 }
 
 function readMatchQueryValue(record: Record<string, string> | null | undefined, key: string): string {
-  if (!record) return ''
-  const aliases = queryMatchAliasesForKey(key)
-  for (const alias of aliases) {
-    const candidate = normalizeMatchQueryValue(key, String(record[alias] || ''))
-    if (candidate) return candidate
-  }
-  return ''
+  const normalizedKey = String(key || '').trim()
+  return record && normalizedKey ? normalizeMatchQueryValue(normalizedKey, String(record[normalizedKey] || '')) : ''
 }
 
 function defaultMatchKeysForMainTab(tab: MainTab): string[] {
@@ -272,20 +260,6 @@ const STORAGE_WORKSPACE_DOCK_HEIGHT = localStorageKeys.ui.workspaceDockHeight
 const DEFAULT_WINDOW_SCOPE_ID = 'window-default'
 
 export const useUiStore = defineStore('ui', () => {
-  // Agena runs as a standalone SPA (no embedded workspace pane), so shell state
-  // always persists.
-  const shouldPersistWorkspaceShellState = true
-
-  function persistWorkspaceShellString(key: string, value: string) {
-    if (!shouldPersistWorkspaceShellState) return
-    setLocalString(key, value)
-  }
-
-  function persistWorkspaceShellJson(key: string, value: unknown) {
-    if (!shouldPersistWorkspaceShellState) return
-    setLocalJson(key, value)
-  }
-
   // Explicit semantic signals.
   const isCompactLayout = ref(false)
   const isMobileDevice = ref(false)
@@ -669,13 +643,13 @@ export const useUiStore = defineStore('ui', () => {
         workspaceWindowDragId.value = ''
       }
       retainGlobalSelectionsForWindows(list.map((item) => item.id))
-      persistWorkspaceShellJson(STORAGE_WORKSPACE_WINDOWS, list)
+      setLocalJson(STORAGE_WORKSPACE_WINDOWS, list)
     },
     { deep: true },
   )
 
   watch(activeWorkspaceWindowId, (v) => {
-    persistWorkspaceShellString(STORAGE_ACTIVE_WORKSPACE_WINDOW_ID, String(v || ''))
+    setLocalString(STORAGE_ACTIVE_WORKSPACE_WINDOW_ID, String(v || ''))
   })
 
   watch(
@@ -706,7 +680,7 @@ export const useUiStore = defineStore('ui', () => {
     },
     { immediate: true },
   )
-  watch(activeMainTab, (v) => persistWorkspaceShellString(STORAGE_ACTIVE_TAB, v), { immediate: true })
+  watch(activeMainTab, (v) => setLocalString(STORAGE_ACTIVE_TAB, v), { immediate: true })
 
   const workspaceSplitWidth = ref<number>(520)
 
@@ -1275,7 +1249,7 @@ export const useUiStore = defineStore('ui', () => {
   watch(
     workspaceGroups,
     (list) => {
-      persistWorkspaceShellJson(STORAGE_WORKSPACE_GROUPS, list)
+      setLocalJson(STORAGE_WORKSPACE_GROUPS, list)
     },
     { deep: true },
   )
@@ -1283,13 +1257,13 @@ export const useUiStore = defineStore('ui', () => {
   watch(
     workspaceGroupPaneRatiosById,
     (value) => {
-      persistWorkspaceShellJson(STORAGE_WORKSPACE_GROUP_PANE_RATIOS, value)
+      setLocalJson(STORAGE_WORKSPACE_GROUP_PANE_RATIOS, value)
     },
     { deep: true },
   )
 
   watch(activeWorkspaceGroupId, (v) => {
-    persistWorkspaceShellString(STORAGE_ACTIVE_WORKSPACE_GROUP_ID, String(v || ''))
+    setLocalString(STORAGE_ACTIVE_WORKSPACE_GROUP_ID, String(v || ''))
   })
 
   // Global overlays

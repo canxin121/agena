@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { hasToolAttachmentOutput, isDeferredAttachmentOutput, toolOutputAttachments } from '../src/lib/toolAttachments'
 import { projectLocalPart } from '../src/pages/chat/transcriptProjection'
-import { mediaAttachmentPresentation, operationPresentation } from '../src/pages/chat/transcriptPartPresentation'
+import { operationAttachmentPresentation, operationPresentation } from '../src/pages/chat/transcriptPartPresentation'
 import { attachmentPreviewUrl, attachmentDownloadUrl } from '../src/lib/attachmentLinks'
 
 const attachment = {
@@ -25,7 +25,7 @@ describe('attachment output presentation', () => {
     expect(display.defaultExpanded).toBe(true)
     const operation = operationPresentation(display)
     expect(operation.presentationBlocks).toHaveLength(1)
-    const media = mediaAttachmentPresentation(operation.presentationBlocks[0]!)
+    const media = operationAttachmentPresentation(operation.presentationBlocks[0]!)
     expect(media).toMatchObject({
       kind: 'image',
       mime: 'image/png',
@@ -34,7 +34,7 @@ describe('attachment output presentation', () => {
     })
   })
 
-  test('modern media blocks and the same output attachment are not shown twice', () => {
+  test('media blocks and the same output attachment are not shown twice', () => {
     const display = projectLocalPart(
       {
         id: '1129',
@@ -66,16 +66,55 @@ describe('attachment output presentation', () => {
     ).toBe(false)
   })
 
-  test('legacy audio, video and file blocks use the same attachment renderer', () => {
-    for (const [kind, mime] of [
-      ['audio', 'audio/wav'],
-      ['video', 'video/webm'],
-      ['file', 'application/pdf'],
-    ] as const) {
+  test('Media uses ArtifactRef and retired media envelopes are not interpreted', () => {
+    for (const mime of ['audio/wav', 'video/webm', 'application/pdf']) {
       expect(
-        mediaAttachmentPresentation({ type: kind, uri: '/api/v1/sessions/46/media?path=x', mime, filename: 'file' }),
-      ).toMatchObject({ kind, mime, url: '/api/v1/sessions/46/media?path=x' })
+        operationAttachmentPresentation({
+          type: 'media',
+          artifact: { uri: '/api/v1/sessions/46/media?path=x', mime, name: 'file' },
+        }),
+      ).toMatchObject({ mime, url: '/api/v1/sessions/46/media?path=x', label: 'file' })
     }
+    for (const type of ['image', 'audio', 'video', 'file']) {
+      const old = { type, uri: '/old', mime: 'image/png', filename: 'old.png' }
+      expect(operationAttachmentPresentation(old)).toBeNull()
+      expect(hasToolAttachmentOutput({}, { blocks: [old] })).toBe(false)
+    }
+    expect(
+      operationAttachmentPresentation({ type: 'media', artifact: { url: '/old', mime_type: 'image/png' } }),
+    ).toBeNull()
+    expect(toolOutputAttachments({ raw_output: { attachments: [attachment] } })).toEqual([])
+  })
+
+  test('source discriminants preserve current inline, provider-owned and unavailable descriptors', () => {
+    for (const source of [
+      { source: 'url', url: '/image' },
+      { source: 'data_url', url: 'data:image/png;base64,AA==' },
+      { source: 'base64', data: 'AA==' },
+      { source: 'provider_data', route: 'provider:model', data: 'AA==' },
+    ]) {
+      expect(
+        operationAttachmentPresentation({ type: 'output_attachment', attachment: { ...attachment, source } })?.url,
+      ).toBeTruthy()
+    }
+    expect(
+      operationAttachmentPresentation({
+        type: 'output_attachment',
+        attachment: {
+          ...attachment,
+          source: { source: 'unavailable', reason: 'revoked', path: '/must-not-open', url: '/must-not-open' },
+        },
+      }),
+    ).toMatchObject({ unavailable: true, unavailableReason: 'revoked', url: '', path: '' })
+    expect(
+      operationAttachmentPresentation({
+        type: 'output_attachment',
+        attachment: { ...attachment, source: { source: 'file_id', file_id: 'opaque' } },
+      }),
+    ).toMatchObject({ url: '', path: '' })
+    expect(
+      operationAttachmentPresentation({ type: 'output_attachment', attachment: { mime: 'image/png', url: '/old' } }),
+    ).toBeNull()
   })
 
   test.each([
@@ -115,7 +154,7 @@ describe('attachment output presentation', () => {
     for (const sections of [{}, { output: complete }, { output: null }, { output: complete, metadata: {} }]) {
       for (const expanded of [true, false, true]) {
         const blocks = operationPresentation(display, sections, expanded).presentationBlocks
-        const attachments = blocks.map(mediaAttachmentPresentation).filter((item) => item !== null)
+        const attachments = blocks.map(operationAttachmentPresentation).filter((item) => item !== null)
         expect(attachments).toHaveLength(expanded ? 1 : 0)
         if (!expanded) continue
         const media = attachments[0]!

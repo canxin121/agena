@@ -1152,7 +1152,7 @@ impl SessionManager {
         let resolved_adapter_id = options.model.adapter_id.clone();
 
         let mut merged_override = options.request_override.clone();
-        merged_override.remove_legacy_parallel_tool_calls_patch();
+        merged_override.remove_reserved_parallel_tool_calls_patch();
         let thinking_modes = provider_registry.model_thinking_modes(&options.model)?;
         let default_thinking_mode = || {
             thinking_modes.iter().find_map(|mode| {
@@ -1231,7 +1231,7 @@ impl SessionManager {
                 resolved_adapter_id.as_ref(),
             ));
         }
-        merged_override.remove_legacy_parallel_tool_calls_patch();
+        merged_override.remove_reserved_parallel_tool_calls_patch();
         options.model_supports_parallel_tool_calls = Some(
             provider_registry
                 .model_metadata(&options.model)

@@ -10,9 +10,9 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-/** Match the public UserProblem contract, never Failure's model feedback or
- * diagnostic extensions. Older servers can still send the Failure envelope. */
-function publicProblem(value: unknown): JsonRecord {
+/** Project only the public UserProblem fields from a current failure.
+ * Model feedback and diagnostic extensions never belong in user details. */
+export function publicUserProblem(value: unknown): JsonRecord {
   const problem = record(value)
   const result: JsonRecord = {}
   for (const key of ['id', 'code', 'category', 'responsibility', 'retry', 'recovery', 'impact']) {
@@ -29,14 +29,7 @@ function publicProblem(value: unknown): JsonRecord {
 }
 
 export function toolFailurePresentation(value: unknown): { message: string; details: JsonRecord | null } {
-  const error = record(value)
-  const candidates = [error.failure, error.problem, error]
-  const details = candidates.map(publicProblem).find((candidate) => Object.keys(candidate).length > 0) ?? null
-  const message =
-    text(record(details?.user).fallback) ||
-    // Legacy public error envelopes used message/detail instead of UserProblem.
-    candidates.map((candidate) => text(record(candidate).message)).find(Boolean) ||
-    text(error.detail)
-  if (message && !text(record(details?.user).fallback)) return { message, details: { ...details, message } }
-  return { message, details }
+  const problem = publicUserProblem(record(value).failure)
+  const details = Object.keys(problem).length ? problem : null
+  return { message: text(record(problem.user).fallback), details }
 }

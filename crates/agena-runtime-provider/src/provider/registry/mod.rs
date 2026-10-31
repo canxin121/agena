@@ -18,12 +18,12 @@ use crate::ProviderError;
 use agena_domain::{
     AdapterId, Model, ModelId, ModelRef, ModelSpeedMode, ModelThinkingMode, ProviderId,
 };
+use agena_domain::{AttachmentItem, AttachmentKind};
 use agena_plugin_host::ProviderDescriptor;
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 use agena_provider::ProviderErrorKind;
 use agena_provider::{CompletionInputAttachment, CompletionInputPart};
-use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind};
 
 /// How many times a retryable provider request is retried before the request
 /// fails. 10 mirrors codex's `stream_max_retries` default and is deliberately

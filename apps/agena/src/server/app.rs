@@ -654,16 +654,12 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     .await
     .context("failed to build agena runtime")?;
 
-    let server_state_db = Arc::new(
-        crate::server::persistence::db::ServerStateDb::from_store(
-            runtime
-                .application_services()
-                .instance_state
-                .ok_or_else(|| anyhow!("runtime instance-state repository is unavailable"))?,
-        )
-        .await
-        .map_err(|error| anyhow!("failed to open agena server database: {error}"))?,
-    );
+    let server_state_db = Arc::new(crate::server::persistence::db::ServerStateDb::new(
+        runtime
+            .application_services()
+            .instance_state
+            .ok_or_else(|| anyhow!("runtime instance-state repository is unavailable"))?,
+    ));
     let server_auth =
         crate::server::auth::init_server_auth_async(args.password.clone(), &server_state_db)
             .await

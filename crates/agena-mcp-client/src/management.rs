@@ -83,15 +83,11 @@ fn project_summary(summary: &mut McpConnectionSummary, status: Option<&McpServer
             "disconnected"
         }
         .into();
-        summary.error = if status.legacy_credentials_present {
-            Some("Stored credentials use the previous server-name binding. Enter the bearer token again or sign in to bind credentials to this endpoint.".into())
-        } else {
-            status
-                .last_failure
-                .as_ref()
-                .or(status.last_refresh_failure.as_ref())
-                .map(|f| f.user.fallback.clone())
-        };
+        summary.error = status
+            .last_failure
+            .as_ref()
+            .or(status.last_refresh_failure.as_ref())
+            .map(|f| f.user.fallback.clone());
     }
 }
 

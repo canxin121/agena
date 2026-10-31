@@ -703,7 +703,7 @@ mod tests {
     async fn cancelled_manifest_and_state_saves_keep_later_writes_behind_their_commits() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db.clone()));
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
         let apps = Arc::new(InteractiveApps::new(db, registry, runtime.clone()));
@@ -922,7 +922,7 @@ mod tests {
     async fn stop_also_cancels_a_run_waiting_for_its_final_snapshot() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db.clone()));
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
         let apps = Arc::new(InteractiveApps::new(db, registry, runtime));
@@ -958,7 +958,7 @@ mod tests {
     async fn cancelled_stop_still_requests_cleanup_of_every_app_service() {
         let directory = tempfile::tempdir().unwrap();
         let store = Arc::new(TestStore::new(directory.path()));
-        let db = Arc::new(ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(ServerStateDb::new(store.clone()));
         let registry = Arc::new(WorkspacePreviewRegistry::new(db.clone()));
         let runtime = Arc::new(WorkspacePreviewRuntime::new(registry.clone()));
         let apps = Arc::new(InteractiveApps::new(db, registry.clone(), runtime.clone()));

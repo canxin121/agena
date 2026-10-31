@@ -104,7 +104,7 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
   )
   const diffKey = computed(() =>
     diffIdentity.value
-      ? JSON.stringify([...JSON.parse(diffIdentity.value), diffLimit.value, selected.value?.revision ?? ''])
+      ? JSON.stringify([...JSON.parse(diffIdentity.value), diffLimit.value, selected.value?.revision])
       : '',
   )
   const visibleDiff = shallowRef<SessionFileChanges | null>(null)
@@ -118,17 +118,13 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
   let retainedDiff: { key: string; scope: number; value: SessionFileChanges } | null = null
   const diff = useVisibleResource<SessionFileChanges>({
     key: diffKey,
-    // The list carries a per-file fingerprint. Only a changed selected row
-    // should reload its diff; legacy responses still use the broad clock.
-    resource: (key) => {
-      const [id, , , revision] = JSON.parse(key) as [string, string, number, string]
-      return revision ? undefined : `session:${id}:files`
-    },
+    // The list carries each file's fingerprint. Its selected row controls diff
+    // refreshes; unrelated files never invalidate the displayed diff.
     interval: () => null,
     async load(key, signal, _previous, force, observe) {
       const [id, path, maxBytes, revision] = JSON.parse(key) as [string, string, number, string]
       const scope = captureResourceObservation(`session:${id}:files`).scope
-      if (revision && retainedDiff?.key === key && retainedDiff.scope === scope && !force) return retainedDiff.value
+      if (retainedDiff?.key === key && retainedDiff.scope === scope && !force) return retainedDiff.value
       const query = new URLSearchParams({ path, max_bytes: String(maxBytes) })
       const value = await request(
         `session:${id}:files`,
@@ -144,7 +140,7 @@ export function useWorkspaceChanges(options: { sessionId: Ref<string>; busy: Ref
       // revision actually returned, then let the list catch up automatically.
       if (actualRevision && scope === captureResourceObservation(`session:${id}:files`).scope)
         retainedDiff = { key: JSON.stringify([id, path, maxBytes, actualRevision]), scope, value }
-      if (revision && actualRevision && revision !== actualRevision) void status.refresh()
+      if (actualRevision && revision !== actualRevision) void status.refresh()
       return value
     },
   })

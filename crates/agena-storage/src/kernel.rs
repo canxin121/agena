@@ -423,9 +423,7 @@ pub struct ToolResult {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolView {
-    #[serde(default)]
     pub created_at_ms: i64,
-    #[serde(default)]
     pub finished_at_ms: Option<i64>,
     pub entry_id: EntryId,
     pub id: ToolId,
@@ -456,9 +454,7 @@ pub struct InteractionView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderRoundView {
     pub execution_id: ExecutionId,
-    #[serde(default)]
     pub created_at_ms: i64,
-    #[serde(default)]
     pub finished_at_ms: Option<i64>,
     pub id: RoundId,
     pub phase: ProviderRoundPhase,

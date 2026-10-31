@@ -87,8 +87,7 @@ function readManualModelEntry(raw: string): SessionManualModelEntry | null {
   try {
     parsed = JSON.parse(serialized)
   } catch {
-    // Legacy entries were bare slugs without a timestamp. They cannot be
-    // attributed to a session, so they are dropped instead of trusted.
+    // A cached choice must carry its timestamp and value as one JSON record.
     return null
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null

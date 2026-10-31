@@ -34,7 +34,7 @@ const OAUTH_REFRESH_BUFFER_SECS: u64 = 30;
 pub enum OAuthCredentialState {
     /// No non-empty record exists in the dedicated OAuth secret-store slot.
     Missing,
-    /// A record parsed as `rmcp::transport::StoredCredentials`.
+    /// A current bound document contains `rmcp::transport::StoredCredentials`.
     Configured,
     /// The secret store could not be read or its value was not a valid credential
     /// record. The underlying error is deliberately not surfaced in status.
@@ -253,9 +253,9 @@ impl FileOAuthCredentialStore {
         })
     }
 
-    /// Require an exact configuration binding when loading credentials. Unbound
-    /// legacy records and records from different scopes/client registrations
-    /// remain stored but are never used by this bound connection.
+    /// Bind authorization operations to exact scopes and client registration.
+    /// Loading, saving and clearing require this binding. An unbound store is
+    /// available only for redacted health inspection and explicit deletion.
     pub fn with_binding(mut self, binding: String) -> Self {
         self.binding = Some(binding);
         self
@@ -267,21 +267,20 @@ impl FileOAuthCredentialStore {
     ) -> Result<Option<StoredCredentials>, AuthError> {
         let invalid =
             || AuthError::InternalError("invalid MCP OAuth credential document".to_owned());
-        let value: serde_json::Value = serde_json::from_str(raw).map_err(|_| invalid())?;
-        if value.get("agena_mcp_oauth").is_some() {
-            let document: BoundOAuthCredentials =
-                serde_json::from_value(value).map_err(|_| invalid())?;
-            if document.agena_mcp_oauth != 1 {
-                return Err(invalid());
-            }
-            if expected_binding.is_some_and(|expected| expected != document.binding) {
-                return Ok(None);
-            }
-            Ok(Some(document.credentials))
-        } else {
-            let credentials = serde_json::from_value(value).map_err(|_| invalid())?;
-            Ok(expected_binding.is_none().then_some(credentials))
+        let document: BoundOAuthCredentials = serde_json::from_str(raw).map_err(|_| invalid())?;
+        if document.agena_mcp_oauth != 1 {
+            return Err(invalid());
         }
+        if expected_binding.is_some_and(|expected| expected != document.binding) {
+            return Ok(None);
+        }
+        Ok(Some(document.credentials))
+    }
+
+    fn connection_binding(&self) -> Result<String, AuthError> {
+        self.binding
+            .clone()
+            .ok_or_else(|| Self::auth_error("authorization requires a connection binding"))
     }
 
     pub fn delete(&self) -> Result<(), TokenStoreError> {
@@ -365,12 +364,12 @@ impl CredentialStore for FileOAuthCredentialStore {
     async fn load(&self) -> Result<Option<StoredCredentials>, AuthError> {
         let store = Arc::clone(&self.store);
         let key = oauth_secret_key(&self.server);
-        let binding = self.binding.clone();
+        let binding = self.connection_binding()?;
         SECRET_STORE_WORKERS
             .run(move || {
                 let raw = store.get_secret(&key).map_err(Self::auth_error)?;
                 match raw.filter(|value| !value.trim().is_empty()) {
-                    Some(value) => Self::decode_credentials(&value, binding.as_deref()),
+                    Some(value) => Self::decode_credentials(&value, Some(&binding)),
                     None => Ok(None),
                 }
             })
@@ -381,17 +380,14 @@ impl CredentialStore for FileOAuthCredentialStore {
     async fn save(&self, credentials: StoredCredentials) -> Result<(), AuthError> {
         let store = Arc::clone(&self.store);
         let key = oauth_secret_key(&self.server);
-        let binding = self.binding.clone();
+        let binding = self.connection_binding()?;
         SECRET_STORE_WORKERS
             .run(move || {
-                let raw = match binding {
-                    Some(binding) => serde_json::to_string(&BoundOAuthCredentials {
-                        agena_mcp_oauth: 1,
-                        binding,
-                        credentials,
-                    }),
-                    None => serde_json::to_string(&credentials),
-                }
+                let raw = serde_json::to_string(&BoundOAuthCredentials {
+                    agena_mcp_oauth: 1,
+                    binding,
+                    credentials,
+                })
                 .map_err(|_| Self::auth_error("could not encode OAuth credentials"))?;
                 store.set_secret(&key, &raw).map_err(Self::auth_error)
             })
@@ -402,16 +398,14 @@ impl CredentialStore for FileOAuthCredentialStore {
     async fn clear(&self) -> Result<(), AuthError> {
         let store = Arc::clone(&self.store);
         let key = oauth_secret_key(&self.server);
-        let binding = self.binding.clone();
+        let binding = self.connection_binding()?;
         SECRET_STORE_WORKERS
             .run(move || {
-                if let Some(binding) = binding {
-                    let Some(raw) = store.get_secret(&key).map_err(Self::auth_error)? else {
-                        return Ok(());
-                    };
-                    if Self::decode_credentials(&raw, Some(&binding))?.is_none() {
-                        return Ok(());
-                    }
+                let Some(raw) = store.get_secret(&key).map_err(Self::auth_error)? else {
+                    return Ok(());
+                };
+                if Self::decode_credentials(&raw, Some(&binding))?.is_none() {
+                    return Ok(());
                 }
                 store.delete_secret(&key).map_err(Self::auth_error)
             })

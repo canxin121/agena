@@ -42,9 +42,8 @@ pub(crate) fn encode_part_cursor(
     cursor.map(|cursor| encode_cursor(&cursor)).transpose()
 }
 
-/// Synthesize the user-visible failure part from the failed round that ended an
-/// execution. Failure is a read-time projection: legacy transcripts never
-/// persisted this part, and no schema change is required for them to render.
+/// Project an execution's failed round or missing final failure notice into the
+/// current public error contract. The durable execution facts remain unchanged.
 pub(crate) async fn append_execution_failures(
     reader: &KernelReader,
     entries: &[EntryView],
@@ -123,12 +122,12 @@ pub(crate) async fn append_execution_failures(
                             ),
                             "failed provider round could not be projected as a transcript error"
                         );
-                        (manager_failure_content(), run_id, candidate_created_at_ms)
+                        (manager_failure_content()?, run_id, candidate_created_at_ms)
                     }
                 },
-                None => (manager_failure_content(), run_id, candidate_created_at_ms),
+                None => (manager_failure_content()?, run_id, candidate_created_at_ms),
             },
-            None => (manager_failure_content(), run_id, candidate_created_at_ms),
+            None => (manager_failure_content()?, run_id, candidate_created_at_ms),
         };
         failures.push((run_id, source_id, created_at_ms, content, owner, message_id));
     }
@@ -192,21 +191,26 @@ fn failure_content(
     .as_value())
 }
 
-/// Older manager-level failures predate the durable failure notice, so their
-/// exact reason is gone. The attempt phase still proves the run failed; show a
-/// visible error instead of only the generic "Response failed" lifecycle row.
-fn manager_failure_content() -> serde_json::Value {
-    agena_runtime_contracts::part_content::ErrorContent {
-        category: Some("internal".into()),
-        message: "The response ended unexpectedly before a final answer was produced. \
-                  This run was stopped outside the provider stream, so its exact failure \
-                  reason was not recorded. Send a new message to continue."
-            .into(),
-        detail: None,
-        retry: None,
-        extra: Default::default(),
-    }
-    .as_value()
+/// Recovery or a malformed failure notice may leave only a failed attempt.
+/// Preserve that known outcome without inventing an unavailable failure reason.
+fn manager_failure_content() -> Result<serde_json::Value, ApplicationError> {
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+    failure_content(&Failure::new(
+        FailureCode::new("runtime.execution_failure_unavailable"),
+        FailureCategory::Internal,
+        FailureResponsibility::System,
+        RetryDirective::Never,
+        RecoveryDirective::None,
+        FailureImpact::OperationFailed,
+        UserPresentation::new(
+            "runtime.execution_failure_unavailable",
+            "The response ended unexpectedly before a final answer was produced. \
+             Its exact failure reason is unavailable. Send a new message to continue.",
+        ),
+    ))
 }
 
 fn requested_sections(sections: &[ToolDetailSection]) -> &[ToolDetailSection] {
@@ -255,7 +259,8 @@ fn tool_result_projection_error_content(
         error.field,
     );
     // A malformed output/metadata field must not erase a valid execution
-    // failure. Keep its complete public problem, never the private raw result.
+    // failure. Keep its public identity and failure reason, and append only the
+    // reviewed projection context. Never expose the private raw result.
     let failure = result
         .and_then(|value| value.get("failure"))
         .filter(|value| !value.is_null())
@@ -266,15 +271,27 @@ fn tool_result_projection_error_content(
             "{}\n\n{message}",
             content["message"].as_str().unwrap_or_default(),
         ));
+        // Clients render UserProblem, not ErrorContent's internal headline.
+        content["problem"]["user"]["fallback"] = content["message"].clone();
         content["detail"] = serde_json::Value::String(message);
         content
     } else {
-        agena_runtime_contracts::part_content::ErrorContent {
-            category: Some("internal".into()),
-            message,
-            ..Default::default()
-        }
-        .as_value()
+        use agena_failure::{
+            Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+            RecoveryDirective, RetryDirective, UserPresentation,
+        };
+        // Clients consume the public problem contract even when the stored
+        // result carries no valid execution failure. Only the field name enters
+        // this reviewed message; stored values and decoder diagnostics stay private.
+        failure_content(&Failure::new(
+            FailureCode::new("runtime.tool_result_projection_failed"),
+            FailureCategory::Internal,
+            FailureResponsibility::System,
+            RetryDirective::Never,
+            RecoveryDirective::None,
+            FailureImpact::OperationFailed,
+            UserPresentation::validated("runtime.tool_result_projection_failed", message),
+        ))?
     };
     content["projection_error"] = serde_json::Value::Bool(true);
     content["tool_call_id"] = serde_json::Value::from(tool_id);
@@ -481,8 +498,8 @@ pub(crate) async fn project_kernel_entry(
                     });
                 }
                 let output = if let Some(raw_output) = decode("raw_output") {
-                    // Canonical output wins; legacy preview fields may be
-                    // unrelated or obsolete and are not consumed in this case.
+                    // Executed tools own their RawOutput. Catalog queries use
+                    // the separate Tool API response contract below.
                     Some(raw_output)
                 } else {
                     let response = decode_tool_result_field::<
@@ -500,12 +517,7 @@ pub(crate) async fn project_kernel_entry(
                     decode_tool_result_field::<agena_domain::RawOutput>("raw_output", output)?;
                 let invocation = decode_tool_result_field::<agena_domain::ToolInvocation>(
                     "invocation",
-                    decode("invocation").map(|mut value| {
-                        if let Some(object) = value.as_object_mut() {
-                            object.remove("tool_api_call");
-                        }
-                        value
-                    }),
+                    decode("invocation"),
                 )?;
                 let tool_api_call = decode_tool_result_field::<agena_domain::ToolApiCall>(
                     "tool_api_call",
@@ -952,6 +964,22 @@ impl Application {
 
 #[cfg(test)]
 mod tool_input_projection_tests {
+    #[test]
+    fn unavailable_execution_failure_uses_the_public_problem_contract() {
+        let content = super::manager_failure_content().unwrap();
+        let problem: agena_failure::UserProblem =
+            serde_json::from_value(content["problem"].clone()).unwrap();
+        assert_eq!(content["message"], problem.user.fallback);
+        assert!(
+            problem
+                .user
+                .fallback
+                .contains("exact failure reason is unavailable")
+        );
+        assert!(content["problem"].get("model").is_none());
+        assert!(content["problem"].get("diagnostic").is_none());
+    }
+
     use super::*;
     use agena_domain::{
         ComposerDocument, ComposerNode, StructuredObject, ToolApiCall, ToolApiFunction,
@@ -1193,13 +1221,24 @@ mod tool_input_projection_tests {
                 .is_err()
         );
 
-        // Older serialized views remain readable after adding timestamps.
-        let mut legacy = serde_json::to_value(&*completed).unwrap();
-        legacy.as_object_mut().unwrap().remove("created_at_ms");
-        legacy.as_object_mut().unwrap().remove("finished_at_ms");
-        let legacy: agena_storage::kernel::ToolView = serde_json::from_value(legacy).unwrap();
-        assert_eq!(legacy.created_at_ms, 0);
-        assert_eq!(legacy.finished_at_ms, None);
+        // Current views carry the stored creation time; decoding never invents
+        // an epoch timestamp for a record from another persistence contract.
+        let mut current = serde_json::to_value(&*completed).unwrap();
+        let decoded: agena_storage::kernel::ToolView =
+            serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(decoded.created_at_ms, completed.created_at_ms);
+        assert_eq!(decoded.finished_at_ms, completed.finished_at_ms);
+        current.as_object_mut().unwrap().remove("created_at_ms");
+        assert!(serde_json::from_value::<agena_storage::kernel::ToolView>(current).is_err());
+        let rounds = reader.rounds(session, None, 64).await.unwrap();
+        let mut current = serde_json::to_value(&rounds[0]).unwrap();
+        let decoded: agena_storage::kernel::ProviderRoundView =
+            serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(decoded, rounds[0]);
+        current.as_object_mut().unwrap().remove("created_at_ms");
+        assert!(
+            serde_json::from_value::<agena_storage::kernel::ProviderRoundView>(current).is_err()
+        );
     }
 
     #[tokio::test]
@@ -1309,8 +1348,8 @@ mod tool_input_projection_tests {
                 assert!(content.error.is_none());
                 assert_eq!(content.resources[0].resource_id, log.id());
 
-                // Reconstruct from the durable history query, including old
-                // completed records that have no persisted invocation object.
+                // Reconstruct from the durable history query. Calls rejected
+                // before execution can have no executable invocation object.
                 let history = reader.history_window(session, None, &[], 64).await.unwrap();
                 let entry = history.entries.iter().find(|entry| {
                     matches!(&entry.payload, EntryPayload::Tool { tool_id } if *tool_id == tool.id())
@@ -1413,6 +1452,13 @@ mod tool_input_projection_tests {
             ("tool_api_response", json!(17)),
             ("tool_api_response.output_text", json!(17)),
             ("invocation", json!([])),
+            (
+                "invocation",
+                json!({
+                    "name":"shell.exec", "input":{},
+                    "tool_api_call":{"function":"call", "arguments":{"private":"private-invalid-value"}},
+                }),
+            ),
             ("tool_api_call", json!(false)),
             ("metadata", json!([])),
         ];
@@ -1458,6 +1504,28 @@ mod tool_input_projection_tests {
             assert_eq!(projected.state, "failed");
             assert_eq!(projected.content["projection_error"], true);
             assert_eq!(projected.content["invalid_field"], *field);
+            assert_eq!(projected.content["tool_call_id"], tool.id().get());
+            let problem: agena_failure::UserProblem =
+                serde_json::from_value(projected.content["problem"].clone()).unwrap();
+            assert_eq!(
+                problem.code.as_str(),
+                "runtime.tool_result_projection_failed"
+            );
+            assert_eq!(projected.content["message"], problem.user.fallback);
+            assert!(
+                problem
+                    .user
+                    .fallback
+                    .contains(&format!("{field} field is invalid"))
+            );
+            assert!(
+                problem
+                    .user
+                    .fallback
+                    .contains("original record has been preserved")
+            );
+            assert!(projected.content["problem"].get("model").is_none());
+            assert!(projected.content["problem"].get("diagnostic").is_none());
             assert!(
                 !projected
                     .content
@@ -1565,7 +1633,7 @@ mod tool_input_projection_tests {
                     .unwrap()
                     .value;
                 let mut result = json!({
-                    "tool_api_response":{"output_text":"Legacy output preview"},
+                    "tool_api_response":{"output_text":"Catalog output preview"},
                 });
                 if explicit_nulls {
                     for field in [
@@ -1584,8 +1652,8 @@ mod tool_input_projection_tests {
                         "attachments":[attachment.clone()],
                         "truncated":false,
                     });
-                    // An unused malformed legacy preview must not override
-                    // or invalidate valid canonical image output.
+                    // An unrelated malformed catalog response must not
+                    // override or invalidate an executed tool's RawOutput.
                     result["tool_api_response"] = if explicit_nulls {
                         json!(17)
                     } else {
@@ -1620,7 +1688,7 @@ mod tool_input_projection_tests {
                     assert_eq!(output.text_content(), "Generated image");
                 } else {
                     assert!(output.attachments.is_empty());
-                    assert_eq!(output.text_content(), "Legacy output preview");
+                    assert_eq!(output.text_content(), "Catalog output preview");
                 }
             }
         }
@@ -1703,7 +1771,20 @@ mod tool_input_projection_tests {
         let projected = project_kernel_entry(reader, session, &entry).await.unwrap();
         assert_eq!(projected.part_id, entry.id.get());
         assert_eq!(projected.kind, "error");
-        assert_eq!(projected.content["problem"], problem);
+        let public: agena_api::part::ErrorPartResource =
+            serde_json::from_value(projected.content.clone()).unwrap();
+        let mut expected_problem = agena_failure::UserProblem::from(&failure);
+        let message = &public.problem.user.fallback;
+        assert!(message.starts_with(&format!("{}\n\n", expected_problem.user.fallback)));
+        assert!(message.contains("raw_output field is invalid"));
+        assert!(message.contains("original record has been preserved"));
+        assert_eq!(projected.content["message"], message.as_str());
+        // Only public prose gains context; identity, classification, retry,
+        // recovery, impact, localization key and detail key remain unchanged.
+        expected_problem.user.fallback.clone_from(message);
+        assert_eq!(public.problem, expected_problem);
+        assert!(projected.content["problem"].get("model").is_none());
+        assert!(projected.content["problem"].get("diagnostic").is_none());
         assert_eq!(projected.content["invalid_field"], "raw_output");
         assert!(
             !projected

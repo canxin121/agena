@@ -250,7 +250,6 @@ export type MessagePart = {
   agenaSections?: Array<{ section: 'metadata' | 'input' | 'output' | 'presentation'; revision: number }>
   agenaPresentation?: JsonLike
   runId?: number | null
-  parentPartId?: number | null
   // Tool state consumed by transcriptProjection and the AgenaOperationPart presentation.
   tool?: string
   state?: JsonLike

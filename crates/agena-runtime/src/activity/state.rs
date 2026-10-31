@@ -26,7 +26,6 @@ use agena_runtime_session::SessionManager;
 use agena_storage::kernel::{
     RequestId, SessionConfiguration, SessionId, SessionSummaryView, ToolId,
 };
-use agena_storage::store::PartState;
 
 use super::registry::ActivityRegistry;
 use crate::{
@@ -466,11 +465,9 @@ impl BackgroundCompletionBridge {
         if summary.tty || summary.owner_session_id.is_none() {
             return;
         }
-        let terminal = match summary.status {
-            ProcessStatus::Exited => PartState::Completed,
-            ProcessStatus::TimedOut | ProcessStatus::Stopped | ProcessStatus::Failed => {
-                PartState::Failed
-            }
+        let completed = match summary.status {
+            ProcessStatus::Exited => true,
+            ProcessStatus::TimedOut | ProcessStatus::Stopped | ProcessStatus::Failed => false,
             // A completion signal must be terminal; a spurious running report
             // has nothing to do here.
             ProcessStatus::Running => return,
@@ -487,7 +484,7 @@ impl BackgroundCompletionBridge {
                 route.flushed
             });
         let command_label = format!("\"{}\"", summary.command.trim());
-        let outcome = if terminal == PartState::Completed {
+        let outcome = if completed {
             Ok(match summary.exit_code {
                 Some(code) => format!("Command {command_label} completed (exit code {code})"),
                 None => format!("Command {command_label} completed"),

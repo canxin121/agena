@@ -21,7 +21,7 @@ import {
   prettyJson,
   stringValue,
   structuredValueMarkdown,
-  mediaAttachmentPresentation,
+  operationAttachmentPresentation,
   type JsonRecord,
 } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
@@ -30,7 +30,7 @@ const props = defineProps<{ block: JsonRecord; sessionId?: string | null }>()
 const chat = useChatStore()
 const directory = useDirectoryStore()
 const ui = useUiStore()
-const mediaAttachment = computed(() => mediaAttachmentPresentation(props.block))
+const mediaAttachment = computed(() => operationAttachmentPresentation(props.block))
 const workspaceRoot = computed(() => chat.getSessionDirectory(props.sessionId) || directory.currentDirectory || '')
 const mediaOpenError = ref('')
 
@@ -60,15 +60,8 @@ const contentFormat = computed(
       : 'plain') as ContentFormat,
 )
 
-const kind = computed(() => stringValue(props.block.type) || stringValue(props.block.kind) || 'unknown')
-const bodyText = computed(() => {
-  return (
-    stringValue(props.block.text) ||
-    stringValue(props.block.markdown) ||
-    stringValue(props.block.stdout) ||
-    stringValue(props.block.content)
-  )
-})
+const kind = computed(() => stringValue(props.block.type) || 'unknown')
+const bodyText = computed(() => stringValue(props.block.text))
 const command = computed(() => stringValue(props.block.command))
 // A command is Markdown code, not prose: render it through the shared Markdown
 // fence so the complete command stays readable and copyable.
@@ -78,21 +71,8 @@ const stdout = computed(() => stringValue(props.block.stdout))
 const stderr = computed(() => stringValue(props.block.stderr))
 const exitCode = computed(() => (typeof props.block.exit_code === 'number' ? props.block.exit_code : null))
 
-const tableColumns = computed(() =>
-  jsonArray(props.block.columns).map((raw, index) => {
-    if (typeof raw === 'string') return { key: raw, label: raw }
-    const column = jsonRecord(raw)
-    const key = stringValue(column.key) || String(index)
-    return { key, label: stringValue(column.label) || key }
-  }),
-)
-const tableRows = computed(() => jsonArray(props.block.rows).map((row) => row))
-
-function tableCell(row: JsonValue, key: string, index: number): string {
-  if (Array.isArray(row)) return formatCell(row[index])
-  const record = jsonRecord(row)
-  return formatCell(record[key])
-}
+const tableColumns = computed(() => jsonArray(props.block.columns).map(stringValue))
+const tableRows = computed(() => jsonArray(props.block.rows).filter(Array.isArray))
 
 function formatCell(value: JsonValue | undefined): string {
   if (value === null || value === undefined) return ''
@@ -104,60 +84,30 @@ function formatCell(value: JsonValue | undefined): string {
     .join(' · ')
 }
 
-const searchResults = computed(() => {
-  const source = jsonArray(props.block.results).length ? jsonArray(props.block.results) : jsonArray(props.block.items)
-  return source.map((raw, index) => {
+const searchResults = computed(() =>
+  jsonArray(props.block.items).map((raw, index) => {
     const item = jsonRecord(raw)
-    const uri = stringValue(item.uri) || stringValue(item.url)
+    const uri = stringValue(item.url)
     return {
       key: uri || `${stringValue(item.title)}:${index}`,
       title: stringValue(item.title) || uri || `Result ${index + 1}`,
       uri,
-      snippet: stringValue(item.snippet) || stringValue(item.description),
-    }
-  })
-})
-
-const fileChanges = computed(() => {
-  const source = jsonArray(props.block.changes).length ? jsonArray(props.block.changes) : jsonArray(props.block.files)
-  return source.map((raw, index) => {
-    const item = jsonRecord(raw)
-    return {
-      key: stringValue(item.path) || stringValue(item.filename) || String(index),
-      path: stringValue(item.path) || stringValue(item.filename) || `file-${index + 1}`,
-      status: stringValue(item.status) || stringValue(item.kind),
-      additions: typeof item.additions === 'number' ? item.additions : null,
-      deletions: typeof item.deletions === 'number' ? item.deletions : null,
-    }
-  })
-})
-
-const artifact = computed(() => jsonRecord(props.block.artifact))
-const resourceUri = computed(
-  () =>
-    stringValue(props.block.uri) ||
-    stringValue(props.block.url) ||
-    stringValue(artifact.value.uri) ||
-    stringValue(jsonRecord(props.block.source).url),
-)
-const resourceTitle = computed(
-  () =>
-    stringValue(props.block.title) ||
-    stringValue(props.block.filename) ||
-    stringValue(artifact.value.name) ||
-    resourceUri.value,
-)
-const checklistItems = computed(() =>
-  jsonArray(props.block.items).map((raw, index) => {
-    const item = jsonRecord(raw)
-    return {
-      key: stringValue(item.id) || `${stringValue(item.content)}:${index}`,
-      content: stringValue(item.content) || stringValue(item.title) || `Item ${index + 1}`,
-      status: stringValue(item.status),
-      priority: stringValue(item.priority),
+      snippet: stringValue(item.snippet),
     }
   }),
 )
+
+const fileChanges = computed(() =>
+  jsonArray(props.block.changes).map((raw, index) => {
+    const item = jsonRecord(raw)
+    return {
+      key: stringValue(item.path) || String(index),
+      path: stringValue(item.path) || `file-${index + 1}`,
+      status: stringValue(item.kind),
+    }
+  }),
+)
+
 const progressPercent = computed(() =>
   typeof props.block.total === 'number' && props.block.total > 0 && typeof props.block.completed === 'number'
     ? Math.max(0, Math.min(100, Math.floor((props.block.completed * 100) / props.block.total)))
@@ -197,23 +147,19 @@ const progressCount = computed(() =>
 
     <MarkdownRenderer
       v-else-if="kind === 'json'"
-      :content="structuredValueMarkdown(block.value ?? block.data ?? block.content ?? block)"
+      :content="structuredValueMarkdown(block.value ?? null)"
       mode="markdown"
       :stream="false"
     />
 
-    <AgenaDiffBlock v-else-if="kind === 'diff'" :diff="stringValue(block.diff) || bodyText" />
+    <AgenaDiffBlock v-else-if="kind === 'diff'" :diff="stringValue(block.diff)" />
 
     <div v-else-if="kind === 'table'" class="overflow-x-auto border-y border-border/60">
       <table class="w-full border-collapse text-left text-xs">
         <thead class="text-muted-foreground">
           <tr>
-            <th
-              v-for="column in tableColumns"
-              :key="column.key"
-              class="border-b border-border/60 px-2 py-1 font-medium"
-            >
-              {{ column.label }}
+            <th v-for="column in tableColumns" :key="column" class="border-b border-border/60 px-2 py-1 font-medium">
+              {{ column }}
             </th>
           </tr>
         </thead>
@@ -221,10 +167,10 @@ const progressCount = computed(() =>
           <tr v-for="(row, rowIndex) in tableRows" :key="rowIndex" class="border-b border-border/35 last:border-b-0">
             <td
               v-for="(column, columnIndex) in tableColumns"
-              :key="column.key"
+              :key="column"
               class="min-w-24 max-w-xl break-words px-2 py-1 align-top whitespace-pre-wrap"
             >
-              {{ tableCell(row, column.key, columnIndex) }}
+              {{ formatCell(row[columnIndex]) }}
             </td>
           </tr>
         </tbody>
@@ -245,10 +191,6 @@ const progressCount = computed(() =>
       <div v-for="change in fileChanges" :key="change.key" class="flex min-w-0 items-center gap-3 py-1">
         <span class="min-w-0 flex-1 truncate">{{ change.path }}</span>
         <span v-if="change.status" class="text-muted-foreground">{{ change.status }}</span>
-        <span v-if="change.additions !== null" class="text-emerald-600 dark:text-emerald-400"
-          >+{{ change.additions }}</span
-        >
-        <span v-if="change.deletions !== null" class="text-rose-600 dark:text-rose-400">-{{ change.deletions }}</span>
       </div>
     </div>
 
@@ -260,29 +202,6 @@ const progressCount = computed(() =>
         @open="openMedia"
       />
       <p v-if="mediaOpenError" class="text-xs text-destructive" role="alert">{{ mediaOpenError }}</p>
-    </div>
-
-    <div v-else-if="kind === 'resource_link' || kind === 'citation'" class="interaction-width space-y-1">
-      <AgenaResourceLink :href="resourceUri" :label="resourceTitle" :description="resourceUri" />
-      <p v-if="bodyText" class="px-1 text-xs leading-relaxed text-muted-foreground">{{ bodyText }}</p>
-    </div>
-
-    <div v-else-if="kind === 'embedded_resource'" class="space-y-1 border-y border-border/50 py-1">
-      <div class="break-all font-mono text-[11px] text-muted-foreground">{{ resourceTitle }}</div>
-      <pre v-if="bodyText" class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs">{{
-        bodyText
-      }}</pre>
-      <CodeBlock v-else :code="prettyJson(block)" lang="json" compact />
-    </div>
-
-    <div v-else-if="kind === 'checklist'" class="divide-y divide-border/40 border-y border-border/60 text-xs">
-      <div v-for="item in checklistItems" :key="item.key" class="flex min-w-0 items-start gap-2 py-1">
-        <span class="shrink-0 font-mono text-primary">{{ item.status === 'completed' ? '[x]' : '[ ]' }}</span>
-        <span class="min-w-0 flex-1 break-words">{{ item.content }}</span>
-        <span v-if="item.priority" class="shrink-0 font-mono text-[10px] text-muted-foreground">{{
-          item.priority
-        }}</span>
-      </div>
     </div>
 
     <div v-else-if="kind === 'progress'" class="space-y-1.5 border-y border-border/50 py-1">

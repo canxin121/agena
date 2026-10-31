@@ -80,22 +80,7 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function hydrate() {
     const raw = getLocalJson<unknown>(STORAGE_KEY, null)
-    const next = cloneRecord(raw)
-    if (next) {
-      let removedTranscriptPreferences = false
-      for (const key of [
-        'chatActivityKindDefaultExpanded',
-        'chatToolActivityDefaultExpandedCategories',
-        'chatToolActivityDefaultExpandedOverrides',
-      ]) {
-        if (Object.prototype.hasOwnProperty.call(next, key)) {
-          delete (next as Record<string, unknown>)[key]
-          removedTranscriptPreferences = true
-        }
-      }
-      if (removedTranscriptPreferences) setLocalJson(STORAGE_KEY, next)
-    }
-    data.value = next
+    data.value = cloneRecord(raw)
   }
 
   async function refresh() {

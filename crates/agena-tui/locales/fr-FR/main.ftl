@@ -2072,7 +2072,6 @@ timeline-label-role = Rôle
 timeline-label-state = État
 timeline-label-revision = Révision
 timeline-label-run = Exécution
-timeline-label-parent-part = Partie parente
 timeline-summary-permission-requested = autorisation demandée [{$risk}] : {$reason}
 timeline-summary-permission-replied = réponse à l’autorisation : {$kind}
 timeline-summary-permission-rule-created = règle d’autorisation n° {$id} créée

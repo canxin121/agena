@@ -34,10 +34,8 @@ impl std::fmt::Debug for ServerStateDb {
 }
 
 impl ServerStateDb {
-    pub(crate) async fn from_store(
-        store: Arc<dyn InstanceStateRepository>,
-    ) -> Result<Self, String> {
-        Ok(Self { store })
+    pub(crate) fn new(store: Arc<dyn InstanceStateRepository>) -> Self {
+        Self { store }
     }
 
     pub(crate) fn path(&self) -> &Path {

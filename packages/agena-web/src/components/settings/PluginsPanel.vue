@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { normalizePluginSettingsView, type PluginSettingsTab } from '@/components/settings/pluginSettingsNavigation'
+import { pluginTabForSettingsView, type PluginSettingsTab } from '@/components/settings/pluginSettingsNavigation'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
@@ -446,8 +446,7 @@ const allCommands = computed(() =>
 )
 const selectedCommands = computed(() =>
   allCommands.value.filter(
-    (command) =>
-      command.plugin_id === selectedPluginId.value && command.category?.trim().toLowerCase() !== 'skill',
+    (command) => command.plugin_id === selectedPluginId.value && command.category?.trim().toLowerCase() !== 'skill',
   ),
 )
 const selectedTools = computed(() =>
@@ -610,7 +609,7 @@ async function canLeavePlugin() {
 onBeforeRouteUpdate((to) => {
   if (
     to.params.section === 'plugins-tools' &&
-    normalizePluginSettingsView(to.query.view || 'plugin-workbench') === 'plugin-workbench' &&
+    pluginTabForSettingsView(to.query.view || 'plugin-workbench') !== null &&
     String(to.query.plugin || selectedPluginId.value) === selectedPluginId.value
   )
     return true

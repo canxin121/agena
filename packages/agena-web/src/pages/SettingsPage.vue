@@ -30,7 +30,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
 import { settingsQueryForDestination } from '@/components/settings/settingsDestination'
-import { normalizePluginSettingsView, pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
+import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import {
   resolveSettingsSubpage,
@@ -124,11 +124,12 @@ const activeView = computed(() => {
   try {
     remembered = localStorage.getItem(settingsSubpageStorageKey(activeSection.value)) || ''
   } catch {}
-  const requested =
-    activeSection.value === 'plugins-tools'
-      ? normalizePluginSettingsView(route.query.view || (route.query.pluginTab ? 'plugin-workbench' : remembered))
-      : route.query.view
-  return resolveSettingsSubpage(requested, remembered, activePages.value, SETTINGS_DEFAULT_SUBPAGE[activeSection.value])
+  return resolveSettingsSubpage(
+    route.query.view,
+    remembered,
+    activePages.value,
+    SETTINGS_DEFAULT_SUBPAGE[activeSection.value],
+  )
 })
 
 // Every scoped page resolves the same configuration layers; its workbench owns
@@ -160,15 +161,11 @@ watch(
     ] as const,
   () => {
     if (!settingsTabFromRouteValue(route.params.section)) return
-    if (route.params.section === 'plugins-tools' && route.query.view === 'mcp-server') {
-      void router.replace({ path: settingsPathForTab('mcp-server'), query: { view: 'connection' }, hash: route.hash })
-      return
-    }
     try {
       localStorage.setItem(settingsSubpageStorageKey(activeSection.value), activeView.value)
       localStorage.setItem(settingsScopeStorageKey(activeSection.value), activeScope.value)
     } catch {}
-    const { pluginTab: _legacyPluginTab, scope: _scope, ...query } = route.query
+    const { pluginTab: _pluginTab, scope: _scope, ...query } = route.query
     if (activeScope.value) query.scope = activeScope.value
     const isPluginView = activeSection.value === 'plugins-tools' && pluginTabForSettingsView(activeView.value)
     if (isPluginView) {
@@ -871,7 +868,11 @@ const dirtyHint = computed(
 
           <!-- Skills -->
           <SkillsPanel v-else-if="activeSection === 'skills'" ref="skillsPanel" :active-page="activeView" />
-          <McpConnectionsPanel v-else-if="activeSection === 'mcp-connections'" ref="mcpConnectionsPanel" :active-page="activeView" />
+          <McpConnectionsPanel
+            v-else-if="activeSection === 'mcp-connections'"
+            ref="mcpConnectionsPanel"
+            :active-page="activeView"
+          />
 
           <!-- MCP Server -->
           <SettingsSectionWorkbench

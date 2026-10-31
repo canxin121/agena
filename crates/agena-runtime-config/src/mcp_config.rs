@@ -359,7 +359,6 @@ pub enum McpHttpAuthConfig {
     /// OAuth tokens and registered client identities use the secret store.
     /// Optional pre-registration or client metadata supports providers that
     /// do not offer dynamic client registration.
-    #[serde(alias = "oauth")]
     OAuth {
         #[serde(default)]
         scopes: Vec<String>,
@@ -416,21 +415,32 @@ mod tests {
     }
 
     #[test]
-    fn oauth_accepts_the_cli_alias_and_defaults_registration_fields() {
-        for kind in ["oauth", "o_auth"] {
-            let auth: McpHttpAuthConfig =
-                serde_json::from_value(json!({"kind": kind, "scopes": ["read"]})).unwrap();
-            assert!(matches!(
-                &auth,
-                McpHttpAuthConfig::OAuth {
-                    client_id: None,
-                    client_secret: None,
-                    client_metadata_url: None,
-                    ..
-                }
-            ));
-            assert_eq!(serde_json::to_value(auth).unwrap()["kind"], "o_auth");
-        }
+    fn oauth_uses_the_current_config_tag_and_defaults_registration_fields() {
+        let auth: McpHttpAuthConfig = serde_json::from_value(json!({
+            "kind": "o_auth", "scopes": ["read"]
+        }))
+        .unwrap();
+        assert!(matches!(
+            &auth,
+            McpHttpAuthConfig::OAuth {
+                client_id: None,
+                client_secret: None,
+                client_metadata_url: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            serde_json::to_value(auth).unwrap(),
+            json!({
+                "kind": "o_auth", "scopes": ["read"]
+            })
+        );
+        assert!(
+            serde_json::from_value::<McpHttpAuthConfig>(json!({
+                "kind": "oauth", "scopes": ["read"]
+            }))
+            .is_err()
+        );
     }
 
     #[test]

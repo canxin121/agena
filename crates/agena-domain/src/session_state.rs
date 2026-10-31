@@ -118,18 +118,10 @@ impl SessionLifecycleState {
 
 /// The single client-facing processing state of a session.
 ///
-/// This is the one canonical definition of the derived session state shared by
-/// every layer: storage derives it from the durable run markers and pending
-/// interactions ([`agena_storage::store::SessionState`] is a re-export of this
-/// type), the API projects it with per-kind payloads, and TUI/CLI/Web branch on
-/// [`SessionStateKind::as_str`] or the generated TypeScript mirrors. Storing a
-/// second copy of these variants anywhere else is a bug.
-///
-/// There is no "owner" or lease dimension here. One server process owns the
-/// data directory, so a run marker that is in flight is a run this process is
-/// executing: the marker alone answers "is this session busy" (17.3). A crash
-/// leaves an ownerless marker behind, but it is resolved by the recovering
-/// process before it serves a single read, so clients never observe it.
+/// Storage derives this state from current kernel execution facts and pending
+/// interactions. API projections and TUI/CLI/Web consumers share the same
+/// vocabulary; database ownership and recovery remain kernel responsibilities.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionStateKind {

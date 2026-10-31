@@ -18,11 +18,8 @@ pub mod provider_sse;
 pub use codex_user_agent::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_user_agent};
 pub use provider::{
     CatalogedModelsProvider, ManagedCredential, ModelRuntime, MultiAdapterProvider,
-    ProjectedSessionPart, ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook,
-    catalog_decoration_source, completion_input_part_from_wire, completion_input_provider_state,
-    completion_input_provider_state_from_parts, install_request_header_hook,
-    parse_sap_ai_core_service_key, project_classifier_input_run_text, project_completion_input,
-    project_operation_output, project_persisted as project_session_parts,
+    ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook, catalog_decoration_source,
+    install_request_header_hook, parse_sap_ai_core_service_key, project_classifier_input_run_text,
     with_request_cancellation,
 };
 pub use provider_client_versions::*;

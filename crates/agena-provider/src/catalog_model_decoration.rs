@@ -154,8 +154,8 @@ fn configured_definition_for_provider(
     provider: &dyn CatalogModelDecorationSource,
 ) -> ConfiguredModelDefinition {
     let mut configured = definition.clone().into_configured_definition();
-    // Legacy global catalog values must never leak onto a different provider
-    // route. The user's request default remains in provider configuration.
+    // Global catalog values must never leak onto a different provider route.
+    // The user's request default remains in provider configuration.
     configured.supports_verbosity = None;
     configured.default_verbosity = None;
     configured.verbosity_levels.clear();

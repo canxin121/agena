@@ -104,7 +104,7 @@ async function main() {
     { type: 'table', id: 'table', columns: ['name', 'value'], rows: [['table marker', 23]] },
     { type: 'log', id: 'log', stream: 'stderr', text: 'Readable stderr result' },
     { type: 'command', id: 'command', command: 'printf fixture', cwd: '/fixture', stdout: 'Command stdout', stderr: 'Command stderr', exit_code: 1 },
-    { type: 'file_changes', id: 'file_changes', changes: [{ path: 'fixture-added.txt', kind: 'added', additions: 2, deletions: 0 }] },
+    { type: 'file_changes', id: 'file_changes', changes: [{ path: 'fixture-added.txt', kind: 'added' }] },
     { type: 'diff', id: 'diff', diff: 'diff --git a/fixture.txt b/fixture.txt\n--- a/fixture.txt\n+++ b/fixture.txt\n@@ -1 +1 @@\n-old line\n+new line\n' },
     { type: 'search_results', id: 'search_results', items: [{ title: 'Search result marker', url: 'https://example.test/result', snippet: 'Search result snippet' }], total: 1 },
     { type: 'media', id: 'media', artifact: { uri: `file://${images[1].path}`, mime: 'image/svg+xml', name: 'chart.svg' } },

@@ -1,38 +1,19 @@
-//! Provider-agnostic wire representation of a single chat message.
+//! Provider-agnostic wire representation of a completion input run.
 //!
-//! [`WirePart`] is the normalised, provider-ready view of persisted session
-//! parts ([`agena_storage::store::Part`]). Callers obtain it via
-//! [`project_session_parts`] / [`project_completion_input`] and then map it to
-//! whatever payload format their provider expects.
-//!
-//! The projection step handles all concerns that are shared across every
-//! provider:
-//!   - stripping UI-only content (file changes, permission requests, …)
-//!   - resolving the tool-call ID from the operation's stashed provider id
-//!     with fallback to the operation's numeric call id
-//!   - carrying operation outputs through one provider-neutral projection path
-//!   - emitting an empty output for still-pending / in-progress tool executions
+//! [`project`] converts the provider-owned [`CompletionInputRun`] contract into
+//! [`WirePart`]s consumed by concrete adapters. The session kernel supplies the
+//! run's role, ordered parts, tool outcomes, and provider replay state.
+//! Attachment projection keeps local and unavailable resources as explicit
+//! references while adapters encode deliverable media for their protocols.
 
 use base64::Engine as _;
-use serde::Deserialize;
 
 use crate::ProviderError;
-use agena_domain::{ExecutionStatus, ReasoningPart, Role};
+use agena_domain::{AttachmentItem, AttachmentKind, AttachmentSource, Role};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
-    CompletionInputPart, CompletionInputProviderState, CompletionInputRun, ModelToolFunction,
-    normalize_optional_text, provider_metadata_value_is_meaningful,
+    CompletionInputPart, CompletionInputRun, ModelToolFunction,
 };
-use agena_runtime_contracts::part::{
-    AttachmentItem, AttachmentKind, AttachmentSource, OperationPart,
-};
-use agena_runtime_contracts::part_content::{
-    ThinkContent, TypedContent, attachment_from_file_ref, command_reference_from_command_ref,
-    decode, operation_from_tool_call,
-};
-use agena_runtime_contracts::provider_state::PartProviderState;
-use agena_storage::store::{Part, PartRole};
-
 // ─── Runtime-private type ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,231 +82,6 @@ pub fn project(run: &CompletionInputRun) -> Vec<WirePart> {
         .cloned()
         .map(wire_part_from_completion_input)
         .collect()
-}
-
-/// Decode a storage [`Part`] into the typed [`TypedContent`] the projection
-/// operates on. A part that fails to decode (unknown kind or non-object
-/// payload) projects to nothing — the same "reload 宁缺勿崩" principle the
-/// session reload path applies.
-fn projected_content(part: &Part) -> Option<TypedContent> {
-    decode(&part.kind, &part.content).ok()
-}
-
-/// Resolve the stable provider-visible call id for a stored tool part.
-///
-/// [`agena_storage::store::Part`] has no `operation_id` column; the session
-/// serialization stashes the provider operation id under
-/// `agena.operation_id` inside the rich [`OperationPart`] metadata (see
-/// `agena-runtime-session` `serialize_part_content`). When that stash is
-/// missing, the operation's numeric call id is the deterministic fallback.
-fn project_operation_call_id(exec: &OperationPart) -> String {
-    exec.metadata
-        .get("agena.operation_id")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .unwrap_or_else(|| exec.call_id().to_string())
-}
-
-// ─── Typed-content projections ───────────────────────────────────────────────
-//
-// Provider projection uses the runtime-facing values recovered through the
-// public extractor helpers in `agena_runtime_contracts::part_content`
-// (`operation_from_tool_call`, `attachment_from_file_ref`,
-// `command_reference_from_command_ref`, …).
-
-/// Derive the reasoning text providers prefer from the canonical `think`
-/// shape (summary wins, raw content otherwise).
-fn reasoning_preferred_text(think: &ThinkContent) -> String {
-    ReasoningPart {
-        summary: think.summary.clone(),
-        raw_content: think.raw.clone(),
-        encrypted_content: think.encrypted_content.clone(),
-    }
-    .preferred_text()
-}
-
-/// Project a persisted part slice at the session/core boundary.
-///
-/// Consumes storage [`Part`]s directly (R6-T5); each part is decoded to its
-/// typed [`TypedContent`] and projected into the current provider wire
-/// contract. Run markers and
-/// provider-only operations are skipped; the coarse `state` column drives
-/// result emission with the fine-grained denial outcomes recovered from the
-/// rich content.
-pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
-    let mut wire: Vec<WirePart> = Vec::new();
-
-    for part in parts {
-        if !part.visibility.visible_to_ai() {
-            continue;
-        }
-        if part.is_run_marker() {
-            continue;
-        }
-        let Some(content) = projected_content(part) else {
-            continue;
-        };
-        let role = role_from_part_role(part.role);
-
-        match content {
-            TypedContent::Text(text) => {
-                if !text.text.is_empty() {
-                    wire.push(WirePart::Text {
-                        text: text.text.clone(),
-                    });
-                }
-            }
-            // Paste and compaction are textual provider context; emit their
-            // text directly when non-empty.
-            TypedContent::PasteRef(paste) => {
-                if !paste.text.is_empty() {
-                    wire.push(WirePart::Text {
-                        text: paste.text.clone(),
-                    });
-                }
-            }
-            TypedContent::Compaction(compaction) => {
-                if let Some(summary) = compaction.summary.as_deref().filter(|s| !s.is_empty()) {
-                    wire.push(WirePart::Text {
-                        text: summary.to_owned(),
-                    });
-                }
-            }
-            // Run markers are filtered above; the fold degraded Run to empty
-            // text, so nothing projects here.
-            TypedContent::Run(_) => {}
-            TypedContent::FileRef(file_ref) => {
-                for item in &attachment_from_file_ref(&file_ref).attachments {
-                    if file_ref
-                        .extra
-                        .get("delivery")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("reference")
-                    {
-                        let label = item
-                            .filename
-                            .as_deref()
-                            .or(item.title.as_deref())
-                            .unwrap_or("attachment");
-                        let text=local_resource_reference_text(item).unwrap_or_else(||format!("[Reference-only resource: {label}; media type {}. No media bytes or remote-file access were provided to this model. Use a separately authorized cloud media tool or explicitly attach contents to analyze it.]",item.mime));
-                        wire.push(WirePart::Text { text });
-                    } else if let Some(text) = local_resource_reference_text(item) {
-                        wire.push(WirePart::Text { text });
-                    } else {
-                        wire.push(WirePart::Attachment { item: item.clone() });
-                    }
-                }
-            }
-            TypedContent::CommandRef(command_ref) => {
-                let command_reference = command_reference_from_command_ref(&command_ref);
-                if !command_reference.commands.is_empty() {
-                    wire.push(WirePart::Text {
-                        text: command_reference.model_context_text(),
-                    });
-                }
-            }
-            TypedContent::ToolCall(tool_call) => {
-                let exec = operation_from_tool_call(&tool_call);
-                if exec.is_provider_only() {
-                    continue;
-                }
-                let call_id = project_operation_call_id(&exec);
-                let status = operation_status(&exec);
-
-                let Some((function, arguments_json)) =
-                    protocol_name_and_args(exec.tool_api_call.as_ref())
-                else {
-                    continue;
-                };
-                if matches!(role, Role::Tool) {
-                    if is_terminal_result_status(status) {
-                        wire.push(WirePart::ToolResult {
-                            attachments: exec
-                                .raw_output()
-                                .map(|output| output.attachments.clone())
-                                .unwrap_or_default(),
-                            tool_call_id: call_id,
-                            function,
-                            arguments_json,
-                            status: completion_input_result_status(status),
-                            output_json: project_operation_output(status, &exec),
-                        });
-                    }
-                    continue;
-                }
-                wire.push(WirePart::ToolCall {
-                    id: call_id.clone(),
-                    function: function.clone(),
-                    arguments_json: arguments_json.clone(),
-                });
-
-                // Every persisted assistant tool call projects its paired
-                // result — even a call whose turn was interrupted before the
-                // execution settled (Pending/InProgress). A provider-visible
-                // `function_call` with no matching `function_call_output` is
-                // rejected by gateways that translate the Responses input into
-                // Chat messages ("No tool output found for tool call N"), so
-                // an interrupted call must replay as a closed call/result pair
-                // rather than an orphaned call.
-                wire.push(WirePart::ToolResult {
-                    attachments: exec
-                        .raw_output()
-                        .map(|output| output.attachments.clone())
-                        .unwrap_or_default(),
-                    tool_call_id: call_id,
-                    function,
-                    arguments_json,
-                    status: completion_input_result_status(status),
-                    output_json: project_operation_output(status, &exec),
-                });
-            }
-            TypedContent::Think(think) => {
-                let text = reasoning_preferred_text(&think);
-                if !text.is_empty() {
-                    wire.push(WirePart::Reasoning { text });
-                }
-            }
-            TypedContent::Hook(hook) => {
-                // A hook that blocked the stop carries its continuation in
-                // `message` (for example the workflow plan autorun's
-                // `<plan_context>` block). The continuation is System-originated
-                // (the agent.stop plugin's `continue_with_message`), so it must
-                // never project as the assistant's own reply text — that role
-                // leak is exactly how runtime content surfaces as the model's
-                // visible output. Project it as a dedicated SystemMessage wire
-                // part, which adapters deliver as a mid-conversation
-                // system/notice message. The next model turn still sees it: both
-                // Text and SystemMessage map to `TranscriptBlock::Text` in
-                // `runs_to_provider_transcript` (prompt_window.rs).
-                if let Some(message) = hook.message.as_deref().filter(|text| !text.is_empty()) {
-                    wire.push(WirePart::SystemMessage {
-                        text: message.to_owned(),
-                    });
-                }
-            }
-            // A background-operation completion/event notification (the agena
-            // analog of Claude's `<task-notification>`). It stays appended onto
-            // the launching assistant run (no new run marker), but must never
-            // project as the assistant's own reply text — that role leak is
-            // exactly how notification JSON surfaced as the model's visible
-            // output. Project it as a dedicated SystemMessage wire part, which
-            // adapters deliver as a mid-conversation system/notice message;
-            // `body` carries the full `<agena_notification>…</agena_notification>`
-            // payload the model is taught to recognize (§3).
-            TypedContent::SystemNotification(notification) => {
-                if !notification.body.trim().is_empty() {
-                    wire.push(WirePart::SystemMessage {
-                        text: notification.body.clone(),
-                    });
-                }
-            }
-            TypedContent::Notice(_) | TypedContent::Error(_) => {}
-        }
-    }
-
-    wire
 }
 
 fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
@@ -445,179 +201,6 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
     }
 }
 
-/// Project a persisted run group into the provider-owned completion input
-/// contract. `parts` is one run's parts — a run marker plus its content
-/// parts (or a bare content part for singletons). Role and provider replay
-/// state are read from the run marker when present, matching how the session
-/// groups storage parts into logical messages. Runtime-only interaction and
-/// error Activities are excluded; all provider-visible parts and replay state
-/// are retained.
-pub fn project_completion_input(parts: &[Part]) -> CompletionInputRun {
-    let marker = parts.iter().find(|part| part.is_run_marker());
-    let role = marker
-        .map(|part| role_from_part_role(part.role))
-        .or_else(|| parts.first().map(|part| role_from_part_role(part.role)))
-        .unwrap_or(Role::User);
-    CompletionInputRun {
-        role,
-        parts: project_persisted(parts)
-            .into_iter()
-            .map(completion_input_part_from_wire)
-            .collect(),
-        provider_state: marker
-            .and_then(|part| {
-                part.content
-                    .get("rounds")
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|rounds| rounds.last())
-                    .and_then(|round| round.get("provider_state"))
-                    .filter(|state| !state.is_null())
-                    .or(part.provider_state.as_ref())
-            })
-            .and_then(|state| completion_input_provider_state_from_parts(state, parts))
-            .unwrap_or_default(),
-    }
-}
-
-pub fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
-    match part {
-        WirePart::Text { text } => CompletionInputPart::Text { text },
-        WirePart::Reasoning { text } => CompletionInputPart::Reasoning { text },
-        WirePart::SystemMessage { text } => CompletionInputPart::SystemMessage { text },
-        WirePart::Attachment { item } => CompletionInputPart::Attachment {
-            attachment: completion_input_attachment(item),
-        },
-        WirePart::ToolCall {
-            id,
-            function,
-            arguments_json,
-        } => CompletionInputPart::ToolCall {
-            id,
-            function,
-            arguments_json,
-        },
-        WirePart::ToolResult {
-            tool_call_id,
-            function,
-            arguments_json,
-            status,
-            output_json,
-            attachments,
-        } => CompletionInputPart::ToolResult {
-            tool_call_id,
-            function,
-            arguments_json,
-            status,
-            output_json,
-            attachments: attachments
-                .into_iter()
-                .map(completion_input_attachment)
-                .collect(),
-        },
-    }
-}
-
-fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachment {
-    CompletionInputAttachment {
-        kind: match item.kind {
-            AttachmentKind::Image => CompletionInputAttachmentKind::Image,
-            AttachmentKind::Audio => CompletionInputAttachmentKind::Audio,
-            AttachmentKind::Video => CompletionInputAttachmentKind::Video,
-            AttachmentKind::Pdf => CompletionInputAttachmentKind::Pdf,
-            AttachmentKind::File => CompletionInputAttachmentKind::File,
-        },
-        mime: item.mime,
-        source: match item.source {
-            AttachmentSource::Url { url } => CompletionInputAttachmentSource::Url { url },
-            AttachmentSource::DataUrl { url } => CompletionInputAttachmentSource::DataUrl { url },
-            AttachmentSource::Base64 { data } => CompletionInputAttachmentSource::Base64 { data },
-            AttachmentSource::ProviderData { route, data } => {
-                CompletionInputAttachmentSource::ProviderData { route, data }
-            }
-            AttachmentSource::FileId { file_id } => {
-                CompletionInputAttachmentSource::FileId { id: file_id }
-            }
-            AttachmentSource::LocalPath { path } => {
-                CompletionInputAttachmentSource::LocalPath { path }
-            }
-            AttachmentSource::Unavailable { reason } => {
-                CompletionInputAttachmentSource::Unavailable { reason }
-            }
-        },
-        filename: item.filename,
-        title: item.title,
-        size_bytes: item.size_bytes,
-        sha256: item.sha256,
-        width: item.width,
-        height: item.height,
-        duration_ms: item.duration_ms,
-        page_count: item.page_count,
-    }
-}
-
-pub fn completion_input_provider_state_from_parts(
-    value: &serde_json::Value,
-    parts: &[Part],
-) -> Option<CompletionInputProviderState> {
-    let sources = parts
-        .iter()
-        .filter(|part| part.kind == "think")
-        .map(|part| {
-            agena_runtime_contracts::provider_state::ReasoningTextSource::from_content(
-                part.part_id,
-                &part.content,
-            )
-        })
-        .collect::<Vec<_>>();
-    match agena_runtime_contracts::provider_state::restore_reasoning_text(value, &sources) {
-        Ok(state) => completion_input_provider_state(&state),
-        Err(error) => {
-            tracing::error!(diagnostic = %error, "provider replay state contains an invalid part-content reference");
-            None
-        }
-    }
-}
-
-pub fn completion_input_provider_state(
-    value: &serde_json::Value,
-) -> Option<CompletionInputProviderState> {
-    let mut state: CompletionInputProviderState =
-        match serde_json::from_value::<PartProviderState>(value.clone()) {
-            Ok(state) => state.into(),
-            Err(error) => {
-                tracing::warn!(
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "decode persisted provider state for prompt replay",
-                        &error,
-                    ),
-                    "malformed persisted provider state was omitted from prompt replay"
-                );
-                return None;
-            }
-        };
-    state.response_id = normalize_optional_text(state.response_id);
-    state.gemini_thought_signatures = std::mem::take(&mut state.gemini_thought_signatures)
-        .into_iter()
-        .filter_map(|(call_id, signature)| {
-            let call_id = normalize_optional_text(Some(call_id))?;
-            (!signature.trim().is_empty()).then_some((call_id, signature))
-        })
-        .collect();
-    state.copilot_reasoning_opaque = state
-        .copilot_reasoning_opaque
-        .filter(|value| !value.trim().is_empty());
-    state.openai_chat_reasoning_details = state
-        .openai_chat_reasoning_details
-        .filter(provider_metadata_value_is_meaningful);
-    state
-        .anthropic_thinking_blocks
-        .retain(provider_metadata_value_is_meaningful);
-    state
-        .openai_reasoning_items
-        .retain(provider_metadata_value_is_meaningful);
-    (!state.is_empty()).then_some(state)
-}
-
 /// Enforce the boundary between Tool API functions and execution tools before
 /// any adapter serializes a request. Every replayed operation must be a known
 /// Tool API function; execution-tool names and internal keys are never
@@ -637,103 +220,6 @@ pub fn validate_provider_native_tool_input_history(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod protocol_history_tests {
-    use super::*;
-
-    #[test]
-    fn failed_inline_ui_plugin_projects_located_correction_through_the_actual_provider_output() {
-        use agena_runtime_tools::tool::ToolError;
-        let mut sdk = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
-            "invalid_ui",
-            serde_json::json!({"agena_inline_ui_error":{
-                "code":"invalid_ui", "applied":false, "truncated":false,
-                "issues":[{"path":"document.blocks[0].program.nodes[2].props.style",
-                    "reason":"unsupported property",
-                    "fix":"Remove the unsupported property."}]
-            }}),
-        );
-        sdk.failure.user = agena_failure::UserPresentation::validated(
-            "inline_ui.error",
-            "The plugin input is invalid.",
-        );
-        let ToolError::Plugin(problem) = ToolError::from_plugin_error(sdk) else {
-            panic!("plugin error must survive as a typed tool failure")
-        };
-        let operation = agena_runtime_contracts::part::OperationPart::failed(
-            17,
-            agena_domain::ToolInvocation::new("agena.inline_ui.prepare", Default::default()),
-            problem.public,
-            agena_domain::RawOutput::default(),
-            agena_domain::TimeRange::default(),
-        );
-        let model_text =
-            project_operation_output(agena_domain::ExecutionStatus::Failed, &operation);
-        eprintln!("Inline UI model-visible validation example: {model_text}");
-        assert!(model_text.contains("document.blocks[0].program.nodes[2].props.style"));
-        assert!(model_text.contains("Remove the unsupported property."));
-        assert!(model_text.contains("invalid_ui"));
-        assert!(!model_text.contains("agena_inline_ui_error"));
-        assert!(model_text.len() < 450);
-
-        // A revision conflict remains distinct, with both actual numbers.
-        let conflict = agena_plugin_host::sdk::PluginError::invalid_params_with_data(
-            "revision_conflict",
-            serde_json::json!({"agena_inline_ui_error":{
-                "code":"revision_conflict", "applied":false, "truncated":false,
-                "expected_revision":1, "current_revision":2,
-                "issues":[{"path":"update.expected_revision",
-                    "reason":"expected 1, current 2",
-                    "fix":"Read current UI and reconcile before retrying."}]
-            }}),
-        );
-        let ToolError::Plugin(problem) = ToolError::from_plugin_error(conflict) else {
-            panic!("typed conflict")
-        };
-        let operation = agena_runtime_contracts::part::OperationPart::failed(
-            18,
-            agena_domain::ToolInvocation::new("agena.inline_ui.update", Default::default()),
-            problem.public,
-            agena_domain::RawOutput::default(),
-            agena_domain::TimeRange::default(),
-        );
-        let projected = project_operation_output(agena_domain::ExecutionStatus::Failed, &operation);
-        eprintln!("Inline UI model-visible conflict example: {projected}");
-        for expected in [
-            "revision_conflict",
-            "update.expected_revision",
-            "expected 1",
-            "current 2",
-            "reconcile",
-        ] {
-            assert!(projected.contains(expected), "{projected}");
-        }
-    }
-
-    #[test]
-    fn history_replays_explicit_protocol_calls_and_rejects_control_decisions() {
-        let run = |function| CompletionInputRun {
-            role: Role::Assistant,
-            parts: vec![CompletionInputPart::ToolCall {
-                id: "call-1".into(),
-                function,
-                arguments_json: r#"{"tool":"fs.read","input":{"file_path":"a.txt"}}"#.into(),
-            }],
-            provider_state: Default::default(),
-        };
-        assert!(
-            validate_provider_native_tool_input_history(&[run(
-                agena_domain::ToolApiFunction::Call.into()
-            ),])
-            .is_ok()
-        );
-        assert!(
-            validate_provider_native_tool_input_history(&[run(ModelToolFunction::ApproveAction),])
-                .is_err()
-        );
-    }
 }
 
 /// Like [`project`] but returns a single lossy string — used when the provider
@@ -873,43 +359,6 @@ fn truncate_classifier_part(text: &str) -> String {
         tail += 1;
     }
     format!("{}{marker}{}", &text[..head], &text[tail..])
-}
-
-// ─── Part helpers ─────────────────────────────────────────────────────────────
-
-/// Map a storage part role onto the domain role, matching the session
-/// reload path (`role_from_part_role`).
-fn role_from_part_role(role: PartRole) -> Role {
-    match role {
-        PartRole::User => Role::User,
-        PartRole::Assistant => Role::Assistant,
-        PartRole::System => Role::System,
-        PartRole::Tool => Role::Tool,
-        PartRole::Runtime => Role::System,
-    }
-}
-
-/// Recover the fine-grained execution status for a stored tool part. The
-/// coarse `state` column cannot express denial outcomes; the rich operation
-/// content carries them (matching the session reload path
-/// `part_to_message_part`, which also prefers `operation.status()`).
-fn operation_status(exec: &OperationPart) -> ExecutionStatus {
-    exec.status()
-}
-
-/// Whether a tool execution status has settled enough to emit a provider
-/// [`WirePart::ToolResult`] — every status except still-pending/in-progress.
-fn is_terminal_result_status(status: ExecutionStatus) -> bool {
-    matches!(
-        status,
-        ExecutionStatus::Completed
-            | ExecutionStatus::PolicyDenied
-            | ExecutionStatus::UserDeclined
-            | ExecutionStatus::CapabilityUnavailable
-            | ExecutionStatus::ToolUnavailable
-            | ExecutionStatus::Failed
-            | ExecutionStatus::Cancelled
-    )
 }
 
 pub fn parts_text_lossy(parts: &[WirePart]) -> String {
@@ -1208,306 +657,6 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
-fn protocol_name_and_args(
-    call: Option<&agena_domain::ToolApiCall>,
-) -> Option<(ModelToolFunction, String)> {
-    let call = call?;
-    let arguments = serde_json::to_string(&call.arguments).ok()?;
-    Some((call.function.into(), arguments))
-}
-
-pub fn project_operation_output(status: ExecutionStatus, exec: &OperationPart) -> String {
-    match status {
-        // A call whose turn was interrupted before the execution settled. The
-        // result must still carry a non-empty output: gateways that translate
-        // the Responses input into Chat messages reject an empty tool message,
-        // and a placeholder tells the model the call never completed instead
-        // of pretending it produced nothing.
-        ExecutionStatus::Pending | ExecutionStatus::InProgress => {
-            "Tool call was interrupted before producing a result.".to_string()
-        }
-        ExecutionStatus::Cancelled => {
-            "Tool execution was cancelled before producing a result.".to_owned()
-        }
-        ExecutionStatus::Completed
-        | ExecutionStatus::PolicyDenied
-        | ExecutionStatus::UserDeclined
-        | ExecutionStatus::CapabilityUnavailable
-        | ExecutionStatus::ToolUnavailable => {
-            let raw = exec.raw_output();
-            if raw.is_none_or(|raw| raw.managed_outputs.is_empty() && !raw.truncated) {
-                return structured_operation_output(exec)
-                    .or_else(|| generic_structured_operation_output(exec))
-                    .unwrap_or_else(|| exec.output_text().unwrap_or_default().to_string());
-            }
-            managed_operation_output(exec).unwrap_or_else(|| {
-                structured_operation_output(exec)
-                    .or_else(|| generic_structured_operation_output(exec))
-                    .unwrap_or_else(|| exec.output_text().unwrap_or_default().to_string())
-            })
-        }
-        ExecutionStatus::Failed => exec
-            .output_text()
-            .map(str::to_owned)
-            // A failed call with no ordinary output must preserve the reviewed,
-            // structured corrective feedback from its Failure on provider
-            // replay. error_message() alone drops field paths and fix hints.
-            .or_else(|| exec.error.as_ref().and_then(agena_domain::OperationError::model_message))
-            .or_else(|| exec.error_message().map(str::to_owned))
-            .unwrap_or_default(),
-    }
-}
-
-fn completion_input_result_status(
-    status: ExecutionStatus,
-) -> agena_provider::CompletionInputToolResultStatus {
-    match status {
-        ExecutionStatus::Completed => agena_provider::CompletionInputToolResultStatus::Completed,
-        // Policy denial and a user's explicit decline are successful protocol
-        // completions: the tool did not run, but the model must receive the
-        // structured non-execution result and continue normally.
-        ExecutionStatus::PolicyDenied
-        | ExecutionStatus::UserDeclined
-        | ExecutionStatus::CapabilityUnavailable
-        | ExecutionStatus::ToolUnavailable => {
-            agena_provider::CompletionInputToolResultStatus::Completed
-        }
-        ExecutionStatus::Failed => agena_provider::CompletionInputToolResultStatus::Failed,
-        ExecutionStatus::Cancelled | ExecutionStatus::Pending | ExecutionStatus::InProgress => {
-            agena_provider::CompletionInputToolResultStatus::Cancelled
-        }
-    }
-}
-
-const MAX_MODEL_WEB_RESULT_SNIPPET_CHARS: usize = 400;
-const MAX_MODEL_WEB_CRAWL_DOCUMENTS: usize = 20;
-const MAX_MODEL_WEB_CRAWL_FAILURES: usize = 5;
-
-fn structured_operation_output(exec: &OperationPart) -> Option<String> {
-    structured_web_search_output(exec).or_else(|| structured_web_crawl_output(exec))
-}
-
-fn serialize_structured_operation_value(
-    value: &serde_json::Value,
-    context: &str,
-) -> Option<String> {
-    match serde_json::to_string(value) {
-        Ok(value) => Some(value),
-        Err(error) => {
-            tracing::error!(
-                operation = context,
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    context,
-                    &error,
-                ),
-                "structured operation output could not be serialized for the model"
-            );
-            None
-        }
-    }
-}
-
-fn generic_structured_operation_output(exec: &OperationPart) -> Option<String> {
-    let payload = exec.raw_output()?.payload.clone()?;
-    serialize_structured_operation_value(&payload, "serialize generic structured tool output")
-}
-
-fn managed_operation_output(exec: &OperationPart) -> Option<String> {
-    let raw = exec.raw_output()?;
-    let mut object = serde_json::Map::new();
-    let text = exec.output_text().unwrap_or_default();
-    if !text.trim().is_empty() {
-        object.insert(
-            "text".to_string(),
-            serde_json::Value::String(text.to_string()),
-        );
-    }
-    if let Some(payload) = raw.payload.clone() {
-        object.insert("structured".to_string(), payload);
-    }
-    if !raw.managed_outputs.is_empty() {
-        let mut managed_outputs = Vec::with_capacity(raw.managed_outputs.len());
-        for output in &raw.managed_outputs {
-            match serde_json::to_value(output) {
-                Ok(output) => managed_outputs.push(output),
-                Err(error) => {
-                    tracing::error!(
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "serialize managed tool output for model projection",
-                            &error,
-                        ),
-                        "managed tool output was omitted from the model projection"
-                    );
-                }
-            }
-        }
-        object.insert(
-            "managed_outputs".to_string(),
-            serde_json::Value::Array(managed_outputs),
-        );
-    }
-    object.insert("truncated".to_string(), serde_json::Value::Bool(true));
-    serialize_structured_operation_value(
-        &serde_json::Value::Object(object),
-        "serialize managed tool output",
-    )
-}
-
-fn structured_web_search_output(exec: &OperationPart) -> Option<String> {
-    let output =
-        match agena_domain::ToolOutput::from_json_payload(exec.raw_output()?.payload.as_ref()) {
-            Ok(output) => output,
-            Err(error) => {
-                tracing::debug!(
-                    error = %error,
-                    "tool output is not a typed web-search payload; using generic projection"
-                );
-                return None;
-            }
-        };
-    let agena_runtime_tools::tool::ToolPayloadOutput::WebSearch {
-        query,
-        backend,
-        results,
-    } = agena_runtime_tools::tool::ToolPayloadOutput::from_tool_output(
-        exec.invocation.name.as_str(),
-        &output,
-    )?
-    else {
-        return None;
-    };
-
-    let results = results
-        .into_iter()
-        .map(|result| {
-            let snippet = compact_optional_text(result.snippet, MAX_MODEL_WEB_RESULT_SNIPPET_CHARS);
-            serde_json::json!({
-                "title": result.title,
-                "url": result.url,
-                "snippet": snippet,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    serialize_structured_operation_value(
-        &serde_json::json!({
-            "query": query,
-            "backend": backend,
-            "results": results,
-        }),
-        "serialize web-search output for model projection",
-    )
-}
-
-fn structured_web_crawl_output(exec: &OperationPart) -> Option<String> {
-    if !matches!(
-        exec.invocation.name.as_str(),
-        "web.crawl" | "agena_web__crawl" | "crawl"
-    ) {
-        return None;
-    }
-
-    let payload = exec.raw_output()?.payload.clone()?;
-    let report: ModelWebCrawlReport = match serde_json::from_value(payload) {
-        Ok(report) => report,
-        Err(error) => {
-            tracing::debug!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "decode typed web-crawl output for model projection",
-                    &error,
-                ),
-                "tool output is not a typed web-crawl report; using generic projection"
-            );
-            return None;
-        }
-    };
-    let document_count = report.documents.len();
-    let failure_count = report.failures.len();
-    let documents = report
-        .documents
-        .into_iter()
-        .take(MAX_MODEL_WEB_CRAWL_DOCUMENTS)
-        .map(|document| {
-            serde_json::json!({
-                "title": document.title,
-                "url": document.url,
-                "depth": document.depth,
-                "chunk_count": document.chunk_count,
-            })
-        })
-        .collect::<Vec<_>>();
-    let failures = report
-        .failures
-        .into_iter()
-        .take(MAX_MODEL_WEB_CRAWL_FAILURES)
-        .map(|failure| truncate_text(failure.as_str(), MAX_MODEL_WEB_RESULT_SNIPPET_CHARS))
-        .collect::<Vec<_>>();
-
-    serialize_structured_operation_value(
-        &serde_json::json!({
-            "start_url": report.start_url,
-            "engine": report.engine,
-            "rendered": report.rendered,
-            "stored_count": report.stored_count,
-            "cached_count": report.cached_count,
-            "duplicate_count": report.duplicate_count,
-            "near_duplicate_count": report.near_duplicate_count,
-            "failure_count": report.failure_count,
-            "total_documents": report.total_documents,
-            "documents_truncated": document_count > MAX_MODEL_WEB_CRAWL_DOCUMENTS,
-            "documents": documents,
-            "failures_truncated": failure_count > MAX_MODEL_WEB_CRAWL_FAILURES,
-            "failures": failures,
-        }),
-        "serialize web-crawl output for model projection",
-    )
-}
-
-fn compact_optional_text(value: Option<String>, max_chars: usize) -> Option<String> {
-    value
-        .map(|text| text.trim().to_owned())
-        .filter(|text| !text.is_empty())
-        .map(|text| truncate_text(text.as_str(), max_chars))
-}
-
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    let trimmed = text.trim();
-    if trimmed.chars().count() <= max_chars {
-        return trimmed.to_owned();
-    }
-
-    let mut end = trimmed.len();
-    if let Some((idx, _)) = trimmed.char_indices().nth(max_chars) {
-        end = idx;
-    }
-    format!("{}…", trimmed[..end].trim_end())
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelWebCrawlReport {
-    start_url: String,
-    engine: String,
-    rendered: bool,
-    stored_count: usize,
-    cached_count: usize,
-    duplicate_count: usize,
-    near_duplicate_count: usize,
-    failure_count: usize,
-    total_documents: usize,
-    #[serde(default)]
-    documents: Vec<ModelWebCrawlDocument>,
-    #[serde(default)]
-    failures: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ModelWebCrawlDocument {
-    title: String,
-    url: String,
-    depth: u32,
-    chunk_count: usize,
-}
-
 fn attachment_file_content_value(item: &AttachmentItem) -> Option<serde_json::Value> {
     let upload_name = filename(item)
         .map(str::to_owned)
@@ -1557,4 +706,136 @@ fn parse_data_url(url: &str) -> Option<(String, String)> {
         .trim()
         .to_owned();
     Some((mime, encoded.to_owned()))
+}
+
+#[cfg(test)]
+mod protocol_history_tests {
+    use super::*;
+
+    #[test]
+    fn current_input_preserves_order_tool_identity_and_media_delivery_boundaries() {
+        let image = CompletionInputAttachment {
+            kind: CompletionInputAttachmentKind::Image,
+            mime: "image/png".into(),
+            source: CompletionInputAttachmentSource::Base64 {
+                data: "aGk=".into(),
+            },
+            filename: Some("image.png".into()),
+            title: Some("Preview".into()),
+            size_bytes: Some(2),
+            sha256: Some("fixture-sha".into()),
+            width: Some(1),
+            height: Some(1),
+            duration_ms: None,
+            page_count: None,
+        };
+        let mut local = image.clone();
+        local.source = CompletionInputAttachmentSource::LocalPath {
+            path: "workspace.png".into(),
+        };
+        let mut unavailable = image.clone();
+        degrade_completion_input_attachment(&mut unavailable, "its provider route changed");
+        assert_eq!(unavailable.sha256, None);
+        assert_eq!(unavailable.size_bytes, None);
+        let function: ModelToolFunction = agena_domain::ToolApiFunction::Call.into();
+        let arguments_json =
+            r#"{"tool":"fs.read_media","input":{"file_path":"image.png"}}"#.to_owned();
+        let run = CompletionInputRun {
+            role: Role::Assistant,
+            parts: vec![
+                CompletionInputPart::Text {
+                    text: "before".into(),
+                },
+                CompletionInputPart::Reasoning {
+                    text: "reasoning".into(),
+                },
+                CompletionInputPart::SystemMessage {
+                    text: "system notice".into(),
+                },
+                CompletionInputPart::ToolCall {
+                    id: "call-42".into(),
+                    function: function.clone(),
+                    arguments_json: arguments_json.clone(),
+                },
+                CompletionInputPart::ToolResult {
+                    tool_call_id: "call-42".into(),
+                    function: function.clone(),
+                    arguments_json: arguments_json.clone(),
+                    status: agena_provider::CompletionInputToolResultStatus::Failed,
+                    output_json: r#"{"error":"failed"}"#.into(),
+                    attachments: vec![image, local, unavailable],
+                },
+            ],
+            provider_state: Default::default(),
+        };
+        let projected = project(&run);
+        let [
+            WirePart::Text { text },
+            WirePart::Reasoning { text: reasoning },
+            WirePart::SystemMessage { text: notice },
+            WirePart::ToolCall {
+                id,
+                function: call_function,
+                arguments_json: call_arguments,
+            },
+            WirePart::ToolResult {
+                tool_call_id,
+                function: result_function,
+                arguments_json: result_arguments,
+                status,
+                output_json,
+                attachments,
+            },
+        ] = projected.as_slice()
+        else {
+            panic!("the current completion contract must retain part ordering and roles");
+        };
+        assert_eq!(text, "before");
+        assert_eq!(reasoning, "reasoning");
+        assert_eq!(notice, "system notice");
+        assert_eq!(id, "call-42");
+        assert_eq!(tool_call_id, id);
+        assert_eq!(call_function, &function);
+        assert_eq!(result_function, &function);
+        assert_eq!(call_arguments, &arguments_json);
+        assert_eq!(result_arguments, &arguments_json);
+        assert_eq!(
+            *status,
+            agena_provider::CompletionInputToolResultStatus::Failed
+        );
+        assert!(output_json.starts_with(r#"{"error":"failed"}"#));
+        assert!(output_json.contains("workspace.png"));
+        assert!(output_json.contains("its provider route changed"));
+        assert!(!output_json.contains("aGk="));
+        assert_eq!(attachments.len(), 1);
+        assert!(
+            matches!(&attachments[0].source, AttachmentSource::Base64 { data } if data == "aGk=")
+        );
+        assert_eq!(attachments[0].sha256.as_deref(), Some("fixture-sha"));
+        assert_eq!(attachments[0].size_bytes, Some(2));
+        assert_eq!(attachments[0].title.as_deref(), Some("Preview"));
+    }
+
+    #[test]
+    fn history_replays_explicit_protocol_calls_and_rejects_control_decisions() {
+        let run = |function| CompletionInputRun {
+            role: Role::Assistant,
+            parts: vec![CompletionInputPart::ToolCall {
+                id: "call-1".into(),
+                function,
+                arguments_json: r#"{"tool":"fs.read","input":{"file_path":"a.txt"}}"#.into(),
+            }],
+            provider_state: Default::default(),
+        };
+        assert!(
+            validate_provider_native_tool_input_history(&[run(
+                agena_domain::ToolApiFunction::Call.into()
+            ),])
+            .is_ok()
+        );
+        assert!(
+            validate_provider_native_tool_input_history(&[run(ModelToolFunction::ApproveAction),])
+                .is_err()
+        );
+    }
 }

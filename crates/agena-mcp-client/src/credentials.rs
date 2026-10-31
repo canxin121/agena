@@ -5,8 +5,8 @@ use url::Url;
 
 /// Stable opaque identity for a server and its normalized HTTP endpoint.
 /// Paths and query parameters remain part of the identity: changing either
-/// requires explicitly configuring credentials for the new endpoint. Existing
-/// name-only records are retained but are never adopted automatically.
+/// requires explicitly configuring credentials for the new endpoint. Connection
+/// lookup uses this identity, never a server name alone.
 pub fn credential_store_name(name: &str, endpoint: &Url) -> String {
     let mut endpoint = endpoint.clone();
     endpoint.set_fragment(None);

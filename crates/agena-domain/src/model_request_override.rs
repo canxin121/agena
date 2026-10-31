@@ -16,9 +16,9 @@ impl ModelSpeedModeRequestOverride {
         self.headers.is_empty() && self.body_patch.is_empty()
     }
 
-    /// Remove the legacy protocol field from generic JSON body patches. The
-    /// typed model capability is serialized only by adapters that support it.
-    pub fn remove_legacy_parallel_tool_calls_patch(&mut self) {
+    /// Keep the typed parallel-tool capability out of generic JSON body patches.
+    /// Only adapters that support the capability serialize its protocol field.
+    pub fn remove_reserved_parallel_tool_calls_patch(&mut self) {
         self.body_patch.remove("parallel_tool_calls");
         for value in self.body_patch.values_mut() {
             remove_parallel_tool_calls_keys(value);
@@ -31,7 +31,7 @@ impl ModelSpeedModeRequestOverride {
             merged.headers.insert(key.clone(), value.clone());
         }
         merge_json_patch_maps(&mut merged.body_patch, &other.body_patch);
-        merged.remove_legacy_parallel_tool_calls_patch();
+        merged.remove_reserved_parallel_tool_calls_patch();
         merged
     }
 }

@@ -37,12 +37,14 @@ export function attachmentLabel(fields: AttachmentLabelFields): string {
 /** The same vocabulary for raw attachment payload records (`file_ref`). */
 export function attachmentLabelFromRecord(value: unknown): string {
   const item = (typeof value === 'object' && value !== null && !Array.isArray(value) ? value : {}) as JsonRecord
+  const source = (
+    typeof item.source === 'object' && item.source !== null && !Array.isArray(item.source) ? item.source : {}
+  ) as JsonRecord
   return attachmentLabel({
     title: item.title,
     filename: item.filename,
-    name: item.name,
-    path: item.path,
-    fileId: item.file_id,
+    path: source.source === 'local_path' ? source.path : undefined,
+    fileId: source.source === 'file_id' ? source.file_id : undefined,
     mime: item.mime,
   })
 }

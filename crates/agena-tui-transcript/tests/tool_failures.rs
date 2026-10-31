@@ -368,3 +368,107 @@ fn nonfailed_tools_do_not_invent_a_missing_error() {
         );
     }
 }
+
+#[test]
+fn malformed_error_parts_do_not_expose_private_fields_in_display_or_copy() {
+    for content in [
+        json!({"message":"private_error_canary","summary":"private_error_canary","payload":{"token":"private_error_canary"}}),
+        json!({"problem":{"user":{"fallback":"private_error_canary"}},"provider_payload":"private_error_canary"}),
+        json!({"raw_output":{"token":"private_error_canary"}}),
+    ] {
+        let part = PartResource {
+            part_id: 88,
+            run_id: Some(88),
+            message_id: Some(88),
+            message_boundary: true,
+            kind: "error".into(),
+            role: "assistant".into(),
+            state: "failed".into(),
+            run_state: Some("failed".into()),
+            content,
+            ..Default::default()
+        };
+        let entry = parts_entries(&[part]).remove(0);
+        let rendered = render_entry_detailed(
+            &entry,
+            100,
+            &I18n::english(),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("Error details are unavailable."))
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("private_error_canary")
+                    && !line.copy_text.contains("private_error_canary"))
+        );
+        assert!(
+            rendered
+                .nodes
+                .iter()
+                .all(|node| !node.copy_text.contains("private_error_canary"))
+        );
+    }
+}
+
+#[test]
+fn current_error_parts_keep_the_public_problem_and_business_context() {
+    let failure =
+        failure("The setting was saved, but the configuration snapshot could not be refreshed.");
+    let problem = UserProblem::from(&failure);
+    let part = PartResource {
+        part_id: 89,
+        run_id: Some(89),
+        message_id: Some(89),
+        message_boundary: true,
+        kind: "error".into(),
+        role: "assistant".into(),
+        state: "failed".into(),
+        run_state: Some("failed".into()),
+        content: serde_json::to_value(agena_api::part::ErrorPartResource {
+            retry: None,
+            problem: problem.clone(),
+        })
+        .unwrap(),
+        ..Default::default()
+    };
+    let entry = parts_entries(&[part]).remove(0);
+    let TranscriptPartContent::Activity(TranscriptActivityContent::Error(actual)) =
+        &entry.parts[0].content
+    else {
+        panic!("current public errors remain typed activities");
+    };
+    assert_eq!(actual.problem, problem);
+    let rendered = render_entry_detailed(
+        &entry,
+        160,
+        &I18n::english(),
+        &Default::default(),
+        &Default::default(),
+    );
+    assert!(
+        rendered
+            .lines
+            .iter()
+            .any(|line| line.text.contains("The setting was saved"))
+    );
+    assert!(
+        rendered
+            .lines
+            .iter()
+            .all(|line| !line.text.contains(MODEL_ONLY) && !line.copy_text.contains(MODEL_ONLY))
+    );
+    assert!(
+        rendered
+            .nodes
+            .iter()
+            .all(|node| !node.copy_text.contains(MODEL_ONLY))
+    );
+}

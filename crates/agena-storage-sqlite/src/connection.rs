@@ -17,7 +17,7 @@ use sea_orm::{
     DatabaseConnection, DbErr, SqlxSqliteConnector,
     sqlx::{
         ConnectOptions,
-        sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+        sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous},
     },
 };
 
@@ -193,7 +193,6 @@ fn acquire_owner(path: &Path, create: bool) -> Result<(PathBuf, Arc<DatabaseOwne
 
 async fn prepare(
     url: &str,
-    level: log::LevelFilter,
 ) -> Result<(SqliteConnectOptions, Option<Arc<DatabaseOwner>>, bool), DbErr> {
     if !url.starts_with("sqlite:") {
         return Err(database_error("only SQLite database URLs are supported"));
@@ -222,7 +221,7 @@ async fn prepare(
         .pragma("cache_size", "-8192")
         .pragma("mmap_size", "0")
         .pragma("wal_autocheckpoint", "1000")
-        .log_statements(level);
+        .log_statements(log::LevelFilter::Off);
     if memory {
         // Named memory URIs must not accidentally give two independent
         // factories competing authority over the same anonymous instance.
@@ -267,19 +266,123 @@ async fn pool(
     Ok(Arc::new(SqlxSqliteConnector::from_sqlx_sqlite_pool(pool)))
 }
 
-/// Open an independently owned pool for standalone infrastructure fixtures or
-/// embedders. The service runtime uses `KernelDatabase` and injects its writer
-/// into every durable repository, including scheduler and server state.
-pub async fn connect_owned_database(
-    url: &str,
-    level: log::LevelFilter,
-) -> Result<DatabaseConnection, DbErr> {
-    let (mut options, owner, memory) = prepare(url, level).await?;
-    if !memory {
-        options = options.journal_mode(SqliteJournalMode::Wal);
+/// The owner lock keeps Agena's writers out while these files are copied.
+/// Recover only the private copy: even a read-only WAL connection may write
+/// shared-memory state, and closing a rejected writer may checkpoint its WAL.
+fn copy_recovery_snapshot(path: &Path) -> std::io::Result<Option<tempfile::TempDir>> {
+    let mut logs = Vec::new();
+    for suffix in ["-wal", "-journal"] {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        let source = PathBuf::from(name);
+        match source.metadata() {
+            Ok(metadata) if metadata.len() != 0 => logs.push((source, suffix)),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
     }
-    let connection = pool(options, owner, if memory { 1 } else { 5 }).await?;
-    Arc::try_unwrap(connection).map_err(|_| database_error("new pool unexpectedly shared"))
+    if logs.is_empty() {
+        return Ok(None);
+    }
+    // Keep the private snapshot on the database filesystem. Clean shutdowns
+    // have no recovery log and avoid this copy entirely. Copy failures reject
+    // admission rather than falling back to opening the source for recovery.
+    let directory = tempfile::Builder::new()
+        .prefix(".agena-sqlite-admission-")
+        .tempdir_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
+    let target = directory.path().join("instance.sqlite");
+    std::fs::copy(path, &target)?;
+    for (source, suffix) in logs {
+        let mut name = target.as_os_str().to_owned();
+        name.push(suffix);
+        std::fs::copy(source, Path::new(&name))?;
+    }
+    // SHM is derived coordination state. SQLite rebuilds it in
+    // this private directory from the copied WAL rather than sharing it with
+    // the source database or trusting a stale WAL index.
+    Ok(Some(directory))
+}
+
+/// Admit the current baseline without opening any original file for writing.
+/// Immutable mode inspects main pages without journal recovery or WAL/SHM
+/// creation. Recover retained logs only in a private copy before admitting a
+/// writer. Current-baseline schema creation commits before WAL is enabled.
+async fn inspect_existing_database(
+    options: &SqliteConnectOptions,
+    owner: &DatabaseOwner,
+) -> Result<(), DbErr> {
+    let path = owner.path.clone();
+    let has_contents = DATABASE_FILES
+        .run(move || -> std::io::Result<bool> {
+            if path.metadata()?.len() != 0 {
+                return Ok(true);
+            }
+            // A zero-byte main file with retained SQLite state is not a fresh
+            // database. Never initialize over an unresolved journal or WAL.
+            for suffix in ["-wal", "-shm", "-journal"] {
+                let mut name = path.as_os_str().to_owned();
+                name.push(suffix);
+                if Path::new(&name).try_exists()? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+        .await
+        .map_err(database_error)?
+        .map_err(database_error)?;
+    if !has_contents {
+        return Ok(());
+    }
+    let inspection = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            options
+                .clone()
+                .read_only(true)
+                .create_if_missing(false)
+                .immutable(true),
+        )
+        .await
+        .map_err(database_error)?;
+    let inspection = SqlxSqliteConnector::from_sqlx_sqlite_pool(inspection);
+    let validation = crate::kernel::schema::validate_existing(&inspection).await;
+    let closed = inspection.close().await;
+    validation?;
+    closed?;
+
+    // The main file can still have the current schema while a committed WAL
+    // changes a table, index, or baseline identity. Validate the recovered
+    // view before a writer can touch any original SQLite file.
+    let path = owner.path.clone();
+    let snapshot = DATABASE_FILES
+        .run(move || copy_recovery_snapshot(&path))
+        .await
+        .map_err(database_error)?
+        .map_err(database_error)?;
+    let Some(snapshot) = snapshot else {
+        return Ok(());
+    };
+    let inspection = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            options
+                .clone()
+                .filename(snapshot.path().join("instance.sqlite"))
+                .read_only(false)
+                .create_if_missing(false)
+                .immutable(false),
+        )
+        .await
+        .map_err(database_error)?;
+    let inspection = SqlxSqliteConnector::from_sqlx_sqlite_pool(inspection);
+    let validation = crate::kernel::schema::validate_existing(&inspection).await;
+    let closed = inspection.close().await;
+    // Close SQLite before dropping its temporary directory, including on a
+    // validation failure. No recovery, checkpoint or cleanup targets source.
+    validation?;
+    closed
 }
 
 /// One writer and up to four readers. Memory mode shares one retained pool
@@ -291,10 +394,13 @@ pub struct KernelDatabase {
 
 impl KernelDatabase {
     pub async fn open(url: &str) -> Result<Self, DbErr> {
-        let (options, owner, memory) = prepare(url, log::LevelFilter::Off).await?;
+        let (options, owner, memory) = prepare(url).await?;
+        if let Some(owner) = &owner {
+            inspect_existing_database(&options, owner).await?;
+        }
         let writer = pool(options.clone(), owner.clone(), 1).await?;
-        // Inspect an existing schema before switching journal mode or making
-        // recovery writes. Rejecting an old database must preserve its bytes.
+        // Recheck the live view after main-file and recovered-copy admission,
+        // before any runtime recovery writes. Fresh files initialize here.
         if let Err(error) = crate::kernel::schema::initialize(writer.as_ref()).await {
             let _ = writer.close_by_ref().await;
             return Err(error);
@@ -323,3 +429,6 @@ impl KernelDatabase {
         self.writer.close_by_ref().await
     }
 }
+
+#[cfg(test)]
+mod tests;

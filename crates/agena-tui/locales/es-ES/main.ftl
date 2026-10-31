@@ -2008,7 +2008,6 @@ timeline-label-role = Rol
 timeline-label-state = Estado
 timeline-label-revision = Revisión
 timeline-label-run = Ejecución
-timeline-label-parent-part = Parte superior
 transcript-alert-note = Nota
 transcript-alert-tip = Consejo
 transcript-alert-important = Importante

@@ -7,7 +7,7 @@ import { attachmentLabel } from '../../lib/attachmentLabels'
 import { isRunInFlight } from '../../lib/chatRunState'
 import { toolInputRecord } from '../../lib/toolInput'
 import { toolOutputAttachments } from '../../lib/toolAttachments'
-import { toolFailurePresentation } from '../../lib/toolFailures'
+import { publicUserProblem, toolFailurePresentation } from '../../lib/toolFailures'
 import { partOwnsInteractions } from '../../lib/interactiveRequests'
 
 export type JsonRecord = Record<string, JsonValue>
@@ -141,16 +141,7 @@ function booleanValue(source: JsonRecord, keys: readonly string[]): boolean {
 }
 
 export function attentionRequestId(payload: JsonValue | null | undefined): string {
-  const root = jsonRecord(payload)
-  const properties = jsonRecord(root.properties)
-  const propertyRequest = jsonRecord(properties.request)
-  const request = jsonRecord(root.request)
-  return (
-    firstString(properties, ['id', 'request_id']) ||
-    firstString(propertyRequest, ['request_id', 'id']) ||
-    firstString(root, ['request_id', 'id']) ||
-    firstString(request, ['request_id', 'id'])
-  )
+  return stringValue(jsonRecord(jsonRecord(jsonRecord(payload).properties).request).request_id)
 }
 
 export type AttentionPresentationSource = {
@@ -316,36 +307,25 @@ export function structuredValueMarkdown(value: JsonValue): string {
 
 function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresentation | null {
   const item = jsonRecord(value)
-  if (!Object.keys(item).length) return null
   const source = jsonRecord(item.source)
-  const sourceKind = firstString(source, ['source'])
-  const mime = firstString(item, ['mime'])
+  const sourceKind = stringValue(source.source)
+  if (!['url', 'data_url', 'base64', 'provider_data', 'file_id', 'local_path', 'unavailable'].includes(sourceKind)) {
+    return null
+  }
+  const mime = stringValue(item.mime)
   const unavailable = sourceKind === 'unavailable'
-  const unavailableReason = unavailable ? firstString(source, ['reason']) : ''
-  const path = firstString(source, ['path']) || firstString(item, ['path'])
-  const directUrl = unavailable
-    ? ''
-    : firstString(source, ['data_url', 'url']) || firstString(item, ['data_url', 'url'])
-  const base64 = unavailable
-    ? ''
-    : (sourceKind === 'base64' || sourceKind === 'provider_data'
-        ? firstString(source, ['data'])
-        : firstString(source, ['base64'])) || firstString(item, ['base64'])
-  const fileId = firstString(source, ['file_id']) || firstString(item, ['file_id'])
+  const unavailableReason = unavailable ? stringValue(source.reason) : ''
+  const path = sourceKind === 'local_path' ? stringValue(source.path) : ''
+  const directUrl = sourceKind === 'url' || sourceKind === 'data_url' ? stringValue(source.url) : ''
+  const base64 = sourceKind === 'base64' || sourceKind === 'provider_data' ? stringValue(source.data) : ''
+  const fileId = sourceKind === 'file_id' ? stringValue(source.file_id) : ''
   const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
   const label =
-    attachmentLabel({
-      title: firstString(item, ['title']),
-      filename: firstString(item, ['filename']),
-      name: firstString(item, ['name']),
-      path,
-      fileId,
-      mime,
-    }) || `attachment-${index + 1}`
+    attachmentLabel({ title: item.title, filename: item.filename, path, fileId, mime }) || `attachment-${index + 1}`
   return {
-    key: firstString(item, ['sha256']) || url || `${label}:${index}`,
+    key: stringValue(item.sha256) || url || `${label}:${index}`,
     label,
-    kind: firstString(item, ['kind']),
+    kind: stringValue(item.kind),
     mime,
     url,
     path,
@@ -359,23 +339,22 @@ function attachmentFromRecord(value: JsonValue, index: number): AttachmentPresen
   }
 }
 
-/** Media blocks carry the shared ArtifactRef, including inline and local images. */
-export function mediaAttachmentPresentation(block: JsonRecord): AttachmentPresentation | null {
-  const kind = stringValue(block.type) || stringValue(block.kind)
-  if (!['media', 'image', 'audio', 'video', 'file'].includes(kind)) return null
+/** Public media blocks carry ArtifactRef. Output descriptors use a separate,
+ * local block so unavailable or provider-owned attachments keep their source. */
+export function operationAttachmentPresentation(block: JsonRecord): AttachmentPresentation | null {
+  if (block.type === 'output_attachment') return attachmentFromRecord(block.attachment ?? null, 0)
+  if (block.type !== 'media') return null
   const artifact = jsonRecord(block.artifact)
-  const originalSource = jsonRecord(block.source)
-  const uri =
-    firstString(artifact, ['uri', 'url']) || firstString(block, ['uri', 'url']) || firstString(originalSource, ['url'])
+  const uri = stringValue(artifact.uri)
+  if (!uri) return null
   const path = uri.startsWith('file://') ? uri.slice('file://'.length) : ''
   return attachmentFromRecord(
     {
-      ...block,
-      ...artifact,
-      kind: kind === 'media' ? firstString(artifact, ['kind']) || firstString(block, ['kind']) : kind,
-      mime: firstString(artifact, ['mime']) || firstString(block, ['mime', 'mime_type', 'media_type']),
-      filename: artifact.name ?? block.filename ?? null,
-      source: path ? { source: 'local_path', path } : uri ? { source: 'url', url: uri } : originalSource,
+      mime: artifact.mime ?? '',
+      filename: artifact.name ?? null,
+      size_bytes: artifact.size_bytes ?? null,
+      sha256: artifact.sha256 ?? null,
+      source: path ? { source: 'local_path', path } : { source: 'url', url: uri },
     },
     0,
   )
@@ -390,7 +369,7 @@ const COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
  * line.
  */
 function hasCommandBlock(blocks: readonly JsonRecord[]): boolean {
-  return blocks.some((block) => (stringValue(block.type) || stringValue(block.kind)) === 'command')
+  return blocks.some((block) => block.type === 'command')
 }
 
 function commandMarkdownFromInput(input: JsonValue | null): string {
@@ -442,17 +421,17 @@ export function operationPresentation(
     .map(jsonRecord)
     .filter((item) => Object.keys(item).length > 0)
 
-  // Older tool results may only have an Attachment metadata table. Render the
-  // durable descriptors too, while keeping modern media presentations unique.
+  // A deferred Output still includes current attachment descriptors. Render
+  // descriptors without a Media block, preserving their source and availability.
   const presentedAttachments = new Set(
     blocks.flatMap((block) => {
-      const attachment = mediaAttachmentPresentation(block)
+      const attachment = operationAttachmentPresentation(block)
       return attachment ? [attachment.path || attachment.url] : []
     }),
   )
   for (const [index, item] of toolOutputAttachments(rawOutput).entries()) {
-    const block = { ...item, type: 'media', id: `output-attachment-${index}` } as JsonRecord
-    const attachment = mediaAttachmentPresentation(block)
+    const block = { type: 'output_attachment', id: `output-attachment-${index}`, attachment: item } as JsonRecord
+    const attachment = operationAttachmentPresentation(block)
     const reference = attachment?.path || attachment?.url || ''
     if (!attachment || (reference && presentedAttachments.has(reference))) continue
     if (reference) presentedAttachments.add(reference)
@@ -488,9 +467,9 @@ export function operationPresentation(
           ? 'Allowed persistently'
           : replyKind === 'auto_approve'
             ? 'Approved automatically'
-            : replyKind === 'deny_once' || replyKind === 'reject'
+            : replyKind === 'deny_once'
               ? 'Denied once'
-              : replyKind === 'deny_always' || replyKind === 'reject_always'
+              : replyKind === 'deny_always'
                 ? 'Denied persistently'
                 : replyKind
                   ? `Replied (${replyKind})`
@@ -558,54 +537,17 @@ export function partInteractionRequestIds(part: TranscriptDisplayPart): string[]
 }
 
 export function attachmentPresentations(part: TranscriptDisplayPart): AttachmentPresentation[] {
-  const content = jsonRecord(part.source.agenaContent)
-  const attachments = jsonArray(content.attachments)
-  const projected = attachments
+  return jsonArray(jsonRecord(part.source.agenaContent).attachments)
     .map(attachmentFromRecord)
     .filter((item): item is AttachmentPresentation => Boolean(item))
-  if (projected.length) return projected
-
-  const mime = stringValue(part.source.mime) || firstString(content, ['mime'])
-  const contentSource = jsonRecord(content.source)
-  const unavailable = firstString(contentSource, ['source']) === 'unavailable'
-  const unavailableReason = unavailable ? firstString(contentSource, ['reason']) : ''
-  const path = stringValue(part.source.serverPath) || firstString(content, ['path'])
-  const url = unavailable ? '' : stringValue(part.source.url) || path
-  const label =
-    attachmentLabel({
-      title: firstString(content, ['title']),
-      filename: stringValue(part.source.filename),
-      name: firstString(content, ['name']),
-      path,
-      mime,
-    }) || 'attachment'
-  return [
-    {
-      key: url || label,
-      label,
-      kind: firstString(content, ['kind']),
-      mime,
-      url,
-      path,
-      sizeBytes: null,
-      width: null,
-      height: null,
-      durationMs: null,
-      pageCount: null,
-      unavailable,
-      unavailableReason,
-    },
-  ]
 }
 
 export function commandPresentations(part: TranscriptDisplayPart): CommandPresentation[] {
   const content = jsonRecord(part.source.agenaContent)
-  const values = jsonArray(content.commands).length ? jsonArray(content.commands) : jsonArray(content.skills)
-  const sourceValues = values.length ? values : [content]
-  return sourceValues
+  return jsonArray(content.commands)
     .map((value) => {
       const command = jsonRecord(value)
-      const name = firstString(command, ['name', 'command', 'skill'])
+      const name = stringValue(command.name)
       if (!name) return null
       return {
         name,
@@ -639,6 +581,18 @@ function interactionQuestion(value: JsonValue, index: number): InteractionQuesti
   }
 }
 
+/** Choice labels are user content. Only the explicit custom flag selects the
+ * custom editor; allowCustom adds an independent local affordance if needed. */
+export function interactionQuestionOptions(question: InteractionQuestionPresentation) {
+  const options = question.options.map((option) => ({ ...option, custom: option.custom === true, synthetic: false }))
+  if (question.allowCustom && !options.some((option) => option.custom)) {
+    let label = 'Custom'
+    while (options.some((option) => option.label === label)) label += '_'
+    options.push({ label, description: '', custom: true, synthetic: true })
+  }
+  return options
+}
+
 function userInputPresentationFromRequest(
   request: JsonRecord,
   reply: JsonValue | null,
@@ -648,7 +602,7 @@ function userInputPresentationFromRequest(
     requestId: firstString(request, ['request_id']),
     title: firstString(request, ['title']) || fallbackTitle,
     bodyMarkdown: firstString(request, ['body_markdown']),
-    kind: firstString(request, ['input_kind', 'kind']),
+    kind: stringValue(request.kind),
     pending: reply === null || reply === undefined,
     reply,
     questions: jsonArray(request.questions)
@@ -663,23 +617,17 @@ function permissionActionLabel(action: JsonRecord): string {
     return [firstString(action, ['access_kind']), firstString(action, ['target_path'])].filter(Boolean).join(' ')
   }
   if (actionKind === 'network_access') {
-    return `network ${firstString(action, ['target', 'host'])}`.trim()
+    return `network ${stringValue(action.target)}`.trim()
   }
   return (
-    [firstString(action, ['tool_name', 'name']), firstString(action, ['qualifier'])].filter(Boolean).join(' · ') ||
+    [stringValue(action.tool_name), firstString(action, ['qualifier'])].filter(Boolean).join(' · ') ||
     actionKind ||
     'permission'
   )
 }
 
-function attentionProperties(attention: AttentionPresentationSource): JsonRecord {
-  return jsonRecord(jsonRecord(attention.payload).properties)
-}
-
 function attentionRequest(attention: AttentionPresentationSource): JsonRecord {
-  const properties = attentionProperties(attention)
-  const nested = jsonRecord(properties.request)
-  return Object.keys(nested).length ? { ...properties, ...nested } : properties
+  return jsonRecord(jsonRecord(jsonRecord(attention.payload).properties).request)
 }
 
 /** Convert the state-driven question attention into the same presentation used by durable parts. */
@@ -688,10 +636,10 @@ export function interactionPresentationFromAttention(
 ): InteractionPresentation | null {
   if (!attention || attention.kind !== 'question') return null
   const request = attentionRequest(attention)
-  const requestId = attentionRequestId(attention.payload) || firstString(request, ['request_id', 'id'])
+  const requestId = stringValue(request.request_id)
   if (!requestId) return null
   const presentation = userInputPresentationFromRequest(
-    { ...request, request_id: requestId },
+    { ...request, kind: request.input_kind ?? null },
     null,
     firstString(request, ['title']) || String(i18n.global.t('chat.attention.title.question')),
   )
@@ -704,7 +652,7 @@ export function permissionPresentationFromAttention(
 ): OperationPermissionPresentation | null {
   if (!attention || attention.kind !== 'permission') return null
   const request = attentionRequest(attention)
-  const requestId = attentionRequestId(attention.payload) || firstString(request, ['request_id', 'id'])
+  const requestId = stringValue(request.request_id)
   if (!requestId) return null
   const action = jsonRecord(request.action)
   return {
@@ -741,7 +689,7 @@ export function pendingInteractionPresentationFromAttention(
 
 export function errorPresentation(part: TranscriptDisplayPart): ErrorPresentation {
   const content = jsonRecord(part.source.agenaContent)
-  const problem = jsonRecord(content.problem)
+  const problem = publicUserProblem(content.problem)
   const user = jsonRecord(problem.user)
   const progress = jsonRecord(content.retry)
   const outcome = firstString(progress, ['outcome'])
@@ -757,18 +705,14 @@ export function errorPresentation(part: TranscriptDisplayPart): ErrorPresentatio
     .filter(Boolean)
     .join(' · ')
   return {
-    message:
-      firstString(user, ['fallback']) ||
-      firstString(problem, ['message']) ||
-      firstString(content, ['message']) ||
-      part.summary,
+    message: firstString(user, ['fallback']) || String(i18n.global.t('chat.partStatus.failed')),
     code: firstString(problem, ['code']),
     category: firstString(problem, ['category']),
     responsibility: firstString(problem, ['responsibility']),
     impact: firstString(problem, ['impact']),
     recovery: firstString(problem, ['recovery']),
     retry,
-    correlationId: firstString(problem, ['correlation_id', 'id']),
+    correlationId: firstString(problem, ['id']),
     details: problem,
   }
 }

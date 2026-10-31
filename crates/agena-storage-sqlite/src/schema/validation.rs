@@ -1,5 +1,5 @@
-//! Validate the durable schema and present performance indexes exactly.
-//! Return missing derived indexes; never repair tables or rewrite records.
+//! Validate every durable schema object, including performance indexes.
+//! Existing schemas are checked exactly and are never repaired or rewritten.
 
 use std::collections::BTreeMap;
 

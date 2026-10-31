@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use anyhow::Context as _;
+
 impl App {
     pub(crate) fn request_sessions(&mut self, append: bool) {
         if append {
@@ -798,37 +800,26 @@ async fn load_rewind_targets(
     rewind_targets_from_parts(&parts)
 }
 
-/// One target per completed user run marker. Text is selected by run_id,
-/// which also handles interleaved runs and preserves multiline input.
+/// One target per completed user message. Its composer document owns both
+/// ordering and identity for text, resources, commands, and pasted snippets.
 fn rewind_targets_from_parts(
     parts: &[agena_api::part::PartResource],
 ) -> anyhow::Result<Vec<crate::RewindTarget>> {
-    let mut inputs_by_run = std::collections::HashMap::<i64, Vec<_>>::new();
-    for part in parts {
-        if part.role == "user"
-            && let Some(run_id) = part.run_id
-        {
-            inputs_by_run.entry(run_id).or_default().push(part);
-        }
-    }
     parts
         .iter()
         .filter(|part| part.is_message_boundary() && part.role == "user")
         .enumerate()
         .filter(|(_, marker)| marker.state == "completed")
         .map(|(index, marker)| {
-            let document = if let Some(document) = marker.content.get("document") {
-                serde_json::from_value::<agena_domain::ComposerDocument>(document.clone())?
-            } else {
-                agena_domain::ComposerDocument(
-                    inputs_by_run
-                        .get(&marker.part_id)
-                        .into_iter()
-                        .flatten()
-                        .map(|part| rewind_composer_node(part))
-                        .collect::<anyhow::Result<Vec<_>>>()?,
+            let document = marker.content.get("document").ok_or_else(|| {
+                anyhow::anyhow!(
+                    "user message {} is missing its composer document",
+                    marker.part_id
                 )
-            };
+            })?;
+            let document =
+                serde_json::from_value::<agena_domain::ComposerDocument>(document.clone())
+                    .context("invalid user composer document in rewind history")?;
             Ok(crate::RewindTarget::from_run(
                 marker,
                 index as i64 + 1,
@@ -838,128 +829,77 @@ fn rewind_targets_from_parts(
         .collect()
 }
 
-/// Rebuild ordered composer input from the canonical user payloads. A rewind
-/// must retain resources and command references, as well as multiline text.
-fn rewind_composer_node(
-    part: &agena_api::part::PartResource,
-) -> anyhow::Result<agena_domain::ComposerNode> {
-    use agena_domain::{
-        ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerNode,
-        ResourceDelivery, ResourceKind, ResourceReference,
-    };
-    let content = &part.content;
-    if let Some(text) = content.get("text").and_then(serde_json::Value::as_str) {
-        return Ok(ComposerNode::Text {
-            text: text.to_owned(),
-        });
-    }
-    let payload = if part.kind == "skill_ref" {
-        let command = content
-            .get("skills")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|commands| commands.first())
-            .ok_or_else(|| {
-                anyhow::anyhow!("user command reference {} has no command", part.part_id)
-            })?;
-        ActivityPayload::CommandReference(serde_json::from_value(command.clone())?)
-    } else {
-        let attachment = content
-            .get("attachments")
-            .and_then(serde_json::Value::as_array)
-            .and_then(|items| items.first());
-        let source = attachment
-            .and_then(|item| item.get("source"))
-            .or_else(|| content.get("source"));
-        let path = content
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                source
-                    .and_then(|source| source.get("path"))
-                    .and_then(serde_json::Value::as_str)
-            });
-        let reference = if let Some(path) = path {
-            ResourceReference::WorkspacePath {
-                path: path.to_owned(),
-            }
-        } else if let Some(url) = source
-            .and_then(|source| source.get("url"))
-            .or_else(|| content.get("data_url"))
-            .and_then(serde_json::Value::as_str)
-        {
-            ResourceReference::Url {
-                url: url.to_owned(),
-            }
-        } else {
-            anyhow::bail!(
-                "user resource {} has no recoverable reference",
-                part.part_id
-            );
-        };
-        let mime = content
-            .get("mime")
-            .or_else(|| attachment.and_then(|item| item.get("mime")))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let kind = if mime.starts_with("image/") {
-            ResourceKind::Image
-        } else if mime.starts_with("audio/") {
-            ResourceKind::Audio
-        } else if mime.starts_with("video/") {
-            ResourceKind::Video
-        } else if mime == "application/pdf" {
-            ResourceKind::Pdf
-        } else if mime == "inode/directory" {
-            ResourceKind::Directory
-        } else {
-            ResourceKind::File
-        };
-        ActivityPayload::Resource(agena_domain::ResourceActivity {
-            delivery: if content.get("delivery").and_then(serde_json::Value::as_str)
-                == Some("model_input")
-            {
-                ResourceDelivery::ModelInput
-            } else {
-                ResourceDelivery::Reference
-            },
-            kind,
-            reference,
-            name: content
-                .get("name")
-                .or_else(|| attachment.and_then(|item| item.get("filename")))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("resource")
-                .to_owned(),
-            media_type: (!mime.is_empty()).then(|| mime.to_owned()),
-            size_bytes: content
-                .get("size_bytes")
-                .and_then(serde_json::Value::as_u64),
-            width: content
-                .get("width")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| value.try_into().ok()),
-            height: content
-                .get("height")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| value.try_into().ok()),
-            duration_ms: content
-                .get("duration_ms")
-                .and_then(serde_json::Value::as_u64),
-            page_count: content
-                .get("page_count")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| value.try_into().ok()),
-        })
-    };
-    Ok(ComposerNode::activity(ComposerActivity {
-        id: ActivityId::new(),
-        payload,
-        provenance: ActivityProvenance {
-            content_hash: content
-                .get("sha")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
+#[cfg(test)]
+mod rewind_document_tests {
+    use super::rewind_targets_from_parts;
+    use agena_api::part::PartResource;
+    use agena_domain::{ActivityId, ComposerDocument};
+    use serde_json::{Value, json};
+
+    fn user_message(id: i64, state: &str, document: Value) -> PartResource {
+        PartResource {
+            part_id: id,
+            run_id: Some(id),
+            message_id: Some(id),
+            message_boundary: true,
+            kind: "text".into(),
+            role: "user".into(),
+            state: state.into(),
+            content: json!({"text":"display text is not a reconstruction source","document":document}),
             ..Default::default()
-        },
-    }))
+        }
+    }
+
+    #[test]
+    fn rewind_preserves_document_order_identities_and_multiline_input() {
+        let source = json!([
+            {"type":"text","text":"First line\nSecond line"},
+            {"type":"activity","activity":{"id":ActivityId::new(),"payload":{
+                "activity_type":"resource","kind":"image","name":"picture.png","delivery":"model_input",
+                "media_type":"image/png","size_bytes":8,"width":4,"height":2,
+                "reference":{"reference_type":"artifact","uri":"agena:media:v1:fixture","sha256":"a".repeat(64)}
+            }}},
+            {"type":"activity","activity":{"id":ActivityId::new(),"payload":{
+                "activity_type":"command_reference","name":"review","description":"Review changes",
+                "content_hash":"command-revision","source":"agena.skills","skill_id":"skill:review","aliases":["r"]
+            }}},
+            {"type":"activity","activity":{"id":ActivityId::new(),"payload":{
+                "activity_type":"text_artifact","label":"snippet","language":"rust","text":"fn main() {}\n"
+            }}},
+            {"type":"text","text":"Last line"}
+        ]);
+        let expected: ComposerDocument = serde_json::from_value(source.clone()).unwrap();
+        let mut assistant = user_message(2, "completed", json!([]));
+        assistant.role = "assistant".into();
+        let parts = [
+            user_message(1, "completed", source),
+            assistant,
+            user_message(3, "pending", json!([])),
+            user_message(
+                4,
+                "completed",
+                json!([{"type":"text","text":"Another\nmessage"}]),
+            ),
+        ];
+        let targets = rewind_targets_from_parts(&parts).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].at_message_id, 1);
+        assert_eq!(targets[0].sequence, 1);
+        assert_eq!(targets[0].message_document, expected);
+        assert_eq!(targets[1].at_message_id, 4);
+        assert_eq!(targets[1].sequence, 3);
+        assert_eq!(targets[1].message_document.text(), "Another\nmessage");
+    }
+
+    #[test]
+    fn rewind_rejects_missing_or_malformed_documents_without_guessing_old_parts() {
+        let mut missing = user_message(1, "completed", json!([]));
+        missing.content = json!({"text":"old text","attachments":[{"source":{"path":"old.png"}}]});
+        let error = rewind_targets_from_parts(&[missing]).err().unwrap();
+        assert!(error.to_string().contains("missing its composer document"));
+
+        let malformed = user_message(2, "completed", json!({"text":"not a document"}));
+        let error = rewind_targets_from_parts(&[malformed]).err().unwrap();
+        assert!(error.to_string().contains("invalid user composer document"));
+    }
 }

@@ -38,13 +38,6 @@ pub(crate) fn build_timeline_item(
             run_id.to_string(),
         ));
     }
-    if let Some(parent_part_id) = record.parent_part_id {
-        detail_lines.push(timeline_detail_labeled_line(
-            i18n,
-            "timeline-label-parent-part",
-            parent_part_id.to_string(),
-        ));
-    }
     detail_lines.push(app_detail_plain_line(String::new()));
     let body = match serde_json::to_string_pretty(&record.content) {
         Ok(body) => body,

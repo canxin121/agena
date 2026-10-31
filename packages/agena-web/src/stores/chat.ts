@@ -16,7 +16,6 @@ import {
   upsertPart,
 } from './chat/messageIndex'
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
-import { STORAGE_RUN_CONFIG } from './chat/storeKeys'
 import { ApiError } from '../lib/api'
 import { createRevalidator } from '../lib/revalidation'
 import { isDocumentVisible } from '../lib/backgroundReads'
@@ -229,8 +228,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
       .map((row) => row.kind.toLowerCase())
       .filter(Boolean)
   }
-  sessionRunConfigBySession.value = loadSessionRunConfigMap(STORAGE_RUN_CONFIG)
-  const runConfigPersister = createSessionRunConfigPersister(STORAGE_RUN_CONFIG, () => sessionRunConfigBySession.value)
+  sessionRunConfigBySession.value = loadSessionRunConfigMap(localStorageKeys.chat.sessionRunConfig)
+  const runConfigPersister = createSessionRunConfigPersister(
+    localStorageKeys.chat.sessionRunConfig,
+    () => sessionRunConfigBySession.value,
+  )
 
   // ─── timers / inflight guards ─────────────────────────────────────────────
   let refreshSessionsInFlight: Promise<void> | null = null
@@ -1420,7 +1422,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       // { kind: "user_input", input_kind: "review" | "ask_user", ... }.
       // Keep both values distinct: the outer kind selects the reply family,
       // while input_kind controls the inline transcript layout.
-      const isUserInput = outerKind === 'user_input' || Boolean(inputKind) || Array.isArray(rec.questions)
+      const isUserInput = outerKind === 'user_input'
       if (isUserInput) {
         const title = readString(rec.title as JsonValue) || String(i18n.global.t('chat.attention.title.question'))
         const body = readString(rec.body_markdown as JsonValue)
@@ -1443,6 +1445,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
                         return {
                           label: readString(or.label as JsonValue),
                           description: readString(or.description as JsonValue),
+                          custom: or.custom === true,
                         }
                       })
                       .filter((o) => Boolean(o.label))
@@ -1470,7 +1473,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
               id: requestId,
               title,
               body_markdown: body,
-              input_kind: inputKind || (outerKind === 'user_input' ? 'ask_user' : outerKind),
+              input_kind: inputKind,
               questions,
               // Keep the canonical request available to any status/debug
               // consumer. The transcript itself reads the operation-owned
@@ -1480,7 +1483,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           },
         }
       }
-      // permission
+      if (outerKind !== 'permission') continue
       const action = asRecord(rec.action as JsonValue)
       const toolName = readString(action.tool_name as JsonValue)
       const actionKind = readString(action.kind as JsonValue)

@@ -247,6 +247,31 @@ same saved state. Native service definitions pass the data root explicitly.
 Service names include a hash of the data root, so stopping or upgrading one
 instance does not address another instance's service.
 
+### Database baseline
+
+The current database baseline is `agena-2026-10-31`. A new database creates
+the complete session, Scheduler, and server schema together with that baseline
+identity in one transaction. The baseline is a fixed identity, not an upgrade
+counter. Each initialized database also receives its own instance identity.
+
+Before opening an existing database for writes, Agena checks its main file
+through an immutable read-only connection. If recovery logs remain, it also
+validates the recovered state in a private temporary copy before opening the
+original for writes. This preserves the original database and SQLite log
+contents when a baseline, identity, or schema check rejects them. Recovery
+admission needs temporary space beside the database for that copy; clean
+shutdowns without recovery logs avoid the copy.
+
+A database from another baseline, one with missing identity, or one with
+incompatible schema is rejected. Agena does not migrate, reset, or delete that
+database. Start the new baseline with a new empty `--data-dir` (`-DataDir` in
+PowerShell) and keep the previous data root separately. Changing the selected
+root does not import its contents.
+
+Recovery of an interrupted execution and rollback of a failed installer
+replacement remain part of the current contract; neither upgrades a database
+from a different baseline.
+
 ## Beta release selection
 
 The repository and binary versions are `0.1.0`. Releases use tags such as
@@ -475,10 +500,11 @@ export AGENA_SERVER_PASSWORD='choose-your-server-password'
 `agena server --password` accepts the same credential; prefer the environment
 variable to keep the secret out of process arguments. MCP has no separate
 password. Without a server password, OAuth authorization is unavailable.
-The old `--ui-password` flag is accepted as a hidden compatibility alias. Rename
-`AGENA_SERVER_UI_PASSWORD` in existing shell configuration to
-`AGENA_SERVER_PASSWORD`. If a service still has only the old variable, startup
-reports the required rename instead of silently disabling login protection.
+The removed `--ui-password` flag is rejected. A service configured only with
+`AGENA_SERVER_UI_PASSWORD` fails startup rather than disabling login protection;
+set `AGENA_SERVER_PASSWORD` explicitly. Installer state must contain the current
+`SERVER_PASSWORD` field, including an explicit empty value for an unprotected
+local instance. The installer does not import the retired `UI_PASSWORD` field.
 
 On macOS/Linux the installer writes `client-env.sh` under the installation
 root, and the managed shell block sources it. The file exports `AGENA_DATA_DIR`
@@ -591,10 +617,10 @@ an `agena.db`. A custom root is purged directly; the default `~/agena` is left
 alone when another root was selected. Purge removes configuration and
 credentials as well as sessions.
 
-Installer state uses schema 2. An existing state file with another schema is
-rejected instead of migrated, and the message asks for a reinstall with an
-explicit data root. Existing SQLite databases must match the current Agena
-schema; an incompatible database is rejected without being modified.
+Installer state uses schema 2 and requires the current saved fields. An
+incompatible state file is rejected without modification. Use a new
+installation directory and explicitly select a new empty data root for the
+current [database baseline](#database-baseline).
 
 ## Installer verification
 

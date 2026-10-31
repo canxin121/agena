@@ -1,6 +1,6 @@
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 import type { SettingsSidebarDestination, SettingsTab } from './sidebar/settingsSidebarNavigation'
-import { normalizePluginSettingsView, pluginTabForSettingsView } from './pluginSettingsNavigation'
+import { pluginTabForSettingsView } from './pluginSettingsNavigation'
 
 export function settingsQueryForDestination(
   destination: SettingsSidebarDestination,
@@ -19,12 +19,8 @@ export function settingsQueryForDestination(
     pluginTabForSettingsView(currentQuery.view)
   ) {
     if (plugin !== undefined) query.plugin = plugin
-    const tab =
-      destination.view === 'plugin-workbench'
-        ? pluginTabForSettingsView(currentQuery.view, currentQuery.pluginTab)
-        : pluginTabForSettingsView(destination.view)
+    const tab = pluginTabForSettingsView(currentQuery.view, currentQuery.pluginTab)
     if (tab && tab !== 'overview') query.pluginTab = tab
   }
-  if (destination.section === 'plugins-tools') query.view = normalizePluginSettingsView(destination.view)
   return query
 }

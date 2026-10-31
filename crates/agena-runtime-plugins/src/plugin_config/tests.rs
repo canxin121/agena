@@ -1,5 +1,8 @@
 use super::*;
+use agena_plugin_host::sdk::PluginKey;
 use serde_json::{Value, json};
+
+const NOTIFICATIONS_PLUGIN: &str = "agena.notifications";
 
 fn configured(value: Value) -> PluginsConfig {
     serde_json::from_value(value).unwrap()
@@ -13,22 +16,24 @@ fn bundled() -> BTreeMap<String, ConfiguredPlugin> {
 }
 
 #[test]
-fn legacy_disabled_notification_config_retains_settings_and_timeouts() {
+fn explicit_builtin_settings_and_disabled_state_override_bundled_defaults() {
     let original = configured(json!({
         "list": {
-            "agena.terminal": {
-                "enabled": false,
-                "package": {"kind": "static"},
-                "settings": {"custom": {"value": 3}},
-                "timeouts": {"init": "7s"}
+            "agena.notifications": {
+                "enabled": false, "package": {"kind": "static"},
+                "settings": {"custom": {"value": 3}}, "timeouts": {"init": "7s"}
             }
-        }
+        },
+        "host": {"quotas": {"agena.notifications": {"max_concurrent": 5}}}
     }));
-    let legacy = original.list[LEGACY_NOTIFICATIONS_PLUGIN].clone();
+    let expected = original.list[NOTIFICATIONS_PLUGIN].clone();
     let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
     assert_eq!(merged.list.len(), 1);
-    assert_eq!(merged.list[NOTIFICATIONS_PLUGIN], legacy);
-    assert!(!merged.list[NOTIFICATIONS_PLUGIN].enabled);
+    assert_eq!(merged.list[NOTIFICATIONS_PLUGIN], expected);
+    assert_eq!(
+        merged.host.quotas[&NOTIFICATIONS_PLUGIN.parse::<PluginKey>().unwrap()].max_concurrent,
+        5
+    );
     assert_eq!(
         merge_bundled_plugin_config(merged.clone(), bundled()).unwrap(),
         merged
@@ -36,171 +41,84 @@ fn legacy_disabled_notification_config_retains_settings_and_timeouts() {
 }
 
 #[test]
-fn explicit_canonical_notification_config_and_quota_win_over_aliases() {
+fn profile_inheritance_preserves_disable_patch_and_provenance_order() {
     let original = configured(json!({
-        "list": {
-            "agena.terminal": {"enabled": false, "package": {"kind": "static"}},
-            "agena.notifications": {
-                "package": {"kind": "static"}, "settings": {"canonical": true}
-            }
-        },
-        "host": {"quotas": {
-            "agena.terminal": {"max_concurrent": 1},
-            "agena.notifications": {"max_concurrent": 5}
-        }}
-    }));
-    let expected = original.list[NOTIFICATIONS_PLUGIN].clone();
-    let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
-    assert_eq!(merged.list.len(), 1);
-    assert_eq!(merged.list[NOTIFICATIONS_PLUGIN], expected);
-    assert_eq!(merged.host.quotas.len(), 1);
-    assert_eq!(
-        merged.host.quotas[&NOTIFICATIONS_PLUGIN.parse::<PluginKey>().unwrap()].max_concurrent,
-        5
-    );
-}
-
-#[test]
-fn legacy_profile_disable_applies_to_the_renamed_builtin() {
-    let original = configured(json!({
-        "profiles": {"quiet": {"plugins": {"agena.terminal": {"action": "disable"}}}},
-        "active_profiles": ["quiet"]
-    }));
-    let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
-    assert_eq!(merged.list.len(), 1);
-    assert!(!merged.list[NOTIFICATIONS_PLUGIN].enabled);
-    assert_eq!(
-        merged.profile_resolution.changes[0].plugin_id,
-        NOTIFICATIONS_PLUGIN
-    );
-}
-
-#[test]
-fn profile_inheritance_keeps_layer_order_across_old_and_new_names() {
-    for (parent_id, child_id) in [
-        (LEGACY_NOTIFICATIONS_PLUGIN, NOTIFICATIONS_PLUGIN),
-        (NOTIFICATIONS_PLUGIN, LEGACY_NOTIFICATIONS_PLUGIN),
-    ] {
-        let original = configured(json!({
-            "list": {
-                "agena.terminal": {"package": {"kind": "static"}, "settings": {"base": true}}
-            },
-            "profiles": {
-                "parent": {"plugins": {(parent_id): {"action": "disable"}}},
-                "child": {
-                    "extends": ["parent"],
-                    "plugins": {(child_id): {
-                        "action": "patch", "enabled": true, "settings_patch": {"child": true}
-                    }}
-                }
-            },
-            "active_profiles": ["child"]
-        }));
-        let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
-        assert_eq!(merged.list.len(), 1);
-        let plugin = &merged.list[NOTIFICATIONS_PLUGIN];
-        assert!(plugin.enabled);
-        assert_eq!(plugin.settings, json!({"base": true, "child": true}));
-        assert_eq!(
-            merged.profile_resolution.applied_profiles,
-            ["parent", "child"]
-        );
-        assert!(
-            merged
-                .profile_resolution
-                .changes
-                .iter()
-                .all(|change| { change.plugin_id == NOTIFICATIONS_PLUGIN })
-        );
-    }
-}
-
-#[test]
-fn canonical_entry_wins_within_a_profile_and_legacy_removal_works() {
-    let original = configured(json!({
+        "list": {"agena.notifications": {
+            "package": {"kind":"static"}, "settings": {"base": true}
+        }},
         "profiles": {
-            "quiet": {"plugins": {
-                "agena.terminal": {"action": "patch", "enabled": true},
-                "agena.notifications": {"action": "disable"}
-            }},
-            "remove": {"extends": ["quiet"], "plugins": {
-                "agena.terminal": {"action": "remove"}
-            }}
+            "parent": {"plugins": {"agena.notifications": {"action":"disable"}}},
+            "child": {"extends":["parent"], "plugins": {"agena.notifications": {
+                "action":"patch", "enabled":true, "settings_patch":{"child":true}
+            }}}
         },
-        "active_profiles": ["quiet"]
+        "active_profiles":["child"]
     }));
-    let merged = merge_bundled_plugin_config(original.clone(), bundled()).unwrap();
-    assert!(!merged.list[NOTIFICATIONS_PLUGIN].enabled);
-    assert_eq!(merged.profile_resolution.changes.len(), 1);
-
-    let mut removed = original;
-    removed.active_profiles = vec!["remove".into()];
+    let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
+    assert_eq!(merged.list.len(), 1);
+    assert!(merged.list[NOTIFICATIONS_PLUGIN].enabled);
+    assert_eq!(
+        merged.list[NOTIFICATIONS_PLUGIN].settings,
+        json!({"base":true,"child":true})
+    );
+    assert_eq!(
+        merged.profile_resolution.applied_profiles,
+        ["parent", "child"]
+    );
     assert!(
-        merge_bundled_plugin_config(removed, bundled())
+        merged
+            .profile_resolution
+            .changes
+            .iter()
+            .all(|change| change.plugin_id == NOTIFICATIONS_PLUGIN)
+    );
+}
+
+#[test]
+fn profiles_remove_real_entries_and_reject_missing_builtin_targets() {
+    let original = configured(json!({
+        "profiles":{"remove":{"plugins":{"agena.notifications":{"action":"remove"}}}},
+        "active_profiles":["remove"]
+    }));
+    assert!(
+        merge_bundled_plugin_config(original, bundled())
             .unwrap()
             .list
             .is_empty()
     );
+    let retired = configured(json!({
+        "profiles":{"old":{"plugins":{"agena.snapshot":{"action":"disable"}}}},
+        "active_profiles":["old"]
+    }));
+    let error = merge_bundled_plugin_config(retired, bundled()).unwrap_err();
+    assert!(error.contains("cannot disable missing plugin `agena.snapshot`"));
 }
 
 #[test]
-fn activation_references_in_base_replacements_and_patches_and_quotas_are_migrated() {
-    let activation = json!({
-        "requires": ["agena.terminal", "agena.notifications", "agena.fs"],
-        "after": ["agena.fs", "agena.notifications", "agena.terminal"]
-    });
+fn current_activation_dependencies_and_external_entries_are_preserved() {
+    let activation = json!({"requires":["agena.notifications"],"after":["agena.fs"]});
     let original = configured(json!({
-        "list": {
-            "test.base": {"package": {"kind": "static"}, "activation": activation},
-            "test.patched": {"package": {"kind": "static"}}
-        },
-        "profiles": {"custom": {"plugins": {
-            "test.replaced": {"action": "replace", "plugin": {
-                "package": {"kind": "static"}, "activation": activation
-            }},
-            "test.patched": {"action": "patch", "activation": activation}
+        "list": {"test.base":{"package":{"kind":"static"},"activation":activation}},
+        "profiles":{"custom":{"plugins":{
+            "test.replaced":{"action":"replace","plugin":{"package":{"kind":"static"},"activation":activation}}
         }}},
-        "active_profiles": ["custom"],
-        "host": {"quotas": {"agena.terminal": {"rate_per_sec": 12, "burst": 20}}}
+        "active_profiles":["custom"]
     }));
+    let expected = original.list["test.base"].activation.clone();
     let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
-    let expected: PluginActivationConfig = serde_json::from_value(json!({
-        "requires": ["agena.notifications", "agena.fs"],
-        "after": ["agena.fs", "agena.notifications"]
-    }))
-    .unwrap();
-    for id in ["test.base", "test.replaced", "test.patched"] {
-        assert_eq!(merged.list[id].activation, expected);
-    }
-    assert_eq!(merged.host.quotas.len(), 1);
-    assert_eq!(
-        merged.host.quotas[&NOTIFICATIONS_PLUGIN.parse::<PluginKey>().unwrap()].rate_per_sec,
-        12
-    );
+    assert_eq!(merged.list["test.base"].activation, expected);
+    assert_eq!(merged.list["test.replaced"].activation, expected);
+    assert_eq!(merged.list.len(), 3);
 }
 
 #[test]
-fn previously_resolved_profile_provenance_uses_the_new_name() {
-    let mut original = configured(json!({
-        "list": {"agena.terminal": {"package": {"kind": "static"}}},
-        "profiles": {"quiet": {"plugins": {"agena.terminal": {"action": "disable"}}}},
-        "active_profiles": ["quiet"]
-    }));
-    original.resolve_profiles_in_place().unwrap();
+fn configuration_does_not_rewrite_plugin_identifiers_or_inject_retired_entries() {
+    let original = configured(json!({"list":{
+        "agena.terminal":{"enabled":false,"package":{"kind":"static"}}
+    }}));
+    let expected = original.list["agena.terminal"].clone();
     let merged = merge_bundled_plugin_config(original, bundled()).unwrap();
-    assert_eq!(merged.list.len(), 1);
-    assert!(!merged.list[NOTIFICATIONS_PLUGIN].enabled);
-    assert_eq!(
-        merged.profile_resolution.changes[0].plugin_id,
-        NOTIFICATIONS_PLUGIN
-    );
-}
-
-#[test]
-fn configurations_without_the_bundled_notification_plugin_keep_their_ids() {
-    let original = configured(json!({
-        "list": {"agena.terminal": {"package": {"kind": "static"}}}
-    }));
-    let merged = merge_bundled_plugin_config(original.clone(), BTreeMap::new()).unwrap();
-    assert_eq!(merged.list, original.list);
+    assert_eq!(merged.list["agena.terminal"], expected);
+    assert!(merged.list[NOTIFICATIONS_PLUGIN].enabled);
+    assert!(!merged.list.contains_key("agena.snapshot"));
 }

@@ -31,9 +31,4 @@ pub use credential::{ManagedCredential, parse_sap_ai_core_service_key, should_re
 pub use multi_adapter::MultiAdapterProvider;
 pub use multi_adapter::ProviderModelRoute;
 pub use registry::ProviderRegistry;
-pub use wire_message::{
-    WirePart as ProjectedSessionPart, completion_input_part_from_wire,
-    completion_input_provider_state, completion_input_provider_state_from_parts,
-    project_classifier_input_run_text, project_completion_input, project_operation_output,
-    project_persisted, project_persisted as project_session_parts,
-};
+pub use wire_message::project_classifier_input_run_text;

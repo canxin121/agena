@@ -1,15 +1,17 @@
 //! Infrastructure declarations shared with the single session-kernel schema.
-use sea_orm::{DatabaseConnection, DbErr};
 pub(crate) mod validation;
 
-/// Initialize a new-model database or validate its exact durable declarations.
-/// Existing incompatible databases are left untouched.
-pub async fn initialize_schema(database: &DatabaseConnection) -> Result<(), DbErr> {
-    crate::kernel::schema::initialize(database).await
+/// Identity of this complete persistence and payload contract. This is not an
+/// upgrade counter: databases from another baseline must use another data root.
+pub(crate) const SCHEMA_BASELINE: &str = "agena-2026-10-31";
+
+pub(crate) fn instance_table() -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS agena_instance (id INTEGER PRIMARY KEY CHECK(id=1), schema_baseline TEXT NOT NULL CHECK(schema_baseline='{SCHEMA_BASELINE}'), instance_id TEXT NOT NULL UNIQUE CHECK(length(instance_id)=36), created_at_ms INTEGER NOT NULL)"
+    )
 }
 
 pub(crate) const TABLES: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS agena_instance (id INTEGER PRIMARY KEY CHECK(id=1), instance_id TEXT NOT NULL UNIQUE CHECK(length(instance_id)=36), created_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_server_state (key TEXT PRIMARY KEY CHECK(length(key) BETWEEN 1 AND 200 AND key=trim(key)), value_json TEXT NOT NULL CHECK(json_valid(value_json)), updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_permission_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT NOT NULL, mode TEXT NOT NULL, scope TEXT NOT NULL, session_id INTEGER NULL, workspace_id INTEGER NULL, source TEXT NOT NULL, reason TEXT NULL, operator TEXT NULL, revoked_at_ms INTEGER NULL, revoked_reason TEXT NULL, revoked_by TEXT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",

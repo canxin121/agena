@@ -2564,7 +2564,6 @@ timeline-label-role = 角色
 timeline-label-state = 状态
 timeline-label-revision = 修订版本
 timeline-label-run = 运行
-timeline-label-parent-part = 父级片段
 transcript-alert-note = 备注
 transcript-alert-tip = 提示
 transcript-alert-important = 重要

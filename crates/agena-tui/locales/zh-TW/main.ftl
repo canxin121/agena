@@ -2233,7 +2233,6 @@ timeline-label-role = 角色
 timeline-label-state = 狀態
 timeline-label-revision = 修訂版本
 timeline-label-run = 執行
-timeline-label-parent-part = 父層片段
 transcript-alert-note = 備註
 transcript-alert-tip = 提示
 transcript-alert-important = 重要

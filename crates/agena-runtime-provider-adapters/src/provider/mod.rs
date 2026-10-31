@@ -2,8 +2,7 @@
 
 pub use agena_domain::{Model, ModelId, ModelSpeedMode, ModelThinkingMode};
 pub use agena_runtime_provider::provider::{
-    CatalogedModelsProvider, MultiAdapterProvider, ProjectedSessionPart,
-    parse_sap_ai_core_service_key, project_completion_input,
+    CatalogedModelsProvider, MultiAdapterProvider, parse_sap_ai_core_service_key,
 };
 pub use agena_runtime_provider::provider::{
     CompletionResponse, ManagedCredential, should_retry_credential,

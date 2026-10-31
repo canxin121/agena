@@ -111,12 +111,6 @@ enum Work {
     CollectBlobs(oneshot::Sender<Result<port::BlobGc>>),
 }
 
-/// Open an isolated/new-model database. An old Part schema is rejected without
-/// mutation; use a fresh database path for the new model.
-pub async fn open_session_kernel(url: &str) -> Result<KernelPorts> {
-    Ok(open_kernel_runtime(url).await?.ports)
-}
-
 /// Infrastructure composition retains typed repositories; no raw connection
 /// is handed to a session, provider, tool, or application caller.
 pub struct SqliteKernel {
@@ -131,6 +125,9 @@ pub struct SqliteKernel {
     pub maintenance: port::KernelMaintenance,
 }
 
+/// Open the session kernel and infrastructure repositories on the current
+/// instance baseline. Incompatible databases are preserved; use a new empty
+/// data directory for this baseline.
 pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
     let database = KernelDatabase::open(url).await.map_err(storage)?;
     let workspaces = Arc::new(crate::SeaWorkspaceRepository::new(database.writer.clone()));

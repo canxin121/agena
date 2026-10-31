@@ -30,6 +30,7 @@ import type { JsonValue } from '@/types/json'
 import {
   jsonArray,
   jsonRecord,
+  interactionQuestionOptions,
   stringValue,
   type InteractionPresentation,
   type OperationPermissionPresentation,
@@ -166,16 +167,9 @@ function moveQuestionPage(delta: number) {
   if (page !== questionPage.value) goToQuestionPage(page)
 }
 
-function answersFromReply(reply: JsonValue | null, index: number, questionId: string): string[] {
+function answersFromReply(reply: JsonValue | null, questionId: string): string[] {
   const answers = jsonRecord(jsonRecord(reply).answers)
-  const byId = jsonArray(answers[questionId]).map(stringValue).filter(Boolean)
-  if (byId.length || questionId === String(index)) return byId
-  return jsonArray(answers[String(index)]).map(stringValue).filter(Boolean)
-}
-
-function hasExplicitCustomOption(label: string): boolean {
-  const normalized = label.trim().toLowerCase()
-  return normalized === 'custom' || normalized === 'type your own answer'
+  return jsonArray(answers[questionId]).map(stringValue).filter(Boolean)
 }
 
 function ensureSlots() {
@@ -192,12 +186,12 @@ function ensureSlots() {
 // an answer nor destroys the user's unsubmitted work.
 const replyState = computed(() => {
   const reply = interaction.value?.reply || null
-  const selected = questions.value.map((question, index) => {
-    const values = answersFromReply(reply, index, question.questionId || String(index))
+  const selected = questions.value.map((question) => {
+    const values = answersFromReply(reply, question.questionId)
     return values.filter((value) => question.options.some((option) => !option.custom && option.label === value))
   })
-  const customDrafts = questions.value.map((question, index) => {
-    const values = answersFromReply(reply, index, question.questionId || String(index))
+  const customDrafts = questions.value.map((question) => {
+    const values = answersFromReply(reply, question.questionId)
     return values
       .filter((value) => !question.options.some((option) => !option.custom && option.label === value))
       .join(', ')
@@ -207,7 +201,7 @@ const replyState = computed(() => {
 
 const replyCancelled = computed(() => {
   const reply = jsonRecord(interaction.value?.reply)
-  return reply.kind === 'cancel' || reply.cancelled === true
+  return reply.kind === 'cancel'
 })
 const replyStatusLabel = computed(() =>
   replyCancelled.value
@@ -215,14 +209,12 @@ const replyStatusLabel = computed(() =>
     : t(interaction.value?.reply ? 'chat.attention.ui.answered' : 'chat.attention.ui.unanswered'),
 )
 const committedAnswers = computed(() =>
-  questions.value.map((question, index) => ({
+  questions.value.map((question) => ({
     question,
-    answers: answersFromReply(interaction.value?.reply || null, index, question.questionId || String(index)).map(
-      (value) => {
-        const option = question.options.find((option) => !option.custom && option.label === value)
-        return { value, description: option?.description || '', custom: !option }
-      },
-    ),
+    answers: answersFromReply(interaction.value?.reply || null, question.questionId).map((value) => {
+      const option = question.options.find((option) => !option.custom && option.label === value)
+      return { value, description: option?.description || '', custom: !option }
+    }),
   })),
 )
 
@@ -267,7 +259,7 @@ function customAllowed(index: number): boolean {
 }
 
 function customOption(index: number) {
-  return questionOptions(index).find((option) => option.custom)
+  return (questionOptions.value[index] || []).find((option) => option.custom)
 }
 
 function isCustomSelected(index: number) {
@@ -378,32 +370,15 @@ function focusQuestionEntry(index: number, reverse = false) {
 }
 
 function visibleOptions(index: number) {
-  return questionOptions(index).filter((option) => !option.custom)
+  return (questionOptions.value[index] || []).filter((option) => !option.custom)
 }
 
-function questionOptions(index: number) {
-  const question = questions.value[index]
-  if (!question) return []
-  // Older producers included a literal Custom choice alongside allow_custom.
-  // An explicit option type takes precedence over that legacy label convention.
-  const legacyCustomIndex =
-    question.allowCustom && !question.options.some((option) => option.custom)
-      ? question.options.findIndex((option) => hasExplicitCustomOption(option.label))
-      : -1
-  const options = question.options.map((option, optionIndex) => ({
-    ...option,
-    custom: Boolean(option.custom || optionIndex === legacyCustomIndex),
-    synthetic: false,
-  }))
-  if (question.allowCustom && !options.some((option) => option.custom))
-    options.push({ label: 'Custom', description: '', custom: true, synthetic: true })
-  return options
-}
+const questionOptions = computed(() => questions.value.map(interactionQuestionOptions))
 
 function toggleOption(index: number, label: string) {
   const question = questions.value[index]
   if (!question || !interaction.value?.pending || busy.value) return
-  const option = questionOptions(index).find((option) => option.label === label)
+  const option = (questionOptions.value[index] || []).find((option) => option.label === label)
   if (!option) return
   const current = selected.value[index] || []
   if (question.multiple) {
@@ -438,7 +413,7 @@ function answerFor(index: number): string[] {
   const question = questions.value[index]
   if (!question) return []
   const options = (selected.value[index] || []).filter((label) =>
-    questionOptions(index).some((option) => !option.custom && option.label === label),
+    (questionOptions.value[index] || []).some((option) => !option.custom && option.label === label),
   )
   const custom = (isReviewDecision.value ? customOpen.value[index] : isCustomSelected(index))
     ? (customDrafts.value[index] || '').trim()
@@ -1117,7 +1092,7 @@ onBeforeUnmount(() => {
               question.multiple ? t('chat.attention.ui.multiple') : t('chat.attention.ui.single')
             }}</span>
           </div>
-          <template v-for="option in questionOptions(questionIndex)" :key="option.label">
+          <template v-for="option in questionOptions[questionIndex] || []" :key="option.label">
             <label
               class="interaction-choice"
               :title="

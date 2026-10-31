@@ -771,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_document_policy_uses_opaque_sandbox() {
+    fn control_proxy_document_policy_uses_opaque_sandbox() {
         let mut headers = HeaderMap::new();
         apply_frame_headers(&mut headers, "'self'", true);
         let policy = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();

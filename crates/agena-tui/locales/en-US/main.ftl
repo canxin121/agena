@@ -2564,7 +2564,6 @@ timeline-label-role = Role
 timeline-label-state = State
 timeline-label-revision = Revision
 timeline-label-run = Run
-timeline-label-parent-part = Parent part
 transcript-alert-note = Note
 transcript-alert-tip = Tip
 transcript-alert-important = Important

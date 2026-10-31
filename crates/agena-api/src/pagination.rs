@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Default page size for notification pages and legacy generic consumers.
+/// Default page size for notification pages.
 pub const DEFAULT_LIMIT: u64 = 100;
 /// Maximum page size (server clamps anything above this).
 pub const MAX_LIMIT: u64 = 1000;

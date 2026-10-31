@@ -21,6 +21,7 @@ import {
 } from './sessionMutationSync'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { toolInputRecord } from '../../lib/toolInput'
+import { toolFailurePresentation } from '../../lib/toolFailures'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { MessageEntry, MessageFold, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
@@ -69,7 +70,6 @@ export type AgenaPart = {
   created_at_ms?: number
   started_at_ms?: number
   finished_at_ms?: number | null
-  parent_part_id?: number | null
   run_id?: number | null
   message_id?: number | null
   user_message_ordinal?: number
@@ -389,12 +389,7 @@ function arrayStringField(value: JsonValue, key: string): string {
 function problemMessage(value: JsonValue): string {
   const problem = asObject(value)
   const user = asObject(problem.user)
-  return stringField(user, ['fallback']) || stringField(problem, ['message'])
-}
-
-function operationFailureMessage(value: JsonValue): string {
-  const error = asObject(value)
-  return problemMessage(error.failure) || problemMessage(error.problem) || stringField(error, ['message', 'detail'])
+  return stringField(user, ['fallback'])
 }
 
 /**
@@ -428,7 +423,6 @@ export function normalizeAgenaPart(
   const startedMs = typeof part.started_at_ms === 'number' ? part.started_at_ms : createdMs
   const finishedMs = typeof part.finished_at_ms === 'number' ? part.finished_at_ms : undefined
   const runId = typeof part.run_id === 'number' ? part.run_id : null
-  const parentPartId = typeof part.parent_part_id === 'number' ? part.parent_part_id : null
   const agenaSummary = typeof part.summary === 'string' ? part.summary : null
   const agenaPresentation = part.presentation ?? null
 
@@ -450,7 +444,6 @@ export function normalizeAgenaPart(
     agenaPresentation,
     agenaInlineUi: part.inline_ui ?? null,
     runId,
-    parentPartId,
     time: {
       start: startedMs,
       ...(typeof finishedMs === 'number' ? { end: finishedMs } : {}),
@@ -486,7 +479,7 @@ export function normalizeAgenaPart(
         stringField(agenaPresentation, ['summary']) ||
         stringField(outputRecord, ['text']) ||
         stringField(payloadRecord, ['text'])
-      const error = operationFailureMessage(contentRecord.error)
+      const error = toolFailurePresentation(contentRecord.error).message
       const metaCandidate = {
         ...asObject(outputRecord.metadata),
         ...asObject(contentRecord.metadata),
@@ -513,21 +506,13 @@ export function normalizeAgenaPart(
       const contentRecord = asObject(content)
       const attachments = Array.isArray(contentRecord.attachments) ? contentRecord.attachments : []
       const firstAttachment = attachments.length > 0 ? asObject(attachments[0]) : {}
-      const source = {
-        ...asObject(firstAttachment.source),
-        ...asObject(contentRecord.source),
-      }
-      const name = stringField(content, ['name', 'title']) || stringField(firstAttachment, ['filename', 'title'])
-      const mime = stringField(content, ['mime']) || stringField(firstAttachment, ['mime'])
-      const path = stringField(content, ['path']) || stringField(source, ['path'])
-      const directUrl =
-        stringField(content, ['data_url', 'url']) ||
-        stringField(source, ['data_url', 'url']) ||
-        stringField(firstAttachment, ['data_url', 'url'])
-      const base64 =
-        stringField(content, ['base64']) ||
-        stringField(source, ['base64', 'data']) ||
-        stringField(firstAttachment, ['base64'])
+      const source = asObject(firstAttachment.source)
+      const sourceKind = stringField(source, ['source'])
+      const name = stringField(firstAttachment, ['filename', 'title'])
+      const mime = stringField(firstAttachment, ['mime'])
+      const path = sourceKind === 'local_path' ? stringField(source, ['path']) : ''
+      const directUrl = sourceKind === 'url' || sourceKind === 'data_url' ? stringField(source, ['url']) : ''
+      const base64 = sourceKind === 'base64' || sourceKind === 'provider_data' ? stringField(source, ['data']) : ''
       const url = directUrl || (base64 && mime ? `data:${mime};base64,${base64}` : '') || path
       return {
         ...base,
@@ -545,11 +530,10 @@ export function normalizeAgenaPart(
     }
     case 'skill_ref': {
       const contentRecord = asObject(content)
-      const references = [contentRecord.commands, contentRecord.skills].find(Array.isArray) ?? []
+      const references = Array.isArray(contentRecord.commands) ? contentRecord.commands : []
       const firstReference = references.length > 0 ? asObject(references[0]) : {}
-      const name =
-        stringField(content, ['command', 'skill', 'name']) || stringField(firstReference, ['name']) || 'command'
-      const description = stringField(content, ['description']) || stringField(firstReference, ['description'])
+      const name = stringField(firstReference, ['name']) || 'command'
+      const description = stringField(firstReference, ['description'])
       return {
         ...base,
         type: 'tool',
@@ -587,8 +571,7 @@ export function normalizeAgenaPart(
       return { ...base, type: 'compaction', ...(summary ? { text: summary } : {}) }
     }
     case 'error': {
-      const message =
-        problemMessage(asObject(content).problem) || stringField(asObject(content), ['message']) || str(part.summary)
+      const message = problemMessage(asObject(content).problem)
       return { ...base, type: 'text', text: message }
     }
     case 'system_notification': {

@@ -149,6 +149,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let other = tempfile::tempdir().unwrap();
         let record: PreviewSessionRecord = serde_json::from_value(serde_json::json!({
+            "instanceId":uuid::Uuid::new_v4().to_string(),
             "id":"demo", "directory":root.path().to_str().unwrap(), "runDirectory":root.path().to_str().unwrap(),
             "agenaSessionId":"7", "state":"stopped", "proxyBasePath":"/api/v1/workbench/preview/s/demo/",
             "targetUrl":"http://127.0.0.1:5173/", "command":"node", "args":[], "logsPath":"/tmp/preview.log", "updatedAt":0

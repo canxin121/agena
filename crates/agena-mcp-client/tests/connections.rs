@@ -429,11 +429,11 @@ impl SecretStore for MemorySecrets {
 }
 
 #[tokio::test]
-async fn stored_bearer_is_bound_to_endpoint_and_legacy_credentials_are_not_sent() {
+async fn stored_bearer_uses_only_the_configured_endpoint_identity() {
     let fixture = HttpFixture::start("modern", false).await;
     let secrets: Arc<dyn SecretStore> = Arc::new(MemorySecrets::default());
     let store = FileTokenStore::with_secret_store(secrets);
-    store.put_bearer("bound", "legacy-private").unwrap();
+    store.put_bearer("bound", "unrelated-name-private").unwrap();
     let other = Url::parse("http://127.0.0.1:1/mcp").unwrap();
     store
         .put_bearer(&credential_store_name("bound", &other), "other-private")
@@ -463,7 +463,8 @@ async fn stored_bearer_is_bound_to_endpoint_and_legacy_credentials_are_not_sent(
 #[tokio::test]
 async fn oauth_pkce_completion_checks_binding_and_logout_preserves_bearer() {
     let fixture = HttpFixture::start("modern", true).await;
-    let secrets: Arc<dyn SecretStore> = Arc::new(MemorySecrets::default());
+    let memory = Arc::new(MemorySecrets::default());
+    let secrets: Arc<dyn SecretStore> = memory.clone();
     let sessions = McpOAuthSessionManager::with_secret_store(Arc::clone(&secrets));
     let identity = credential_store_name("oauth", &fixture.endpoint);
     let bearer = FileTokenStore::with_secret_store(Arc::clone(&secrets));
@@ -582,12 +583,57 @@ async fn oauth_pkce_completion_checks_binding_and_logout_preserves_bearer() {
             .await
             .unwrap()
     );
-    // Simulate an older unbound credential document at the endpoint key.
-    oauth.save(retained_credentials).await.unwrap();
-    assert!(oauth.load().await.unwrap().is_some());
-    assert!(
-        bound.load().await.unwrap().is_none(),
-        "legacy documents require explicit reauthorization"
+    let raw_credentials = serde_json::to_string(&retained_credentials).unwrap();
+    let before_unbound = memory.0.lock().unwrap().clone();
+    assert!(oauth.load().await.is_err());
+    assert!(oauth.save(retained_credentials).await.is_err());
+    assert!(oauth.clear().await.is_err());
+    assert_eq!(*memory.0.lock().unwrap(), before_unbound);
+
+    bound
+        .save(serde_json::from_str(&raw_credentials).unwrap())
+        .await
+        .unwrap();
+    assert!(bound.load().await.unwrap().is_some());
+    let key = memory
+        .0
+        .lock()
+        .unwrap()
+        .keys()
+        .find(|key| key.starts_with("mcp-oauth-"))
+        .unwrap()
+        .clone();
+    let bound_document: Value =
+        serde_json::from_str(&memory.get_secret(&key).unwrap().unwrap()).unwrap();
+    assert_eq!(bound_document["agena_mcp_oauth"], 1);
+    assert_eq!(
+        bound_document["binding"],
+        oauth_credential_binding(&["read".into()], &McpOAuthRegistration::default(),)
+    );
+    // A bare upstream record is not Agena's current storage format. Rejection
+    // must not copy, rewrite, or delete the persisted credential material.
+    memory.set_secret(&key, &raw_credentials).unwrap();
+    let error = bound.load().await.unwrap_err().to_string();
+    assert!(error.contains("invalid MCP OAuth credential document"));
+    assert!(!error.contains("fixture"));
+    assert_eq!(
+        oauth.health().credential_state,
+        OAuthCredentialState::Unreadable
+    );
+    assert_eq!(
+        bound.health().credential_state,
+        OAuthCredentialState::Unreadable
+    );
+    assert!(bound.clear().await.is_err());
+    assert_eq!(
+        memory.get_secret(&key).unwrap().as_deref(),
+        Some(raw_credentials.as_str())
+    );
+    sessions.logout("oauth", &fixture.endpoint).await.unwrap();
+    assert!(memory.get_secret(&key).unwrap().is_none());
+    assert_eq!(
+        bearer.bearer_result(&identity).unwrap().as_deref(),
+        Some("manual-private")
     );
     sessions.shutdown().await;
 }

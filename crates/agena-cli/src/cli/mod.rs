@@ -857,7 +857,6 @@ pub struct ServerArgs {
     #[arg(
         long,
         env = "AGENA_SERVER_PASSWORD",
-        alias = "ui-password",
         hide_env_values = true,
         value_name = "PASSWORD"
     )]

@@ -767,37 +767,37 @@ class McpOAuthTests(unittest.TestCase):
         self.start()
         self.assert_token_accepted(tokens['access_token'], False)
 
-    def test_legacy_mcp_password_is_discarded_and_its_grants_are_revoked(self):
-        self.json_request('/api/v1/server/mcp', 'PUT', {'enabled': True})
-        _, tokens = self.authorize(self.password)
+    def test_retired_mcp_control_fields_are_rejected_without_rewriting_storage(self):
+        for field in ('authMode', 'anonymousAccess', 'oauthPassword'):
+            self.json_request('/api/v1/server/mcp', 'PUT', {
+                field: 'retired-private-value',
+            }, expected=422)
         self.stop()
         with sqlite3.connect(self.root / 'data/agena.db') as database:
             control = json.loads(database.execute(
                 "SELECT value_json FROM agena_server_state WHERE key='mcp.server.control'",
             ).fetchone()[0])
-            old_verifier = json.loads(database.execute(
-                "SELECT value_json FROM agena_server_state WHERE key='auth.serverPasswordVerifier'",
-            ).fetchone()[0])
-            control['oauth_password_phc'] = old_verifier
-            control.pop('server_password_fingerprint', None)
-            database.execute("DELETE FROM agena_server_state WHERE key='auth.serverPasswordVerifier'")
+            control['oauth_password_phc'] = 'retired-private-value'
             database.execute("UPDATE agena_server_state SET value_json=? WHERE key='mcp.server.control'",
                              (json.dumps(control),))
-        self.start(password='shared-password-after-migration')
-        self.assert_token_accepted(tokens['access_token'], False)
-        _, authorization = self.authorization_request()
-        status, _, _ = self.request('/oauth/authorize', 'POST', authorization | {
-            'password': self.DEFAULT_PASSWORD,
-        }, form=True)
-        self.assertEqual(status, 401)
-        _, migrated = self.authorize(self.password)
-        self.assert_token_accepted(migrated['access_token'], True)
+        environment = {key: value for key, value in os.environ.items()
+                       if not key.startswith('AGENA_MCP_')}
+        environment.pop('AGENA_SERVER_UI_PASSWORD', None)
+        environment['AGENA_SERVER_PASSWORD'] = self.password
+        result = subprocess.run([
+            str(Path(os.environ['AGENA_TEST_BINARY']).resolve()),
+            '--data-dir', str(self.root / 'data'), 'server',
+            '--host', '127.0.0.1', '--port', '0', '--workspace', str(self.workspace),
+        ], env=environment, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        diagnostics = result.stdout + result.stderr
+        self.assertIn('oauth_password_phc', diagnostics)
+        self.assertNotIn('retired-private-value', diagnostics)
         with sqlite3.connect(self.root / 'data/agena.db') as database:
             saved = json.loads(database.execute(
                 "SELECT value_json FROM agena_server_state WHERE key='mcp.server.control'",
             ).fetchone()[0])
-        self.assertNotIn('oauth_password_phc', saved)
-        self.assertTrue(saved['server_password_fingerprint'])
+        self.assertEqual(saved, control)
 
     def test_browser_consent_errors_and_passwordless_cancellation(self):
         self.json_request('/api/v1/server/mcp', 'PUT', {'enabled': True})

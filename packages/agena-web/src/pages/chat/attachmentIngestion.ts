@@ -23,8 +23,6 @@ export type ComposerAttachment = {
   state: AttachmentState
   pastePreview?: string
 }
-/** @deprecated use {@link ComposerAttachment}; kept for older call sites. */
-export type StagedAttachment = ComposerAttachment
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 export const MAX_ATTACHMENT_TOTAL_BYTES = 40 * 1024 * 1024
 export const MAX_ATTACHMENTS = 8
@@ -36,8 +34,8 @@ export function pasteTextWithinBudget(text: string) {
 }
 
 type Options = {
-  get: () => StagedAttachment[]
-  set: (files: StagedAttachment[]) => void
+  get: () => ComposerAttachment[]
+  set: (files: ComposerAttachment[]) => void
   read: (file: File, signal: AbortSignal) => Promise<string>
   onError: (error: { kind: 'size' | 'total' | 'count' | 'read' | 'memory'; file: File }) => void
   onBusy: (count: number) => void
@@ -54,7 +52,8 @@ export function createAttachmentIngestor(options: Options) {
   let queue: Promise<void> = Promise.resolve()
   const active = new Set<AbortController>()
   const activeById = new Map<string, AbortController>()
-  const resourceCount = (files: StagedAttachment[]) => files.filter((file) => file.composerKind !== 'skill_ref').length
+  const resourceCount = (files: ComposerAttachment[]) =>
+    files.filter((file) => file.composerKind !== 'skill_ref').length
   async function process(files: File[], epoch: number, stageOptions: StageOptions): Promise<File[]> {
     const accepted: File[] = []
     for (const file of files) {

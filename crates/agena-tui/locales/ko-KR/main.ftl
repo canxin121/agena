@@ -2072,7 +2072,6 @@ timeline-label-role = 역할
 timeline-label-state = 상태
 timeline-label-revision = 수정 버전
 timeline-label-run = 실행
-timeline-label-parent-part = 상위 부분
 transcript-alert-note = 참고
 transcript-alert-tip = 팁
 transcript-alert-important = 중요

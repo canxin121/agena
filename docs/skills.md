@@ -54,7 +54,7 @@ document is preserved when read or edited; unknown extension keys are accepted.
 
 New and edited managed documents are validated before saving. Invalid existing
 packages remain visible in the library with diagnostics so they can be repaired.
-Legacy command declarations retain their existing naming conventions.
+Plugin command declarations use their command contract's naming conventions.
 
 `SKILL.md` should stay focused. More than 500 body lines produces a recommendation
 to move detailed material into supporting files, rather than a hard validation
@@ -92,14 +92,17 @@ the same name.
 Package availability and installation provenance are stored in
 `.agena-skill.json` inside the managed directory. This is internal state, not
 part of the Agent Skills document. Import ignores source copies of this state.
-The legacy `agena.commands` disabled-name setting is respected when no explicit
-package availability setting exists; an explicit managed-package setting wins.
+The `agena.commands` disabled-name setting is the shared command availability
+policy when no explicit package setting exists; an explicit managed-package
+setting wins. Plugin declarations have no writable package state and continue
+to use that name-based policy.
 
-Plain Markdown files under the older command roots remain available through the
+Plain Markdown files under configured command roots are available through the
 command palette. The Skills attachment picker lists enabled, valid packages for
-the selected workspace and omits shadowed copies. Selecting a skill attaches its
-opaque ID and revision; its instructions are fetched on demand through the
-`agena.skills` plugin's `get` tool. Older command references remain supported.
+the selected workspace and omits shadowed copies. Selecting a managed skill
+attaches its opaque ID and revision; its instructions are fetched on demand
+through the `agena.skills` plugin's `get` tool. A plugin command reference uses
+the command name, source, and content hash because it has no managed package ID.
 
 ## Web settings
 

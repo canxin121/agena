@@ -13,7 +13,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-/// One persisted part as exposed by the public API.
+/// One timeline entry as exposed by the public API.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct PartResource {
     /// Display-only embeds for an assistant text body; absent on user input.
@@ -40,8 +40,6 @@ pub struct PartResource {
     pub summary: Option<String>,
     pub visibility: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_part_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
     /// User input owning this entry, independent of physical append order.
     /// A later queued input can be persisted before an earlier reply starts.
@@ -58,8 +56,6 @@ pub struct PartResource {
     /// entry identity; a bounded history page need not compute a global rank.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_message_ordinal: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_state: Option<Value>,
 }
 
 impl PartResource {

@@ -75,7 +75,7 @@ const connectedCount = computed(() => catalog.value?.connections.filter((connect
 const draftProblems = computed(() => draft.value ? mcpConfigProblems(draft.value) : [])
 const createProblems = computed(() => mcpConfigProblems(createDraft.value, true))
 const changedElsewhere = computed(() => Boolean(dirty.value && detail.value && detail.value.revision !== draftRevision.value))
-const authKind = computed(() => { const kind = String(mcpRecord(detail.value?.config.auth).kind || 'none'); return kind === 'oauth' ? 'o_auth' : kind })
+const authKind = computed(() => String(mcpRecord(detail.value?.config.auth).kind || 'none'))
 const scopeOptions = computed(() => [{ value: 'workspace', label: st('Workspace') }, { value: 'global', label: st('Global') }])
 const filterScopes = computed(() => [{ value: 'all', label: st('All scopes') }, ...scopeOptions.value])
 const statusOptions = computed(() => [

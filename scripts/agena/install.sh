@@ -115,7 +115,7 @@ while [[ $# -gt 0 ]]; do
     --host) HOST="${2:-}"; HOST_SET=1; shift 2 ;;
     --port) PORT="${2:-}"; PORT_SET=1; shift 2 ;;
     --workspace) WORKSPACE="${2:-}"; WORKSPACE_SET=1; shift 2 ;;
-    --password|--ui-password) SERVER_PASSWORD="${2:-}"; SERVER_PASSWORD_SET=1; shift 2 ;;
+    --password) SERVER_PASSWORD="${2:-}"; SERVER_PASSWORD_SET=1; shift 2 ;;
     --service-mode) SERVICE_MODE="${2:-}"; SERVICE_MODE_SET=1; shift 2 ;;
     --no-path-update) UPDATE_PATH=0; NO_PATH_UPDATE_SET=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
@@ -287,16 +287,14 @@ load_state() {
     exit 1
   fi
   local selected_install_dir="$INSTALL_DIR" stored_data_dir
-  local UI_PASSWORD="" # Legacy installer-state key; never written again.
   unset INSTALL_STATE_SCHEMA DATA_DIR RELEASE_VERSION SERVER_PASSWORD
   # shellcheck disable=SC1090
   source "$STATE_FILE"
-  SERVER_PASSWORD="${SERVER_PASSWORD-${UI_PASSWORD:-}}"
   if (( NO_PATH_UPDATE_SET )); then
     UPDATE_PATH=0
   fi
-  if [[ "${INSTALL_STATE_SCHEMA:-}" != "2" || -z "${DATA_DIR:-}" ]]; then
-    echo "ERROR: installer state is incompatible; reinstall with an explicit --data-dir" >&2
+  if [[ "${INSTALL_STATE_SCHEMA:-}" != "2" || -z "${DATA_DIR:-}" || "${SERVER_PASSWORD+x}" != "x" ]]; then
+    echo "ERROR: installer state is incompatible; use a new installation directory and an explicit --data-dir" >&2
     exit 1
   fi
   stored_data_dir="$DATA_DIR"

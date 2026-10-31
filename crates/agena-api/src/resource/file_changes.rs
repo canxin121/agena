@@ -17,7 +17,6 @@ pub struct SessionFileChangeResource {
     pub path: String,
     /// Fingerprint of this path's persisted operations, independent of other
     /// files. Clients use it to keep an already displayed diff unchanged.
-    #[serde(default)]
     pub revision: String,
     /// Lines this path's recorded operations add and remove, merged into one
     /// pair per file. Recorded operation diffs are aggregated; this is never a
@@ -47,4 +46,23 @@ pub struct SessionFileEditResource {
     /// several files), not necessarily just this row's path.
     pub diff_scope: String,
     pub diff_unavailable_reason: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionFileChangeResource;
+
+    #[test]
+    fn file_change_requires_its_path_revision() {
+        let current = serde_json::json!({
+            "path":"src/你好.rs", "revision":"current-path-facts",
+            "added":3, "removed":1, "operation_count":1,
+            "operation_history":false, "operations":[],
+        });
+        let decoded: SessionFileChangeResource = serde_json::from_value(current.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), current);
+        let mut incomplete = current;
+        incomplete.as_object_mut().unwrap().remove("revision");
+        assert!(serde_json::from_value::<SessionFileChangeResource>(incomplete).is_err());
+    }
 }

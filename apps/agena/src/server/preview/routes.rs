@@ -721,7 +721,7 @@ async fn response_from_upstream_for_session(
     }
 
     if should_rewrite_html || should_rewrite_css {
-        let bytes = read_legacy_document(upstream, Duration::from_secs(15)).await?;
+        let bytes = read_control_proxy_document(upstream, Duration::from_secs(15)).await?;
         let text = String::from_utf8_lossy(&bytes);
         let rewritten = if should_rewrite_html {
             rewrite_html_proxy_root_urls(&text, proxy_base_path)
@@ -744,7 +744,7 @@ async fn response_from_upstream_for_session(
     Ok(add_preview_frame_headers(response))
 }
 
-async fn read_legacy_document(
+async fn read_control_proxy_document(
     mut upstream: reqwest::Response,
     timeout: Duration,
 ) -> ApiResult<Vec<u8>> {
@@ -756,7 +756,7 @@ async fn read_legacy_document(
         })? {
             if bytes.len().saturating_add(chunk.len()) > MAX_REWRITE_BYTES {
                 return Err(AppError::bad_gateway(
-                    "legacy preview document exceeds the 8 MiB rewrite limit; use isolated preview access",
+                    "control preview document exceeds the 8 MiB rewrite limit; use isolated preview access",
                 ));
             }
             bytes.extend_from_slice(&chunk);
@@ -764,7 +764,7 @@ async fn read_legacy_document(
         Ok(bytes)
     })
     .await
-    .map_err(|_| AppError::bad_gateway("legacy preview document body timed out; use isolated preview access"))?
+    .map_err(|_| AppError::bad_gateway("control preview document body timed out; use isolated preview access"))?
 }
 
 async fn proxy_preview_session_websocket(
@@ -1066,7 +1066,7 @@ fn preview_proxy_client() -> ApiResult<reqwest::Client> {
 }
 
 fn add_preview_frame_headers(mut response: Response) -> Response {
-    // Legacy same-origin endpoints are data bridges. If opened as documents,
+    // Authenticated control-origin endpoints are data bridges. If opened as documents,
     // enforce an opaque sandbox even outside the workbench iframe.
     super::gateway::apply_frame_headers(response.headers_mut(), "'self'", true);
     // A reachable app may correctly require its own cookies or return an
@@ -1155,7 +1155,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_proxy_filters_connection_nominated_headers_both_directions() {
+    fn control_proxy_filters_connection_nominated_headers_both_directions() {
         let mut input = HeaderMap::new();
         input.append(
             header::CONNECTION,
@@ -1196,7 +1196,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_proxy_marks_reachable_errors_and_preserves_encoded_or_partial_bodies() {
+    async fn control_proxy_marks_reachable_errors_and_preserves_encoded_or_partial_bodies() {
         async fn upstream(request: Request<Body>) -> Response {
             match request.uri().path() {
                 "/encoded" => Response::builder()
@@ -1272,7 +1272,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn legacy_html_rewrite_has_a_body_deadline_even_after_headers_arrive() {
+    async fn control_proxy_html_rewrite_has_a_body_deadline_even_after_headers_arrive() {
         async fn upstream() -> Response {
             let body = futures_util::stream::once(async {
                 Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"<html>"))
@@ -1298,10 +1298,10 @@ mod tests {
             .unwrap();
         let result = tokio::time::timeout(
             Duration::from_secs(1),
-            read_legacy_document(upstream, Duration::from_millis(25)),
+            read_control_proxy_document(upstream, Duration::from_millis(25)),
         )
         .await
-        .expect("the legacy rewrite must not wait indefinitely for EOF");
+        .expect("the control proxy rewrite must not wait indefinitely for EOF");
         assert!(result.is_err());
         server.abort();
     }

@@ -56,13 +56,17 @@ A management session token and an MCP OAuth access token serve different
 protocols and cannot substitute for one another. The password is shared; the
 session and grant lifecycles remain separate.
 
-The older `publicUrl` / `oauthIssuerUrl` control fields, persisted records and
-`--mcp-public-url` / `--mcp-oauth-issuer-url` flags remain compatible with existing
-split-origin or Secure MCP Tunnel deployments. A routed tunnel resource still
-needs a separately reachable issuer origin. These legacy fields cannot be
-combined with `serverUrl`; saving the single address replaces both legacy
-identity overrides. Existing tunnel routing paths remain intact until that
-explicit change.
+The `publicUrl` / `oauthIssuerUrl` control fields and
+`--mcp-public-url` / `--mcp-oauth-issuer-url` flags configure split-origin and
+Secure MCP Tunnel deployments. A routed tunnel resource needs a separately
+reachable issuer origin. These explicit identity overrides cannot be combined
+with `serverUrl`; saving the single address replaces both overrides. Tunnel
+routing paths remain intact until that explicit change.
+
+MCP authentication always uses the shared server-password and OAuth policy.
+Removed authentication-mode selectors and independent MCP password records are
+rejected, not imported. Persisted OAuth state and signed tokens must carry their
+current generation so revocation remains effective across restarts.
 
 ## Request pipeline
 
@@ -214,29 +218,22 @@ would not revoke a self-contained JWT.
 - Disabling the MCP server removes the entire public surface (MCP plus OAuth)
   and keeps the management API reachable.
 
-## Migration from selectable modes
+## Authentication contract
 
-Releases before this policy exposed `--mcp-auth-mode`
-(`none`/`oauth`/`mixed`), `--mcp-anonymous-access` (`none`/`read_only`), the
-matching `AGENA_MCP_*` environment variables, control-plane fields, and TUI/Web
-selectors. They are gone:
+MCP has one authentication policy. Discovery is anonymous; tool calls use the
+published access policy and challenge when OAuth authorization is required.
+`AGENA_SERVER_PASSWORD` or `--password` configures the shared server password.
+Without that setting MCP remains unready and cannot issue OAuth grants.
 
-- persisted control records and older control-plane clients that still send the
-  fields keep working — the value is reported once (log / debug trace) and
-  ignored, and the unified policy applies;
-- a deployment that ran with `--mcp-auth-mode none` now answers unauthenticated
-  tool calls with an authentication challenge. Tool *discovery* stays anonymous,
-  so connectors still enumerate the catalog;
-- a deployment without a server password starts with MCP marked unready;
-  configure `AGENA_SERVER_PASSWORD` to enable OAuth authorization;
-- legacy MCP-only password hashes are discarded on load and omitted from new
-  control records. Previously issued OAuth grants are invalidated. Clients
-  must authorize again with the server password;
-- rename the old `AGENA_SERVER_UI_PASSWORD` environment variable to
-  `AGENA_SERVER_PASSWORD`. `--ui-password` remains a hidden compatibility alias
-  for `--password`, including old installed service launch arguments. Reinstall
-  the native service definition with `agena server install` to capture the new
-  environment variable.
+Control requests and persisted records reject removed authentication selectors
+and independent MCP password fields. The server does not import those records.
+OAuth runtime records require clients and token generation, and access tokens
+must include their signed generation claim.
+
+The removed `--ui-password` flag is rejected. A service configured only with
+`AGENA_SERVER_UI_PASSWORD` fails startup rather than enabling anonymous access;
+configure `AGENA_SERVER_PASSWORD` explicitly and replace the service definition
+with `agena server install` using the desired launch options.
 
 ## Test coverage
 

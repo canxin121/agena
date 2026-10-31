@@ -73,19 +73,9 @@ struct Observer {
 
 impl Observer {
     async fn load(source: NotificationSource, host: Arc<dyn HostClient>) -> Result<Self> {
-        let state = if let Some(payload) = source.state.get_payload(STATE_KEY).await? {
-            serde_json::from_str(&payload)?
-        } else {
-            // Preserve in-flight recovery when upgrading from the original
-            // browser-specific observer. Subscriptions/keys keep their owner.
-            let mut state = AttentionState::default();
-            if let Some(payload) = source.state.get_payload("notifications.webPush").await? {
-                let legacy: serde_json::Value = serde_json::from_str(&payload)?;
-                if let Some(active) = legacy.get("active") {
-                    state.active = serde_json::from_value(active.clone())?;
-                }
-            }
-            state
+        let state = match source.state.get_payload(STATE_KEY).await? {
+            Some(payload) => serde_json::from_str(&payload)?,
+            None => AttentionState::default(),
         };
         Ok(Self {
             source,

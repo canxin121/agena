@@ -21,11 +21,7 @@ async fn fixture() -> (
         .await
         .unwrap();
     let directory = tempfile::tempdir().unwrap();
-    let db = Arc::new(
-        ServerStateDb::from_store(kernel.instance_state.clone())
-            .await
-            .unwrap(),
-    );
+    let db = Arc::new(ServerStateDb::new(kernel.instance_state.clone()));
     let service = WebPushService::load_with_secrets(
         db,
         FileSecretStore::at(directory.path(), "test.web-push"),

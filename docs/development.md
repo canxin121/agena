@@ -268,13 +268,11 @@ Disabling `plugins.list.agena.notifications.enabled` stops AI attention generati
 for both adapters. Terminal capabilities and browser permissions/settings
 remain specific to each delivery device.
 
-The former `agena.terminal` plugin ID remains a configuration alias for
-`agena.notifications`. Runtime normalizes existing list entries, profile rules,
-activation dependencies, and host quotas before resolving profiles. Existing
-disabled states and settings are preserved; if both IDs occur in the same
-configuration map, the explicit `agena.notifications` entry wins. Use the new
-ID for new configuration. Notification history and browser push subscriptions
-retain their existing storage keys.
+Configure the notification plugin with its registered ID,
+`agena.notifications`, in list entries, profile rules, activation dependencies,
+and host quotas. Plugin identifiers are not rewritten at startup. Attention
+recovery reads its own persisted state; browser subscriptions keep their
+separate storage owner.
 
 VAPID-signed, encrypted Web Push wakes `/agena-notifications-sw.js`, which calls
 `ServiceWorkerRegistration.showNotification()`. There is no app-shell caching.

@@ -647,7 +647,7 @@ function toggleOuter() {
         />
         <AgenaOperationBlock
           v-for="(block, index) in operation.presentationBlocks"
-          :key="String(block.id || `${block.type || block.kind || 'block'}:${index}`)"
+          :key="String(block.id || `${block.type || 'block'}:${index}`)"
           :block="block"
           :session-id="sessionId"
         />

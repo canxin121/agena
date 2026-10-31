@@ -18,7 +18,6 @@ pub(crate) struct PreviewSessionRecord {
     pub(crate) id: String,
     /// Server-generated identity of this registration. Reusing a display ID
     /// after deletion must never revive an old capability for that ID.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) instance_id: String,
     pub(crate) directory: String,
     pub(crate) run_directory: String,
@@ -1093,7 +1092,7 @@ mod cancellation_tests {
             blocked: tokio::sync::Notify::new(),
             resume: tokio::sync::Notify::new(),
         });
-        let db = Arc::new(db::ServerStateDb::from_store(store.clone()).await.unwrap());
+        let db = Arc::new(db::ServerStateDb::new(store.clone()));
         (
             WorkspacePreviewRegistry::new_with_ttl(db, Duration::from_secs(60)),
             store,
@@ -1260,13 +1259,12 @@ mod cancellation_tests {
             super::super::access::run_generation(&first),
             super::super::access::run_generation(&second)
         );
-        let mut legacy = serde_json::to_value(first).unwrap();
-        legacy.as_object_mut().unwrap().remove("instanceId");
-        assert!(
-            serde_json::from_value::<PreviewSessionRecord>(legacy)
-                .unwrap()
-                .instance_id
-                .is_empty()
+        let mut serialized = serde_json::to_value(&first).unwrap();
+        assert_eq!(
+            serde_json::from_value::<PreviewSessionRecord>(serialized.clone()).unwrap(),
+            first
         );
+        serialized.as_object_mut().unwrap().remove("instanceId");
+        assert!(serde_json::from_value::<PreviewSessionRecord>(serialized).is_err());
     }
 }

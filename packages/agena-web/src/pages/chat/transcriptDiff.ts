@@ -21,14 +21,12 @@ export function transcriptDiffFiles(diff: string): DiffFile[] {
   let newLine = 1
   let oldRemaining = 0
   let newRemaining = 0
-  let legacyHunk = false
   let headerComplete = false
   const flush = () => {
     if (file.change === 'M' && file.oldPath && file.path && file.oldPath !== file.path) file.change = 'R'
     if (file.path || file.oldPath || file.rows.length) files.push(file)
     file = { change: 'M', path: '', oldPath: '', additions: 0, deletions: 0, rows: [] }
     oldRemaining = newRemaining = 0
-    legacyHunk = false
     headerComplete = false
   }
   const path = (value: string) => value.replace(/\t.*$/, '').replace(/^[ab]\//, '')
@@ -39,16 +37,15 @@ export function transcriptDiffFiles(diff: string): DiffFile[] {
       continue
     }
     const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(raw)
-    if (hunk || raw === '@@') {
-      oldLine = hunk ? Number(hunk[1]) : 1
-      newLine = hunk ? Number(hunk[3]) : 1
-      oldRemaining = hunk ? Number(hunk[2] ?? 1) : 0
-      newRemaining = hunk ? Number(hunk[4] ?? 1) : 0
-      legacyHunk = !hunk
+    if (hunk) {
+      oldLine = Number(hunk[1])
+      newLine = Number(hunk[3])
+      oldRemaining = Number(hunk[2] ?? 1)
+      newRemaining = Number(hunk[4] ?? 1)
       file.rows.push({ kind: 'hunk', text: raw, oldLine: null, newLine: null })
       continue
     }
-    const inHunk = legacyHunk || oldRemaining > 0 || newRemaining > 0
+    const inHunk = oldRemaining > 0 || newRemaining > 0
     if (!inHunk && raw.startsWith('--- ')) {
       if (file.rows.length || headerComplete) flush()
       const value = path(raw.slice(4))

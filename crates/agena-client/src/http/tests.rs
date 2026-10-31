@@ -39,6 +39,7 @@ fn only_local_server_addresses_bypass_proxies() {
 struct Fixture {
     url: String,
     requests: Arc<std::sync::Mutex<Vec<String>>>,
+    request_bodies: Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -54,9 +55,12 @@ impl Fixture {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
         let captured = requests.clone();
+        let request_bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_bodies = request_bodies.clone();
         let task = tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
                 let captured = captured.clone();
+                let captured_bodies = captured_bodies.clone();
                 tokio::spawn(async move {
                     let mut bytes = Vec::new();
                     while !bytes.ends_with(b"\r\n\r\n") {
@@ -75,6 +79,7 @@ impl Fixture {
                     let mut body = vec![0; length];
                     socket.read_exact(&mut body).await.unwrap();
                     captured.lock().unwrap().push(headers.clone());
+                    captured_bodies.lock().unwrap().push(body.clone());
                     let target = headers
                         .lines()
                         .next()
@@ -118,6 +123,7 @@ impl Fixture {
         Self {
             url,
             requests,
+            request_bodies,
             task,
         }
     }
@@ -591,4 +597,143 @@ async fn typed_json_decoder_rejects_overflow_numbers_in_unknown_fields() {
         }
         other => panic!("unknown numeric field bypassed JSON validation: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn permission_commands_send_the_public_contract_without_null_fields() {
+    use agena_api::commands::{Command as ApiCommand, UpsertPermissionRuleParams};
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"id":7,"action_key":"tool:read","subject_kind":"tool","mode":"allow","scope":"session","source":"user","created_at":"2026-10-31T00:00:00Z","updated_at":"2026-10-31T00:00:00Z"}"#)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let minimal = serde_json::json!({"mode":"ask"});
+    let replacement = serde_json::json!({"tool_name":"read", "qualifier":"", "scope":"session", "session_id":7, "mode":"allow"});
+    let result = client
+        .command(ApiCommand::UpsertPermissionRule(
+            serde_json::from_value::<UpsertPermissionRuleParams>(minimal.clone()).unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert!(matches!(result, CommandResult::PermissionRule(rule) if rule.id == 7));
+    client
+        .command(ApiCommand::ReplacePermissionRule(
+            ReplacePermissionRuleParams {
+                rule_id: 7,
+                rule: serde_json::from_value(replacement.clone()).unwrap(),
+            },
+        ))
+        .await
+        .unwrap();
+    let requests = server.requests.lock().unwrap();
+    assert!(requests[0].starts_with("POST /api/v1/permission-rules "));
+    assert!(requests[1].starts_with("PUT /api/v1/permission-rules/7 "));
+    let bodies = server.request_bodies.lock().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap(),
+        minimal
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap(),
+        replacement
+    );
+}
+
+#[tokio::test]
+async fn adapter_probe_query_uses_the_same_body_as_the_direct_http_method() {
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "unused",
+        Some(r#"{"provider_id":"fixture","adapters":[]}"#),
+    )
+    .await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let request: ListProviderAdapterModelsParams = serde_json::from_value(serde_json::json!({
+        "base_url":"https://example.test", "protocol_paths":{"anthropic":"/messages"},
+        "api_key":{"kind":"env","value":"PROVIDER_KEY"}, "adapter_ids":["anthropic"]
+    }))
+    .unwrap();
+    let direct = client
+        .list_provider_adapter_models(request.clone())
+        .await
+        .unwrap();
+    assert_eq!(direct.provider_id, "fixture");
+    let result = client
+        .query(Query::ListProviderAdapterModels(request))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, QueryResult::ProviderAdapterModels(response) if response.provider_id == "fixture")
+    );
+    let bodies = server.request_bodies.lock().unwrap();
+    let direct: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+    assert_eq!(
+        direct,
+        serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap()
+    );
+    assert_eq!(
+        direct["protocol_paths"],
+        serde_json::json!({"openai":"/v1","anthropic":"/messages","gemini":"/v1beta"})
+    );
+    assert_eq!(
+        direct["api_key"],
+        serde_json::json!({"kind":"env","value":"PROVIDER_KEY"})
+    );
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("POST /api/v1/providers/models "))
+    );
+}
+
+#[tokio::test]
+async fn aws_profiles_are_typed_and_keep_missing_field_defaults_and_decode_errors() {
+    for (wire, expected) in [
+        (
+            r#"{"profiles":["default","开发"]}"#,
+            vec!["default", "开发"],
+        ),
+        ("{}", Vec::new()),
+    ] {
+        let server = Fixture::new("127.0.0.1:0", "unused", Some(wire)).await;
+        let client = AgenaClient::new(&server.url).unwrap();
+        let response = client.aws_profile_names().await.unwrap();
+        assert_eq!(response.profiles, expected);
+    }
+    for wire in [r#"{"profiles":null}"#, r#"{"profiles":[12]}"#] {
+        let server = Fixture::new("127.0.0.1:0", "unused", Some(wire)).await;
+        let client = AgenaClient::new(&server.url).unwrap();
+        assert!(matches!(
+            client.aws_profile_names().await,
+            Err(ClientError::Decode(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn patch_settings_returns_the_shared_edit_response() {
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"config_path":"/fixture/config.json","config_found":true,"operation":"patch","dry_run":true,"changed":true,"created":false,"deleted":false,"validated":true,"reload_requested":false,"reload_required":true,"previous":{"enabled":false},"current":{"enabled":true}}"#)).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let response = client
+        .patch_settings(
+            "providers",
+            serde_json::json!({"enabled":true}),
+            true,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.operation, "patch");
+    assert!(response.before_revision.is_empty() && response.after_revision.is_empty());
+    assert!(response.reload.is_none() && response.path.is_none());
+    assert!(response.dry_run && response.reload_required);
+    assert_eq!(response.current, serde_json::json!({"enabled":true}));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&server.request_bodies.lock().unwrap()[0])
+            .unwrap(),
+        serde_json::json!({
+            "path":"providers", "changes":{"enabled":true}, "dry_run":true, "validate":true, "reload":false
+        })
+    );
+    assert!(server.requests.lock().unwrap()[0].starts_with("PATCH /api/v1/settings "));
 }

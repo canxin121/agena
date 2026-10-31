@@ -63,10 +63,6 @@ function hasHeader(initHeaders: RequestInit['headers'] | undefined, name: string
   return false
 }
 
-async function readBodyText(resp: Response): Promise<string> {
-  return await resp.text().catch(() => '')
-}
-
 function asRecord(value: JsonLike): Record<string, JsonLike> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, JsonLike>
@@ -103,12 +99,38 @@ function apiErrorDetails(bodyJson: JsonLike, fallbackMessage: string): { message
   }
 }
 
-function attachApiErrorDetails(error: ApiError, bodyJson: JsonLike, fallbackMessage: string) {
-  if (bodyJson === undefined) return
-  error.bodyJson = bodyJson
-  const details = apiErrorDetails(bodyJson, fallbackMessage)
+async function throwApiResponseError(resp: Response, url: string, authTokenVersion: number): Promise<never> {
+  const bodyText = await resp.text().catch(() => '')
+
+  // Decode once for the public message and the endpoint-specific diagnostics.
+  let bodyJson: JsonLike = undefined
+  const contentType = (resp.headers.get('content-type') || '').toLowerCase()
+  const looksJson =
+    contentType.includes('application/json') || bodyText.trim().startsWith('{') || bodyText.trim().startsWith('[')
+  if (bodyText && looksJson) {
+    try {
+      bodyJson = JSON.parse(bodyText)
+    } catch {
+      bodyJson = undefined
+    }
+  }
+
+  const details = apiErrorDetails(bodyJson, bodyText || `Request failed (${resp.status})`)
+  const error = new ApiError(details.message, resp.status, bodyText)
+  if (bodyJson !== undefined) error.bodyJson = bodyJson
   if (details.code) error.code = details.code
   if (details.hint) error.hint = details.hint
+
+  if (error.status === 401 && details.code === 'auth.required') {
+    emitAuthRequired({
+      message: error.message,
+      status: error.status,
+      code: details.code,
+      url,
+      authTokenVersion,
+    })
+  }
+  throw error
 }
 
 export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, JsonLike> | null {
@@ -138,38 +160,7 @@ export async function apiResponse(url: string, init?: RequestInit): Promise<Resp
   const resp = await apiFetch(url, init)
 
   if (!resp.ok && resp.status !== 304) {
-    const txt = await readBodyText(resp)
-
-    // Best-effort parse structured backend errors so the UI can show something actionable.
-    let bodyJson: JsonLike = undefined
-    const ct = (resp.headers.get('content-type') || '').toLowerCase()
-    const looksJson = ct.includes('application/json') || txt.trim().startsWith('{') || txt.trim().startsWith('[')
-    if (txt && looksJson) {
-      try {
-        bodyJson = JSON.parse(txt)
-      } catch {
-        bodyJson = undefined
-      }
-    }
-
-    const fallbackMessage = txt || `Request failed (${resp.status})`
-    const message = apiErrorDetails(bodyJson, fallbackMessage).message
-
-    const err = new ApiError(message, resp.status, txt)
-    attachApiErrorDetails(err, bodyJson, fallbackMessage)
-
-    const code = (err.code || '').trim()
-    const isServerAuthRequired = err.status === 401 && code === 'auth.required'
-    if (isServerAuthRequired) {
-      emitAuthRequired({
-        message: err.message,
-        status: err.status,
-        code,
-        url,
-        authTokenVersion,
-      })
-    }
-    throw err
+    await throwApiResponseError(resp, url, authTokenVersion)
   }
 
   return resp
@@ -192,40 +183,9 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
     },
   })
   if (!resp.ok) {
-    const txt = await readBodyText(resp)
-
-    // Match apiJson's error extraction so callers get actionable messages.
-    let bodyJson: JsonLike = undefined
-    const ct = (resp.headers.get('content-type') || '').toLowerCase()
-    const looksJson = ct.includes('application/json') || txt.trim().startsWith('{') || txt.trim().startsWith('[')
-    if (txt && looksJson) {
-      try {
-        bodyJson = JSON.parse(txt)
-      } catch {
-        bodyJson = undefined
-      }
-    }
-
-    const fallbackMessage = txt || `Request failed (${resp.status})`
-    const message = apiErrorDetails(bodyJson, fallbackMessage).message
-
-    const err = new ApiError(message, resp.status, txt)
-    attachApiErrorDetails(err, bodyJson, fallbackMessage)
-
-    const code = (err.code || '').trim()
-    const isServerAuthRequired = err.status === 401 && code === 'auth.required'
-    if (isServerAuthRequired) {
-      emitAuthRequired({
-        message: err.message,
-        status: err.status,
-        code,
-        url,
-        authTokenVersion,
-      })
-    }
-
-    throw err
+    await throwApiResponseError(resp, url, authTokenVersion)
   }
+
   return await resp.text()
 }
 
@@ -242,39 +202,7 @@ export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
     },
   })
   if (!resp.ok) {
-    const txt = await readBodyText(resp)
-
-    // Mirror apiText error extraction.
-    let bodyJson: JsonLike = undefined
-    const ct = (resp.headers.get('content-type') || '').toLowerCase()
-    const looksJson = ct.includes('application/json') || txt.trim().startsWith('{') || txt.trim().startsWith('[')
-    if (txt && looksJson) {
-      try {
-        bodyJson = JSON.parse(txt)
-      } catch {
-        bodyJson = undefined
-      }
-    }
-
-    const fallbackMessage = txt || `Request failed (${resp.status})`
-    const message = apiErrorDetails(bodyJson, fallbackMessage).message
-
-    const err = new ApiError(message, resp.status, txt)
-    attachApiErrorDetails(err, bodyJson, fallbackMessage)
-
-    const code = (err.code || '').trim()
-    const isServerAuthRequired = err.status === 401 && code === 'auth.required'
-    if (isServerAuthRequired) {
-      emitAuthRequired({
-        message: err.message,
-        status: err.status,
-        code,
-        url,
-        authTokenVersion,
-      })
-    }
-
-    throw err
+    await throwApiResponseError(resp, url, authTokenVersion)
   }
 
   return await resp.blob()

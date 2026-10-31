@@ -13,6 +13,8 @@ use ratatui::{
 };
 
 use crate::i18n::I18n;
+use agena_tui_components::text::{format_fixed_columns, truncate_display_text_with_suffix};
+use unicode_width::UnicodeWidthStr;
 
 /// Usage-dashboard data view selected by the terminal user.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -753,14 +755,18 @@ fn render_overview_rows(
             let label = if daily {
                 compact_date(&row.label).to_owned()
             } else {
-                truncate(&row.label, name_width)
+                truncate_display_text_with_suffix(&row.label, name_width, "…")
             };
             Line::from(vec![
                 Span::styled(
                     if daily {
                         format!("{label} ")
                     } else {
-                        format!("{label:<name_width$}")
+                        format_fixed_columns(
+                            &[(&label, name_width)],
+                            name_width as u16,
+                            str::to_owned,
+                        )
                     },
                     Style::default().fg(agena_tui_components::theme::info_color()),
                 ),
@@ -813,16 +819,22 @@ fn render_usage_table(
         .iter()
         .map(|row| metric_value(presentation.sort, &row.totals))
         .fold(0.0_f64, f64::max);
+    let right_aligned_header = |key: &str, width: usize| {
+        let label = truncate_display_text_with_suffix(&i18n.text(key), width, "…");
+        format!("{}{label}", " ".repeat(width.saturating_sub(label.width())))
+    };
+    let name = i18n.text("usage-column-name");
+    let header = [
+        format_fixed_columns(&[(&name, name_width)], name_width as u16, str::to_owned),
+        " ".repeat(bar_width),
+        right_aligned_header("usage-column-cost", 10),
+        right_aligned_header("usage-column-tokens", 10),
+        right_aligned_header("usage-column-requests", 7),
+        right_aligned_header("usage-column-cache", 7),
+    ]
+    .join(" ");
     let mut lines = vec![Line::from(Span::styled(
-        format!(
-            "{:<name_width$} {:<bar_width$} {:>10} {:>10} {:>7} {:>7}",
-            i18n.text("usage-column-name"),
-            "",
-            i18n.text("usage-column-cost"),
-            i18n.text("usage-column-tokens"),
-            i18n.text("usage-column-requests"),
-            i18n.text("usage-column-cache")
-        ),
+        header,
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
     for (index, row) in rows.iter().enumerate().skip(start).take(visible) {
@@ -850,10 +862,12 @@ fn render_usage_table(
         } else {
             Style::default()
         };
-        let name = truncate(&row.label, name_width.saturating_sub(2));
+        let label_width = name_width.saturating_sub(2);
+        let name = truncate_display_text_with_suffix(&row.label, label_width, "…");
+        let name = format_fixed_columns(&[(&name, label_width)], label_width as u16, str::to_owned);
         lines.push(Line::from(Span::styled(
             format!(
-                "{} {name:<width$} {} {:>10} {:>10} {:>7} {:>7}",
+                "{} {name} {} {:>10} {:>10} {:>7} {:>7}",
                 if selected { "›" } else { " " },
                 bar(
                     metric_value(presentation.sort, &row.totals),
@@ -864,7 +878,6 @@ fn render_usage_table(
                 format_tokens(row.totals.total_tokens),
                 format_count(row.totals.requests),
                 format_percent(row.totals.cache_hit_rate),
-                width = name_width.saturating_sub(2)
             ),
             style,
         )));
@@ -986,14 +999,127 @@ fn format_percent(ratio: f64) -> String {
 fn compact_date(value: &str) -> &str {
     value.get(5..).unwrap_or(value)
 }
-fn truncate(value: &str, width: usize) -> String {
-    if value.chars().count() <= width {
-        return value.to_owned();
+
+#[cfg(test)]
+mod usage_width_tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn localized_usage_headers_align_with_metric_columns_and_clip_long_titles() {
+        let row = UsageDashboardRow {
+            label: "界面 👩‍💻".to_owned(),
+            totals: UsageDashboardTotals {
+                total_cost_usd: 1.0,
+                total_tokens: 123,
+                requests: 7,
+                cache_hit_rate: 0.5,
+                ..Default::default()
+            },
+            session: None,
+        };
+        for &(locale, _) in crate::i18n::SUPPORTED_LOCALES {
+            let i18n = I18n::resolve(Some(locale), None);
+            let mut terminal = Terminal::new(TestBackend::new(80, 6)).unwrap();
+            terminal
+                .draw(|frame| {
+                    let area = frame.area();
+                    render_usage_table(
+                        frame,
+                        area,
+                        "",
+                        &[&row],
+                        &UsageDashboardPresentation::default(),
+                        &i18n,
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            assert!(
+                i18n.text("usage-column-name")
+                    .starts_with(buffer[(1, 1)].symbol()),
+                "{locale}"
+            );
+            assert!(
+                (22..=39).all(|x| buffer[(x, 1)].symbol() == " "),
+                "{locale}"
+            );
+            for (key, start, end) in [
+                ("usage-column-cost", 40_u16, 49_u16),
+                ("usage-column-tokens", 51, 60),
+                ("usage-column-requests", 62, 68),
+                ("usage-column-cache", 70, 76),
+            ] {
+                // A CJK glyph occupies two cells, with its text stored only in
+                // the first. Compare occupied display columns, not char indexes.
+                for y in [1, 2] {
+                    let right_edge = (start..=end)
+                        .filter_map(|x| {
+                            let symbol = buffer[(x, y)].symbol();
+                            if symbol.trim().is_empty() {
+                                None
+                            } else {
+                                Some(x + symbol.width() as u16 - 1)
+                            }
+                        })
+                        .max();
+                    assert_eq!(right_edge, Some(end), "{locale} {key} row {y}");
+                    assert_eq!(buffer[(end + 1, y)].symbol(), " ", "{locale} {key} row {y}");
+                }
+                if i18n.text(key).width() > usize::from(end - start + 1) {
+                    assert_eq!(buffer[(end, 1)].symbol(), "…", "{locale} {key}");
+                }
+            }
+        }
     }
-    if width <= 1 {
-        return "…".chars().take(width).collect();
+
+    #[test]
+    fn usage_rows_align_metrics_for_ascii_cjk_and_joined_emoji() {
+        let i18n = I18n::english();
+        for label in ["a".repeat(30), "界".repeat(30), "👩‍💻".repeat(30)] {
+            let row = UsageDashboardRow {
+                label,
+                totals: UsageDashboardTotals {
+                    total_cost_usd: 1.0,
+                    ..Default::default()
+                },
+                session: None,
+            };
+            for table in [false, true] {
+                let width = if table { 80 } else { 40 };
+                let mut terminal = Terminal::new(TestBackend::new(width, 6)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        let area = frame.area();
+                        if table {
+                            render_usage_table(
+                                frame,
+                                area,
+                                "",
+                                &[&row],
+                                &UsageDashboardPresentation::default(),
+                                &i18n,
+                            );
+                        } else {
+                            render_overview_rows(
+                                frame,
+                                area,
+                                "",
+                                std::slice::from_ref(&row),
+                                false,
+                                &i18n,
+                            );
+                        }
+                    })
+                    .unwrap();
+                let y = if table { 2 } else { 1 };
+                let buffer = terminal.backend().buffer();
+                let first_bar = (1..width - 1)
+                    .find(|x| buffer[(*x, y)].symbol() == "█")
+                    .unwrap();
+                assert_eq!(first_bar, if table { 23 } else { 18 }, "{}", row.label);
+                assert!((1..first_bar).all(|x| !buffer[(x, y)].symbol().ends_with('\u{200d}')));
+            }
+        }
     }
-    let mut output = value.chars().take(width - 1).collect::<String>();
-    output.push('…');
-    output
 }

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use agena_tui::i18n::I18n;
+use agena_tui_components::text::truncate_display_text;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},

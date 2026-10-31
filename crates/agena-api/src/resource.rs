@@ -1631,20 +1631,6 @@ pub struct UserInputQuestion {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Request to probe adapter models from a provider endpoint.
-pub struct ProviderAdapterModelsRequest {
-    #[serde(default)]
-    pub provider_id: Option<String>,
-    pub base_url: String,
-    #[serde(default)]
-    pub protocol_paths: crate::queries::ProviderProtocolPaths,
-    #[serde(default)]
-    pub api_key: Option<crate::queries::ProviderSecretSource>,
-    #[serde(default)]
-    pub adapter_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Request to list saved provider adapter models.
 pub struct SavedProviderAdapterModelsRequest {
     #[serde(default)]

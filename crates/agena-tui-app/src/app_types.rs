@@ -40,7 +40,7 @@ use agena_tui_session::session_list::SessionListPresentation;
 use agena_tui_session::session_view::SessionViewMode;
 use agena_tui_settings::SettingsStudioSectionId;
 
-use super::{PluginWorkbenchOverlay, cleanup_temporary_composer_items};
+use super::PluginWorkbenchOverlay;
 
 mod composer;
 pub(crate) use self::composer::*;
@@ -606,8 +606,6 @@ impl Drop for App {
                 "failed to persist the final TUI draft store during shutdown"
             );
         }
-        cleanup_temporary_composer_items(self.composer_items.as_slice());
-        self.cleanup_temporary_draft_store_items();
     }
 }
 

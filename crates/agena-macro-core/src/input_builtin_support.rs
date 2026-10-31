@@ -372,150 +372,19 @@ pub fn built_in_validation_tokens(
             }
         }
     });
-    let min_items_exprs = min_items.iter().map(|constraint| {
-        let path = &constraint.path;
-        let value = constraint.value;
-        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-            quote! {
-                ::agena_plugin_sdk::macro_support::validate_min_items_path(
-                    &#target,
-                    #path,
-                    #value,
-                )?;
-            }
-        } else {
-            let resolved_path =
-                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
-            quote! {
-                let __path = #resolved_path;
-                ::agena_plugin_sdk::macro_support::validate_min_items_path(
-                    &#target,
-                    __path.as_str(),
-                    #value,
-                )?;
-            }
-        }
-    });
-    let max_items_exprs = max_items.iter().map(|constraint| {
-        let path = &constraint.path;
-        let value = constraint.value;
-        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-            quote! {
-                ::agena_plugin_sdk::macro_support::validate_max_items_path(
-                    &#target,
-                    #path,
-                    #value,
-                )?;
-            }
-        } else {
-            let resolved_path =
-                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
-            quote! {
-                let __path = #resolved_path;
-                ::agena_plugin_sdk::macro_support::validate_max_items_path(
-                    &#target,
-                    __path.as_str(),
-                    #value,
-                )?;
-            }
-        }
-    });
-    let min_properties_exprs = min_properties.iter().map(|constraint| {
-        let path = &constraint.path;
-        let value = constraint.value;
-        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-            quote! {
-                ::agena_plugin_sdk::macro_support::validate_min_properties_path(
-                    &#target,
-                    #path,
-                    #value,
-                )?;
-            }
-        } else {
-            let resolved_path =
-                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
-            quote! {
-                let __path = #resolved_path;
-                ::agena_plugin_sdk::macro_support::validate_min_properties_path(
-                    &#target,
-                    __path.as_str(),
-                    #value,
-                )?;
-            }
-        }
-    });
-    let max_properties_exprs = max_properties.iter().map(|constraint| {
-        let path = &constraint.path;
-        let value = constraint.value;
-        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-            quote! {
-                ::agena_plugin_sdk::macro_support::validate_max_properties_path(
-                    &#target,
-                    #path,
-                    #value,
-                )?;
-            }
-        } else {
-            let resolved_path =
-                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
-            quote! {
-                let __path = #resolved_path;
-                ::agena_plugin_sdk::macro_support::validate_max_properties_path(
-                    &#target,
-                    __path.as_str(),
-                    #value,
-                )?;
-            }
-        }
-    });
-    let min_chars_exprs = min_chars.iter().map(|constraint| {
-        let path = &constraint.path;
-        let value = constraint.value;
-        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-            quote! {
-                ::agena_plugin_sdk::macro_support::validate_min_chars_path(
-                    &#target,
-                    #path,
-                    #value,
-                )?;
-            }
-        } else {
-            let resolved_path =
-                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
-            quote! {
-                let __path = #resolved_path;
-                ::agena_plugin_sdk::macro_support::validate_min_chars_path(
-                    &#target,
-                    __path.as_str(),
-                    #value,
-                )?;
-            }
-        }
-    });
-    let max_chars_exprs = max_chars.iter().map(|constraint| {
-        let path = &constraint.path;
-        let value = constraint.value;
-        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-            quote! {
-                ::agena_plugin_sdk::macro_support::validate_max_chars_path(
-                    &#target,
-                    #path,
-                    #value,
-                )?;
-            }
-        } else {
-            let resolved_path =
-                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
-            quote! {
-                let __path = #resolved_path;
-                ::agena_plugin_sdk::macro_support::validate_max_chars_path(
-                    &#target,
-                    __path.as_str(),
-                    #value,
-                )?;
-            }
-        }
-    });
+    let mut count_exprs = Vec::new();
+    for (rule, constraints) in COUNT_RULES.iter().zip([
+        min_items,
+        max_items,
+        min_properties,
+        max_properties,
+        min_chars,
+        max_chars,
+    ]) {
+        count_exprs.extend(constraints.iter().map(|constraint| {
+            rule.validation_call(&target, constraint, flatten_shapes, nested_shapes)
+        }));
+    }
     let format_exprs = formats.iter().map(|constraint| {
         let path = &constraint.path;
         let value = &constraint.value;
@@ -589,12 +458,7 @@ pub fn built_in_validation_tokens(
         }
     });
     quote! {
-        #(#min_items_exprs)*
-        #(#max_items_exprs)*
-        #(#min_properties_exprs)*
-        #(#max_properties_exprs)*
-        #(#min_chars_exprs)*
-        #(#max_chars_exprs)*
+        #(#count_exprs)*
         #(#format_exprs)*
         #(#pattern_exprs)*
         #(#choices_exprs)*
@@ -742,6 +606,172 @@ pub(crate) fn numeric_constraint_schema_calls<C: SchemaConstraintSource>(
             )?;
             let pointer = LitStr::new(&pointer, constraint.path.span());
             calls.push(rule.schema_call(&pointer, &constraint.value));
+        }
+    }
+    Ok(calls)
+}
+
+/// Count constraints share their source, field/item overrides, schema keyword,
+/// and runtime validator. Schema lower bounds retain their established policy:
+/// minItems replaces its value; minProperties/minLength keep a stronger bound.
+/// The SDK separately preserves declared non-empty requirements across these
+/// ordinary metadata overrides.
+struct CountRule {
+    schema_key: &'static str,
+    schema_policy: CountSchemaPolicy,
+    validator: &'static str,
+    source: fn(&dyn SchemaConstraintSource) -> &[PathUsizeConstraint],
+    field: fn(&PluginInputFieldMetadata) -> Option<usize>,
+    item: fn(&PluginInputFieldMetadata) -> Option<usize>,
+}
+
+#[derive(Clone, Copy)]
+enum CountSchemaPolicy {
+    Replace,
+    StrongerMinimum,
+}
+
+const COUNT_RULES: [CountRule; 6] = [
+    CountRule {
+        schema_key: "minItems",
+        schema_policy: CountSchemaPolicy::Replace,
+        validator: "validate_min_items_path",
+        source: |source| source.min_items(),
+        field: |field| field.min_items,
+        item: |_| None,
+    },
+    CountRule {
+        schema_key: "maxItems",
+        schema_policy: CountSchemaPolicy::Replace,
+        validator: "validate_max_items_path",
+        source: |source| source.max_items(),
+        field: |field| field.max_items,
+        item: |_| None,
+    },
+    CountRule {
+        schema_key: "minProperties",
+        schema_policy: CountSchemaPolicy::StrongerMinimum,
+        validator: "validate_min_properties_path",
+        source: |source| source.min_properties(),
+        field: |field| field.min_properties,
+        item: |field| field.item_min_properties,
+    },
+    CountRule {
+        schema_key: "maxProperties",
+        schema_policy: CountSchemaPolicy::Replace,
+        validator: "validate_max_properties_path",
+        source: |source| source.max_properties(),
+        field: |field| field.max_properties,
+        item: |field| field.item_max_properties,
+    },
+    CountRule {
+        schema_key: "minLength",
+        schema_policy: CountSchemaPolicy::StrongerMinimum,
+        validator: "validate_min_chars_path",
+        source: |source| source.min_chars(),
+        field: |field| field.min_chars,
+        item: |field| field.item_min_chars,
+    },
+    CountRule {
+        schema_key: "maxLength",
+        schema_policy: CountSchemaPolicy::Replace,
+        validator: "validate_max_chars_path",
+        source: |source| source.max_chars(),
+        field: |field| field.max_chars,
+        item: |field| field.item_max_chars,
+    },
+];
+
+impl CountRule {
+    fn schema_call(&self, pointer: &LitStr, value: usize) -> proc_macro2::TokenStream {
+        let setter = syn::Ident::new(
+            match self.schema_policy {
+                CountSchemaPolicy::Replace => "set_schema_u64_metadata",
+                CountSchemaPolicy::StrongerMinimum => "set_schema_minimum_u64_metadata",
+            },
+            pointer.span(),
+        );
+        let key = self.schema_key;
+        let value = value as u64;
+        quote! {
+            ::agena_plugin_sdk::macro_support::#setter(schema, #pointer, #key, #value);
+        }
+    }
+
+    fn validation_call(
+        &self,
+        target: &proc_macro2::TokenStream,
+        constraint: &PathUsizeConstraint,
+        flatten_shapes: &[Type],
+        nested_shapes: &[NestedInputShapeField],
+    ) -> proc_macro2::TokenStream {
+        let path = &constraint.path;
+        let validator = syn::Ident::new(self.validator, path.span());
+        let value = constraint.value;
+        if flatten_shapes.is_empty() && nested_shapes.is_empty() {
+            quote! {
+                ::agena_plugin_sdk::macro_support::#validator(&#target, #path, #value)?;
+            }
+        } else {
+            let resolved_path =
+                expand_input_shape_resolved_path_expr(flatten_shapes, nested_shapes, path);
+            quote! {
+                let __path = #resolved_path;
+                ::agena_plugin_sdk::macro_support::#validator(
+                    &#target, __path.as_str(), #value,
+                )?;
+            }
+        }
+    }
+}
+
+pub(crate) fn count_field_schema_calls(
+    pointer: &LitStr,
+    metadata: &PluginInputFieldMetadata,
+) -> Vec<proc_macro2::TokenStream> {
+    let mut calls = Vec::new();
+    let item_pointer = LitStr::new(&format!("{}/items", pointer.value()), metadata.path.span());
+    // Preserve the field-then-item generation order within each count family.
+    for family in COUNT_RULES.chunks_exact(2) {
+        for rule in family {
+            if let Some(value) = (rule.field)(metadata) {
+                calls.push(rule.schema_call(pointer, value));
+            }
+        }
+        for rule in family {
+            if let Some(value) = (rule.item)(metadata) {
+                calls.push(rule.schema_call(&item_pointer, value));
+            }
+        }
+    }
+    calls
+}
+
+pub(crate) fn count_constraint_schema_calls<C: SchemaConstraintSource>(
+    prefix: &str,
+    constraints: &C,
+) -> syn::Result<Vec<proc_macro2::TokenStream>> {
+    let mut calls = Vec::new();
+    for rule in &COUNT_RULES {
+        let mut overridden = BTreeSet::new();
+        for metadata in constraints.input_field_metadata() {
+            if (rule.field)(metadata).is_some() {
+                overridden.insert(metadata.parse_path.value());
+            }
+            if (rule.item)(metadata).is_some() {
+                overridden.insert(format!("{}[]", metadata.parse_path.value()));
+            }
+        }
+        for constraint in (rule.source)(constraints) {
+            if overridden.contains(&constraint.path.value()) {
+                continue;
+            }
+            let pointer = super::input_schema_path_support::schema_pointer_from_logical_path(
+                prefix,
+                &constraint.path.value(),
+            )?;
+            let pointer = LitStr::new(&pointer, constraint.path.span());
+            calls.push(rule.schema_call(&pointer, constraint.value));
         }
     }
     Ok(calls)

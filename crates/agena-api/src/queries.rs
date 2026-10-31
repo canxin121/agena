@@ -270,3 +270,41 @@ pub struct ActivityLogsParams {
     #[serde(default)]
     pub wait_ms: u64,
 }
+
+#[cfg(test)]
+mod adapter_probe_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn adapter_probe_preserves_defaults_partial_paths_and_secret_tags() {
+        let request: ListProviderAdapterModelsParams =
+            serde_json::from_value(json!({"base_url":"https://example.test"})).unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "provider_id":null, "base_url":"https://example.test",
+                "protocol_paths":{"openai":"/v1","anthropic":"/v1","gemini":"/v1beta"},
+                "api_key":null, "adapter_ids":[]
+            })
+        );
+        let request: ListProviderAdapterModelsParams = serde_json::from_value(json!({
+            "base_url":"https://example.test", "protocol_paths":{"openai":"/custom"},
+            "api_key":{"kind":"env","value":"API_KEY"}, "adapter_ids":["anthropic"]
+        }))
+        .unwrap();
+        assert_eq!(request.protocol_paths.openai, "/custom");
+        assert_eq!(request.protocol_paths.anthropic, "/v1");
+        assert_eq!(request.protocol_paths.gemini, "/v1beta");
+        assert!(
+            matches!(request.api_key, Some(ProviderSecretSource::Env(ref name)) if name == "API_KEY")
+        );
+        for invalid in [
+            json!({}),
+            json!({"base_url":"x", "adapter_ids":null}),
+            json!({"base_url":"x", "api_key":{"kind":"unknown","value":"x"}}),
+        ] {
+            assert!(serde_json::from_value::<ListProviderAdapterModelsParams>(invalid).is_err());
+        }
+    }
+}

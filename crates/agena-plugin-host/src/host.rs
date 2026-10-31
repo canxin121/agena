@@ -99,13 +99,6 @@ pub struct AgentStopHookRun {
     pub reason: Option<String>,
 }
 
-#[derive(serde::Deserialize)]
-struct HostInvokeServiceParams {
-    request: PluginServiceInvokeInput,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
 impl AgentStopHookRun {
     /// A run that completed without blocking stop.
     pub fn ran(plugin_id: String, hook: &str) -> Self {
@@ -810,6 +803,16 @@ fn host_status_from(status: crate::status::PluginStatus) -> HostPluginStatus {
     }
 }
 
+/// Required request envelopes share one wire shape. Callback authority is
+/// validated before dispatch; deserializing this context does not authorize it.
+/// Defaulted requests and strict envelopes keep their dedicated contracts.
+#[derive(serde::Deserialize)]
+struct HostRequestParams<T> {
+    request: T,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
 #[derive(serde::Deserialize)]
 struct HostLogParams {
     level: LogLevel,
@@ -832,13 +835,6 @@ struct HostUnsubscribeParams {
 struct HostConfigReadParams {
     #[serde(default)]
     path: Option<String>,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPermissionCheckPathParams {
-    request: crate::sdk::host_api::PathPermissionQuery,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
@@ -875,153 +871,13 @@ struct HostInvokeToolParams {
 }
 
 #[derive(serde::Deserialize)]
-struct HostAskUserParams {
-    request: AskUserRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostAgentSpawnParams {
-    request: AgentSpawnRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostAgentMessageParams {
-    request: AgentMessageRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostAgentWaitParams {
-    request: AgentWaitRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostAgentTargetParams {
-    request: AgentTargetRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
 struct HostListToolsParams {
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
-struct HostContextStatusParams {
-    request: HostContextStatusRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostSetSessionModelParams {
-    request: HostSetSessionModelRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostImageExecuteParams {
-    request: HostImageExecuteRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostMonitorStartParams {
-    request: MonitorStartRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
 struct HostMonitorListParams {
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostMonitorReadParams {
-    request: MonitorReadRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostMonitorStopParams {
-    request: MonitorStopRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostCommandRegisterParams {
-    request: HostCommandRegisterRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostCommandUpdateParams {
-    request: HostCommandUpdateRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostCommandRemoveParams {
-    request: HostCommandRemoveRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostToolRegisterParams {
-    request: HostToolRegisterRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostToolUpdateParams {
-    request: HostToolUpdateRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostToolRemoveParams {
-    request: HostToolRemoveRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostStorageGetParams {
-    request: HostStorageGetRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostStorageSetParams {
-    request: HostStorageSetRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostStorageDeleteParams {
-    request: HostStorageDeleteRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
@@ -1034,36 +890,8 @@ struct HostStorageListParams {
     _context: Option<HostCallbackContext>,
 }
 
-#[derive(serde::Deserialize)]
-struct HostSecretGetParams {
-    request: HostSecretGetRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostSecretSetParams {
-    request: HostSecretSetRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostSecretDeleteParams {
-    request: HostSecretDeleteRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
 #[derive(serde::Deserialize, Default)]
 struct HostSecretListParams {
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPluginStatusGetParams {
-    request: HostPluginStatusGetRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
@@ -1088,71 +916,8 @@ struct HostSchedulerListParams {
     _context: Option<HostCallbackContext>,
 }
 
-#[derive(serde::Deserialize)]
-struct HostSchedulerCreateParams {
-    request: HostSchedulerCreateRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostSchedulerDeleteParams {
-    request: HostSchedulerDeleteRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
 #[derive(serde::Deserialize, Default)]
 struct HostMcpListServersParams {
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostMcpAddServerParams {
-    request: HostMcpAddServerRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostMcpRemoveServerParams {
-    request: HostMcpRemoveServerRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostDisplayContributeParams {
-    request: HostDisplayContributeRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostDisplayRemoveParams {
-    request: HostDisplayRemoveRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostNotifyParams {
-    request: PluginNotifyRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostThemeRegisterParams {
-    request: HostThemeRegisterRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostThemeRemoveParams {
-    request: HostThemeRemoveRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

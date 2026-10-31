@@ -1,19 +1,3 @@
-pub(crate) fn model_name_status_label(model: &ModelRef) -> String {
-    agena_tui_session::session_helpers::model_name_status_label(model)
-}
-
-pub(crate) fn execution_model_status_label(
-    execution: &SessionExecutionContextResource,
-) -> Option<String> {
-    agena_tui_session::session_helpers::execution_model_status_label(execution)
-}
-
-pub(crate) fn execution_model_name_status_label(
-    execution: &SessionExecutionContextResource,
-) -> Option<String> {
-    agena_tui_session::session_helpers::execution_model_name_status_label(execution)
-}
-
 pub(crate) fn derive_session_title(i18n: &I18n, text: &str) -> String {
     let fallback = ui_text::t(i18n, "composer-session-new");
     let first_line = text
@@ -44,44 +28,6 @@ pub(crate) fn draft_title_source(i18n: &I18n, draft: &ComposerDraft) -> Option<S
     } else {
         Some(preview)
     }
-}
-
-pub(crate) fn truncate_display_width(text: &str, max_width: usize) -> String {
-    let text = sanitize_terminal_text(text);
-    let mut width = 0_usize;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if width.saturating_add(ch_width) > max_width {
-            break;
-        }
-        out.push(ch);
-        width = width.saturating_add(ch_width);
-    }
-    if out.is_empty() {
-        text.chars().take(max_width).collect()
-    } else {
-        out
-    }
-}
-
-pub(crate) fn user_input_answer_values(
-    question: &UserInputQuestion,
-    draft: &UserInputAnswerDraft,
-) -> Vec<String> {
-    agena_tui_session::session_helpers::user_input_answer_values(question, draft)
-}
-
-pub(crate) fn user_input_question_label(question: &UserInputQuestion) -> &str {
-    agena_tui_session::session_helpers::user_input_question_label(question)
-}
-
-pub(crate) fn contains_case_insensitive(text: &str, query: &str) -> bool {
-    agena_tui_session::session_helpers::contains_case_insensitive(text, query)
-}
-
-pub(crate) fn find_search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
-    agena_tui_session::session_helpers::find_search_ranges(text, query)
 }
 
 pub(crate) async fn run_status_line_command(
@@ -173,39 +119,6 @@ pub(crate) async fn run_status_line_command(
     }
 }
 
-pub(crate) fn next_grapheme_boundary(text: &str, index: usize) -> usize {
-    agena_tui_session::session_helpers::next_grapheme_boundary(text, index)
-}
-
-pub(crate) fn attachment_chip_label(
-    i18n: &I18n,
-    path: &Path,
-    kind: AttachmentKind,
-    is_directory: bool,
-    width: Option<u32>,
-    height: Option<u32>,
-    size_bytes: u64,
-) -> String {
-    ui_text::attachment_chip_label(i18n, path, kind, is_directory, width, height, size_bytes)
-}
-
-pub(crate) fn cleanup_temporary_composer_items(items: &[ComposerItem]) {
-    let _ = items;
-}
-
-pub(crate) fn cleanup_temporary_composer_item(item: &ComposerItem) {
-    let _ = item;
-}
-
-pub(crate) fn attachment_placeholder_base(
-    i18n: &I18n,
-    path: &Path,
-    kind: AttachmentKind,
-    is_directory: bool,
-) -> String {
-    ui_text::attachment_placeholder_base(i18n, path, kind, is_directory)
-}
-
 pub(crate) fn find_placeholder_occurrence(
     text: &str,
     placeholder: &str,
@@ -232,10 +145,30 @@ pub(crate) fn find_placeholder_occurrence(
     None
 }
 use crate::{
-    AttachmentKind, Command, ComposerDraft, ComposerItem, Duration, I18n, ModelRef, Path, Range,
-    SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
-    sanitize_terminal_text, ui_text,
+    Command, ComposerDraft, Duration, I18n, Range, Stdio, truncate_display_width, ui_text,
 };
-use agena_tui::user_input::UserInputAnswerDraft;
+use agena_tui_session::session_helpers::next_grapheme_boundary;
 use anyhow::Context as _;
 use tokio::io::AsyncReadExt;
+
+#[cfg(test)]
+mod session_title_tests {
+    use super::*;
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn generated_session_titles_use_display_columns_and_whole_graphemes() {
+        let i18n = I18n::english();
+        let prompt = "👩‍💻".repeat(31);
+        let title = derive_session_title(&i18n, &prompt);
+        assert_eq!(title, "👩‍💻".repeat(30));
+        assert_eq!(title.width(), 60);
+        assert_eq!(
+            derive_session_title(&i18n, &"界".repeat(31)),
+            "界".repeat(30)
+        );
+        assert_eq!(truncate_display_width("界", 1), "");
+        assert_eq!(truncate_display_width("e\u{301}x", 1), "e\u{301}");
+        assert_eq!(prompt, "👩‍💻".repeat(31));
+    }
+}

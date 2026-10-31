@@ -5,11 +5,9 @@
 use std::{convert::Infallible, future::Future};
 
 use agena_api::{
+    commands::UpsertPermissionRuleParams,
     queries::{ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams},
-    resource::{
-        PermissionReply, ProviderAdapterModelsRequest, SavedProviderAdapterModelsRequest,
-        UserInputReply,
-    },
+    resource::{PermissionReply, SavedProviderAdapterModelsRequest, UserInputReply},
 };
 use agena_application::dto::{
     AuthApiKeyWriteRequest, AuthBrowserStartResource, AuthCodeExchangeRequest,
@@ -21,8 +19,8 @@ use agena_application::dto::{
     MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
     MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
     MarketplaceUpgradeRequest, MemoryWriteRequest, OperatorToolInvokeRequest,
-    PermissionRuleBatchRequest, PermissionRuleRevokeRequest, PermissionRuleWriteRequest,
-    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginSettingsUpdateRequest,
+    PermissionRuleBatchRequest, PermissionRuleRevokeRequest, PluginInspectResponse,
+    PluginLogListQuery, PluginLogListResponse, PluginSettingsUpdateRequest,
     PluginSurfaceCatalogResponse, PluginToolInvokeRequest, RuntimeBackgroundTaskCancelResponse,
     RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
     SessionListQuery, SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequest,

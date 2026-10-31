@@ -434,3 +434,452 @@ mod numeric_generation_tests {
         assert!(PreciseInteger::parse_input(json!({"value": 9_007_199_254_740_992_u64})).is_err());
     }
 }
+
+#[cfg(test)]
+mod count_generation_tests {
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(
+        min_items("entries", 0),
+        max_items("entries", 5),
+        min_properties("settings", 0),
+        max_properties("settings", 5),
+        min_chars("caption", 0),
+        max_chars("caption", 5),
+        item_min_properties("objects", 0),
+        item_max_properties("objects", 5),
+        item_min_chars("labels", 0),
+        item_max_chars("labels", 5)
+    )]
+    struct CountInput {
+        #[serde(rename = "entries")]
+        #[arg(min_items = 1, max_items = 2)]
+        elements: Vec<String>,
+        #[arg(min_properties = 1, max_properties = 2)]
+        settings: BTreeMap<String, u8>,
+        #[arg(min_chars = 2, max_chars = 3)]
+        caption: String,
+        #[arg(item_min_properties = 1, item_max_properties = 2)]
+        objects: Vec<BTreeMap<String, u8>>,
+        #[arg(item_min_chars = 2, item_max_chars = 3)]
+        labels: Vec<String>,
+    }
+
+    fn valid() -> serde_json::Value {
+        json!({
+            "entries": ["a"], "settings": {"a": 1}, "caption": "界🙂",
+            "objects": [{"a": 1}], "labels": ["界🙂"]
+        })
+    }
+
+    #[test]
+    fn count_field_and_item_overrides_keep_schema_bounds() {
+        let schema = CountInput::input_schema();
+        for (path, key, expected) in [
+            ("/properties/entries", "minItems", 1),
+            ("/properties/entries", "maxItems", 2),
+            ("/properties/settings", "minProperties", 1),
+            ("/properties/settings", "maxProperties", 2),
+            ("/properties/caption", "minLength", 2),
+            ("/properties/caption", "maxLength", 3),
+            ("/properties/objects/items", "minProperties", 1),
+            ("/properties/objects/items", "maxProperties", 2),
+            ("/properties/labels/items", "minLength", 2),
+            ("/properties/labels/items", "maxLength", 3),
+        ] {
+            assert_eq!(schema.pointer(path).unwrap()[key], expected, "{path}/{key}");
+        }
+        assert!(CountInput::parse_input(valid()).is_ok());
+    }
+
+    #[test]
+    fn count_runtime_bounds_preserve_unicode_paths_and_error_order() {
+        for (field, value) in [
+            ("entries", json!([])),
+            ("entries", json!(["a", "b", "c"])),
+            ("settings", json!({})),
+            ("settings", json!({"a":1,"b":2,"c":3})),
+            ("caption", json!("界")),
+            ("caption", json!("🙂🙂🙂🙂")),
+            ("objects", json!([{}])),
+            ("objects", json!([{"a":1,"b":2,"c":3}])),
+            ("labels", json!(["界"])),
+            ("labels", json!(["🙂🙂🙂🙂"])),
+        ] {
+            let mut input = valid();
+            input[field] = value;
+            let error = CountInput::parse_input(input).unwrap_err();
+            assert_eq!(error.kind, crate::PluginErrorKind::InvalidParams);
+            assert!(error.to_string().contains(field), "{field}: {error}");
+        }
+        let mut input = valid();
+        input["entries"] = json!([]);
+        input["settings"] = json!({});
+        input["caption"] = json!("");
+        let error = CountInput::parse_input(input).unwrap_err();
+        assert!(error.to_string().contains("entries"), "{error}");
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct LowerBoundPolicies {
+        #[arg(non_empty, min_items = 0)]
+        entries: Vec<String>,
+        #[arg(non_empty, min_properties = 0)]
+        settings: BTreeMap<String, u8>,
+        #[arg(non_empty, min_chars = 0)]
+        caption: String,
+    }
+
+    #[test]
+    fn count_schema_non_empty_lower_bound_matches_runtime() {
+        let schema = LowerBoundPolicies::input_schema();
+        assert_eq!(schema["properties"]["entries"]["minItems"], 1);
+        assert_eq!(schema["properties"]["settings"]["minProperties"], 1);
+        assert_eq!(schema["properties"]["caption"]["minLength"], 1);
+        for field in ["entries", "settings", "caption"] {
+            assert_eq!(schema["properties"][field]["x-agena-non-empty"], true);
+        }
+        let valid = json!({"entries":["a"],"settings":{"a":1},"caption":"界"});
+        assert!(LowerBoundPolicies::parse_input(valid.clone()).is_ok());
+        #[cfg(feature = "schema-validation")]
+        assert!(jsonschema::is_valid(&schema, &valid));
+        for field in ["entries", "settings", "caption"] {
+            let mut input = valid.clone();
+            input[field] = match field {
+                "entries" => json!([]),
+                "settings" => json!({}),
+                _ => json!(""),
+            };
+            #[cfg(feature = "schema-validation")]
+            assert!(!jsonschema::is_valid(&schema, &input), "{field}");
+            assert!(LowerBoundPolicies::parse_input(input).is_err());
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+    struct SourceCountBatch {
+        entries: Vec<String>,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(
+        non_empty("batch.entries"),
+        min_items("batch.entries", 0),
+        min_items("rows[]", 0)
+    )]
+    struct SourceNonEmptyCounts {
+        batch: SourceCountBatch,
+        #[arg(item_non_empty)]
+        rows: Vec<Vec<String>>,
+    }
+
+    #[test]
+    fn count_source_and_item_non_empty_survive_zero_minimums() {
+        let schema = SourceNonEmptyCounts::input_schema();
+        let batch = super::resolve_schema_value(&schema, &schema["properties"]["batch"]);
+        assert_eq!(batch["properties"]["entries"]["minItems"], 1, "{schema:#}");
+        assert_eq!(batch["properties"]["entries"]["x-agena-non-empty"], true);
+        assert_eq!(schema["properties"]["rows"]["items"]["minItems"], 1);
+        let valid = json!({"batch":{"entries":["a"]},"rows":[["a"]]});
+        assert!(SourceNonEmptyCounts::parse_input(valid.clone()).is_ok());
+        #[cfg(feature = "schema-validation")]
+        assert!(jsonschema::is_valid(&schema, &valid));
+        for (pointer, value) in [("/batch/entries", json!([])), ("/rows", json!([[]]))] {
+            let mut input = valid.clone();
+            *input.pointer_mut(pointer).unwrap() = value;
+            #[cfg(feature = "schema-validation")]
+            assert!(!jsonschema::is_valid(&schema, &input), "{pointer}");
+            assert!(SourceNonEmptyCounts::parse_input(input).is_err());
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("entries"), min_items("entries", 0))]
+    struct SourceNonEmptyElements {
+        entries: Vec<String>,
+    }
+
+    #[test]
+    fn count_direct_array_source_non_empty_keeps_element_semantics() {
+        let schema = SourceNonEmptyElements::input_schema();
+        assert_eq!(schema["properties"]["entries"]["items"]["minLength"], 1);
+        assert_eq!(
+            schema["properties"]["entries"]["items"]["x-agena-non-empty"],
+            true
+        );
+        for (entries, accepted) in [
+            (json!(["a"]), true),
+            (json!([""]), false),
+            (json!(["a", ""]), false),
+        ] {
+            let input = json!({"entries": entries});
+            #[cfg(feature = "schema-validation")]
+            assert_eq!(jsonschema::is_valid(&schema, &input), accepted);
+            assert_eq!(SourceNonEmptyElements::parse_input(input).is_ok(), accepted);
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(min_items("entries", 0))]
+    struct SchemarsCountOverrides {
+        #[schemars(length(min = 3))]
+        #[arg(min_items = 1)]
+        entries: Vec<String>,
+        #[schemars(length(min = 3))]
+        #[arg(min_items = 0)]
+        empty_allowed: Vec<String>,
+        #[schemars(length(min = 3))]
+        #[arg(non_empty, min_items = 0)]
+        required_entries: Vec<String>,
+    }
+
+    #[test]
+    fn count_explicit_array_minimum_replaces_schemars_before_non_empty() {
+        let schema = SchemarsCountOverrides::input_schema();
+        assert_eq!(schema["properties"]["entries"]["minItems"], 1);
+        assert_eq!(schema["properties"]["empty_allowed"]["minItems"], 0);
+        assert_eq!(schema["properties"]["required_entries"]["minItems"], 1);
+        assert!(
+            schema["properties"]["entries"]
+                .get("x-agena-non-empty")
+                .is_none()
+        );
+        assert!(
+            schema["properties"]["empty_allowed"]
+                .get("x-agena-non-empty")
+                .is_none()
+        );
+        assert_eq!(
+            schema["properties"]["required_entries"]["x-agena-non-empty"],
+            true
+        );
+        let valid = json!({"entries":["a"],"empty_allowed":[],"required_entries":["a"]});
+        assert!(SchemarsCountOverrides::parse_input(valid.clone()).is_ok());
+        #[cfg(feature = "schema-validation")]
+        assert!(jsonschema::is_valid(&schema, &valid));
+        for field in ["entries", "required_entries"] {
+            let mut input = valid.clone();
+            input[field] = json!([]);
+            #[cfg(feature = "schema-validation")]
+            assert!(!jsonschema::is_valid(&schema, &input), "{field}");
+            assert!(SchemarsCountOverrides::parse_input(input).is_err());
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(non_empty("entries"))]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum EnumNonEmptyCounts {
+        #[input(min_items("entries", 0))]
+        Values { entries: Vec<String> },
+    }
+
+    #[test]
+    fn count_enum_non_empty_survives_variant_minimum() {
+        let schema = EnumNonEmptyCounts::input_schema();
+        let entries = ["oneOf", "anyOf", "allOf"]
+            .iter()
+            .find_map(|group| schema.pointer(&format!("/{group}/0/properties/entries")))
+            .expect("enum branch must expose the entries property");
+        assert_eq!(entries["minItems"], 1);
+        assert_eq!(entries["x-agena-non-empty"], true);
+        for (entries, accepted) in [(json!(["a"]), true), (json!([]), false)] {
+            let input = json!({"kind":"values", "entries":entries});
+            #[cfg(feature = "schema-validation")]
+            assert_eq!(jsonschema::is_valid(&schema, &input), accepted);
+            assert_eq!(EnumNonEmptyCounts::parse_input(input).is_ok(), accepted);
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct ShapeNonEmptyCounts {
+        #[arg(non_empty)]
+        entries: Vec<String>,
+    }
+
+    struct CountOverlayPlugin;
+
+    #[crate::agena_plugin(
+        namespace = "count_fixture",
+        name = "non_empty_overlay",
+        version = "0.0.0",
+        summary = "Verify typed shape count overlays"
+    )]
+    impl CountOverlayPlugin {
+        #[tool(
+            name = "count",
+            summary = "Count entries after typed input validation",
+            min_items("entries", 0)
+        )]
+        async fn count(&self, input: ShapeNonEmptyCounts) -> crate::Result<String> {
+            Ok(input.entries.len().to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn count_typed_shape_non_empty_survives_tool_spec_minimum() {
+        let plugin = CountOverlayPlugin;
+        let manifest = crate::Plugin::manifest(&plugin);
+        let schema = manifest
+            .tools
+            .iter()
+            .find(|tool| tool.name == "count")
+            .expect("generated tool must be in the manifest")
+            .input_schema();
+        assert_eq!(
+            ShapeNonEmptyCounts::input_schema()["properties"]["entries"]["minItems"],
+            1
+        );
+        assert_eq!(schema["properties"]["entries"]["minItems"], 1);
+        assert_eq!(schema["properties"]["entries"]["x-agena-non-empty"], true);
+        let invoke = |input| crate::ToolInvokeInput {
+            tool_name: "count".to_owned(),
+            session_id: 1,
+            call_id: 1,
+            workspace_root: "/fixture".to_owned(),
+            input,
+        };
+        let valid = json!({"entries":["a"]});
+        #[cfg(feature = "schema-validation")]
+        assert!(jsonschema::is_valid(&schema, &valid));
+        let result = crate::Plugin::tool_invoke(&plugin, invoke(valid))
+            .await
+            .unwrap();
+        assert_eq!(result.output_text, "1");
+        let invalid = json!({"entries":[]});
+        #[cfg(feature = "schema-validation")]
+        assert!(!jsonschema::is_valid(&schema, &invalid));
+        let error = crate::Plugin::tool_invoke(&plugin, invoke(invalid))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, crate::PluginErrorKind::InvalidParams);
+    }
+
+    #[test]
+    fn count_non_empty_fact_survives_composite_schema_overlays() {
+        let mut schema = json!({"anyOf":[
+            {"type":"array", "items":{"type":"string"}},
+            {"type":"string"},
+            {"type":"object"},
+            {"type":"null"}
+        ]});
+        super::set_schema_non_empty_metadata(&mut schema, "");
+        for key in ["minItems", "minLength", "minProperties"] {
+            super::set_schema_u64_metadata(&mut schema, "", key, 0);
+        }
+        for (index, key) in [(0, "minItems"), (1, "minLength"), (2, "minProperties")] {
+            assert_eq!(schema["anyOf"][index][key], 1);
+            assert_eq!(schema["anyOf"][index]["x-agena-non-empty"], true);
+        }
+        assert!(schema["anyOf"][3].get("x-agena-non-empty").is_none());
+        #[cfg(feature = "schema-validation")]
+        {
+            for input in [json!([]), json!(""), json!({})] {
+                assert!(!jsonschema::is_valid(&schema, &input));
+            }
+            for input in [json!(["a"]), json!("a"), json!({"a":1}), json!(null)] {
+                assert!(jsonschema::is_valid(&schema, &input));
+            }
+        }
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(
+        min_items("entries", 1),
+        max_items("entries", 2),
+        min_properties("settings", 1),
+        max_properties("settings", 2),
+        min_chars("caption", 2),
+        max_chars("caption", 3)
+    )]
+    struct SourceCounts {
+        entries: Vec<String>,
+        settings: BTreeMap<String, u8>,
+        caption: String,
+    }
+
+    #[test]
+    fn count_source_constraints_keep_schema_and_runtime_rules() {
+        let schema = SourceCounts::input_schema();
+        for (field, key, expected) in [
+            ("entries", "minItems", 1),
+            ("entries", "maxItems", 2),
+            ("settings", "minProperties", 1),
+            ("settings", "maxProperties", 2),
+            ("caption", "minLength", 2),
+            ("caption", "maxLength", 3),
+        ] {
+            assert_eq!(schema["properties"][field][key], expected, "{field}/{key}");
+        }
+        assert!(
+            SourceCounts::parse_input(json!({
+                "entries":["a"], "settings":{"a":1}, "caption":"界🙂"
+            }))
+            .is_ok()
+        );
+        assert!(
+            SourceCounts::parse_input(json!({
+                "entries":["a"], "settings":{"a":1}, "caption":"界"
+            }))
+            .is_err()
+        );
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    struct CountShape {
+        #[serde(rename = "caption")]
+        label: String,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[input(min_chars("caption", 2), max_chars("caption", 3))]
+    struct FlattenedCount {
+        #[serde(flatten)]
+        #[input(flatten_shape)]
+        shape: CountShape,
+    }
+
+    #[derive(
+        Debug, serde::Serialize, serde::Deserialize, schemars::JsonSchema, crate::ToolInput,
+    )]
+    #[serde(tag = "mode", rename_all = "snake_case")]
+    enum CountMode {
+        Read {
+            #[arg(min_chars = 2, max_chars = 3)]
+            caption: String,
+        },
+    }
+
+    #[test]
+    fn count_validation_preserves_flattened_paths_and_enum_fields() {
+        assert!(FlattenedCount::parse_input(json!({"caption":"界🙂"})).is_ok());
+        let error = FlattenedCount::parse_input(json!({"caption":"界"})).unwrap_err();
+        assert!(error.to_string().contains("caption"), "{error}");
+        assert!(CountMode::parse_input(json!({"mode":"read","caption":"界🙂"})).is_ok());
+        let error =
+            CountMode::parse_input(json!({"mode":"read","caption":"🙂🙂🙂🙂"})).unwrap_err();
+        assert!(error.to_string().contains("caption"), "{error}");
+    }
+}

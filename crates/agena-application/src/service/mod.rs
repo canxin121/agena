@@ -1,6 +1,6 @@
 //! Application services: use cases that orchestrate the runtime.
 
-use agena_api::pagination::normalize_resource_limit;
+use agena_api::{commands::UpsertPermissionRuleParams, pagination::normalize_resource_limit};
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -28,13 +28,13 @@ use crate::{
         GitPullRequestResource, GitStageRequest, GitStatusResource, MemoryResource,
         MemoryWriteRequest, PendingInteractiveRequestResource, PermissionRuleBatchOperation,
         PermissionRuleBatchRequest, PermissionRuleBatchResponse, PermissionRuleResource,
-        PermissionRuleWriteRequest, ScheduledJobResource, ScheduledJobRunResource,
-        SearchPaginationQuery, SessionAutomationResource, SessionCreateRequest,
-        SessionExecutionContextResource, SessionExecutionResource, SessionResource,
-        SessionRunOptionsRequest, SessionState, SessionUpdateRequest, SessionUsageResource,
-        WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
-        WorkspaceFileTreeResource, WorkspaceFileUploadRequest, WorkspaceFileUploadResource,
-        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
+        ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
+        SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
+        SessionExecutionResource, SessionResource, SessionRunOptionsRequest, SessionState,
+        SessionUpdateRequest, SessionUsageResource, WorkspaceFileDownloadQuery, WorkspaceFileKind,
+        WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
+        WorkspaceFileUploadRequest, WorkspaceFileUploadResource, WorkspaceListQuery,
+        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor},
 };

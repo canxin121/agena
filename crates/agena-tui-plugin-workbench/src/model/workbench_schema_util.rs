@@ -404,7 +404,7 @@ pub(crate) fn fit_column_widths(preferred: &[usize], width: u16) -> Vec<usize> {
 }
 
 pub(crate) fn pad_to_width(text: &str, width: usize) -> String {
-    let clipped = truncate_text(text, width);
+    let clipped = truncate_display_text(text, width);
     let padding = width.saturating_sub(clipped.width());
     format!("{clipped}{}", " ".repeat(padding))
 }
@@ -471,28 +471,6 @@ pub fn move_index(index: &mut usize, item_count: usize, delta: isize) {
     *index = (*index as isize + delta).clamp(0, last) as usize;
 }
 
-pub(crate) fn truncate_text(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
-        return text.to_owned();
-    }
-    if max_width <= 3 {
-        return ".".repeat(max_width);
-    }
-    let mut out = String::new();
-    let mut width = 0;
-    let suffix_width = 3;
-    for ch in text.chars() {
-        let ch_width = ch.width().unwrap_or_default();
-        if width + ch_width + suffix_width > max_width {
-            break;
-        }
-        out.push(ch);
-        width += ch_width;
-    }
-    out.push_str("...");
-    out
-}
-
 pub fn clean(text: impl AsRef<str>) -> String {
     text.as_ref()
         .chars()
@@ -505,10 +483,25 @@ pub fn clean(text: impl AsRef<str>) -> String {
         })
         .collect()
 }
+use super::truncate_display_text;
 use super::{
     BTreeSet, JsonMap, JsonValue, PluginDetailTab, PluginWorkbenchOverlay, PluginWorkbenchPlugin,
     Style, active_schema_for_value, json, object_property_schema, pattern_key_matches,
     preview_value, schema_has_array_shape, schema_has_object_shape, section_row_count,
     settings_contract_editor_schema,
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
+
+#[cfg(test)]
+mod display_width_tests {
+    use super::*;
+
+    #[test]
+    fn padded_config_cells_keep_whole_emoji_and_exact_column_width() {
+        assert_eq!(pad_to_width("👩‍💻abcdef", 6), "👩‍💻a...");
+        assert_eq!(pad_to_width("界界界界", 5), "界...");
+        assert_eq!(pad_to_width("e\u{301}", 4), "e\u{301}   ");
+        assert_eq!(pad_to_width("text", 2), "..");
+        assert_eq!(pad_to_width("界", 0), "");
+    }
+}

@@ -1,5 +1,12 @@
 use super::*;
 
+/// AWS profile names available to the server's provider configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AwsProfileNamesResponse {
+    #[serde(default)]
+    pub profiles: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Summary of one provider adapter.
 pub struct ProviderAdapterSummaryResource {

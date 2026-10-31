@@ -62,6 +62,15 @@ impl HostClient for PermissionHost {
             .await
     }
 
+    async fn storage_list(
+        &self,
+        request: HostStorageListRequest,
+    ) -> crate::sdk::Result<HostStorageListResponse> {
+        assert!(request.namespace.is_none());
+        assert!(request.prefix.is_none());
+        Ok(HostStorageListResponse::default())
+    }
+
     async fn require_mcp_server_permission(
         &self,
         _: crate::sdk::host_api::HostMcpServerSpec,
@@ -270,4 +279,81 @@ async fn native_mcp_authorization_preserves_approval_and_never_starts_a_server()
         .await;
     assert_eq!(inner.mcp_authorizations.load(Ordering::Relaxed), 2);
     assert_eq!(inner.mcp_starts.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn required_request_rpc_envelopes_preserve_wire_validation() {
+    let inner = Arc::new(PermissionHost::default());
+    let handle = HostHandle::new(inner.clone());
+    let request = json!(PathPermissionQuery::read("fixture.txt"));
+    for params in [
+        json!({"request": request}),
+        json!({"request": request, "context": null}),
+        json!({"request": request, "extension": {"enabled": true}}),
+    ] {
+        let result = handle
+            .handle_call(method::HOST_PERMISSION_CHECK_PATH, params)
+            .await
+            .unwrap();
+        assert!(matches!(
+            serde_json::from_value::<PermissionQuery>(result).unwrap(),
+            PermissionQuery::Ask { .. }
+        ));
+    }
+    assert_eq!(inner.queries.load(std::sync::atomic::Ordering::Relaxed), 3);
+    for params in [
+        json!({}),
+        json!({"context": null}),
+        json!({"request": null}),
+        json!({"request": "invalid"}),
+        json!({"request": request, "context": 7}),
+    ] {
+        let error = handle
+            .handle_call(method::HOST_PERMISSION_CHECK_PATH, params)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, PluginErrorKind::InvalidParams);
+    }
+    assert_eq!(inner.queries.load(std::sync::atomic::Ordering::Relaxed), 3);
+}
+
+#[tokio::test]
+async fn rpc_defaulted_and_strict_envelopes_keep_distinct_contracts() {
+    let handle = HostHandle::new(Arc::new(PermissionHost::default()));
+    assert!(
+        handle
+            .handle_call(method::HOST_STORAGE_LIST, json!({}))
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        handle
+            .handle_call(method::HOST_STORAGE_LIST, json!({"request": null}))
+            .await
+            .unwrap_err()
+            .kind,
+        PluginErrorKind::InvalidParams
+    );
+    assert_eq!(
+        handle
+            .handle_call(
+                method::HOST_CONFIG_RELOAD_STATUS,
+                json!({"request": {"task_id": "fixture"}, "context": null})
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PluginErrorKind::HostUnavailable
+    );
+    assert_eq!(
+        handle
+            .handle_call(
+                method::HOST_CONFIG_RELOAD_STATUS,
+                json!({"request": {"task_id": "fixture"}, "extension": true})
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PluginErrorKind::InvalidParams
+    );
 }

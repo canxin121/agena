@@ -4,8 +4,8 @@ use super::{
     GitArgs, InspectArgs, LoginArgs, LogoutArgs, McpCommand, McpGetArgs, McpServerArgs,
     McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginCommand,
     PluginReleaseSubcommand, PluginSubcommand, PluginTemplateArg, PrArgs, ProviderCommand,
-    ResumeArgs, ReviewArgs, SessionsCommand, UsageArgs, render_completion_command,
-    render_plugin_validate_output, validate_plugin_target,
+    ResumeArgs, ReviewArgs, SessionsCommand, UsageArgs, normalized_mcp_server_name,
+    render_completion_command, render_plugin_validate_output, validate_plugin_target,
 };
 impl AgenaCli {
     pub async fn run_command(self) -> Result<(), AppError> {
@@ -639,16 +639,6 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
         }
         _ => unreachable!("non-marketplace plugin command reached blocking lifecycle helper"),
     }
-}
-
-fn normalized_mcp_server_name(server: &str) -> Result<String, AppError> {
-    let server = server.trim();
-    if server.is_empty() {
-        return Err(AppError::Config(
-            "MCP server name must not be empty".to_owned(),
-        ));
-    }
-    Ok(server.to_owned())
 }
 
 fn single_release_plugin_id(

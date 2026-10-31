@@ -17,7 +17,6 @@ use agena_api::{
         ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
         ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams,
         StopActivityParams, SubmitRunParams, UpdateSessionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
     },
     notifications::Notification,
     queries::{
@@ -28,9 +27,9 @@ use agena_api::{
     },
     resource::{
         BackgroundActivityResource, HealthResponse, PermissionRuleResource,
-        ProviderAdapterModelsRequest, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        RunOptions, SavedProviderAdapterModelsRequest, SessionExecutionResource,
-        SessionOverviewResource, SessionResource, WorkspaceResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse, RunOptions,
+        SavedProviderAdapterModelsRequest, SessionExecutionResource, SessionOverviewResource,
+        SessionResource, WorkspaceResource,
     },
 };
 use futures_util::{StreamExt, TryStreamExt as _};
@@ -1056,7 +1055,7 @@ impl AgenaClient {
 
     pub async fn list_provider_adapter_models(
         &self,
-        request: ProviderAdapterModelsRequest,
+        request: ListProviderAdapterModelsParams,
     ) -> Result<ProviderAdapterModelsResponse, ClientError> {
         self.post_json("/api/v1/providers/models", serde_json::to_value(request)?)
             .await
@@ -1109,7 +1108,9 @@ impl AgenaClient {
         .await
     }
 
-    pub async fn aws_profile_names(&self) -> Result<serde_json::Value, ClientError> {
+    pub async fn aws_profile_names(
+        &self,
+    ) -> Result<agena_api::resource::AwsProfileNamesResponse, ClientError> {
         self.get_json("/api/v1/providers/aws-profiles").await
     }
 
@@ -1803,7 +1804,7 @@ impl AgenaClient {
         changes: serde_json::Value,
         dry_run: bool,
         reload: bool,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::ConfigSettingsEditResponse, ClientError> {
         let url = self.endpoint("/api/v1/settings");
         let body = serde_json::json!({
             "path": path,
@@ -2766,140 +2767,15 @@ impl AgenaClient {
             Command::ReplyUserInput(params) => Ok(CommandResult::Execution(
                 self.reply_user_input(params).await?,
             )),
-            Command::UpsertPermissionRule(UpsertPermissionRuleParams {
-                action_key,
-                subject_kind,
-                tool_name,
-                qualifier,
-                path_access_kind,
-                workspace_root,
-                target_path,
-                network_target,
-                network_host,
-                network_port,
-                scope,
-                session_id,
-                mode,
-            }) => {
-                let mut body = serde_json::Map::new();
-                if let Some(action_key) = action_key {
-                    body.insert("action_key".to_string(), serde_json::json!(action_key));
-                }
-                if let Some(subject_kind) = subject_kind {
-                    body.insert("subject_kind".to_string(), serde_json::json!(subject_kind));
-                }
-                if let Some(tool_name) = tool_name {
-                    body.insert("tool_name".to_string(), serde_json::json!(tool_name));
-                }
-                if let Some(qualifier) = qualifier {
-                    body.insert("qualifier".to_string(), serde_json::json!(qualifier));
-                }
-                if let Some(path_access_kind) = path_access_kind {
-                    body.insert(
-                        "path_access_kind".to_string(),
-                        serde_json::json!(path_access_kind),
-                    );
-                }
-                if let Some(workspace_root) = workspace_root {
-                    body.insert(
-                        "workspace_root".to_string(),
-                        serde_json::json!(workspace_root),
-                    );
-                }
-                if let Some(target_path) = target_path {
-                    body.insert("target_path".to_string(), serde_json::json!(target_path));
-                }
-                if let Some(network_target) = network_target {
-                    body.insert(
-                        "network_target".to_string(),
-                        serde_json::json!(network_target),
-                    );
-                }
-                if let Some(network_host) = network_host {
-                    body.insert("network_host".to_string(), serde_json::json!(network_host));
-                }
-                if let Some(network_port) = network_port {
-                    body.insert("network_port".to_string(), serde_json::json!(network_port));
-                }
-                if let Some(scope) = scope {
-                    body.insert("scope".to_string(), serde_json::json!(scope));
-                }
-                if let Some(session_id) = session_id {
-                    body.insert("session_id".to_string(), serde_json::json!(session_id));
-                }
-                body.insert("mode".to_string(), serde_json::json!(mode));
-                Ok(CommandResult::PermissionRule(
-                    self.post_json("/api/v1/permission-rules", serde_json::Value::Object(body))
-                        .await?,
-                ))
-            }
+            Command::UpsertPermissionRule(request) => Ok(CommandResult::PermissionRule(
+                self.post_json("/api/v1/permission-rules", serde_json::to_value(request)?)
+                    .await?,
+            )),
             Command::ReplacePermissionRule(ReplacePermissionRuleParams { rule_id, rule }) => {
-                let UpsertPermissionRuleParams {
-                    action_key,
-                    subject_kind,
-                    tool_name,
-                    qualifier,
-                    path_access_kind,
-                    workspace_root,
-                    target_path,
-                    network_target,
-                    network_host,
-                    network_port,
-                    scope,
-                    session_id,
-                    mode,
-                } = rule;
-                let mut body = serde_json::Map::new();
-                if let Some(action_key) = action_key {
-                    body.insert("action_key".to_string(), serde_json::json!(action_key));
-                }
-                if let Some(subject_kind) = subject_kind {
-                    body.insert("subject_kind".to_string(), serde_json::json!(subject_kind));
-                }
-                if let Some(tool_name) = tool_name {
-                    body.insert("tool_name".to_string(), serde_json::json!(tool_name));
-                }
-                if let Some(qualifier) = qualifier {
-                    body.insert("qualifier".to_string(), serde_json::json!(qualifier));
-                }
-                if let Some(path_access_kind) = path_access_kind {
-                    body.insert(
-                        "path_access_kind".to_string(),
-                        serde_json::json!(path_access_kind),
-                    );
-                }
-                if let Some(workspace_root) = workspace_root {
-                    body.insert(
-                        "workspace_root".to_string(),
-                        serde_json::json!(workspace_root),
-                    );
-                }
-                if let Some(target_path) = target_path {
-                    body.insert("target_path".to_string(), serde_json::json!(target_path));
-                }
-                if let Some(network_target) = network_target {
-                    body.insert(
-                        "network_target".to_string(),
-                        serde_json::json!(network_target),
-                    );
-                }
-                if let Some(network_host) = network_host {
-                    body.insert("network_host".to_string(), serde_json::json!(network_host));
-                }
-                if let Some(network_port) = network_port {
-                    body.insert("network_port".to_string(), serde_json::json!(network_port));
-                }
-                if let Some(scope) = scope {
-                    body.insert("scope".to_string(), serde_json::json!(scope));
-                }
-                if let Some(session_id) = session_id {
-                    body.insert("session_id".to_string(), serde_json::json!(session_id));
-                }
-                body.insert("mode".to_string(), serde_json::json!(mode));
                 Ok(CommandResult::PermissionRule(
                     self.put_json(
                         &format!("/api/v1/permission-rules/{rule_id}"),
-                        serde_json::Value::Object(body),
+                        serde_json::to_value(rule)?,
                     )
                     .await?,
                 ))
@@ -3074,21 +2950,8 @@ impl AgenaClient {
                         .await?,
                 ))
             }
-            Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
-                provider_id,
-                base_url,
-                protocol_paths,
-                api_key,
-                adapter_ids,
-            }) => Ok(QueryResult::ProviderAdapterModels(
-                self.list_provider_adapter_models(ProviderAdapterModelsRequest {
-                    provider_id,
-                    base_url,
-                    protocol_paths,
-                    api_key,
-                    adapter_ids,
-                })
-                .await?,
+            Query::ListProviderAdapterModels(request) => Ok(QueryResult::ProviderAdapterModels(
+                self.list_provider_adapter_models(request).await?,
             )),
             Query::ListSavedProviderAdapterModels(ListSavedProviderAdapterModelsParams {
                 provider_id,

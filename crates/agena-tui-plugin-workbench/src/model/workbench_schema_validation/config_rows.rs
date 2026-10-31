@@ -5,7 +5,7 @@ use super::super::{
     declared_schema_for_path, effective_schema_kind, get_value_at_path, json_kind_label,
     path_is_prefix_of, path_present_in_value, preview_value, schema_constraints, schema_for_path,
     schema_type_selector_choices, structured_preview, title_for_schema_or_key, title_from_key,
-    truncate_text,
+    truncate_display_text,
 };
 use super::schema_description_text;
 
@@ -207,7 +207,7 @@ pub(crate) fn format_bool_checkbox(value: bool) -> String {
 pub(crate) fn format_value_with_brackets(path: &ConfigPath, value: &JsonValue) -> String {
     match value {
         JsonValue::Bool(value) => format_bool_checkbox(*value),
-        JsonValue::String(text) => format!("[ {} ]", clean(truncate_text(text, 28))),
+        JsonValue::String(text) => format!("[ {} ]", clean(truncate_display_text(text, 28))),
         JsonValue::Number(number) => format!("[ {} ]", format_number_with_unit(path, number)),
         JsonValue::Null => "[ null ]".to_owned(),
         JsonValue::Array(_) | JsonValue::Object(_) => format!("[ {} ]", structured_preview(value)),
@@ -217,7 +217,7 @@ pub(crate) fn format_value_with_brackets(path: &ConfigPath, value: &JsonValue) -
 pub(crate) fn format_default_value(path: &ConfigPath, value: &JsonValue) -> String {
     match value {
         JsonValue::Bool(value) => value.to_string(),
-        JsonValue::String(text) => clean(truncate_text(text, 28)),
+        JsonValue::String(text) => clean(truncate_display_text(text, 28)),
         JsonValue::Number(number) => format_number_with_unit(path, number),
         JsonValue::Null => "Not set".to_owned(),
         JsonValue::Array(_) | JsonValue::Object(_) => structured_preview(value),
@@ -227,7 +227,7 @@ pub(crate) fn format_default_value(path: &ConfigPath, value: &JsonValue) -> Stri
 pub(crate) fn format_nullable_value_for_cell(value: &JsonValue) -> String {
     match value {
         JsonValue::Null => "[ Not set ]".to_owned(),
-        JsonValue::String(text) => format!("[ {} ]", clean(truncate_text(text, 24))),
+        JsonValue::String(text) => format!("[ {} ]", clean(truncate_display_text(text, 24))),
         _ => format!("[ {} ]", preview_value(value)),
     }
 }
@@ -235,7 +235,7 @@ pub(crate) fn format_nullable_value_for_cell(value: &JsonValue) -> String {
 pub(crate) fn format_default_nullable_value(value: &JsonValue) -> String {
     match value {
         JsonValue::Null => "Not set".to_owned(),
-        JsonValue::String(text) => clean(truncate_text(text, 28)),
+        JsonValue::String(text) => clean(truncate_display_text(text, 28)),
         _ => preview_value(value),
     }
 }

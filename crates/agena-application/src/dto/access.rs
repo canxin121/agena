@@ -33,36 +33,6 @@ pub struct GitPullRequestCreateRequest {
 
 pub use agena_api::resource::GitPullRequestResource;
 
-#[derive(Debug, Clone, Deserialize)]
-/// Request to write a permission rule.
-pub struct PermissionRuleWriteRequest {
-    #[serde(default)]
-    pub action_key: Option<String>,
-    #[serde(default)]
-    pub subject_kind: Option<String>,
-    #[serde(default)]
-    pub tool_name: Option<String>,
-    #[serde(default)]
-    pub qualifier: Option<String>,
-    #[serde(default)]
-    pub path_access_kind: Option<String>,
-    #[serde(default)]
-    pub workspace_root: Option<String>,
-    #[serde(default)]
-    pub target_path: Option<String>,
-    #[serde(default)]
-    pub network_target: Option<String>,
-    #[serde(default)]
-    pub network_host: Option<String>,
-    #[serde(default)]
-    pub network_port: Option<u16>,
-    #[serde(default)]
-    pub scope: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<i64>,
-    pub mode: ApiPermissionMode,
-}
-
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Request to revoke a permission rule.
 pub struct PermissionRuleRevokeRequest {

@@ -26,6 +26,6 @@ pub(super) fn prompt_device_login(start: &AuthDeviceStartResource) -> Result<(),
 }
 use std::io::{self, Write as _};
 
-use agena_application::dto::AuthDeviceStartResource;
+use agena_api::resource::AuthDeviceStartResource;
 
 use super::AppError;

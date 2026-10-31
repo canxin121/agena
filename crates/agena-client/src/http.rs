@@ -513,11 +513,11 @@ impl AgenaClient {
             })
     }
 
-    fn request_builder(
+    fn request_builder<Body: serde::Serialize + ?Sized>(
         &self,
         method: reqwest::Method,
         url: url::Url,
-        body: Option<&serde_json::Value>,
+        body: Option<&Body>,
         accept: Option<&str>,
     ) -> reqwest::RequestBuilder {
         let bounded_read = method == reqwest::Method::GET
@@ -580,11 +580,11 @@ impl AgenaClient {
             .await
     }
 
-    async fn send_request_with_headers(
+    async fn send_request_with_headers<Body: serde::Serialize + Sync + ?Sized>(
         &self,
         method: reqwest::Method,
         url: url::Url,
-        body: Option<&serde_json::Value>,
+        body: Option<&Body>,
         accept: Option<&str>,
         headers: reqwest::header::HeaderMap,
     ) -> Result<reqwest::Response, ClientError> {
@@ -799,7 +799,13 @@ impl AgenaClient {
             );
         }
         let response = self
-            .send_request_with_headers(reqwest::Method::GET, url, None, None, headers)
+            .send_request_with_headers(
+                reqwest::Method::GET,
+                url,
+                None::<&serde_json::Value>,
+                None,
+                headers,
+            )
             .await?;
         if response.status() == reqwest::StatusCode::NOT_MODIFIED {
             let mut cached = cached.ok_or_else(|| {
@@ -883,14 +889,15 @@ impl AgenaClient {
     async fn post_json<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
-        body: serde_json::Value,
+        body: impl serde::Serialize + Sync,
     ) -> Result<T, ClientError> {
         let response = self
-            .send_request(
+            .send_request_with_headers(
                 reqwest::Method::POST,
                 self.endpoint(path),
                 Some(&body),
                 None,
+                reqwest::header::HeaderMap::new(),
             )
             .await?;
         self.parse_json(response).await
@@ -1516,11 +1523,16 @@ impl AgenaClient {
         .await
     }
 
-    pub async fn auth_providers(&self) -> Result<serde_json::Value, ClientError> {
+    pub async fn auth_providers(
+        &self,
+    ) -> Result<Vec<agena_api::resource::AuthProviderResource>, ClientError> {
         self.get_json("/api/v1/auth/providers").await
     }
 
-    pub async fn auth_provider(&self, provider_id: &str) -> Result<serde_json::Value, ClientError> {
+    pub async fn auth_provider(
+        &self,
+        provider_id: &str,
+    ) -> Result<agena_api::resource::AuthProviderResource, ClientError> {
         let mut url = self.endpoint("/api/v1/auth/providers");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1535,13 +1547,15 @@ impl AgenaClient {
         &self,
         provider_id: &str,
         redirect_uri: &str,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthBrowserStartResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/openai/browser/start",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "redirect_uri": redirect_uri,
-            }),
+            agena_api::resource::AuthRedirectRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                redirect_uri: redirect_uri.to_owned(),
+            },
         )
         .await
     }
@@ -1552,15 +1566,17 @@ impl AgenaClient {
         code: String,
         pkce_verifier: String,
         redirect_uri: String,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthLoginResultResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/openai/browser/finish",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "code": code,
-                "pkce_verifier": pkce_verifier,
-                "redirect_uri": redirect_uri,
-            }),
+            agena_api::resource::AuthCodeExchangeRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                code,
+                pkce_verifier,
+                redirect_uri,
+            },
         )
         .await
     }
@@ -1569,13 +1585,15 @@ impl AgenaClient {
         &self,
         provider_id: &str,
         redirect_uri: &str,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthBrowserStartResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/gitlab/browser/start",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "redirect_uri": redirect_uri,
-            }),
+            agena_api::resource::AuthRedirectRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                redirect_uri: redirect_uri.to_owned(),
+            },
         )
         .await
     }
@@ -1586,15 +1604,17 @@ impl AgenaClient {
         code: String,
         pkce_verifier: String,
         redirect_uri: String,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthLoginResultResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/gitlab/browser/finish",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "code": code,
-                "pkce_verifier": pkce_verifier,
-                "redirect_uri": redirect_uri,
-            }),
+            agena_api::resource::AuthCodeExchangeRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                code,
+                pkce_verifier,
+                redirect_uri,
+            },
         )
         .await
     }
@@ -1602,10 +1622,12 @@ impl AgenaClient {
     pub async fn start_openai_device_auth(
         &self,
         provider_id: &str,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthDeviceStartResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/openai/device/start",
-            serde_json::json!({ "provider_id": provider_id }),
+            agena_api::resource::AuthProviderRequest {
+                provider_id: Some(provider_id.to_owned()),
+            },
         )
         .await
     }
@@ -1615,14 +1637,16 @@ impl AgenaClient {
         provider_id: &str,
         device_code: String,
         user_code: String,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthLoginResultResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/openai/device/poll",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "device_code": device_code,
-                "user_code": user_code,
-            }),
+            agena_api::resource::AuthUserCodeDevicePollRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                device_code,
+                user_code,
+            },
         )
         .await
     }
@@ -1631,13 +1655,15 @@ impl AgenaClient {
         &self,
         provider_id: &str,
         enterprise_domain: Option<&str>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthDeviceStartResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/github-copilot/device/start",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "enterprise_domain": enterprise_domain,
-            }),
+            agena_api::resource::AuthEnterpriseDeviceRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                enterprise_domain: enterprise_domain.map(str::to_owned),
+            },
         )
         .await
     }
@@ -1647,14 +1673,16 @@ impl AgenaClient {
         provider_id: &str,
         device_code: String,
         enterprise_domain: Option<&str>,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthLoginResultResource, ClientError> {
         self.post_json(
             "/api/v1/auth/providers/github-copilot/device/poll",
-            serde_json::json!({
-                "provider_id": provider_id,
-                "device_code": device_code,
-                "enterprise_domain": enterprise_domain,
-            }),
+            agena_api::resource::AuthEnterpriseDevicePollRequest {
+                provider: agena_api::resource::AuthProviderRequest {
+                    provider_id: Some(provider_id.to_owned()),
+                },
+                device_code,
+                enterprise_domain: enterprise_domain.map(str::to_owned),
+            },
         )
         .await
     }
@@ -1663,15 +1691,21 @@ impl AgenaClient {
         &self,
         provider_id: &str,
         api_key: String,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthProviderResource, ClientError> {
         let mut url = self.endpoint("/api/v1/auth/providers");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(provider_id)
             .push("api-key");
-        let body = serde_json::json!({ "api_key": api_key });
+        let body = agena_api::resource::AuthApiKeyWriteRequest { api_key };
         let response = self
-            .send_request(reqwest::Method::PUT, url, Some(&body), None)
+            .send_request_with_headers(
+                reqwest::Method::PUT,
+                url,
+                Some(&body),
+                None,
+                reqwest::header::HeaderMap::new(),
+            )
             .await?;
         self.parse_json(response).await
     }
@@ -1679,7 +1713,7 @@ impl AgenaClient {
     pub async fn delete_auth_provider(
         &self,
         provider_id: &str,
-    ) -> Result<serde_json::Value, ClientError> {
+    ) -> Result<agena_api::resource::AuthProviderResource, ClientError> {
         let mut url = self.endpoint("/api/v1/auth/providers");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?

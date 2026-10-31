@@ -1,5 +1,173 @@
 use super::*;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to store an API key credential.
+pub struct AuthApiKeyWriteRequest {
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request referencing a provider.
+pub struct AuthProviderRequest {
+    #[serde(default)]
+    pub provider_id: Option<String>,
+}
+
+impl AuthProviderRequest {
+    pub fn normalized_provider_id(&self, default: &str) -> String {
+        self.provider_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(default)
+            .to_owned()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to start an OAuth redirect flow.
+pub struct AuthRedirectRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to exchange an OAuth code for credentials.
+pub struct AuthCodeExchangeRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    pub code: String,
+    pub pkce_verifier: String,
+    pub redirect_uri: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to poll a device-code flow.
+pub struct AuthUserCodeDevicePollRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    pub device_code: String,
+    pub user_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to start an enterprise device flow.
+pub struct AuthEnterpriseDeviceRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    #[serde(default)]
+    pub enterprise_domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to poll an enterprise device flow.
+pub struct AuthEnterpriseDevicePollRequest {
+    #[serde(flatten)]
+    pub provider: AuthProviderRequest,
+    pub device_code: String,
+    #[serde(default)]
+    pub enterprise_domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Type of stored provider credential.
+pub enum AuthCredentialType {
+    Api,
+    Oauth,
+    WellKnown,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Issuer of a provider credential.
+pub enum AuthCredentialIssuerResource {
+    OpenaiChatgpt,
+    GithubCopilot,
+    Gitlab,
+    GoogleAdc,
+    SapAiCore,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+/// Kind of provider login flow.
+pub enum AuthLoginKindResource {
+    OpenaiChatgpt,
+    GithubCopilot,
+    Gitlab,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Authentication state of a provider.
+pub struct AuthProviderResource {
+    pub provider_id: String,
+    pub configured: bool,
+    pub credential_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_type: Option<AuthCredentialType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_issuer: Option<AuthCredentialIssuerResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_preview: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub expired: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enterprise_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+    pub api_key_write_supported: bool,
+    pub refresh_supported: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_login_kind: Option<AuthLoginKindResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_login_instance_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_login_kind: Option<AuthLoginKindResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Browser start details of an OAuth flow.
+pub struct AuthBrowserStartResource {
+    pub provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_url: Option<String>,
+    pub authorize_url: String,
+    pub state: String,
+    pub pkce_verifier: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Device start details of a device flow.
+pub struct AuthDeviceStartResource {
+    pub provider_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enterprise_domain: Option<String>,
+    pub verification_url: String,
+    pub user_code: String,
+    pub device_code: String,
+    pub interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Result of a provider login flow.
+pub struct AuthLoginResultResource {
+    pub completed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<AuthProviderResource>,
+}
+
 /// AWS profile names available to the server's provider configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AwsProfileNamesResponse {
@@ -293,4 +461,160 @@ pub struct ProviderModelSpeedModeResource {
     pub request_override: ProviderModelRequestOverrideResource,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub adapter_overrides: BTreeMap<String, ProviderModelRequestOverrideResource>,
+}
+
+#[cfg(test)]
+mod authentication_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn provider_wire() -> serde_json::Value {
+        json!({
+            "provider_id": "fixture", "configured": true, "credential_present": false,
+            "api_key_write_supported": true, "refresh_supported": false
+        })
+    }
+
+    #[test]
+    fn authentication_provider_keeps_omitted_false_expiry_and_optional_fields() {
+        let wire = provider_wire();
+        let provider: AuthProviderResource = serde_json::from_value(wire.clone()).unwrap();
+        assert!(!provider.expired);
+        assert!(provider.credential_type.is_none());
+        assert!(provider.expires_at.is_none());
+        assert_eq!(serde_json::to_value(&provider).unwrap(), wire);
+
+        let mut expired = wire;
+        expired["expired"] = json!(true);
+        expired["expires_at"] = json!("1970-01-01T00:00:01.234Z");
+        expired["credential_type"] = json!("oauth");
+        expired["credential_issuer"] = json!("github_copilot");
+        let provider: AuthProviderResource = serde_json::from_value(expired.clone()).unwrap();
+        assert!(provider.expired);
+        assert_eq!(provider.expires_at.unwrap().timestamp_millis(), 1234);
+        assert!(matches!(
+            provider.credential_type,
+            Some(AuthCredentialType::Oauth)
+        ));
+        assert_eq!(serde_json::to_value(provider).unwrap(), expired);
+    }
+
+    #[test]
+    fn authentication_resources_keep_handshake_fields_without_copying_private_credentials() {
+        let mut input = provider_wire();
+        input["key_preview"] = json!("key...last");
+        input["api_key"] = json!("fixture-private-key");
+        input["access_token"] = json!("fixture-access-token");
+        input["refresh_token"] = json!("fixture-refresh-token");
+        let provider: AuthProviderResource = serde_json::from_value(input).unwrap();
+        let published = serde_json::to_value(&provider).unwrap();
+        assert_eq!(published["key_preview"], "key...last");
+        for field in ["api_key", "access_token", "refresh_token"] {
+            assert!(published.get(field).is_none());
+        }
+
+        let browser = json!({
+            "provider_id": "fixture", "authorize_url": "https://example.test/authorize",
+            "state": "fixture-state", "pkce_verifier": "fixture-verifier"
+        });
+        let decoded: AuthBrowserStartResource = serde_json::from_value(browser.clone()).unwrap();
+        assert!(decoded.instance_url.is_none());
+        assert_eq!(serde_json::to_value(decoded).unwrap(), browser);
+        let device = json!({
+            "provider_id": "fixture", "verification_url": "https://example.test/device",
+            "user_code": "USER-CODE", "device_code": "fixture-device", "interval_seconds": 0
+        });
+        let decoded: AuthDeviceStartResource = serde_json::from_value(device.clone()).unwrap();
+        assert!(decoded.enterprise_domain.is_none());
+        assert_eq!(serde_json::to_value(decoded).unwrap(), device);
+
+        let pending = json!({"completed": false});
+        let decoded: AuthLoginResultResource = serde_json::from_value(pending.clone()).unwrap();
+        assert!(!decoded.completed && decoded.provider.is_none());
+        assert_eq!(serde_json::to_value(decoded).unwrap(), pending);
+        let complete = json!({"completed": true, "provider": published});
+        let decoded: AuthLoginResultResource = serde_json::from_value(complete.clone()).unwrap();
+        assert!(decoded.completed && decoded.provider.is_some());
+        assert_eq!(serde_json::to_value(decoded).unwrap(), complete);
+    }
+}
+
+#[cfg(test)]
+mod authentication_request_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn assert_wire_roundtrip<T: serde::de::DeserializeOwned + serde::Serialize>(
+        wire: serde_json::Value,
+    ) {
+        let request: T = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(request).unwrap(), wire);
+    }
+
+    #[test]
+    fn auth_requests_keep_flat_wire_fields_and_explicit_nulls() {
+        assert_wire_roundtrip::<AuthApiKeyWriteRequest>(json!({"api_key":"fixture-key"}));
+        assert_wire_roundtrip::<AuthProviderRequest>(json!({"provider_id":"fixture"}));
+        assert_wire_roundtrip::<AuthRedirectRequest>(json!({
+            "provider_id":"fixture", "redirect_uri":"http://localhost:9876/auth/callback"
+        }));
+        assert_wire_roundtrip::<AuthCodeExchangeRequest>(json!({
+            "provider_id":"fixture", "code":"fixture-code", "pkce_verifier":"fixture-verifier",
+            "redirect_uri":"http://localhost:9876/auth/callback"
+        }));
+        assert_wire_roundtrip::<AuthUserCodeDevicePollRequest>(json!({
+            "provider_id":"fixture", "device_code":"fixture-device", "user_code":"USER-CODE"
+        }));
+        assert_wire_roundtrip::<AuthEnterpriseDeviceRequest>(json!({
+            "provider_id":null, "enterprise_domain":null
+        }));
+        assert_wire_roundtrip::<AuthEnterpriseDevicePollRequest>(json!({
+            "provider_id":"fixture", "device_code":"fixture-device", "enterprise_domain":null
+        }));
+        let enterprise: AuthEnterpriseDeviceRequest = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(
+            serde_json::to_value(enterprise).unwrap(),
+            json!({
+                "provider_id":null, "enterprise_domain":null
+            })
+        );
+    }
+
+    #[test]
+    fn auth_request_provider_defaults_and_required_fields_keep_existing_validation() {
+        for wire in [
+            json!({}),
+            json!({"provider_id":null}),
+            json!({"provider_id":""}),
+            json!({"provider_id":" \t"}),
+        ] {
+            let request: AuthProviderRequest = serde_json::from_value(wire).unwrap();
+            assert_eq!(request.normalized_provider_id("fallback"), "fallback");
+        }
+        let request: AuthProviderRequest =
+            serde_json::from_value(json!({"provider_id":" custom / "})).unwrap();
+        assert_eq!(request.normalized_provider_id("fallback"), "custom /");
+        let redirect: AuthRedirectRequest = serde_json::from_value(json!({
+            "redirect_uri":"http://localhost:9876/auth/callback", "extra":true
+        }))
+        .unwrap();
+        assert_eq!(redirect.provider.normalized_provider_id("openai"), "openai");
+        assert_eq!(
+            serde_json::to_value(redirect).unwrap(),
+            json!({
+                "provider_id":null, "redirect_uri":"http://localhost:9876/auth/callback"
+            })
+        );
+        assert!(serde_json::from_value::<AuthApiKeyWriteRequest>(json!({})).is_err());
+        assert!(serde_json::from_value::<AuthCodeExchangeRequest>(json!({
+            "provider_id":"fixture", "code":"fixture-code", "redirect_uri":"http://localhost:9876/auth/callback"
+        })).is_err());
+        assert!(
+            serde_json::from_value::<AuthUserCodeDevicePollRequest>(json!({
+                "device_code":"fixture-device"
+            }))
+            .is_err()
+        );
+        assert!(serde_json::from_value::<AuthEnterpriseDevicePollRequest>(json!({})).is_err());
+    }
 }

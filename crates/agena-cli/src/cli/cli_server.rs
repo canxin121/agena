@@ -38,15 +38,14 @@ use agena_api::{
     mcp_connections::{McpConnectionCatalog, McpConnectionDetail, McpConnectionSummary},
     queries::{ListPermissionRulesParams, ListSessionsParams, Query, QueryResult},
     resource::{
-        ModelRef as WireModelRef, PermissionMode as WirePermissionMode, PermissionReply,
-        PermissionReplyKind as WirePermissionReplyKind, PermissionScope as WirePermissionScope,
-        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
+        AuthCredentialIssuerResource, AuthCredentialType, AuthLoginKindResource,
+        AuthProviderResource, ModelRef as WireModelRef, PermissionMode as WirePermissionMode,
+        PermissionReply, PermissionReplyKind as WirePermissionReplyKind,
+        PermissionScope as WirePermissionScope, ProviderSummaryResource, RunOptions,
+        SessionExecutionResource, SessionResource,
     },
 };
-use agena_application::dto::{
-    AuthBrowserStartResource, AuthDeviceStartResource, AuthLoginKindResource,
-    AuthLoginResultResource, AuthProviderResource, MemoryResource, OperatorToolResource,
-};
+use agena_application::dto::{MemoryResource, OperatorToolResource};
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
 
@@ -942,15 +941,12 @@ impl AgenaCli {
                 format: OutputFormat::Json,
             })) {
             AuthSubcommand::List(args) => {
-                let value = client.auth_providers().await.map_err(|error| {
+                let providers = client.auth_providers().await.map_err(|error| {
                     client_error("failed to read provider authentication from server", error)
                 })?;
-                let items = value.as_array().ok_or_else(|| {
-                    AppError::Internal("server returned an invalid auth-provider list".to_owned())
-                })?;
-                let mut credentials = items
-                    .iter()
-                    .map(auth_summary_from_value)
+                let mut credentials = providers
+                    .into_iter()
+                    .map(auth_summary_from_resource)
                     .collect::<Result<Vec<_>, _>>()?;
                 credentials.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
                 render_serialized(args.format, &AuthListOutput { credentials })
@@ -969,15 +965,12 @@ impl AgenaCli {
             ));
         }
         let client = connect_server_client(self).await?;
-        let provider: AuthProviderResource = decode_server_resource(
-            client
-                .auth_provider(provider_id.as_str())
-                .await
-                .map_err(|error| {
-                    client_error("failed to read provider authentication from server", error)
-                })?,
-            "auth-provider",
-        )?;
+        let provider = client
+            .auth_provider(provider_id.as_str())
+            .await
+            .map_err(|error| {
+                client_error("failed to read provider authentication from server", error)
+            })?;
 
         if let Some(api_key) = args.api_key {
             if !provider.api_key_write_supported {
@@ -1000,7 +993,7 @@ impl AgenaCli {
                 AppError::Config(format!("{provider_id} does not support browser login"))
             })?;
             let redirect_uri = browser_login_redirect_uri(args.port);
-            let start_value = match kind {
+            let start = match kind {
                 AuthLoginKindResource::OpenaiChatgpt => {
                     client
                         .start_openai_browser_auth(provider_id.as_str(), redirect_uri.as_str())
@@ -1018,8 +1011,6 @@ impl AgenaCli {
                 }
             }
             .map_err(|error| client_error("failed to start browser login through server", error))?;
-            let start: AuthBrowserStartResource =
-                decode_server_resource(start_value, "auth-browser-start")?;
             prompt_browser_login(start.authorize_url.as_str())?;
             let callback = agena_runtime::wait_for_oauth_callback_async(
                 args.port,
@@ -1028,7 +1019,7 @@ impl AgenaCli {
             )
             .await
             .map_err(|error| AppError::Config(format!("browser login failed: {error}")))?;
-            let result_value = match kind {
+            let result = match kind {
                 AuthLoginKindResource::OpenaiChatgpt => {
                     client
                         .finish_openai_browser_auth(
@@ -1054,8 +1045,6 @@ impl AgenaCli {
             .map_err(|error| {
                 client_error("failed to finish browser login through server", error)
             })?;
-            let result: AuthLoginResultResource =
-                decode_server_resource(result_value, "auth-login-result")?;
             if !result.completed {
                 return Err(AppError::Internal(
                     "server did not complete browser login".to_owned(),
@@ -1074,7 +1063,7 @@ impl AgenaCli {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
-        let start_value = match kind {
+        let start = match kind {
             AuthLoginKindResource::OpenaiChatgpt => {
                 client.start_openai_device_auth(provider_id.as_str()).await
             }
@@ -1090,8 +1079,6 @@ impl AgenaCli {
             }
         }
         .map_err(|error| client_error("failed to start device login through server", error))?;
-        let start: AuthDeviceStartResource =
-            decode_server_resource(start_value, "auth-device-start")?;
         prompt_device_login(&start)?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(args.timeout_secs);
         let interval = Duration::from_secs(start.interval_seconds.max(1));
@@ -1101,7 +1088,7 @@ impl AgenaCli {
                 return Err(AppError::Config("device login timed out".to_owned()));
             }
             tokio::time::sleep(interval.min(deadline - now)).await;
-            let result_value = match kind {
+            let result = match kind {
                 AuthLoginKindResource::OpenaiChatgpt => {
                     client
                         .poll_openai_device_auth(
@@ -1123,8 +1110,6 @@ impl AgenaCli {
                 AuthLoginKindResource::Gitlab => unreachable!("rejected above"),
             }
             .map_err(|error| client_error("failed to poll device login through server", error))?;
-            let result: AuthLoginResultResource =
-                decode_server_resource(result_value, "auth-login-result")?;
             if result.completed {
                 println!("logged in: {provider_id}");
                 return Ok(());
@@ -1816,36 +1801,39 @@ impl AgenaCli {
     }
 }
 
-fn auth_summary_from_value(value: &serde_json::Value) -> Result<AuthSummary, AppError> {
-    let provider_id = value
-        .get("provider_id")
-        .and_then(serde_json::Value::as_str)
-        .filter(|provider_id| !provider_id.is_empty())
-        .ok_or_else(|| {
-            AppError::Internal("server returned an auth provider without an id".to_owned())
-        })?
-        .to_owned();
-    let string_field = |name: &str| {
-        value
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
-    };
-    let expires_at_ms = value
-        .get("expires_at")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|timestamp| chrono::DateTime::parse_from_rfc3339(timestamp).ok())
-        .map(|timestamp| timestamp.timestamp_millis());
+fn auth_summary_from_resource(provider: AuthProviderResource) -> Result<AuthSummary, AppError> {
+    if provider.provider_id.is_empty() {
+        return Err(AppError::Internal(
+            "server returned an auth provider without an id".to_owned(),
+        ));
+    }
     Ok(AuthSummary {
-        provider_id,
-        kind: string_field("credential_type").unwrap_or_else(|| "none".to_owned()),
-        account_id: string_field("account_id"),
-        enterprise_url: string_field("enterprise_url"),
-        username: string_field("username"),
-        display_name: string_field("display_name"),
-        email: string_field("email"),
-        issuer: string_field("credential_issuer"),
-        expires_at_ms,
+        provider_id: provider.provider_id,
+        kind: match provider.credential_type {
+            Some(AuthCredentialType::Api) => "api",
+            Some(AuthCredentialType::Oauth) => "oauth",
+            Some(AuthCredentialType::WellKnown) => "well_known",
+            None => "none",
+        }
+        .to_owned(),
+        account_id: provider.account_id,
+        enterprise_url: provider.enterprise_url,
+        username: provider.username,
+        display_name: provider.display_name,
+        email: provider.email,
+        issuer: provider.credential_issuer.map(|issuer| {
+            match issuer {
+                AuthCredentialIssuerResource::OpenaiChatgpt => "openai_chatgpt",
+                AuthCredentialIssuerResource::GithubCopilot => "github_copilot",
+                AuthCredentialIssuerResource::Gitlab => "gitlab",
+                AuthCredentialIssuerResource::GoogleAdc => "google_adc",
+                AuthCredentialIssuerResource::SapAiCore => "sap_ai_core",
+            }
+            .to_owned()
+        }),
+        expires_at_ms: provider
+            .expires_at
+            .map(|timestamp| timestamp.timestamp_millis()),
     })
 }
 
@@ -2455,3 +2443,52 @@ fn expect_execution(
 
 #[cfg(test)]
 mod mcp_tests;
+
+#[cfg(test)]
+mod auth_resource_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn auth_summary_projection_keeps_cli_shape_and_excludes_credential_details() {
+        let provider: AuthProviderResource = serde_json::from_value(json!({
+            "provider_id":"fixture", "configured":true, "credential_present":true,
+            "credential_type":"oauth", "credential_issuer":"github_copilot",
+            "key_preview":"key...last", "expires_at":"1970-01-01T00:00:01.234Z",
+            "account_id":"account", "enterprise_url":"https://github.example.test",
+            "username":"fixture-user", "display_name":"Fixture User", "email":"user@example.test",
+            "avatar_url":"https://example.test/avatar.png",
+            "api_key_write_supported":false, "refresh_supported":true
+        }))
+        .unwrap();
+        let summary = auth_summary_from_resource(provider).unwrap();
+        assert_eq!(
+            serde_json::to_value(summary).unwrap(),
+            json!({
+                "provider_id":"fixture", "kind":"oauth", "issuer":"github_copilot",
+                "account_id":"account", "enterprise_url":"https://github.example.test",
+                "username":"fixture-user", "display_name":"Fixture User", "email":"user@example.test",
+                "expires_at_ms":1234
+            })
+        );
+    }
+
+    #[test]
+    fn auth_summary_projection_preserves_no_credential_and_missing_id_behaviors() {
+        let mut provider: AuthProviderResource = serde_json::from_value(json!({
+            "provider_id":"fixture", "configured":true, "credential_present":false,
+            "api_key_write_supported":true, "refresh_supported":false
+        }))
+        .unwrap();
+        let summary = auth_summary_from_resource(provider.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(summary).unwrap(),
+            json!({"provider_id":"fixture","kind":"none"})
+        );
+        provider.provider_id.clear();
+        assert!(matches!(
+            auth_summary_from_resource(provider),
+            Err(AppError::Internal(message)) if message == "server returned an auth provider without an id"
+        ));
+    }
+}

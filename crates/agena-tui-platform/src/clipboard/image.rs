@@ -10,9 +10,6 @@ use std::path::{Path, PathBuf};
 use tempfile::Builder;
 
 #[cfg(target_os = "linux")]
-use std::process::Command;
-
-#[cfg(target_os = "linux")]
 use super::path::{convert_windows_path_to_wsl, is_probably_wsl};
 
 #[derive(Debug, Clone)]
@@ -376,10 +373,10 @@ fn try_dump_windows_clipboard_image() -> Option<String> {
     let script = r#"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $img = Get-Clipboard -Format Image; if ($img -ne $null) { $p=[System.IO.Path]::GetTempFileName(); $p = [System.IO.Path]::ChangeExtension($p,'png'); $img.Save($p,[System.Drawing.Imaging.ImageFormat]::Png); Write-Output $p } else { exit 1 }"#;
 
     for command in ["powershell.exe", "pwsh", "powershell"] {
-        match Command::new(command)
-            .args(["-NoProfile", "-Command", script])
-            .output()
-        {
+        match crate::helper_runner::run_probe(
+            std::path::Path::new(command),
+            ["-NoProfile", "-Command", script],
+        ) {
             Ok(output) if output.status.success() => match String::from_utf8(output.stdout) {
                 Ok(path) if !path.trim().is_empty() => return Some(path.trim().to_owned()),
                 Ok(_) => tracing::debug!(

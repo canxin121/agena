@@ -1432,6 +1432,7 @@ name = "agena-tui-platform"
 version = "0.1.0"
 dependencies = [
  "agena-failure",
+ "agena-process",
  "agena-tui",
  "agena-tui-components",
  "agena-tui-media",

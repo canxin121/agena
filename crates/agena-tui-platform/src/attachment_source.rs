@@ -152,10 +152,27 @@ pub fn acquire_clipboard_image(
     context: &TerminalContext,
     terminal: &mut TerminalRuntime,
 ) -> anyhow::Result<Result<AttachmentAcquisition, ProviderError>> {
+    acquire_clipboard_image_inner(context, terminal, true)
+}
+
+/// Native desktop clipboard access has already run on a host worker. Only
+/// terminal-integrated providers may run here, under exclusive tty ownership.
+pub fn acquire_terminal_clipboard_image(
+    context: &TerminalContext,
+    terminal: &mut TerminalRuntime,
+) -> anyhow::Result<Result<AttachmentAcquisition, ProviderError>> {
+    acquire_clipboard_image_inner(context, terminal, false)
+}
+
+fn acquire_clipboard_image_inner(
+    context: &TerminalContext,
+    terminal: &mut TerminalRuntime,
+    include_native: bool,
+) -> anyhow::Result<Result<AttachmentAcquisition, ProviderError>> {
     let native = ClipboardImageSource;
     let kitty = KittyClipboardImageSource::new();
     let mut providers: Vec<&dyn AttachmentSource> = Vec::new();
-    if context.capabilities.clipboard_read_native.is_operational() {
+    if include_native && context.capabilities.clipboard_read_native.is_operational() {
         providers.push(&native);
     }
     if kitty.available(context) {

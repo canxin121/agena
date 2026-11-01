@@ -37,6 +37,7 @@ use agena_tui_media::MathGraphicsConfig;
 mod capabilities;
 mod graphics;
 pub mod integration;
+mod output;
 mod password;
 
 pub use agena_tui::terminal::TerminalFamily;
@@ -44,7 +45,7 @@ pub use agena_tui::terminal_color::TerminalColorDetection;
 pub use capabilities::TerminalContext;
 pub use password::read_server_password;
 
-type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
+type AppTerminal = Terminal<CrosstermBackend<output::TerminalOutput<io::Stdout>>>;
 const PROTOCOL_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 const PROTOCOL_RESTORE_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -62,6 +63,7 @@ struct ProtocolTransaction {
 /// replies. Live queries and keyboard input share this one event reader.
 pub struct TerminalRuntime {
     terminal: AppTerminal,
+    output_control: output::OutputControl,
     input_reader: TerminalInput,
     input: InputNormalizer,
     broker: TerminalProtocolBroker,
@@ -144,7 +146,9 @@ impl TerminalRuntime {
         TERMINAL_KEYBOARD_STACK_ACTIVE
             .store(lifecycle.keyboard_enhancement_active(), Ordering::Release);
 
-        let backend = CrosstermBackend::new(io::stdout());
+        let output = output::TerminalOutput::new(io::stdout());
+        let output_control = output.control();
+        let backend = CrosstermBackend::new(output);
         let mut terminal = Terminal::new(backend)?;
         terminal.clear().map_err(anyhow::Error::new)?;
         let input_reader =
@@ -181,6 +185,7 @@ impl TerminalRuntime {
 
         Ok(Self {
             terminal,
+            output_control,
             input_reader,
             input,
             broker,
@@ -334,6 +339,11 @@ impl TerminalRuntime {
 
     pub async fn next_event(&mut self) -> Option<Result<Event, std::io::Error>> {
         loop {
+            // Protocol replies and legacy paste can be immediately ready in
+            // long runs without producing an application event. Cooperate
+            // with the outer select so maintenance/redraw cannot be starved.
+            // All consumed input remains owned by self across cancellation.
+            tokio::task::consume_budget().await;
             if let Some(event) = self.input.pop_ready() {
                 return Some(Ok(event));
             }
@@ -388,8 +398,9 @@ impl TerminalRuntime {
         // input under a different owner after an arbitrary timeout.
         self.settle_protocol_transaction(PROTOCOL_SETTLE_TIMEOUT)
             .context("terminal response transaction did not settle before suspension")?;
-        self.terminal
-            .flush()
+        // Terminal::flush replays a framebuffer diff; flush the actual writer
+        // instead so suspension neither redraws nor leaves queued bytes behind.
+        std::io::Write::flush(self.terminal.backend_mut())
             .map_err(anyhow::Error::new)
             .context("failed to flush the TUI before suspending the terminal")?;
 
@@ -496,11 +507,14 @@ impl TerminalRuntime {
         {
             tracing::debug!(%error, "terminal response drain ended during shutdown");
         }
-        let flush_result = self
-            .terminal
-            .flush()
-            .map_err(anyhow::Error::new)
-            .context("failed to flush terminal output during restoration");
+        let flush_result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
+            std::io::Write::flush(self.terminal.backend_mut())
+                .map_err(anyhow::Error::new)
+                .context("failed to flush terminal output during restoration")
+        } else {
+            self.output_control.discard_pending();
+            Ok(())
+        };
         let lifecycle_result = if TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
             self.lifecycle.shutdown()
         } else {

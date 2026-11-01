@@ -6,6 +6,116 @@ use ratatui::{
     style::{Color, Modifier, Style},
 };
 
+#[tokio::test]
+async fn live_native_encoding_matches_sync_pixels_and_does_not_reflow_markdown() {
+    let (mut live, placement) = fixture();
+    let (mut synchronous, _) = fixture();
+    let mut context = MathRenderContext::default();
+    context.enable_background_rendering();
+    let mut live_terminal = Terminal::new(TestBackend::new(8, 6)).unwrap();
+    let mut sync_terminal = Terminal::new(TestBackend::new(8, 6)).unwrap();
+    for (selected, scroll) in [
+        (None, 0),
+        (Some(Rect::new(0, 2, 8, 2)), 0),
+        (None, 0),
+        (Some(Rect::new(0, 0, 8, 1)), 2),
+    ] {
+        let expected = draw(
+            &mut sync_terminal,
+            &mut synchronous,
+            &placement,
+            selected,
+            scroll,
+        );
+        for attempt in 0..5 {
+            let actual = with_math_render_context(&context, || {
+                draw(&mut live_terminal, &mut live, &placement, selected, scroll)
+            });
+            if actual == expected {
+                break;
+            }
+            assert!(
+                attempt < 4,
+                "background protocol did not converge to synchronous pixels"
+            );
+            tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                context.background_changed(),
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(
+            context.background.as_ref().unwrap().generation(),
+            0,
+            "encoded protocol updates repaint but must not invalidate transcript layout"
+        );
+    }
+    live.sync_generation(99);
+    // Retiring a terminal generation discards the prepared cache immediately.
+    let blank = with_math_render_context(&context, || {
+        draw(&mut live_terminal, &mut live, &placement, None, 0)
+    });
+    assert!(!blank[(2, 1)].symbol().contains("1337;File="));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        context.background_changed(),
+    )
+    .await
+    .unwrap();
+    let restored = with_math_render_context(&context, || {
+        draw(&mut live_terminal, &mut live, &placement, None, 0)
+    });
+    assert!(restored[(2, 1)].symbol().contains("1337;File="));
+}
+
+#[tokio::test]
+async fn completed_encoding_can_be_collected_without_drawing_an_image() {
+    let (mut renderer, placement) = fixture();
+    let mut context = MathRenderContext::default();
+    context.enable_background_rendering();
+    let mut terminal = Terminal::new(TestBackend::new(8, 6)).unwrap();
+    with_math_render_context(&context, || {
+        draw(&mut terminal, &mut renderer, &placement, None, 0)
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        context.background_changed(),
+    )
+    .await
+    .unwrap();
+    // Simulates switching to a route which never calls the image renderer.
+    assert!(renderer.poll_completed());
+    assert!(!renderer.poll_completed());
+    let completed = with_math_render_context(&context, || {
+        draw(&mut terminal, &mut renderer, &placement, None, 0)
+    });
+    assert!(completed[(2, 1)].symbol().contains("1337;File="));
+}
+
+#[test]
+fn unselected_graphics_also_enforce_target_pixel_limits() {
+    let (_, placement) = fixture();
+    assert!(
+        crate::graphics_selection::highlighted_graphic(
+            &placement.artifact,
+            Size::new(u16::MAX, 2),
+            FontSize::new(2, 2),
+            &[],
+        )
+        .is_none()
+    );
+    assert!(
+        crate::graphics_selection::highlighted_graphic(
+            &placement.artifact,
+            Size::new(0, 2),
+            FontSize::new(2, 2),
+            &[],
+        )
+        .is_none()
+    );
+}
+
 fn fixture() -> (MathGraphicsRenderer, TranscriptMathPlacement) {
     let picker = Picker::from_parts(FontSize::new(2, 2), ProtocolType::Iterm2, false, Vec::new());
     let config = MathGraphicsConfig {

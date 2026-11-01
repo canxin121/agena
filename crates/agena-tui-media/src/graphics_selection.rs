@@ -77,16 +77,18 @@ pub(super) fn highlighted_graphic(
     font: FontSize,
     highlights: &[GraphicHighlight],
 ) -> Option<DynamicImage> {
-    if highlights.is_empty() {
-        return Some(artifact.image.clone());
-    }
     let width = u32::from(size.width).checked_mul(u32::from(font.width))?;
     let height = u32::from(size.height).checked_mul(u32::from(font.height))?;
-    if width > MAX_IMAGE_DIMENSION
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
         || height > MAX_IMAGE_DIMENSION
         || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
     {
         return None;
+    }
+    if highlights.is_empty() {
+        return Some(artifact.image.clone());
     }
     let mut image = Resize::Scale(None)
         .resize(&artifact.image, font, size, Some(Rgba([0, 0, 0, 0])))

@@ -33,7 +33,11 @@ impl TranscriptState {
     }
 
     /// All wrapped rows of the focused action share one restrained highlight.
-    pub(crate) fn action_cursor_ranges(&mut self, width: u16) -> BTreeMap<usize, Range<usize>> {
+    pub(crate) fn action_cursor_ranges(
+        &mut self,
+        width: u16,
+        visible: Range<usize>,
+    ) -> BTreeMap<usize, Range<usize>> {
         let Some(control) = self.control_at_cursor(width) else {
             return BTreeMap::new();
         };
@@ -54,6 +58,8 @@ impl TranscriptState {
             .lines
             .iter()
             .enumerate()
+            .skip(visible.start)
+            .take(visible.end.saturating_sub(visible.start))
             .filter_map(|(index, line)| {
                 if native_range
                     .as_ref()

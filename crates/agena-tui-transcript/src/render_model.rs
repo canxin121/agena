@@ -572,8 +572,9 @@ pub struct RenderedLine {
     pub navigation_unit: Option<usize>,
     /// Clipboard text for the complete semantic row. This is deliberately
     /// separate from `copy_text`, which remains the projection for just this
-    /// terminal row during a free-form pointer selection.
-    pub navigation_copy_text: String,
+    /// terminal row during a free-form pointer selection. Wrapped visual rows
+    /// share this allocation instead of copying the full logical line each time.
+    pub navigation_copy_text: std::sync::Arc<str>,
     /// Pointer selection policy is deliberately independent from keyboard
     /// navigation. Code and table rows have a `navigation_unit` but remain
     /// character-selectable; formulas and other graphical line boxes opt into
@@ -619,7 +620,7 @@ impl RenderedLine {
             copy_column: 0,
             copy_segments: Vec::new(),
             navigation_unit: None,
-            navigation_copy_text: String::new(),
+            navigation_copy_text: Default::default(),
             pointer_selection: TranscriptPointerSelection::Character,
             style,
             math: Vec::new(),
@@ -641,7 +642,7 @@ impl RenderedLine {
             copy_column: 0,
             copy_segments: Vec::new(),
             navigation_unit: None,
-            navigation_copy_text: String::new(),
+            navigation_copy_text: Default::default(),
             pointer_selection: TranscriptPointerSelection::Character,
             style,
             rich_line: Some(line),
@@ -679,7 +680,25 @@ impl RenderedLine {
     ) -> Self {
         let copy_text = copy_text.into();
         self.navigation_unit = Some(navigation_unit);
-        self.navigation_copy_text = stable_copy_text(&copy_text);
+        self.navigation_copy_text = Self::shared_navigation_text(&copy_text);
+        self
+    }
+
+    /// Build one stable clipboard source for all visual rows of a semantic
+    /// unit. Live spinner placeholders are removed once, not on every wrap.
+    pub fn shared_navigation_text(text: &str) -> std::sync::Arc<str> {
+        stable_copy_text(text).into()
+    }
+
+    /// Attach a source created once with `shared_navigation_text` to another
+    /// visual row. Copying remains complete without quadratic retained text.
+    pub fn with_shared_navigation_unit(
+        mut self,
+        navigation_unit: usize,
+        copy_text: std::sync::Arc<str>,
+    ) -> Self {
+        self.navigation_unit = Some(navigation_unit);
+        self.navigation_copy_text = copy_text;
         self
     }
 

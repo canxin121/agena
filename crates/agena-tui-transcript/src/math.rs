@@ -852,12 +852,13 @@ fn mark_math_navigation_rows(
     {
         for (row, range) in rows.iter().zip(ranges) {
             let unit_start = start.saturating_add(range.start);
+            let copy_text: std::sync::Arc<str> = row.source.as_str().into();
             for line in out
                 .get_mut(unit_start..start.saturating_add(range.end))
                 .unwrap_or_default()
             {
                 line.navigation_unit = Some(unit_start);
-                line.navigation_copy_text.clone_from(&row.source);
+                line.navigation_copy_text.clone_from(&copy_text);
                 line.pointer_selection = TranscriptPointerSelection::SemanticUnit;
             }
         }
@@ -867,9 +868,10 @@ fn mark_math_navigation_rows(
 }
 
 fn mark_rendered_math_unit(out: &mut [RenderedLine], start: usize, copy_text: &str) {
+    let copy_text: std::sync::Arc<str> = copy_text.into();
     for line in out.get_mut(start..).unwrap_or_default() {
         line.navigation_unit = Some(start);
-        line.navigation_copy_text = copy_text.to_string();
+        line.navigation_copy_text = copy_text.clone();
         line.pointer_selection = TranscriptPointerSelection::SemanticUnit;
     }
 }

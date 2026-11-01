@@ -1,6 +1,6 @@
 use super::transcript_ast::{
     MarkdownBlockLayout, MarkdownNode, markdown_inline_line, parse_markdown_document,
-    push_markdown_block_spacing, render_parsed_markdown_block,
+    parse_markdown_document_shared, push_markdown_block_spacing, render_parsed_markdown_block,
 };
 use super::{
     I18n, Line, MarkdownBlock, Modifier, RenderedLine, Span, Style, TranscriptEntry,
@@ -194,7 +194,7 @@ pub(crate) fn tool_text_looks_like_markdown(text: &str, i18n: &I18n) -> bool {
         if source.is_empty() {
             return false;
         }
-        if parse_markdown_document(source)
+        if parse_markdown_document_shared(source)
             .iter()
             .any(|block| matches!(block.parsed, MarkdownNode::Image { .. }))
         {
@@ -403,6 +403,10 @@ pub fn markdown_blocks(text: &str) -> Vec<MarkdownBlock> {
     parse_markdown_document(text)
 }
 
+pub(crate) fn markdown_blocks_shared(text: &str) -> std::sync::Arc<Vec<MarkdownBlock>> {
+    parse_markdown_document_shared(text)
+}
+
 /// Render a complete Markdown document inside an existing transcript node.
 ///
 /// Assistant prose creates one navigation node per Markdown block. Activity
@@ -416,7 +420,7 @@ pub(crate) fn push_markdown_document(
     width: u16,
     i18n: &I18n,
 ) {
-    let blocks = markdown_blocks(text);
+    let blocks = markdown_blocks_shared(text);
     let mut previous = None;
     let mut layout = MarkdownBlockLayout::default();
     for (index, block) in blocks.iter().enumerate() {
@@ -556,11 +560,12 @@ pub(crate) fn push_markdown_code_block(
         }
         for line in code_lines {
             let navigation_unit = out.len();
+            let navigation_text: std::sync::Arc<str> = (*line).into();
             for segment in wrap_display_text(line.replace('\t', "    ").as_str(), card_width) {
                 push_single_line(out, prefix, segment.as_str(), Style::default(), width);
                 if let Some(rendered) = out.last_mut() {
                     rendered.navigation_unit = Some(navigation_unit);
-                    rendered.navigation_copy_text = (*line).to_string();
+                    rendered.navigation_copy_text = navigation_text.clone();
                 }
             }
         }
@@ -589,6 +594,7 @@ pub(crate) fn push_markdown_code_block(
         // would make a wrapped snippet taller than the regular presentation.
         let navigation_unit = out.len();
         let highlighted = highlighted_lines.into_iter().next().unwrap_or_default();
+        let navigation_text = RenderedLine::shared_navigation_text(code);
         for (index, body) in wrap_styled_spans(highlighted, card_width - compact_gutter_width)
             .into_iter()
             .enumerate()
@@ -616,7 +622,7 @@ pub(crate) fn push_markdown_code_block(
                         body_copy_text,
                         prefix_width.saturating_add(compact_gutter_width),
                     )
-                    .with_navigation_unit(navigation_unit, *code),
+                    .with_shared_navigation_unit(navigation_unit, navigation_text.clone()),
             );
         }
         return;
@@ -667,7 +673,9 @@ pub(crate) fn push_markdown_code_block(
     let body_width = card_width.saturating_sub(gutter_width).saturating_sub(2);
     for (index, line) in highlighted_lines.into_iter().enumerate() {
         let navigation_unit = out.len();
-        let navigation_copy_text = code_lines.get(index).copied().unwrap_or_default();
+        let navigation_copy_text = RenderedLine::shared_navigation_text(
+            code_lines.get(index).copied().unwrap_or_default(),
+        );
         let number = format!("{:>width$} ", index + 1, width = line_count_width);
         for (segment_index, body) in wrap_styled_spans(line, body_width).into_iter().enumerate() {
             let gutter = if segment_index == 0 {
@@ -705,7 +713,7 @@ pub(crate) fn push_markdown_code_block(
                         body_copy_text,
                         prefix_width.saturating_add(1).saturating_add(gutter_width),
                     )
-                    .with_navigation_unit(navigation_unit, navigation_copy_text),
+                    .with_shared_navigation_unit(navigation_unit, navigation_copy_text.clone()),
             );
         }
     }
@@ -752,10 +760,61 @@ use syntect::{
 static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
+const MAX_SYNTAX_HIGHLIGHT_BYTES: usize = 128 * 1024;
+const MAX_SYNTAX_HIGHLIGHT_LINE_BYTES: usize = 8 * 1024;
+const MAX_SYNTAX_HIGHLIGHT_LINES: usize = 2048;
+
+fn within_highlight_budget(lines: &[&str]) -> bool {
+    if lines.len() > MAX_SYNTAX_HIGHLIGHT_LINES {
+        return false;
+    }
+    let mut bytes = 0usize;
+    for line in lines {
+        if line.len() > MAX_SYNTAX_HIGHLIGHT_LINE_BYTES {
+            return false;
+        }
+        // Tabs expand before the regex-based lexer sees the text.
+        let expanded = line.len().saturating_add(
+            line.bytes()
+                .filter(|b| *b == b'\t')
+                .count()
+                .saturating_mul(3),
+        );
+        if expanded > MAX_SYNTAX_HIGHLIGHT_LINE_BYTES {
+            return false;
+        }
+        bytes = bytes.saturating_add(expanded.saturating_add(1));
+        if bytes > MAX_SYNTAX_HIGHLIGHT_BYTES {
+            return false;
+        }
+    }
+    true
+}
+
+fn plain_code_lines(
+    lines: &[&str],
+    palette: agena_tui_components::ThemePalette,
+) -> Vec<Vec<Span<'static>>> {
+    lines
+        .iter()
+        .map(|line| {
+            vec![Span::styled(
+                line.replace('\t', "    "),
+                Style::default().fg(palette.code_fg).bg(palette.code_bg),
+            )]
+        })
+        .collect()
+}
+
 /// Infer a code language for an unlabeled fence from its first non-empty line
 /// (shebangs, XML/HTML declarations, JSON payloads, …). Returns `None` when
 /// the line carries no language hint, so callers keep their plain-text label.
 fn infer_fenced_language(lines: &[&str]) -> Option<String> {
+    // Inference also runs regexes and initializes the syntax database. Large
+    // unlabeled blocks must take the same safe path as explicitly typed code.
+    if !within_highlight_budget(lines) {
+        return None;
+    }
     let first_line = lines.iter().find(|line| !line.trim().is_empty())?;
     let syntax = SYNTAXES.find_syntax_by_first_line(first_line)?;
     syntax
@@ -770,6 +829,11 @@ pub(crate) fn syntax_highlight_lines(
     lines: &[&str],
     palette: agena_tui_components::ThemePalette,
 ) -> Vec<Vec<Span<'static>>> {
+    if !within_highlight_budget(lines) {
+        // Styling is optional; source and copy semantics are not. Never
+        // truncate a large/minified response just to bound syntax work.
+        return plain_code_lines(lines, palette);
+    }
     let syntax = SYNTAXES
         .find_syntax_by_token(language)
         .or_else(|| SYNTAXES.find_syntax_by_extension(language))
@@ -789,15 +853,7 @@ pub(crate) fn syntax_highlight_lines(
         "base16-ocean.dark"
     };
     let Some(theme) = THEMES.themes.get(theme_name) else {
-        return lines
-            .iter()
-            .map(|line| {
-                vec![Span::styled(
-                    line.replace('\t', "    "),
-                    Style::default().fg(palette.code_fg).bg(palette.code_bg),
-                )]
-            })
-            .collect();
+        return plain_code_lines(lines, palette);
     };
     let mut highlighter = HighlightLines::new(syntax, theme);
     lines
@@ -923,7 +979,7 @@ pub(crate) fn render_inline_reply_document(
     width: u16,
     i18n: &I18n,
 ) -> Vec<RenderedLine> {
-    let blocks = markdown_blocks(&reply.source);
+    let blocks = markdown_blocks_shared(&reply.source);
     let mut out = Vec::new();
     let mut layout = MarkdownBlockLayout::default();
     let mut previous = None;
@@ -974,6 +1030,113 @@ pub(crate) fn render_inline_reply_document(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_wrapped_code_shares_one_full_line_copy_instead_of_quadratic_text() {
+        let code = "a".repeat(64 * 1024);
+        let source = format!("```text\n{code}\n```");
+        for width in [12, 80] {
+            let mut rendered = Vec::new();
+            push_markdown_code_block(&mut rendered, "", &source, width, &I18n::english());
+            let rows = rendered
+                .iter()
+                .filter(|row| row.navigation_unit.is_some())
+                .collect::<Vec<_>>();
+            assert!(rows.len() > 500);
+            let shared = &rows[0].navigation_copy_text;
+            assert_eq!(shared.as_ref(), code);
+            assert!(
+                rows.iter()
+                    .all(|row| std::sync::Arc::ptr_eq(shared, &row.navigation_copy_text))
+            );
+            assert_eq!(
+                rows.iter()
+                    .map(|row| row.copy_text.as_str())
+                    .collect::<String>(),
+                code
+            );
+        }
+    }
+
+    #[test]
+    fn wrapped_table_rows_share_their_semantic_clipboard_source() {
+        let source = format!(
+            "| Key | Value |\n| --- | --- |\n| item | {} |",
+            "long value ".repeat(150)
+        );
+        let mut rendered = Vec::new();
+        push_markdown_document(&mut rendered, "", &source, 60, &I18n::english());
+        let mut units = std::collections::BTreeMap::new();
+        let mut shared_rows = 0;
+        for row in &rendered {
+            if let Some(unit) = row.navigation_unit {
+                if let Some(first) = units.get(&unit) {
+                    assert!(std::sync::Arc::ptr_eq(first, &row.navigation_copy_text));
+                    shared_rows += 1;
+                } else {
+                    units.insert(unit, row.navigation_copy_text.clone());
+                }
+            }
+        }
+        assert!(shared_rows > 1);
+        assert!(units.values().any(|text| text.contains("item\tlong value")));
+    }
+
+    #[test]
+    fn large_code_highlight_fallback_preserves_all_text_and_tabs() {
+        let palette = agena_tui_components::theme::active_palette();
+        let minified = format!(
+            "{{\"payload\":\"{}\"}}",
+            "界".repeat(MAX_SYNTAX_HIGHLIGHT_LINE_BYTES)
+        );
+        let tabs = "\t".repeat(MAX_SYNTAX_HIGHLIGHT_LINE_BYTES / 4 + 1);
+        let short = "x".repeat(256);
+        for lines in [
+            vec![minified.as_str()],
+            vec![tabs.as_str()],
+            vec![short.as_str(); MAX_SYNTAX_HIGHLIGHT_BYTES / short.len() + 1],
+            vec![""; MAX_SYNTAX_HIGHLIGHT_LINES + 1],
+        ] {
+            assert!(!within_highlight_budget(&lines));
+            assert!(infer_fenced_language(&lines).is_none());
+            let rendered = syntax_highlight_lines("json", &lines, palette);
+            assert_eq!(rendered.len(), lines.len());
+            for (spans, source) in rendered.iter().zip(lines) {
+                assert_eq!(spans.len(), 1);
+                assert_eq!(spans[0].content, source.replace('\t', "    "));
+                assert_eq!(
+                    spans[0].style,
+                    Style::default().fg(palette.code_fg).bg(palette.code_bg)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn normal_code_keeps_highlighting_and_multiline_lexer_state() {
+        let lines = [
+            "/* comment",
+            "continued */",
+            "fn main() { let value = 42; }",
+        ];
+        assert!(within_highlight_budget(&lines));
+        let palette =
+            agena_tui_components::ThemePalette::for_scheme(agena_tui_components::ColorScheme::Dark);
+        let rendered = syntax_highlight_lines("rust", &lines, palette);
+        for (spans, source) in rendered.iter().zip(lines) {
+            assert_eq!(
+                spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>(),
+                source
+            );
+        }
+        assert!(
+            rendered[2].len() > 1,
+            "small blocks must keep syntax styles"
+        );
+    }
 
     #[test]
     fn tool_image_lines_are_recognized_and_rendered_as_markdown() {

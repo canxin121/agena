@@ -78,7 +78,14 @@ pub(crate) async fn run_status_line_command(
             }
             Ok::<_, anyhow::Error>((output, exceeded))
         };
-        let (read, status) = tokio::join!(read_output, child.wait());
+        let wait = async {
+            let status = child.wait().await?;
+            // A finished shell may leave a descendant holding stdout open.
+            // Retire the tree before awaiting EOF, not only after the timeout.
+            child.start_kill()?;
+            Ok::<_, std::io::Error>(status)
+        };
+        let (read, status) = tokio::join!(read_output, wait);
         let (output, exceeded) = read?;
         if exceeded {
             anyhow::bail!(
@@ -150,6 +157,20 @@ use crate::{
 use agena_tui_session::session_helpers::next_grapheme_boundary;
 use anyhow::Context as _;
 use tokio::io::AsyncReadExt;
+
+#[cfg(all(test, unix))]
+mod status_process_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn finished_status_shell_does_not_wait_for_descendant_stdout() {
+        let start = std::time::Instant::now();
+        let text =
+            run_status_line_command("sleep 5 & printf ready".into(), None, "composer".into()).await;
+        assert_eq!(text.as_deref(), Some("ready"));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+}
 
 #[cfg(test)]
 mod session_title_tests {

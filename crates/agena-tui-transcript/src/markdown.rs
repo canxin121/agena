@@ -414,7 +414,7 @@ pub fn push_markdown_table(out: &mut Vec<RenderedLine>, prefix: &str, lines: &[&
                 body_style
             },
         );
-        let navigation_copy_text = row.join("\t");
+        let navigation_copy_text: std::sync::Arc<str> = row.join("\t").into();
         for line in &mut out[navigation_unit..] {
             line.navigation_unit = Some(navigation_unit);
             line.navigation_copy_text.clone_from(&navigation_copy_text);
@@ -467,7 +467,7 @@ pub fn push_markdown_table_fallback(
             },
             width,
         );
-        let navigation_copy_text = row.join("\t");
+        let navigation_copy_text: std::sync::Arc<str> = row.join("\t").into();
         for line in &mut out[navigation_unit..] {
             line.navigation_unit = Some(navigation_unit);
             line.navigation_copy_text.clone_from(&navigation_copy_text);

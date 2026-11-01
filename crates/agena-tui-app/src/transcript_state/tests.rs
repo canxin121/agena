@@ -4,6 +4,259 @@ use agena_api::part::{LoadedPartSection, PartResource};
 use agena_tui_transcript::{TranscriptActivityContent, TranscriptPartContent, parts_entries};
 use serde_json::json;
 
+#[test]
+fn search_edits_reuse_layout_nodes_and_entry_blocks() {
+    let mut state = TranscriptState::default();
+    state.merge_parts(vec![part(
+        901,
+        901,
+        "user",
+        "text",
+        "ÉCLAIR and 中\n\nsecond paragraph",
+    )]);
+    let rendered = state.rendered(80);
+    let lines = rendered.lines.as_ptr();
+    let nodes = rendered.nodes.as_ptr();
+    let blocks = state
+        .entry_render_cache
+        .iter()
+        .map(|(id, entry)| (*id, entry.block.clone()))
+        .collect::<Vec<_>>();
+    for query in ["é", "中", "paragraph", "missing", "  "] {
+        state.set_search_query(query.to_owned());
+        let rendered = state.rendered(80);
+        assert_eq!(
+            rendered.lines.as_ptr(),
+            lines,
+            "search is not a layout input"
+        );
+        assert_eq!(rendered.nodes.as_ptr(), nodes);
+        let expected = rendered
+            .lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                agena_tui_session::session_helpers::contains_case_insensitive(&line.text, query)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rendered.search_matches, expected);
+        for (id, block) in &blocks {
+            assert!(std::sync::Arc::ptr_eq(
+                block,
+                &state.entry_render_cache[id].block
+            ));
+        }
+    }
+    state.set_search_query("newly arrived".into());
+    state.merge_parts(vec![part(902, 902, "user", "text", "newly arrived")]);
+    assert!(
+        !state.rendered(80).search_matches.is_empty(),
+        "content updates still refresh matching"
+    );
+}
+
+#[test]
+fn search_jump_wraps_and_tolerates_a_stale_match_index() {
+    let mut state = TranscriptState::default();
+    state.merge_parts(vec![part(
+        903,
+        903,
+        "user",
+        "text",
+        "target one\n\ntarget two\n\ntarget three",
+    )]);
+    state.set_search_query("target".into());
+    let matches = state.rendered(80).search_matches.clone();
+    assert!(matches.len() >= 3);
+    state.search_match_index = Some(usize::MAX);
+    state.jump_search_match(80, 12, true);
+    assert_eq!(state.search_match_index, Some(0));
+    state.jump_search_match(80, 12, false);
+    assert_eq!(state.search_match_index, Some(matches.len() - 1));
+    state.set_search_query("absent".into());
+    state.jump_search_match(80, 12, true);
+    assert_eq!(state.search_match_index, None);
+}
+
+#[tokio::test]
+async fn completed_image_layout_is_not_invalidated_by_other_media_completions() {
+    use base64::Engine as _;
+    let mut state = TranscriptState::default();
+    let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="#1689bb"/></svg>"##;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(svg);
+    state.merge_parts(vec![part(
+        30,
+        30,
+        "user",
+        "text",
+        &format!("![ready](data:image/svg+xml;base64,{encoded})"),
+    )]);
+    let mut context = agena_tui_media::MathRenderContext::new(None, &std::env::temp_dir());
+    context.enable_background_rendering();
+    state.set_math_render_context(context.clone());
+    for attempt in 0..8 {
+        state.rendered(80);
+        if state
+            .entry_render_cache
+            .values()
+            .all(|entry| entry.remote_image_generation.is_none())
+        {
+            break;
+        }
+        assert!(
+            attempt < 7,
+            "media layout must converge once pixels are ready"
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            context.background_changed(),
+        )
+        .await
+        .unwrap();
+    }
+    assert!(!state.entry_render_cache.is_empty());
+    let rendered = state.rendered(80);
+    assert!(
+        rendered.lines.iter().any(|line| line.text.contains('▀')),
+        "preview must really have completed"
+    );
+    let lines = rendered.lines.as_ptr();
+    let generation = rendered.remote_image_generation;
+    let palette = rendered.palette;
+    for next in generation + 1..generation + 10 {
+        let rendered = state.rendered_inner_at(80, 0, palette, next);
+        assert_eq!(
+            rendered.lines.as_ptr(),
+            lines,
+            "stable media must not rebuild the history vectors"
+        );
+    }
+}
+
+#[test]
+fn media_completion_reuses_plain_history_but_reflows_image_placeholders() {
+    let mut state = TranscriptState::default();
+    state.merge_parts(vec![
+        part(10, 10, "user", "text", "plain history without any media"),
+        part(
+            20,
+            20,
+            "user",
+            "text",
+            "![pending](https://entry-cache-audit.invalid/image.png)",
+        ),
+    ]);
+    let context = agena_tui_media::MathRenderContext::new(None, &std::env::temp_dir());
+    let palette = agena_tui_components::theme::active_palette();
+    agena_tui_media::with_math_render_context(&context, || {
+        agena_tui_media::with_deferred_remote_images(|| {
+            state.rendered_inner_at(80, 0, palette, 10);
+        })
+    });
+    let previous = state
+        .entry_render_cache
+        .iter()
+        .map(|(id, cached)| {
+            (
+                *id,
+                (
+                    cached.remote_image_generation.is_some(),
+                    cached.block.clone(),
+                ),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert!(previous.values().any(|(media, _)| *media));
+    assert!(previous.values().any(|(media, _)| !*media));
+    agena_tui_media::with_math_render_context(&context, || {
+        agena_tui_media::with_deferred_remote_images(|| {
+            state.rendered_inner_at(80, 0, palette, 11);
+        })
+    });
+    for (id, (uses_media, block)) in previous {
+        assert_eq!(
+            std::sync::Arc::ptr_eq(&block, &state.entry_render_cache[&id].block),
+            !uses_media
+        );
+    }
+}
+
+#[test]
+fn selection_paint_is_window_bounded_without_changing_full_selection() {
+    let mut state = TranscriptState::default();
+    state.rendered(80);
+    let line = std::sync::Arc::new(RenderedLine::plain(
+        "abcdef",
+        ratatui::style::Style::default(),
+    ));
+    let rendered = state.rendered.as_mut().unwrap();
+    rendered.lines = vec![line; 20_000];
+    rendered.line_nodes = vec![None; 20_000];
+    state.interaction.text_selection = Some(TranscriptTextSelection {
+        anchor: TranscriptTextPosition { line: 3, column: 1 },
+        head: TranscriptTextPosition {
+            line: 19_990,
+            column: 4,
+        },
+    });
+    state.interaction.visual_anchor = Some(TranscriptTextPosition { line: 3, column: 1 });
+    state.interaction.cursor = Some(TranscriptCursor {
+        line: 19_990,
+        column: 4,
+        preferred_column: 4,
+        anchor: None,
+        block_cursor: None,
+        preferred_screen_row: 0,
+    });
+    for mode in [None, Some(TranscriptVisualSelectionMode::Block)] {
+        state.interaction.visual_selection = mode;
+        let full = state.selection_cell_ranges(80);
+        for window in [0..24, 10_000..10_024, 19_980..20_100, 20_100..20_120] {
+            let actual = state.selection_cell_ranges_in(80, window.clone());
+            let start = window.start.min(20_000);
+            let end = window.end.min(20_000);
+            assert_eq!(actual, full[start..end]);
+            assert!(actual.len() <= window.len());
+        }
+    }
+}
+
+#[test]
+fn focused_action_paints_only_visible_rows_of_a_long_transcript() {
+    let mut state = TranscriptState::default();
+    state.rendered(80);
+    let mut line = RenderedLine::plain("approve", ratatui::style::Style::default());
+    line.controls
+        .push(agena_tui_transcript::RenderedTranscriptControl {
+            columns: 1..5,
+            action: agena_tui_transcript::TranscriptControlAction::Permission {
+                request_id: "request".into(),
+                decision: None,
+            },
+            enabled: true,
+        });
+    let rendered = state.rendered.as_mut().unwrap();
+    let line = std::sync::Arc::new(line);
+    rendered.lines = vec![line; 20_000];
+    rendered.line_nodes = vec![None; 20_000];
+    state.interaction.cursor = Some(TranscriptCursor {
+        line: 10_000,
+        column: 2,
+        preferred_column: 2,
+        anchor: None,
+        block_cursor: None,
+        preferred_screen_row: 0,
+    });
+    let ranges = state.action_cursor_ranges(80, 10_000..10_024);
+    assert_eq!(ranges.len(), 24);
+    assert!(
+        ranges
+            .iter()
+            .all(|(row, cells)| (10_000..10_024).contains(row) && *cells == (1..5))
+    );
+}
+
 fn part(id: i64, run: i64, role: &str, kind: &str, text: &str) -> PartResource {
     PartResource {
         part_id: id,

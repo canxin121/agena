@@ -63,6 +63,10 @@ pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 // rich tool cards. Ten frames per second keeps spinners responsive without
 // continuously re-rendering a large transcript at ~31 FPS while a tool waits.
 pub(super) const UI_TICK_MS: u64 = 100;
+// Even on a busy stream, keep full transcript layout below ~30 FPS. Idle
+// surfaces do not need to rerender ten times per second to remain responsive.
+pub(super) const UI_MIN_FRAME_MS: u64 = 33;
+pub(super) const UI_IDLE_FRAME_MS: u64 = 500;
 pub(super) const UI_COMMAND_QUEUE_CAPACITY: usize = 64;
 pub(super) const UI_COMMAND_MAX_CONCURRENCY: usize = 8;
 pub(super) const APP_MESSAGE_QUEUE_CAPACITY: usize = 512;
@@ -455,6 +459,9 @@ pub struct App {
     pub(super) command_tx: Sender<UiCommand>,
     pub(super) command_rx: Option<Receiver<UiCommand>>,
     pub(super) command_actor: Option<tokio::task::JoinHandle<()>>,
+    /// Rejected commands still finish through their original callbacks after
+    /// the input handler has restored any temporarily taken route/dialog.
+    pub(super) deferred_ui_completions: std::collections::VecDeque<UiCompletion>,
     pub(super) settings_runtime_snapshot_summary: Option<String>,
     pub(super) settings_session_permission: Option<(i64, SessionPermissionStudioState)>,
     pub(super) session_selection_revision: u64,
@@ -513,10 +520,24 @@ pub struct App {
     pub(super) draft_store_path: PathBuf,
     pub(super) draft_store_dirty: bool,
     pub(super) draft_store_last_persist_at: Instant,
+    /// Serializes periodic disk writes against required synchronous exit/send
+    /// flushes. A revision guard prevents an old snapshot overwriting a newer
+    /// draft when a blocking job starts late.
+    pub(super) draft_persist_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    pub(super) draft_persist_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub(super) draft_persist_in_flight: bool,
+    pub(super) draft_store_revision: u64,
+    pub(super) draft_sync_last_at: Instant,
+    pub(super) input_derived_refresh_at: Instant,
     pub(super) draft_store_reported_error: Option<String>,
     pub(super) pending_draft_store_error: Option<UiFailure>,
     pub(super) prompt_history: PromptHistory,
     pub(super) prompt_history_path: PathBuf,
+    pub(super) prompt_history_dirty: bool,
+    pub(super) prompt_history_revision: u64,
+    pub(super) prompt_history_persist_revision: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub(super) prompt_history_persist_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    pub(super) prompt_history_persist_in_flight: bool,
     pub(super) prompt_history_reported_error: Option<String>,
     pub(super) pending_prompt_history_error: Option<UiFailure>,
     pub(super) run_activity: RunActivityTracker,
@@ -605,6 +626,19 @@ impl Drop for App {
                 message = %error,
                 "failed to persist the final TUI draft store during shutdown"
             );
+        }
+        if self.prompt_history_dirty {
+            let lock = self.prompt_history_persist_lock.clone();
+            let _guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Err(error) = self.prompt_history.persist(&self.prompt_history_path) {
+                tracing::error!(
+                    failure_id = %error.failure.id,
+                    message = %error,
+                    "failed to persist final TUI prompt history during shutdown"
+                );
+            }
         }
     }
 }
@@ -852,7 +886,16 @@ pub(super) enum UiAction {
         text: String,
         success: String,
     },
+    WriteClipboard {
+        sequence: Vec<u8>,
+        success: String,
+    },
     PasteClipboard,
+    PreparedClipboardPaste {
+        snapshot: crate::app_clipboard::ClipboardSnapshot,
+        epoch: u64,
+        slot: DraftSlot,
+    },
     EditComposerExternally,
     ExportTranscript {
         path: Option<PathBuf>,

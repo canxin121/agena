@@ -61,15 +61,22 @@ pub(crate) fn highlight_search_line_with_rich(
 
     let mut spans = Vec::new();
     let mut offset = 0_usize;
+    let mut first_range = 0usize;
     for span in &rich_line.spans {
         let span_text = span.content.as_ref();
         let span_start = offset;
         let span_end = span_start.saturating_add(span_text.len());
         let mut cursor: usize = span_start;
-        for range in &ranges {
-            if range.end <= span_start || range.start >= span_end {
-                continue;
-            }
+        while ranges
+            .get(first_range)
+            .is_some_and(|range| range.end <= span_start)
+        {
+            first_range += 1;
+        }
+        for range in ranges[first_range..]
+            .iter()
+            .take_while(|range| range.start < span_end)
+        {
             let match_start = range.start.max(span_start);
             let match_end = range.end.min(span_end);
             if match_start > cursor
@@ -296,8 +303,13 @@ impl App {
             let search_match_index = self.transcript.search_match_index;
             let search_query = self.transcript.search_query.clone();
             let cursor_cell = self.transcript.cursor_cell_range(layout.body.width);
-            let selection_ranges = self.transcript.selection_cell_ranges(layout.body.width);
-            let action_cursor = self.transcript.action_cursor_ranges(layout.body.width);
+            let window = scroll..scroll.saturating_add(viewport_height);
+            let selection_ranges = self
+                .transcript
+                .selection_cell_ranges_in(layout.body.width, window.clone());
+            let action_cursor = self
+                .transcript
+                .action_cursor_ranges(layout.body.width, window);
             let rendered = self.transcript.rendered(layout.body.width);
             transcript_line_count = rendered.lines.len();
             let active_match =
@@ -357,7 +369,10 @@ impl App {
                     {
                         rendered_line = apply_cursor_cell_highlight(rendered_line, range.clone());
                     }
-                    if let Some(range) = selection_ranges.get(idx).and_then(Clone::clone) {
+                    if let Some(range) = selection_ranges
+                        .get(idx.saturating_sub(scroll))
+                        .and_then(Clone::clone)
+                    {
                         rendered_line =
                             apply_line_cell_highlight(rendered_line, range, layout.body.width);
                     }
@@ -1301,6 +1316,69 @@ use super::{
     render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,
     split_vertical_sections,
 };
+
+#[cfg(test)]
+mod search_highlight_tests {
+    use super::*;
+
+    #[test]
+    fn unicode_match_crossing_style_boundaries_preserves_text_and_source_styles() {
+        let rich = Line::from(vec![
+            Span::styled("Écl", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled("AI", Style::default().add_modifier(Modifier::ITALIC)),
+            Span::raw("r and K"),
+        ]);
+        let text = "ÉclAIr and K";
+        let highlighted = highlight_search_line_with_rich(
+            Some(&rich),
+            text,
+            Style::default(),
+            "éclair",
+            false,
+            true,
+        );
+        assert_eq!(
+            highlighted
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            text
+        );
+        assert!(
+            highlighted.spans[0]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD | Modifier::UNDERLINED)
+        );
+        assert!(
+            highlighted.spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::ITALIC | Modifier::UNDERLINED)
+        );
+        assert_eq!(
+            highlight_search_line(text, Style::default(), "k", false, true).to_string(),
+            text
+        );
+    }
+
+    #[test]
+    fn many_rich_spans_and_matches_are_each_processed_in_order() {
+        let rich = Line::from((0..4096).map(|_| Span::raw("a")).collect::<Vec<_>>());
+        let text = "a".repeat(4096);
+        let highlighted =
+            highlight_search_line_with_rich(Some(&rich), &text, Style::default(), "A", false, true);
+        assert_eq!(highlighted.spans.len(), 4096);
+        assert_eq!(highlighted.to_string(), text);
+        assert!(
+            highlighted
+                .spans
+                .iter()
+                .all(|span| span.style.add_modifier.contains(Modifier::UNDERLINED))
+        );
+    }
+}
 use crate::NoticeSeverity;
 use crate::ui_text;
 use crate::{current_spinner_millis, refresh_spinner_line, spinner_frame};

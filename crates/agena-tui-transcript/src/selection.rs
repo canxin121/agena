@@ -130,7 +130,7 @@ pub fn transcript_text_selection_text(
                 {
                     return copied_navigation_units
                         .insert((node_index, unit))
-                        .then(|| (line, rendered_line.navigation_copy_text.clone()));
+                        .then(|| (line, rendered_line.navigation_copy_text.to_string()));
                 }
             }
             let range = selection.cell_range_for_line(line)?;

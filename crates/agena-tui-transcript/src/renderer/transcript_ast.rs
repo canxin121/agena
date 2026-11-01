@@ -25,9 +25,9 @@ use super::{
 };
 use crate::{InlineVerticalLayout, push_math_block};
 use agena_tui_media::{
-    MathLinePlacement, bounded_image_data_url, image_halfblock_lines, image_rendering_enabled,
-    layout_config, positional_unicode_text, render_markdown_image, render_markdown_svg,
-    unicode_formula,
+    MathLinePlacement, bounded_image_data_url, image_halfblock_lines_shared,
+    image_rendering_enabled, layout_config, positional_unicode_text, render_markdown_image,
+    render_markdown_svg, unicode_formula,
 };
 
 mod render;
@@ -188,24 +188,33 @@ const MAX_CACHEABLE_MARKDOWN_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 struct MarkdownParseCache {
-    entries: HashMap<String, Arc<Vec<MarkdownBlock>>>,
-    recency: VecDeque<String>,
+    entries: HashMap<Arc<str>, Arc<Vec<MarkdownBlock>>>,
+    recency: VecDeque<Arc<str>>,
     source_bytes: usize,
 }
 
 impl MarkdownParseCache {
     fn get(&mut self, source: &str) -> Option<Arc<Vec<MarkdownBlock>>> {
-        let blocks = self.entries.get(source).cloned()?;
-        self.recency.retain(|candidate| candidate != source);
-        self.recency.push_back(source.to_string());
+        let (key, blocks) = self.entries.get_key_value(source)?;
+        let key = key.clone();
+        let blocks = blocks.clone();
+        self.recency
+            .retain(|candidate| !Arc::ptr_eq(candidate, &key));
+        self.recency.push_back(key);
         Some(blocks)
     }
 
-    fn insert(&mut self, source: String, blocks: Arc<Vec<MarkdownBlock>>) {
+    fn insert(&mut self, source: &str, blocks: Arc<Vec<MarkdownBlock>>) {
+        let source: Arc<str> = self
+            .entries
+            .get_key_value(source)
+            .map(|(key, _)| key.clone())
+            .unwrap_or_else(|| Arc::from(source));
         if self.entries.insert(source.clone(), blocks).is_none() {
             self.source_bytes = self.source_bytes.saturating_add(source.len());
         }
-        self.recency.retain(|candidate| candidate != &source);
+        self.recency
+            .retain(|candidate| !Arc::ptr_eq(candidate, &source));
         self.recency.push_back(source);
         while self.entries.len() > MAX_MARKDOWN_CACHE_DOCUMENTS
             || self.source_bytes > MAX_MARKDOWN_CACHE_SOURCE_BYTES

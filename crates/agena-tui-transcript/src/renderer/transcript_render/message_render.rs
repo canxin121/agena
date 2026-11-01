@@ -7,13 +7,13 @@ use super::super::{
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
-    markdown_blocks, push_activity_headline, push_expanded_markdown, push_expanded_tool_text,
-    push_label_value, push_literal_activity_headline, push_markdown_document, push_markdown_rule,
-    push_section_heading, push_wrapped_line, push_wrapped_rich_line, render_entry_detailed,
-    render_expanded_tool_text_block, render_markdown_block, sanitize_terminal_text,
-    should_suppress_markdown_block, style_for_role, transcript_message_parts,
-    transcript_part_content, transcript_spinner_placeholder, trim_empty_line_edges,
-    truncate_display_width,
+    markdown_blocks_shared, push_activity_headline, push_expanded_markdown,
+    push_expanded_tool_text, push_label_value, push_literal_activity_headline,
+    push_markdown_document, push_markdown_rule, push_section_heading, push_wrapped_line,
+    push_wrapped_rich_line, render_entry_detailed, render_expanded_tool_text_block,
+    render_markdown_block, sanitize_terminal_text, should_suppress_markdown_block, style_for_role,
+    transcript_message_parts, transcript_part_content, transcript_spinner_placeholder,
+    trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::{
     render_tool_detail_sections_with_sections, render_tool_execution_with_sections,
@@ -840,7 +840,7 @@ pub(crate) fn append_message_markdown_blocks(
     children: &mut Vec<RenderedTranscriptNode>,
     i18n: &I18n,
 ) {
-    let blocks = markdown_blocks(text);
+    let blocks = markdown_blocks_shared(text);
     let mut previous = None;
     let mut layout = MarkdownBlockLayout::default();
     for (block_index, block) in blocks.iter().enumerate() {

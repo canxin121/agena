@@ -310,7 +310,7 @@ fn one_line_code_uses_one_row_and_preserves_code_and_copy_when_wrapping() {
         assert!(
             lines
                 .iter()
-                .all(|line| line.navigation_copy_text == command)
+                .all(|line| line.navigation_copy_text.as_ref() == command)
         );
         assert!(lines.iter().all(|line| line.navigation_unit == Some(0)));
     }

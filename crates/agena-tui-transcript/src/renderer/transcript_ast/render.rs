@@ -313,7 +313,7 @@ fn render_paragraph(
 /// surprising headline. Callers can fall back to a plain span when this
 /// returns `None`.
 pub fn markdown_inline_line(source: &str, base_style: Style, i18n: &I18n) -> Option<Line<'static>> {
-    let blocks = parse_markdown_document(source);
+    let blocks = parse_markdown_document_shared(source);
     let [block] = blocks.as_slice() else {
         return None;
     };
@@ -470,7 +470,7 @@ fn mark_rendered_semantic_unit(
     start: usize,
     copy_text: impl Into<String>,
 ) {
-    let copy_text = copy_text.into();
+    let copy_text: std::sync::Arc<str> = copy_text.into().into();
     for line in out.get_mut(start..).unwrap_or_default() {
         line.navigation_unit = Some(start);
         line.navigation_copy_text.clone_from(&copy_text);
@@ -617,8 +617,10 @@ fn push_rich_inline_graphics(
                         height = height.max(size.height);
                         rendered.push((None, Some((artifact, size)), size.width));
                     } else {
-                        let label = image_placeholder_label(i18n, alt.as_str());
-                        let text = format!("🖼 {label} ({url})");
+                        let label =
+                            image_placeholder_label(i18n, bounded_image_preview(&alt).as_ref());
+                        let source = markdown_image_source_label(&url, i18n);
+                        let text = format!("🖼 {label} ({source})");
                         let span_width = u16::try_from(UnicodeWidthStr::width(text.as_str()))
                             .unwrap_or(u16::MAX);
                         total_width = total_width.saturating_add(span_width);
@@ -1322,12 +1324,13 @@ fn render_ast_table(
     for (row_index, row) in rows.iter().enumerate() {
         let navigation_unit = out.len();
         render_rich_table_row(out, prefix, row, &widths, &table_alignments, width, i18n);
-        let navigation_copy_text = row
+        let navigation_copy_text: std::sync::Arc<str> = row
             .cells
             .iter()
             .map(|cell| inline_plain_text(cell))
             .collect::<Vec<_>>()
-            .join("\t");
+            .join("\t")
+            .into();
         for line in &mut out[navigation_unit..] {
             line.navigation_unit = Some(navigation_unit);
             line.navigation_copy_text.clone_from(&navigation_copy_text);
@@ -1484,18 +1487,19 @@ fn render_rich_table_fallback(
         }
         spans.push(Span::styled(" │", border_style));
         push_wrapped_rich_line(out, prefix, prefix, Line::from(spans), width);
-        let navigation_copy_text = row
+        let navigation_copy_text: std::sync::Arc<str> = row
             .cells
             .iter()
             .map(|cell| inline_plain_text(cell))
             .collect::<Vec<_>>()
-            .join("\t");
+            .join("\t")
+            .into();
         for line in &mut out[navigation_unit..] {
             line.navigation_unit = Some(navigation_unit);
             line.navigation_copy_text.clone_from(&navigation_copy_text);
             // Mirror the full-grid projection: a free-form selection of a
             // fallback row copies tab-separated cells without the border rails.
-            line.copy_text = navigation_copy_text.clone();
+            line.copy_text = navigation_copy_text.to_string();
             line.copy_column = UnicodeWidthStr::width(prefix).saturating_add(1);
             line.copy_segments.clear();
         }
@@ -1540,7 +1544,7 @@ fn render_image_block(
             });
         } else {
             let inset = format!("{prefix}{}", " ".repeat(usize::from(column - prefix_width)));
-            for line in image_halfblock_lines(&artifact, size) {
+            for line in image_halfblock_lines_shared(&artifact, size) {
                 let mut spans = vec![Span::raw(inset.clone())];
                 spans.extend(line.spans);
                 out.push(
@@ -1610,7 +1614,7 @@ fn push_image_source_line(
         &source_prefix,
         &source_prefix,
         Line::from(Span::styled(
-            format!("{marker} {target}"),
+            format!("{marker} {}", bounded_image_preview(target)),
             Style::default()
                 .fg(agena_tui_components::theme::info_color())
                 .add_modifier(Modifier::UNDERLINED),
@@ -1681,15 +1685,19 @@ pub(super) fn markdown_image_caption(alt: &str, title: &str, url: &str, i18n: &I
     } else {
         alt
     };
-    let label = image_placeholder_label(i18n, label);
+    let label = image_placeholder_label(i18n, bounded_image_preview(label).as_ref());
     if title.is_empty() || title == label {
         label
     } else {
-        format!("{label} — {title}")
+        format!("{label} — {}", bounded_image_preview(title))
     }
 }
 
 fn markdown_image_filename(source: &str) -> Option<&str> {
+    // Base64 may contain '/'. Its final payload segment is not a filename.
+    if source.trim_start().starts_with("data:") {
+        return None;
+    }
     let source = source.split(['?', '#']).next().unwrap_or(source);
     source
         .trim_end_matches('/')
@@ -1704,8 +1712,20 @@ pub(super) fn markdown_image_source_label(source: &str, i18n: &I18n) -> String {
     if source.trim_start().starts_with("data:") {
         ui_text::t(i18n, "transcript-image-embedded")
     } else {
-        source.to_owned()
+        bounded_image_preview(source).into_owned()
     }
+}
+
+fn bounded_image_preview(source: &str) -> Cow<'_, str> {
+    const MAX_PREVIEW_BYTES: usize = 512;
+    if source.len() <= MAX_PREVIEW_BYTES {
+        return Cow::Borrowed(source);
+    }
+    let mut end = MAX_PREVIEW_BYTES;
+    while !source.is_char_boundary(end) {
+        end -= 1;
+    }
+    Cow::Owned(format!("{}…", &source[..end]))
 }
 
 pub(super) fn fit_image_size(
@@ -1946,7 +1966,11 @@ fn append_inline_spans(
                 .last_mut()
                 .expect("inline rows are never empty")
                 .push(Span::styled(
-                    format!("🖼 {} ({url})", image_placeholder_label(i18n, alt.as_str())),
+                    format!(
+                        "🖼 {} ({})",
+                        image_placeholder_label(i18n, bounded_image_preview(alt).as_ref()),
+                        markdown_image_source_label(url, i18n)
+                    ),
                     style.fg(agena_tui_components::theme::info_color()),
                 )),
             MarkdownInline::Math { literal, .. } => rows
@@ -2017,9 +2041,50 @@ fn inlines_contain_rich_graphics(inlines: &[MarkdownInline]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::inline_code_style;
+    use super::*;
     use agena_tui_components::{ColorScheme, ThemePalette};
     use ratatui::style::{Color, Modifier, Style};
+
+    #[test]
+    fn embedded_image_placeholders_never_display_base64_payloads() {
+        let i18n = I18n::english();
+        let source = format!("data:image/png;base64,{}", "abc/".repeat(256 * 1024));
+        assert!(markdown_image_filename(&source).is_none());
+        assert!(markdown_image_caption("", "", &source, &i18n).len() < 128);
+        assert!(markdown_image_source_label(&source, &i18n).len() < 128);
+        let mut rows = vec![Vec::new()];
+        append_inline_spans(
+            &mut rows,
+            &[MarkdownInline::Image {
+                url: source,
+                title: String::new(),
+                alt: "sample".into(),
+                dimensions: Default::default(),
+            }],
+            Style::default(),
+            &i18n,
+        );
+        let text = rows
+            .into_iter()
+            .flatten()
+            .map(|span| span.content.into_owned())
+            .collect::<String>();
+        assert!(text.len() < 256);
+        assert!(!text.contains("abc/"));
+    }
+
+    #[test]
+    fn image_preview_limits_keep_utf8_boundaries() {
+        let source = "界".repeat(1000);
+        let preview = bounded_image_preview(&source);
+        assert!(preview.len() <= 515);
+        assert!(preview.ends_with('…'));
+        assert!(preview.starts_with("界界"));
+        assert!(matches!(
+            bounded_image_preview("short.png"),
+            Cow::Borrowed(_)
+        ));
+    }
 
     #[test]
     fn inline_code_stays_visible_on_light_dark_and_unknown_backgrounds() {

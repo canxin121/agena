@@ -3,11 +3,76 @@ use super::*;
 static MARKDOWN_PARSE_CACHE: LazyLock<Mutex<MarkdownParseCache>> =
     LazyLock::new(|| Mutex::new(MarkdownParseCache::default()));
 
+#[cfg(test)]
+mod responsiveness_tests {
+    use super::*;
+
+    #[test]
+    fn renderers_share_parsed_trees_while_owned_callers_remain_independent() {
+        let source =
+            "# shared-cache-regression\n\nA **bold** paragraph with 界 and `code`.\n\n- one\n- two";
+        let first = parse_markdown_document_shared(source);
+        let second = parse_markdown_document_shared(source);
+        assert!(Arc::ptr_eq(&first, &second));
+        let mut owned = parse_markdown_document(source);
+        assert_eq!(owned.len(), first.len());
+        for (owned, shared) in owned.iter().zip(first.iter()) {
+            assert_eq!(owned.source, shared.source);
+            assert_eq!(owned.parsed, shared.parsed);
+            assert_eq!(owned.copy_text, shared.copy_text);
+        }
+        owned.clear();
+        assert!(!first.is_empty());
+        assert!(Arc::ptr_eq(&first, &parse_markdown_document_shared(source)));
+    }
+
+    #[test]
+    fn lru_hits_share_source_storage_and_replacement_preserves_byte_accounting() {
+        let mut cache = MarkdownParseCache::default();
+        let source = "long markdown source ".repeat(20_000);
+        let blocks = Arc::new(Vec::new());
+        cache.insert(&source, blocks.clone());
+        let key = cache
+            .entries
+            .get_key_value(source.as_str())
+            .unwrap()
+            .0
+            .clone();
+        for _ in 0..20 {
+            assert!(Arc::ptr_eq(&cache.get(&source).unwrap(), &blocks));
+            assert!(Arc::ptr_eq(cache.recency.back().unwrap(), &key));
+        }
+        cache.insert(&source, blocks);
+        assert_eq!(cache.entries.len(), 1);
+        assert_eq!(cache.recency.len(), 1);
+        assert_eq!(cache.source_bytes, source.len());
+        for index in 0..MAX_MARKDOWN_CACHE_DOCUMENTS {
+            cache.insert(&format!("document-{index}"), Arc::new(Vec::new()));
+        }
+        assert!(cache.get(&source).is_none());
+        assert_eq!(cache.entries.len(), MAX_MARKDOWN_CACHE_DOCUMENTS);
+        assert_eq!(
+            cache.source_bytes,
+            cache.entries.keys().map(|key| key.len()).sum::<usize>()
+        );
+    }
+}
+
 pub fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> {
+    // Preserve the owned public API for callers that edit the result.
+    // Oversized, uncached trees have one owner and can move out without a
+    // second deep copy; shared cache hits still provide an independent value.
+    Arc::try_unwrap(parse_markdown_document_shared(text))
+        .unwrap_or_else(|blocks| blocks.as_ref().clone())
+}
+
+/// Renderers borrow immutable trees instead of cloning every block, string
+/// and nested inline on cache hits (often for several views of one reply).
+pub(crate) fn parse_markdown_document_shared(text: &str) -> Arc<Vec<MarkdownBlock>> {
     let sanitized = sanitize_terminal_text(text);
     let markdown = trim_empty_line_edges(sanitized.as_str());
     if markdown.is_empty() {
-        return Vec::new();
+        return Arc::new(Vec::new());
     }
     let cacheable = markdown.len() <= MAX_CACHEABLE_MARKDOWN_BYTES;
     if cacheable
@@ -16,15 +81,15 @@ pub fn parse_markdown_document(text: &str) -> Vec<MarkdownBlock> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&markdown)
     {
-        return blocks.as_ref().clone();
+        return blocks;
     }
 
-    let blocks = parse_sanitized_markdown(&markdown);
+    let blocks = Arc::new(parse_sanitized_markdown(&markdown));
     if cacheable {
         MARKDOWN_PARSE_CACHE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(markdown.to_string(), Arc::new(blocks.clone()));
+            .insert(&markdown, blocks.clone());
     }
     blocks
 }

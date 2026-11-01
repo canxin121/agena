@@ -1,5 +1,8 @@
 use super::permission_resource_override_summary;
 
+#[cfg(test)]
+mod tests;
+
 /// One composer/session status row. `kind` names what the row is and `state`
 /// carries its semantics, so the rendered text is never the only witness of
 /// what a chip reports.
@@ -73,24 +76,62 @@ impl App {
         Fut: std::future::Future<Output = std::result::Result<T, E>> + Send + 'static,
         Complete: FnOnce(&mut App, UiResult<T>) + Send + 'static,
     {
+        // Admission must happen before the one-shot completion is moved into
+        // the future. Dropping a rejected command leaves its owner's loading
+        // flag, reserved attachment or other in-flight state unresolved.
+        let permit = match self.command_tx.clone().try_reserve_owned() {
+            Ok(permit) => permit,
+            Err(error) => {
+                let key = match error {
+                    tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                        "flash-ui-backend-queue-full"
+                    }
+                    tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                        "flash-ui-backend-unavailable"
+                    }
+                };
+                let error = crate::UiFailure::message(ui_text::t(&self.i18n, key));
+                self.deferred_ui_completions.push_back(Box::new(move |app| {
+                    complete(app, Err(error.clone()));
+                    app.flash_error(error);
+                }));
+                return;
+            }
+        };
         let application = self.application.clone();
         let command: crate::UiCommand = Box::pin(async move {
-            let result = operation(application)
+            use futures_util::FutureExt as _;
+            // Keep the completion outside the unwinding future. A panic in
+            // creation or polling must release the same UI state as an error,
+            // not just log a task failure and leave the spinner stuck forever.
+            let result = std::panic::AssertUnwindSafe(async move { operation(application).await })
+                .catch_unwind()
                 .await
-                .map_err(|error| crate::UiFailure::from_backend(error.into()));
+                .map_err(|_| {
+                    crate::UiFailure::internal("TUI backend operation panicked before completing")
+                })
+                .and_then(|result| {
+                    result.map_err(|error| crate::UiFailure::from_backend(error.into()))
+                });
             let completion: crate::UiCompletion =
                 Box::new(move |app: &mut App| complete(app, result));
             completion
         });
-        match self.command_tx.try_send(command) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                self.flash_error(ui_text::t(&self.i18n, "flash-ui-backend-queue-full"))
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                self.flash_error(ui_text::t(&self.i18n, "flash-ui-backend-unavailable"))
+        permit.send(command);
+    }
+
+    pub(crate) fn apply_deferred_ui_completions(&mut self) -> bool {
+        // Never reenter a handler which has taken its dialog out of App. A
+        // failed completion must observe the same restored state as success.
+        // Snapshot the batch and cap per-turn work so retries scheduled by a
+        // completion cannot recurse indefinitely or monopolize UI processing.
+        let count = self.deferred_ui_completions.len().min(32);
+        for _ in 0..count {
+            if let Some(completion) = self.deferred_ui_completions.pop_front() {
+                completion(self);
             }
         }
+        count > 0
     }
 
     pub(crate) fn current_runtime_status_summary(&self) -> String {
@@ -436,17 +477,30 @@ async fn run_command_actor(
     let mut active = tokio::task::JoinSet::new();
     let mut ingress_open = true;
     while ingress_open || !active.is_empty() {
+        if tx.is_closed() {
+            break;
+        }
         if active.len() >= crate::UI_COMMAND_MAX_CONCURRENCY || !ingress_open {
-            if let Some(result) = active.join_next().await {
-                send_command_completion(&tx, result).await;
+            let result = tokio::select! {
+                biased;
+                _ = tx.closed() => break,
+                result = active.join_next() => result,
+            };
+            if let Some(result) = result
+                && !send_command_completion(&tx, result).await
+            {
+                break;
             }
             continue;
         }
         tokio::select! {
             biased;
+            _ = tx.closed() => break,
             result = active.join_next(), if !active.is_empty() => {
-                if let Some(result) = result {
-                    send_command_completion(&tx, result).await;
+                if let Some(result) = result
+                    && !send_command_completion(&tx, result).await
+                {
+                    break;
                 }
             }
             command = command_rx.recv() => match command {
@@ -462,7 +516,7 @@ async fn run_command_actor(
 async fn send_command_completion(
     tx: &tokio::sync::mpsc::Sender<crate::AppMessage>,
     result: Result<crate::UiCompletion, tokio::task::JoinError>,
-) {
+) -> bool {
     let completion = match result {
         Ok(completion) => completion,
         Err(error) => Box::new(move |app: &mut App| {
@@ -472,9 +526,9 @@ async fn send_command_completion(
             ));
         }) as crate::UiCompletion,
     };
-    let _ = tx
-        .send(crate::AppMessage::AsyncOperationCompleted(completion))
-        .await;
+    tx.send(crate::AppMessage::AsyncOperationCompleted(completion))
+        .await
+        .is_ok()
 }
 
 /// Picks the first non-empty status mode value from the execution context,

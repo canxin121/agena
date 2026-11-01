@@ -34,12 +34,7 @@ impl App {
         let focus = self.focus.label().to_string();
         tokio::spawn(async move {
             let output = run_status_line_command(command, session_id, focus).await;
-            if let Err(error) = tx.try_send(AppMessage::StatusLineUpdated { output }) {
-                tracing::debug!(
-                    diagnostic = %error,
-                    "TUI status-line update was superseded because the UI queue was unavailable"
-                );
-            }
+            deliver_status_line_update(tx, output).await;
         });
     }
 
@@ -275,3 +270,34 @@ use crate::{
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
     plugin_command_matches_name, run_status_line_command, ui_text,
 };
+
+async fn deliver_status_line_update(
+    tx: tokio::sync::mpsc::Sender<AppMessage>,
+    output: Option<String>,
+) {
+    // This completion also clears refresh_in_flight. Dropping it when the
+    // queue is full permanently wedges the status line, not merely one frame.
+    // Only one refresh can be in flight, so awaiting capacity is bounded.
+    let _ = tx.send(AppMessage::StatusLineUpdated { output }).await;
+}
+
+#[cfg(test)]
+mod status_delivery_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn completion_survives_a_full_ui_queue() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        tx.send(AppMessage::CatalogInvalidated).await.unwrap();
+        let delivery = tokio::spawn(deliver_status_line_update(tx, Some("ready".into())));
+        tokio::task::yield_now().await;
+        assert!(!delivery.is_finished());
+        assert!(matches!(
+            rx.recv().await,
+            Some(AppMessage::CatalogInvalidated)
+        ));
+        delivery.await.unwrap();
+        assert!(matches!(rx.recv().await,
+            Some(AppMessage::StatusLineUpdated { output: Some(text) }) if text == "ready"));
+    }
+}

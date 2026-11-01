@@ -530,14 +530,12 @@ pub fn transcript_message_navigation_target(
 
 pub fn initial_search_match_index(matches: &[usize], cursor_line: usize, forward: bool) -> usize {
     if forward {
-        matches
-            .iter()
-            .position(|line| *line > cursor_line)
-            .unwrap_or(0)
+        let index = matches.partition_point(|line| *line <= cursor_line);
+        if index == matches.len() { 0 } else { index }
     } else {
         matches
-            .iter()
-            .rposition(|line| *line < cursor_line)
+            .partition_point(|line| *line < cursor_line)
+            .checked_sub(1)
             .unwrap_or_else(|| matches.len().saturating_sub(1))
     }
 }
@@ -576,3 +574,27 @@ pub fn transcript_selection_scroll_position(
 use agena_tui::i18n::I18n;
 
 use crate::{RenderedLine, TranscriptMoveDirection};
+
+#[cfg(test)]
+mod search_navigation_tests {
+    use super::initial_search_match_index;
+
+    #[test]
+    fn binary_search_preserves_strict_before_after_and_wraparound() {
+        for matches in [vec![], vec![7], vec![1, 3, 7, 20, 81]] {
+            for cursor in 0..100 {
+                assert_eq!(
+                    initial_search_match_index(&matches, cursor, true),
+                    matches.iter().position(|line| *line > cursor).unwrap_or(0)
+                );
+                assert_eq!(
+                    initial_search_match_index(&matches, cursor, false),
+                    matches
+                        .iter()
+                        .rposition(|line| *line < cursor)
+                        .unwrap_or_else(|| matches.len().saturating_sub(1))
+                );
+            }
+        }
+    }
+}

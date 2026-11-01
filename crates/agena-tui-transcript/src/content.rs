@@ -36,8 +36,9 @@ pub struct ContentView {
     retired_epochs: Vec<ContentCursor>,
     text: String,
     terminal_frame: Option<(ContentCursor, u16, u16, bool)>,
-    document: Option<agena_domain::ContentDocument>,
+    document: Option<Arc<agena_domain::ContentDocument>>,
     document_cursor: Option<ContentCursor>,
+    frame_has_more: bool,
 }
 
 impl Default for ContentView {
@@ -55,6 +56,7 @@ impl Default for ContentView {
             terminal_frame: None,
             document: None,
             document_cursor: None,
+            frame_has_more: false,
         }
     }
 }
@@ -133,7 +135,7 @@ impl ContentView {
             match &chunk.payload {
                 ContentPayload::DocumentEvent { input, checkpoint } => {
                     if let Some(checkpoint) = checkpoint {
-                        document = Some((**checkpoint).clone());
+                        document = Some(Arc::new((**checkpoint).clone()));
                     } else if let agena_domain::ContentInput::Structured { event } = &**input {
                         let Some(next) = document
                             .as_ref()
@@ -149,9 +151,9 @@ impl ContentView {
                             self.recovering = true;
                             return false;
                         };
-                        document = Some(next);
+                        document = Some(Arc::new(next));
                     } else if document.is_none() {
-                        document = Some(agena_domain::ContentDocument::default());
+                        document = Some(Arc::new(agena_domain::ContentDocument::default()));
                     }
                     document_cursor = Some(chunk.cursor);
                 }
@@ -159,7 +161,7 @@ impl ContentView {
                     if snapshot.validate().is_err() {
                         return false;
                     }
-                    document = Some(snapshot.clone());
+                    document = Some(Arc::new(snapshot.clone()));
                     document_cursor = Some(chunk.cursor);
                 }
                 ContentPayload::Structured { base_cursor, event } => {
@@ -172,7 +174,7 @@ impl ContentView {
                         self.recovering = true;
                         return false;
                     };
-                    document = Some(next);
+                    document = Some(Arc::new(next));
                     document_cursor = Some(chunk.cursor);
                 }
                 ContentPayload::Terminal { screen } => {
@@ -221,7 +223,9 @@ impl ContentView {
             *self = Self::default();
             self.retired_epochs = retired;
         }
+        let mut content_changed = reset;
         if let Some(refs) = &page.inline_ui {
+            content_changed |= self.inline_ui.is_none();
             let known = self.inline_ui.get_or_insert_with(Default::default);
             for (reference, document) in refs {
                 if known.len() >= agena_domain::INLINE_UI_MAX_REFERENCES
@@ -231,8 +235,10 @@ impl ContentView {
                 }
                 if agena_domain::inline_reference_tool_id(reference).is_some()
                     && document.validate().is_ok()
+                    && known.get(reference) != Some(document)
                 {
                     known.insert(reference.clone(), document.clone());
+                    content_changed = true;
                 }
             }
         }
@@ -255,6 +261,7 @@ impl ContentView {
             if applied_sequence.is_some_and(|sequence| chunk.cursor.sequence <= sequence) {
                 continue;
             }
+            content_changed = true;
             match &chunk.payload {
                 ContentPayload::Text { text } => {
                     let text = if page.resource.kind == agena_domain::ContentKind::Text {
@@ -374,6 +381,20 @@ impl ContentView {
         {
             resource.state = previous.resource.state;
         }
+        if !content_changed
+            && self.frame_has_more == page.has_more
+            && previous.is_some_and(|frame| {
+                frame.resource == resource
+                    && frame.gap == self.gap
+                    && frame.windowed == self.windowed
+            })
+        {
+            // Replay/heartbeat pages already passed all cursor and payload
+            // validation. Keep the exact frame identity: making a fresh Arc
+            // would invalidate Markdown layout despite no observable change.
+            return true;
+        }
+        self.frame_has_more = page.has_more;
         let terminal = resource.kind == agena_domain::ContentKind::Terminal;
         let (lines, wrapped, omitted) = if resource.kind == agena_domain::ContentKind::Text {
             (Vec::new(), Vec::new(), false)
@@ -381,18 +402,23 @@ impl ContentView {
             observation_lines(self.parser.screen_mut(), !terminal)
         };
         self.windowed |= omitted;
+        let source_text: Arc<str> = if !content_changed && let Some(previous) = previous {
+            previous.source_text.clone()
+        } else {
+            Arc::from(self.text.as_str())
+        };
         let display_text = self.inline_ui.as_ref().map_or_else(
-            || self.text.clone(),
+            || source_text.clone(),
             |refs| {
-                agena_domain::expand_inline_references(
+                Arc::from(agena_domain::expand_inline_references(
                     &self.text,
                     refs,
                     resource.state == ContentState::Active || page.has_more,
-                )
+                ))
             },
         );
         self.frame = Some(Arc::new(ContentFrame {
-            source_text: Arc::from(self.text.as_str()),
+            source_text,
             inline_ui: self.inline_ui.clone(),
             resource,
             lines,
@@ -400,11 +426,8 @@ impl ContentView {
             terminal_size: terminal.then(|| self.parser.screen().size()),
             gap: self.gap,
             windowed: self.windowed,
-            text: Arc::from(display_text),
-            document: self
-                .document
-                .as_ref()
-                .map(|document| Arc::new(document.clone())),
+            text: display_text,
+            document: self.document.clone(),
         }));
         true
     }
@@ -600,6 +623,7 @@ pub fn render_content(
     let navigation_base = out.len();
     let mut group_start = 0;
     let mut group_text = String::new();
+    let mut group_copy_text: Arc<str> = Arc::from("");
     for (index, line) in frame.lines.iter().enumerate() {
         if index == group_start {
             group_text.clear();
@@ -611,6 +635,7 @@ pub fn render_content(
                     break;
                 }
             }
+            group_copy_text = RenderedLine::shared_navigation_text(&group_text);
         }
         let available = width.saturating_sub(CONTENT_GUTTER).max(1) as usize;
         // PTY cells describe an actual screen. Observer width clips its rows
@@ -634,7 +659,10 @@ pub fn render_content(
             out.push(
                 RenderedLine::rich(Line::from(spans))
                     .with_copy_projection(copy, usize::from(CONTENT_GUTTER))
-                    .with_navigation_unit(navigation_base + group_start, group_text.clone()),
+                    .with_shared_navigation_unit(
+                        navigation_base + group_start,
+                        group_copy_text.clone(),
+                    ),
             );
         }
         if !frame.wrapped.get(index).copied().unwrap_or(false) {
@@ -772,6 +800,92 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect()
+    }
+
+    #[test]
+    fn duplicate_text_and_terminal_pages_keep_frame_identity_and_metadata_changes_publish() {
+        for (kind, sequence, payload) in [
+            (
+                ContentKind::Text,
+                5,
+                ContentPayload::Text {
+                    text: "hello".into(),
+                },
+            ),
+            (
+                ContentKind::Terminal,
+                1,
+                ContentPayload::Terminal { screen: screen() },
+            ),
+        ] {
+            let mut view = ContentView::default();
+            let original = page(kind, sequence, payload);
+            assert!(view.apply(original.clone()));
+            let first = view.frame.clone().unwrap();
+            assert!(Arc::ptr_eq(&first.source_text, &first.text));
+            for _ in 0..10 {
+                assert!(view.apply(original.clone()));
+                assert!(Arc::ptr_eq(&first, view.frame.as_ref().unwrap()));
+            }
+            let mut completed = original.clone();
+            completed.chunks.clear();
+            completed.resource.state = ContentState::Complete;
+            assert!(view.apply(completed.clone()));
+            let final_frame = view.frame.clone().unwrap();
+            assert!(!Arc::ptr_eq(&first, &final_frame));
+            assert_eq!(final_frame.resource.state, ContentState::Complete);
+            assert_eq!(final_frame.lines, first.lines);
+            assert!(Arc::ptr_eq(&first.source_text, &final_frame.source_text));
+            assert!(view.apply(completed));
+            assert!(Arc::ptr_eq(&final_frame, view.frame.as_ref().unwrap()));
+        }
+    }
+
+    #[test]
+    fn document_frames_share_unchanged_documents_across_metadata_updates() {
+        let mut view = ContentView::default();
+        let first = page(
+            ContentKind::Structured,
+            1,
+            ContentPayload::StructuredSnapshot {
+                document: agena_domain::ContentDocument::default(),
+            },
+        );
+        assert!(view.apply(first.clone()));
+        let frame = view.frame.clone().unwrap();
+        let document = frame.document.as_ref().unwrap().clone();
+        assert!(view.apply(first.clone()));
+        assert!(Arc::ptr_eq(&frame, view.frame.as_ref().unwrap()));
+        let mut finished = first;
+        finished.chunks.clear();
+        finished.resource.state = ContentState::Complete;
+        assert!(view.apply(finished));
+        let final_frame = view.frame.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(&frame, final_frame));
+        assert!(Arc::ptr_eq(
+            &document,
+            final_frame.document.as_ref().unwrap()
+        ));
+    }
+
+    #[test]
+    fn duplicate_payloads_still_validate_and_pagination_changes_are_observable() {
+        let mut view = ContentView::default();
+        let first = page(
+            ContentKind::Terminal,
+            1,
+            ContentPayload::Terminal { screen: screen() },
+        );
+        assert!(view.apply(first.clone()));
+        let snapshot = view.frame.clone().unwrap();
+        let mut invalid = first.clone();
+        invalid.chunks[0].cursor.epoch = agena_domain::ContentEpoch::new().into();
+        assert!(!view.apply(invalid));
+        assert!(Arc::ptr_eq(&snapshot, view.frame.as_ref().unwrap()));
+        let mut next = first;
+        next.has_more = true;
+        assert!(view.apply(next));
+        assert!(!Arc::ptr_eq(&snapshot, view.frame.as_ref().unwrap()));
     }
 
     #[test]

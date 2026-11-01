@@ -3,13 +3,16 @@ use std::time::Instant;
 mod action_cursor;
 #[cfg(test)]
 mod tests;
+mod word_motion;
 
 /// A source frame invalidates only the entry that observes it. Static Part
 /// projection and Markdown/tool layout survive every other resource update.
 pub(crate) struct CachedEntryRender {
     width: u16,
     palette: agena_tui_components::theme::ThemePalette,
-    remote_image_generation: u64,
+    /// Only pending/retryable media observes completion generations. Ready
+    /// images and text remain valid until their content/layout inputs change.
+    remote_image_generation: Option<u64>,
     retry_clock_second: Option<i64>,
     frames: Vec<std::sync::Arc<agena_tui_transcript::content::ContentFrame>>,
     errors: Vec<(agena_domain::ContentId, String)>,
@@ -1204,9 +1207,17 @@ impl TranscriptState {
     }
 
     pub(crate) fn set_search_query(&mut self, query: String) {
+        if self.search_query == query {
+            return;
+        }
         self.search_query = query;
         self.search_match_index = None;
-        self.invalidate_render();
+        // Search is a projection over existing rendered text, not a layout
+        // input. Preserve nodes, media jobs and selection while editing it.
+        if let Some(rendered) = self.rendered.as_mut() {
+            rendered.search_matches =
+                transcript_search_matches(&rendered.lines, &self.search_query);
+        }
     }
 
     pub(crate) fn current_search_match_count(&self) -> usize {
@@ -1224,25 +1235,22 @@ impl TranscriptState {
     }
 
     pub(crate) fn jump_search_match(&mut self, width: u16, height: u16, forward: bool) {
-        let matches = self.rendered(width).search_matches.clone();
+        let current = self.search_match_index;
+        let anchor_line = self.interaction_line().unwrap_or(self.viewport.top);
+        let matches = &self.rendered(width).search_matches;
         if matches.is_empty() {
             self.search_match_index = None;
             return;
         }
-
-        self.push_jump_mark(width);
-        let anchor_line = self.interaction_line().unwrap_or(self.viewport.top);
-        let next_index = match (self.search_match_index, forward) {
-            (None, direction) => {
-                initial_search_match_index(matches.as_slice(), anchor_line, direction)
-            }
-            (Some(index), true) => (index + 1) % matches.len(),
-            (Some(0), false) => matches.len().saturating_sub(1),
-            (Some(index), false) => index.saturating_sub(1),
+        let next_index = match (current, forward) {
+            (None, direction) => initial_search_match_index(matches, anchor_line, direction),
+            (Some(index), true) => (index.min(matches.len() - 1) + 1) % matches.len(),
+            (Some(0), false) => matches.len() - 1,
+            (Some(index), false) => index.min(matches.len() - 1).saturating_sub(1),
         };
-
-        self.search_match_index = Some(next_index);
         let line = matches[next_index];
+        self.push_jump_mark(width);
+        self.search_match_index = Some(next_index);
         self.set_cursor_line_with_reveal(width, height, line, TranscriptRevealPolicy::Center);
     }
 
@@ -1453,77 +1461,16 @@ impl TranscriptState {
         let Some(cursor) = self.interaction.cursor.clone() else {
             return;
         };
-        let (positions, current_index) = {
-            let rendered = self.rendered(width);
-            let mut positions = Vec::new();
-            for (line, rendered_line) in rendered.lines.iter().enumerate() {
-                if !transcript_rendered_line_is_focusable(rendered, line) {
-                    continue;
-                }
-                let line_positions = transcript_word_grapheme_positions(line, rendered_line);
-                let end_column = line_positions
-                    .iter()
-                    .rev()
-                    .find(|position| position.cursorable)
-                    .map(|position| {
-                        position
-                            .position
-                            .column
-                            .saturating_add(UnicodeWidthStr::width(position.grapheme.as_str()))
-                    })
-                    .unwrap_or(rendered_line.copy_column);
-                let empty_line = !line_positions.iter().any(|position| position.cursorable);
-                positions.extend(line_positions);
-                let continues_navigation_unit = rendered_line.navigation_unit.is_some()
-                    && rendered
-                        .lines
-                        .get(line.saturating_add(1))
-                        .is_some_and(|next| next.navigation_unit == rendered_line.navigation_unit);
-                if continues_navigation_unit {
-                    continue;
-                }
-                // Vim's word functions see a NUL after every line. Keeping an
-                // explicit non-cursor character here prevents equal Unicode
-                // classes on adjacent logical rows from becoming one word.
-                // Wrapped terminal rows that share a navigation unit are one
-                // logical Vim line and deliberately do not get this boundary.
-                positions.push(TranscriptGraphemePosition {
-                    position: TranscriptTextPosition {
-                        line,
-                        column: end_column,
-                    },
-                    grapheme: String::new(),
-                    cursorable: empty_line,
-                    end_of_line: true,
-                    empty_line,
-                });
-            }
-            let current_index = positions.iter().rposition(|position| {
-                position.position.line == cursor.line
-                    && position.position.column <= cursor.column
-                    && position.cursorable
-            });
-            (positions, current_index)
-        };
-        let Some(mut index) = current_index else {
-            return;
-        };
-        let mut moved = false;
-        for _ in 0..count.max(1) {
-            let Some(next) = transcript_word_motion_target(
-                positions.as_slice(),
-                index,
-                forward,
-                to_end,
-                big_word,
-            ) else {
-                break;
-            };
-            moved |= next != index;
-            index = next;
-        }
-        if moved {
-            let target = positions[index].position;
+        let target = word_motion::destination(
+            self.rendered(width),
+            cursor.line,
+            cursor.column,
+            forward,
+            to_end,
+            big_word,
+            count,
+        );
+        if let Some(target) = target {
             self.set_cursor_position_with_reveal(
                 width,
                 height,
@@ -1772,12 +1719,18 @@ impl TranscriptState {
         if self.rendered.as_ref().is_some_and(|rendered| {
             rendered.width == width
                 && rendered.palette == palette
-                && rendered.remote_image_generation == remote_image_generation
+                && (rendered.remote_image_generation == remote_image_generation
+                    || self
+                        .entry_render_cache
+                        .values()
+                        .all(|cached| cached.remote_image_generation.is_none()))
                 && rendered
                     .retry_clock_second
                     .is_none_or(|second| second == now_ms.div_euclid(1000))
         }) {
-            return self.rendered.as_ref().expect("render cache should exist");
+            let rendered = self.rendered.as_mut().expect("render cache should exist");
+            rendered.remote_image_generation = remote_image_generation;
+            return rendered;
         }
 
         // Terminal-cell endpoints cannot be carried safely through Markdown
@@ -1827,6 +1780,9 @@ impl TranscriptState {
             self.projected_entries = Some(entries);
         }
         let entries = self.projected_entries.as_ref().expect("projected entries");
+        // Build once, only on a render-cache miss. Looking up every original
+        // assistant part with iter().find() made a cold long history quadratic.
+        let source_parts = std::cell::OnceCell::new();
         let retry_clock_second = entries.iter().find_map(|entry| {
             agena_tui_transcript::error_part::entry_retry_clock_second(entry, now_ms)
         });
@@ -1873,7 +1829,9 @@ impl TranscriptState {
             let cached = self.entry_render_cache.get(&entry.id).filter(|cached| {
                 cached.width == width
                     && cached.palette == palette
-                    && cached.remote_image_generation == remote_image_generation
+                    && cached
+                        .remote_image_generation
+                        .is_none_or(|generation| generation == remote_image_generation)
                     && cached.retry_clock_second == entry_retry_clock_second
                     && cached.frames.len() == frames.len()
                     && cached.errors == errors
@@ -1929,8 +1887,15 @@ impl TranscriptState {
                     // Preserve the source/typed tree until terminal layout. Do not
                     // turn real controls into Markdown in the actual chat path.
                     if let TranscriptContentId::StoredPart(id) = part.id
-                        && let Some(original) =
-                            self.parts.iter().find(|source| source.part_id == id)
+                        && let Some(original) = source_parts
+                            .get_or_init(|| {
+                                let mut parts = std::collections::HashMap::new();
+                                for source in &self.parts {
+                                    parts.entry(source.part_id).or_insert(source);
+                                }
+                                parts
+                            })
+                            .get(&id)
                         && original.kind == "text"
                         && original.role == "assistant"
                         && matches!(
@@ -1992,7 +1957,7 @@ impl TranscriptState {
                         }
                     }
                 }
-                let mut rendered =
+                let (mut rendered, uses_media) = agena_tui_media::track_media_usage(|| {
                     agena_tui_transcript::render_entry_detailed_with_progressive_expansion(
                         &current,
                         width,
@@ -2001,7 +1966,8 @@ impl TranscriptState {
                         &self.node_expansions,
                         &self.activity_summary_visible_counts,
                         &self.interaction_views,
-                    );
+                    )
+                });
                 let hidden = agena_tui_transcript::entry_hidden_part_count(
                     &current,
                     &self.node_expansions,
@@ -2067,7 +2033,7 @@ impl TranscriptState {
                     CachedEntryRender {
                         width,
                         palette,
-                        remote_image_generation,
+                        remote_image_generation: uses_media.then_some(remote_image_generation),
                         retry_clock_second: entry_retry_clock_second,
                         frames,
                         errors,
@@ -2103,18 +2069,7 @@ impl TranscriptState {
             .collect::<std::collections::BTreeSet<_>>();
         self.entry_render_cache.retain(|id, _| loaded.contains(id));
 
-        let search_matches = if self.search_query.trim().is_empty() {
-            Vec::new()
-        } else {
-            lines
-                .iter()
-                .enumerate()
-                .filter(|(_, line)| {
-                    contains_case_insensitive(&line.text, self.search_query.as_str())
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>()
-        };
+        let search_matches = transcript_search_matches(&lines, &self.search_query);
 
         let math = lines
             .iter()
@@ -2443,7 +2398,7 @@ impl TranscriptState {
         }
         let line = rendered.lines.get(cursor_line)?;
         if line.navigation_unit.is_some() {
-            return Some(line.navigation_copy_text.clone());
+            return Some(line.navigation_copy_text.to_string());
         }
         (!line.copy_text.is_empty()).then(|| line.copy_text.clone())
     }
@@ -2465,8 +2420,22 @@ impl TranscriptState {
     /// `TranscriptTextSelection` used for pointer ranges.
     pub(crate) fn selection_cell_ranges(&mut self, width: u16) -> Vec<Option<Range<usize>>> {
         let line_count = self.rendered(width).lines.len();
+        self.selection_cell_ranges_in(width, 0..line_count)
+    }
+
+    /// Only paint the visible window. Copying an explicit selection may still
+    /// request all rows, but idle redraw must not allocate one range per row
+    /// of a potentially very long loaded transcript.
+    pub(crate) fn selection_cell_ranges_in(
+        &mut self,
+        width: u16,
+        visible: Range<usize>,
+    ) -> Vec<Option<Range<usize>>> {
+        let line_count = self.rendered(width).lines.len();
+        let start = visible.start.min(line_count);
+        let visible = start..visible.end.min(line_count).max(start);
         if self.interaction.visual_selection != Some(TranscriptVisualSelectionMode::Block) {
-            return (0..line_count)
+            return visible
                 .map(|line| {
                     self.interaction
                         .text_selection
@@ -2475,10 +2444,10 @@ impl TranscriptState {
                 .collect();
         }
         let Some(anchor) = self.interaction.visual_anchor else {
-            return vec![None; line_count];
+            return vec![None; visible.len()];
         };
         let Some(cursor) = self.interaction.cursor.clone() else {
-            return vec![None; line_count];
+            return vec![None; visible.len()];
         };
         let cursor_range = self
             .rendered(width)
@@ -2496,7 +2465,7 @@ impl TranscriptState {
             .column
             .max(cursor_range.end.saturating_sub(1))
             .saturating_add(1);
-        (0..line_count)
+        visible
             .map(|line| {
                 (line >= start_line && line <= end_line).then_some(start_column..end_column)
             })
@@ -4524,10 +4493,22 @@ use crate::{
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
-    contains_case_insensitive, initial_search_match_index, min,
-    normalize_transcript_text_selection, transcript_node_highlight_range,
-    transcript_selection_scroll_position, transcript_text_selection_text, ui_text,
+    initial_search_match_index, min, normalize_transcript_text_selection,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_text_selection_text, ui_text,
 };
 use unicode_properties::UnicodeEmoji;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+
+fn transcript_search_matches(lines: &[std::sync::Arc<RenderedLine>], query: &str) -> Vec<usize> {
+    let search = agena_tui_session::session_helpers::PreparedSearch::new(query);
+    if search.is_empty() {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| search.contains(&line.text).then_some(index))
+        .collect()
+}

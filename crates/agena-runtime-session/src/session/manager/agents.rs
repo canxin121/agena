@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 
 mod messaging;
 
+#[cfg(test)]
+mod tests;
+
 const MAX_AGENTS_PER_PARENT: usize = 8;
 
 struct AgentLaunch {
@@ -36,7 +39,45 @@ struct AgentSettlement {
     control: Arc<RunControl>,
     activity: Option<ActivityHandle>,
     execution: ExecutionId,
+    generation: AttemptGeneration,
     origin: Option<EntryId>,
+}
+
+pub(super) struct PendingAgentSettlement {
+    started: i64,
+    execution: ExecutionId,
+    done: Arc<Notify>,
+}
+
+/// The registration describes only an actually owned settlement task. Dropping
+/// that task, including unwinding it, must release any successor waiting on it.
+struct AgentSettlementRegistration {
+    pending: Arc<StdMutex<HashMap<SessionId, PendingAgentSettlement>>>,
+    child: SessionId,
+    started: i64,
+    execution: ExecutionId,
+    done: Arc<Notify>,
+}
+
+impl Drop for AgentSettlementRegistration {
+    fn drop(&mut self) {
+        let mut pending = self.pending.lock().unwrap_or_else(|p| p.into_inner());
+        if pending
+            .get(&self.child)
+            .is_some_and(|entry| entry.started == self.started && entry.execution == self.execution)
+        {
+            pending.remove(&self.child);
+        }
+        self.done.notify_waiters();
+    }
+}
+
+pub(super) struct IndependentAgentRun {
+    name: String,
+    started: i64,
+    origin: Option<EntryId>,
+    generation: AttemptGeneration,
+    pub(super) limits: AgentExecutionLimits,
 }
 
 impl SessionManager {
@@ -416,6 +457,8 @@ impl SessionManager {
         .map_err(kernel_error)?
         .value;
         let execution_id = execution.id;
+        let generation = execution.generation;
+        let registration = self.register_agent_settlement(child, now, execution_id);
         let control = self.supervise_with_budget(
             execution,
             options.clone(),
@@ -432,6 +475,7 @@ impl SessionManager {
         let agent_name = name.clone();
         let timeout = request.timeout_ms;
         tokio::spawn(async move {
+            let _registration = registration;
             let _settlement = settlement;
             let wait = async {
                 loop {
@@ -472,6 +516,7 @@ impl SessionManager {
                     control,
                     activity,
                     execution: execution_id,
+                    generation,
                     origin,
                 })
                 .await;
@@ -486,6 +531,213 @@ impl SessionManager {
         })
     }
 
+    fn register_agent_settlement(
+        &self,
+        child: SessionId,
+        started: i64,
+        execution: ExecutionId,
+    ) -> AgentSettlementRegistration {
+        let done = Arc::new(Notify::new());
+        self.pending_agent_settlements
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(
+                child,
+                PendingAgentSettlement {
+                    started,
+                    execution,
+                    done: done.clone(),
+                },
+            );
+        AgentSettlementRegistration {
+            pending: self.pending_agent_settlements.clone(),
+            child,
+            started,
+            execution,
+            done,
+        }
+    }
+
+    /// Direct user turns and continuations retain a subagent's identity and
+    /// limits. Called after this execution is claimed, so no older attempt can
+    /// still run. Only an exact, live settlement owner can delay the new turn.
+    pub(super) async fn begin_independent_agent_run(
+        &self,
+        control: &RunControl,
+        generation: AttemptGeneration,
+    ) -> Result<Option<IndependentAgentRun>, AppError> {
+        loop {
+            let preparation = self.agent_preparation.lock().await;
+            let configuration = persist(|| self.kernel().reader.configuration(control.session))
+                .await
+                .map_err(kernel_error)?;
+            if !configuration.relation_kind.is_subagent() {
+                return Ok(None);
+            }
+            let Some(mut agent) = configuration.agent.clone() else {
+                return Err(AppError::Config(
+                    "subagent session has no agent identity".into(),
+                ));
+            };
+            let pending = {
+                let settlements = self
+                    .pending_agent_settlements
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                settlements
+                    .get(&control.session)
+                    .filter(|pending| {
+                        pending.execution != control.execution
+                            && Some(pending.started) == agent.started_at_ms
+                    })
+                    .map(|pending| {
+                        let mut notified = Box::pin(pending.done.clone().notified_owned());
+                        // Registration and removal use this same mutex, so a
+                        // finishing or aborted owner cannot lose this wakeup.
+                        notified.as_mut().enable();
+                        notified
+                    })
+            };
+            if let Some(notified) = pending {
+                drop(preparation);
+                tokio::select! {
+                    _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+                    _ = notified => {}
+                }
+                continue;
+            }
+            let started = Utc::now()
+                .timestamp_millis()
+                .max(agent.started_at_ms.unwrap_or(i64::MIN).saturating_add(1));
+            // Resolve fallible routing reads before publishing Running. Once
+            // committed, return its settlement identity without another await.
+            let origin = match configuration.parent_session_id {
+                Some(parent) => self.latest_origin_message(parent).await?,
+                None => None,
+            };
+            agent.status = AgentStatus::Running;
+            agent.started_at_ms = Some(started);
+            agent.finished_at_ms = None;
+            agent.failure = None;
+            let command = RequestId::new();
+            persist(|| {
+                self.kernel().sessions.configure(
+                    command,
+                    control.session,
+                    SessionConfigurationChange {
+                        agent: Some(Some(agent.clone())),
+                        ..Default::default()
+                    },
+                )
+            })
+            .await
+            .map_err(kernel_error)?;
+            return Ok(Some(IndependentAgentRun {
+                name: agent.name,
+                started,
+                origin,
+                generation,
+                limits: agent.limits,
+            }));
+        }
+    }
+
+    pub(super) async fn finish_independent_agent_run(
+        &self,
+        control: &Arc<RunControl>,
+        agent: Option<IndependentAgentRun>,
+        timed_out: bool,
+        result: &Result<(), AppError>,
+    ) -> Result<(), AppError> {
+        let Some(agent) = agent else {
+            return Ok(());
+        };
+        if let Err(error) = result {
+            *control.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.failure());
+        }
+        self.settle_agent(AgentSettlement {
+            child: control.session,
+            name: agent.name,
+            started: agent.started,
+            timed_out,
+            control: control.clone(),
+            activity: None,
+            execution: control.execution,
+            generation: agent.generation,
+            origin: agent.origin,
+        })
+        .await
+    }
+
+    /// Retrying reuses an execution ID with a new generation. Keep a terminal
+    /// attempt's small settlement window intact before admitting that retry.
+    /// Running/queued work still goes through the ordinary conflict check.
+    pub(super) async fn wait_terminal_agent_settlement(
+        &self,
+        session: SessionId,
+    ) -> Result<(), AppError> {
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .map_err(kernel_error)?;
+        if !configuration.relation_kind.is_subagent() {
+            return Ok(());
+        }
+        'settlement: loop {
+            let controls = self
+                .active
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .values()
+                .filter(|run| run.session == session)
+                .cloned()
+                .collect::<Vec<_>>();
+            for control in controls {
+                let execution = self
+                    .kernel()
+                    .reader
+                    .execution(session, control.execution)
+                    .await
+                    .map_err(kernel_error)?;
+                if execution.phase.is_terminal() {
+                    tokio::select! {
+                        _ = self.shutdown.cancelled() => return Err(AppError::Cancelled),
+                        _ = control.wait_settled() => {}
+                    }
+                    continue 'settlement;
+                }
+            }
+            let pending = self
+                .pending_agent_settlements
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .get(&session)
+                .map(|pending| {
+                    let mut notified = Box::pin(pending.done.clone().notified_owned());
+                    notified.as_mut().enable();
+                    (pending.execution, notified)
+                });
+            let Some((execution, notified)) = pending else {
+                return Ok(());
+            };
+            let execution = self
+                .kernel()
+                .reader
+                .execution(session, execution)
+                .await
+                .map_err(kernel_error)?;
+            if !execution.phase.is_terminal() {
+                return Ok(());
+            }
+            tokio::select! {
+                _ = self.shutdown.cancelled() => return Err(AppError::Cancelled),
+                _ = notified => {}
+            }
+        }
+    }
+
     async fn settle_agent(&self, settlement: AgentSettlement) -> Result<(), AppError> {
         let AgentSettlement {
             child,
@@ -495,12 +747,18 @@ impl SessionManager {
             control,
             activity,
             execution,
+            generation,
             origin,
         } = settlement;
         let _preparation = self.agent_preparation.lock().await;
         let view = persist(|| self.kernel().reader.execution(child, execution))
             .await
             .map_err(kernel_error)?;
+        if view.generation != generation || !view.phase.is_terminal() {
+            return Err(AppError::Internal(
+                "agent settlement no longer owns the terminal attempt".into(),
+            ));
+        }
         let status = if timed_out {
             AgentStatus::TimedOut
         } else {
@@ -545,7 +803,7 @@ impl SessionManager {
             .final_text_for(child, Some(execution), 12 * 1024)
             .await?;
         let value = bounded_agent_payload(
-            serde_json::json!({"kind":"agent_result","message_id":origin.map(EntryId::get),"agent_id":child.get(),"name":name,"run_id":execution.to_string(),"status":status,"text":format!("Agent {} ({}) {}:\n{}",name,child.get(),status.as_ref(),text.unwrap_or_default()),"failure":failure}),
+            serde_json::json!({"kind":"agent_result","message_id":origin.map(EntryId::get),"agent_id":child.get(),"name":name,"run_id":execution.to_string(),"attempt_generation":view.generation.get(),"status":status,"text":format!("Agent {} ({}) {}:\n{}",name,child.get(),status.as_ref(),text.unwrap_or_default()),"failure":failure}),
         )?;
         if let Some(activity) = activity {
             let command = RequestId::new();
@@ -570,13 +828,14 @@ impl SessionManager {
                 .await
                 .map_err(kernel_error)?;
         }
-        let command = request_key("agent-completed", &execution.to_string());
+        let run_key = format!("{execution}:{}", view.generation.get());
+        let command = request_key("agent-completed", &run_key);
         persist(|| {
             self.kernel().sessions.finish_agent(
                 command,
                 child,
                 agent.clone(),
-                format!("agent:{execution}"),
+                format!("agent:{run_key}"),
                 value.clone(),
             )
         })

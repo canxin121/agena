@@ -185,6 +185,21 @@ fn summary_triggers() -> Vec<String> {
     triggers
 }
 
+// Additive session isolation extension. The preceding baseline declarations
+// remain byte-for-byte compatible with databases created before this audit.
+pub(super) const SESSION_EXTENSIONS: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS agena_execution_purposes (execution_id TEXT PRIMARY KEY REFERENCES agena_executions(id), purpose TEXT NOT NULL CHECK(purpose IN ('continuation','compaction')))",
+    "CREATE TABLE IF NOT EXISTS agena_branch_entries (session_id INTEGER NOT NULL REFERENCES agena_sessions(id), entry_id INTEGER NOT NULL REFERENCES agena_entries(id), facts_json TEXT NOT NULL CHECK(json_valid(facts_json)), facts_bytes INTEGER GENERATED ALWAYS AS (length(CAST(facts_json AS BLOB))) STORED, PRIMARY KEY(session_id,entry_id)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_branch_sources (session_id INTEGER NOT NULL REFERENCES agena_sessions(id), content_id TEXT NOT NULL REFERENCES agena_content_streams(id), entry_id INTEGER NOT NULL REFERENCES agena_entries(id), head_json TEXT NOT NULL CHECK(json_valid(head_json)), head_bytes INTEGER GENERATED ALWAYS AS (length(CAST(head_json AS BLOB))) STORED, PRIMARY KEY(session_id,content_id)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_branch_rounds (session_id INTEGER NOT NULL REFERENCES agena_sessions(id), round_id INTEGER NOT NULL REFERENCES agena_rounds(id), phase TEXT NOT NULL CHECK(phase IN ('running','succeeded','failed','interrupted')), has_provider_state INTEGER NOT NULL CHECK(has_provider_state IN (0,1)), finished_at_ms INTEGER, PRIMARY KEY(session_id,round_id)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_branch_activities (session_id INTEGER NOT NULL REFERENCES agena_sessions(id), activity_id TEXT NOT NULL REFERENCES agena_background_activities(id), has_outcome INTEGER NOT NULL CHECK(has_outcome IN (0,1)), finished_at_ms INTEGER, PRIMARY KEY(session_id,activity_id)) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS idx_agena_branch_entry_reverse ON agena_branch_entries(entry_id,session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_branch_source_entry ON agena_branch_sources(session_id,entry_id,content_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_branch_source_reverse ON agena_branch_sources(content_id,session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_branch_round_reverse ON agena_branch_rounds(round_id,session_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_branch_activity_reverse ON agena_branch_activities(activity_id,session_id)",
+];
+
 fn declarations() -> impl Iterator<Item = String> {
     let infrastructure = crate::schema::TABLES.iter().chain(crate::schema::INDEXES);
     TABLES
@@ -192,6 +207,7 @@ fn declarations() -> impl Iterator<Item = String> {
         .copied()
         .chain(INDEXES.iter().copied())
         .chain(TRIGGERS.iter().copied())
+        .chain(SESSION_EXTENSIONS.iter().copied())
         .chain(infrastructure.copied())
         .chain(agena_scheduler::schema::declarations())
         .map(str::to_owned)
@@ -208,26 +224,36 @@ fn incompatible_database(reason: &str) -> DbErr {
 async fn validate_objects(
     database: &DatabaseConnection,
     actual: std::collections::BTreeMap<(String, String), String>,
-) -> Result<(), DbErr> {
+) -> Result<bool, DbErr> {
     let expected = declarations()
         .map(|sql| {
             let d = declaration(&sql)?;
             Ok(((d.kind.to_owned(), d.name.to_owned()), d.stored_sql))
         })
         .collect::<Result<std::collections::BTreeMap<_, _>, DbErr>>()?;
-    if expected != actual {
-        return Err(incompatible_database(
-            "database schema does not match the current Agena baseline",
-        ));
+    let current = expected == actual;
+    if !current {
+        let mut previous = expected;
+        for sql in SESSION_EXTENSIONS {
+            let d = declaration(sql)?;
+            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
+        }
+        if previous != actual {
+            return Err(incompatible_database(
+                "database schema does not match the current Agena baseline",
+            ));
+        }
     }
     instance_id(database).await?;
-    Ok(())
+    Ok(current)
 }
 
 /// A read-only probe must reject even a nonempty file with no user tables.
 /// Only a new, empty file may enter the initialization path below.
 pub(crate) async fn validate_existing(database: &DatabaseConnection) -> Result<(), DbErr> {
-    validate_objects(database, schema_objects(database).await?).await
+    validate_objects(database, schema_objects(database).await?)
+        .await
+        .map(|_| ())
 }
 
 pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbErr> {
@@ -235,7 +261,21 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     // Repositories never initialize their own tables after composition.
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
-        return validate_objects(database, actual).await;
+        if validate_objects(database, actual).await? {
+            return Ok(());
+        }
+        // Only the exact recognized predecessor may receive these additive
+        // tables. A partial/foreign schema still fails before any mutation.
+        let transaction = database.begin().await?;
+        for sql in SESSION_EXTENSIONS {
+            transaction
+                .execute(Statement::from_string(
+                    database.get_database_backend(),
+                    *sql,
+                ))
+                .await?;
+        }
+        return transaction.commit().await;
     }
     // The full schema and baseline identity reach the main database together,
     // before the connection owner enables WAL. Immutable preflight reads can

@@ -183,8 +183,8 @@ pub(super) async fn execution_visible(
     let origin:Option<i64>=sqlx::query_scalar("SELECT x.session_id FROM agena_executions x WHERE x.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=x.message_id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)").bind(id.to_string()).bind(session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?;
     let origin = SessionId::try_from(origin.ok_or(KernelError::Ownership)?).map_err(storage)?;
     // A tombstoned origin remains readable through a surviving branch.
-    let row=sqlx::query("SELECT x.message_id,x.current_generation,a.phase FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.id=?").bind(id.to_string()).fetch_one(connection).await.map_err(sql_error)?;
-    Ok(ExecutionView {
+    let row=sqlx::query("SELECT x.message_id,x.current_generation,a.phase,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=x.id),'message') AS purpose FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.id=?").bind(id.to_string()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    let mut view = ExecutionView {
         id,
         session_id: origin,
         message_id: EntryId::try_from(row.try_get::<i64, _>("message_id").map_err(storage)?)
@@ -195,7 +195,14 @@ pub(super) async fn execution_visible(
         )
         .map_err(storage)?,
         phase: decode(&encode(row.try_get::<&str, _>("phase").map_err(storage)?)?)?,
-    })
+        purpose: decode(&encode(
+            row.try_get::<&str, _>("purpose").map_err(storage)?,
+        )?)?,
+    };
+    if let Some(facts) = branches::entry_facts(connection, session, view.message_id).await? {
+        facts.apply_execution(&mut view);
+    }
+    Ok(view)
 }
 
 pub(super) async fn execution(
@@ -203,7 +210,7 @@ pub(super) async fn execution(
     session: SessionId,
     execution: ExecutionId,
 ) -> Result<(ExecutionView, Option<KernelEpoch>)> {
-    let row = sqlx::query("SELECT e.message_id,e.current_generation,a.phase,a.owner_epoch FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation JOIN agena_sessions s ON s.id=e.session_id WHERE e.id=? AND e.session_id=? AND s.deleted_at_ms IS NULL")
+    let row = sqlx::query("SELECT e.message_id,e.current_generation,a.phase,a.owner_epoch,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=e.id),'message') AS purpose FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation JOIN agena_sessions s ON s.id=e.session_id WHERE e.id=? AND e.session_id=? AND s.deleted_at_ms IS NULL")
         .bind(execution.to_string()).bind(session.get()).fetch_optional(connection).await.map_err(sql_error)?
         .ok_or(KernelError::Ownership)?;
     let phase: String = row.try_get("phase").map_err(storage)?;
@@ -225,6 +232,9 @@ pub(super) async fn execution(
             )
             .map_err(storage)?,
             phase,
+            purpose: decode(&encode(
+                row.try_get::<&str, _>("purpose").map_err(storage)?,
+            )?)?,
         },
         epoch,
     ))
@@ -424,6 +434,7 @@ pub(super) async fn history(
             entries.push(entry_row(&row)?);
         }
     }
+    branches::apply_entries(&mut transaction, session, &mut entries).await?;
     entries.reverse();
     Ok(HistoryPage {
         metadata,
@@ -442,10 +453,13 @@ pub(super) async fn entry(
     metrics::add(&diagnostics.0.detail_queries, 1);
     let row=sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT x.response_entry_id FROM agena_attempts x WHERE x.execution_id=e.execution_id AND x.generation=e.generation) AS response_entry_id,(SELECT phase FROM agena_attempts phase_attempt WHERE phase_attempt.execution_id=e.execution_id AND phase_attempt.generation=CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions phase_execution WHERE phase_execution.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,(SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed FROM agena_entries e WHERE e.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=e.id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(id.get()).bind(session.get()).fetch_optional(pool).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("entry".into()))?;
-    entry_row(&row)
+    let mut entry = entry_row(&row)?;
+    let mut connection = pool.acquire().await.map_err(storage)?;
+    branches::apply_entries(&mut connection, session, std::slice::from_mut(&mut entry)).await?;
+    Ok(entry)
 }
 
-pub(super) const ACTIVE_EXECUTIONS_SQL: &str = "SELECT e.id,e.message_id,e.current_generation,a.phase FROM agena_attempts a INDEXED BY idx_agena_attempt_active JOIN agena_executions e ON e.id=a.execution_id AND e.current_generation=a.generation WHERE a.session_id=? AND a.phase IN ('queued','running') AND a.execution_id>? ORDER BY a.execution_id LIMIT ?";
+pub(super) const ACTIVE_EXECUTIONS_SQL: &str = "SELECT e.id,e.message_id,e.current_generation,a.phase,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=e.id),'message') AS purpose FROM agena_attempts a INDEXED BY idx_agena_attempt_active JOIN agena_executions e ON e.id=a.execution_id AND e.current_generation=a.generation WHERE a.session_id=? AND a.phase IN ('queued','running') AND a.execution_id>? ORDER BY a.execution_id LIMIT ?";
 
 pub(super) async fn active_executions(
     pool: &SqlitePool,
@@ -506,6 +520,9 @@ pub(super) async fn active_executions_on(
                 .map_err(storage)?,
                 phase: decode(&encode(
                     &row.try_get::<String, _>("phase").map_err(storage)?,
+                )?)?,
+                purpose: decode(&encode(
+                    row.try_get::<&str, _>("purpose").map_err(storage)?,
                 )?)?,
             })
         })
@@ -683,7 +700,7 @@ pub(super) async fn tool(
     if interactions.len() > 128 {
         return Err(storage("tool interaction identity budget is corrupt"));
     }
-    Ok(ToolView {
+    let mut view = ToolView {
         created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
         finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
         entry_id: EntryId::try_from(entry).map_err(storage)?,
@@ -720,7 +737,17 @@ pub(super) async fn tool(
             .map(|id| id.parse().map_err(storage))
             .collect::<Result<_>>()?,
         blobs,
-    })
+    };
+    if let Some(facts) = branches::entry_facts(&mut transaction, session, view.entry_id).await? {
+        facts.apply_tool(&mut view);
+        for output in &mut view.outputs {
+            let head = branches::source(&mut transaction, session, output.id)
+                .await?
+                .ok_or_else(|| storage("branch tool output has no frozen head"))?;
+            output.epoch = head.epoch;
+        }
+    }
+    Ok(view)
 }
 
 pub(super) async fn interaction(
@@ -730,9 +757,16 @@ pub(super) async fn interaction(
     diagnostics: &KernelDiagnostics,
 ) -> Result<InteractionView> {
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT i.tool_id,i.request_json,i.decision_json,i.remember_json,i.created_at_ms AS interaction_created_at_ms,i.decided_at_ms AS interaction_decided_at_ms,e.revision FROM agena_interactions i JOIN agena_entries e ON e.interaction_id=i.id WHERE i.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let row=sqlx::query("SELECT e.id AS entry_id,i.tool_id,i.request_json,i.decision_json,i.remember_json,i.created_at_ms AS interaction_created_at_ms,i.decided_at_ms AS interaction_decided_at_ms,e.revision FROM agena_interactions i JOIN agena_entries e ON e.interaction_id=i.id WHERE i.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(interaction.get()).bind(session.get()).fetch_optional(pool).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("interaction".into()))?;
-    interaction_row(interaction, &row)
+    let mut view = interaction_row(interaction, &row)?;
+    let mut connection = pool.acquire().await.map_err(storage)?;
+    let entry =
+        EntryId::try_from(row.try_get::<i64, _>("entry_id").map_err(storage)?).map_err(storage)?;
+    if let Some(facts) = branches::entry_facts(&mut connection, session, entry).await? {
+        facts.apply_interaction(&mut view);
+    }
+    Ok(view)
 }
 
 pub(super) fn interaction_row(
@@ -795,7 +829,7 @@ pub(super) async fn round(
 ) -> Result<ProviderRoundView> {
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT r.execution_id,r.phase,r.provider_state_json,r.created_at_ms,r.finished_at_ms FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let row=sqlx::query("SELECT e.session_id AS owner_session_id,r.execution_id,r.phase,r.provider_state_json,r.created_at_ms,r.finished_at_ms FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(round.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("provider round".into()))?;
     metrics::add(&diagnostics.0.detail_queries, 1);
     let inputs: Vec<i64> = sqlx::query_scalar(
@@ -808,7 +842,14 @@ pub(super) async fn round(
     if inputs.len() > 10000 {
         return Err(storage("provider round input identity budget is corrupt"));
     }
-    Ok(ProviderRoundView {
+    let frozen = if row.try_get::<i64, _>("owner_session_id").map_err(storage)? != session.get() {
+        Some(sqlx::query("SELECT phase,has_provider_state,finished_at_ms FROM agena_branch_rounds WHERE session_id=? AND round_id=?")
+            .bind(session.get()).bind(round.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?
+            .ok_or_else(|| KernelError::NotFound("provider round at branch boundary".into()))?)
+    } else {
+        None
+    };
+    let mut view = ProviderRoundView {
         execution_id: row
             .try_get::<&str, _>("execution_id")
             .map_err(storage)?
@@ -831,5 +872,19 @@ pub(super) async fn round(
             .as_deref()
             .map(decode)
             .transpose()?,
-    })
+    };
+    if let Some(frozen) = frozen {
+        view.phase = decode(&encode(
+            frozen.try_get::<&str, _>("phase").map_err(storage)?,
+        )?)?;
+        view.finished_at_ms = frozen.try_get("finished_at_ms").map_err(storage)?;
+        if frozen
+            .try_get::<i64, _>("has_provider_state")
+            .map_err(storage)?
+            == 0
+        {
+            view.provider_state = None;
+        }
+    }
+    Ok(view)
 }

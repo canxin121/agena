@@ -278,9 +278,20 @@ impl ApplicationService {
             .control_snapshot(crate::kernel_session_id(session_id)?, 128)
             .await
             .map_err(crate::kernel_error)?;
-        let context = session_queries
+        let mut context = session_queries
             .execution_context(&snapshot)
             .map_err(session_query_error)?;
+        if context.effective_workspace_root.is_none() {
+            context.effective_workspace_root = Some(
+                self.workspace_repository
+                    .path_by_id(snapshot.metadata.workspace_id)
+                    .await
+                    .map_err(|error| ApplicationError::internal_error(&error))?
+                    .ok_or_else(|| {
+                        ApplicationError::not_found("The session's owning workspace was not found.")
+                    })?,
+            );
+        }
         let session_resource =
             super::sessions::session_resource_from_kernel_summary(&snapshot.summary)?;
 
@@ -322,7 +333,10 @@ impl ApplicationService {
             .active_executions
             .executions
             .iter()
-            .filter(|execution| execution.phase == agena_storage::kernel::ExecutionPhase::Queued)
+            .filter(|execution| {
+                execution.phase == agena_storage::kernel::ExecutionPhase::Queued
+                    && execution.purpose == agena_storage::kernel::ExecutionPurpose::Message
+            })
             .map(|execution| agena_api::resource::QueuedMessageResource {
                 execution_id: execution.id.0,
                 message_id: execution.message_id.get(),

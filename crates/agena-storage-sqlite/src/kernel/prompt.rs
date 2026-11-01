@@ -86,9 +86,28 @@ pub(super) async fn read(
 ) -> Result<PromptView> {
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.prompt_queries, 1);
-    let header = sqlx::query("SELECT r.execution_id,r.generation FROM agena_rounds r JOIN agena_executions execution ON execution.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=execution.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let header = sqlx::query("SELECT execution.session_id AS owner_session_id,r.execution_id,r.generation FROM agena_rounds r JOIN agena_executions execution ON execution.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=execution.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(round.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?
         .ok_or_else(|| KernelError::NotFound("provider input".into()))?;
+    if header
+        .try_get::<i64, _>("owner_session_id")
+        .map_err(storage)?
+        != session.get()
+    {
+        let captured: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agena_branch_rounds WHERE session_id=? AND round_id=?)",
+        )
+        .bind(session.get())
+        .bind(round.get())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(sql_error)?;
+        if !captured {
+            return Err(KernelError::NotFound(
+                "provider input at branch boundary".into(),
+            ));
+        }
+    }
     check_budget(&mut transaction, round.get(), Some(diagnostics)).await?;
     metrics::add(&diagnostics.0.prompt_queries, 1);
     let metadata: String =
@@ -157,6 +176,16 @@ pub(super) async fn read(
                 .transpose()
                 .map_err(storage)?,
         });
+    }
+    // A newly captured branch request inherits the branch's frozen facts. An
+    // inherited provider round already owns its earlier immutable manifest;
+    // the later fork cut must not rewrite what that original request saw.
+    if header
+        .try_get::<i64, _>("owner_session_id")
+        .map_err(storage)?
+        == session.get()
+    {
+        branches::apply_prompt_entries(&mut transaction, session, &mut entries).await?;
     }
     metrics::add(&diagnostics.0.prompt_queries, 1);
     let replays = sqlx::query("SELECT input.source_round_id,input.phase,CASE WHEN input.has_provider_state=1 THEN r.provider_state_json END AS provider_state_json FROM agena_round_input_replays input JOIN agena_rounds r ON r.id=input.source_round_id WHERE input.round_id=? ORDER BY input.source_round_id LIMIT 10000")

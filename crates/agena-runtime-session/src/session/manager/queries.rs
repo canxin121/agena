@@ -19,10 +19,17 @@ impl SessionManager {
             .metadata(session_id(id)?)
             .await
             .map_err(kernel_error)?;
+        self.workspace_root_by_id(metadata.workspace_id).await
+    }
+
+    async fn workspace_root_by_id(
+        &self,
+        workspace_id: i64,
+    ) -> Result<std::path::PathBuf, AppError> {
         let path = self
             .kernel_runtime
             .workspaces
-            .path_by_id(metadata.workspace_id)
+            .path_by_id(workspace_id)
             .await
             .map_err(|error| AppError::internal_error(&error))?
             .ok_or_else(|| {
@@ -31,15 +38,31 @@ impl SessionManager {
         Ok(std::path::PathBuf::from(path))
     }
 
+    async fn execution_workspace_root(
+        &self,
+        workspace_id: i64,
+        configured: Option<&std::path::Path>,
+    ) -> Result<std::path::PathBuf, AppError> {
+        match configured {
+            Some(path) => Ok(path.to_path_buf()),
+            // HTTP-created and imported sessions may omit the override. Their
+            // tools still belong to their recorded workspace, not the default
+            // executor's workspace or whichever session ran most recently.
+            None => self.workspace_root_by_id(workspace_id).await,
+        }
+    }
+
     pub async fn get_session(&self, id: i64) -> Result<Session, AppError> {
         let session = session_id(id)?;
-        let (metadata, summary, configuration, pending) = tokio::try_join!(
-            self.kernel().reader.metadata(session),
-            self.kernel().reader.summary(session),
-            self.kernel().reader.configuration(session),
-            self.kernel().reader.pending_interactions(session, None, 1)
-        )
-        .map_err(kernel_error)?;
+        let snapshot = self
+            .kernel()
+            .reader
+            .control_snapshot(session, 1)
+            .await
+            .map_err(kernel_error)?;
+        let metadata = &snapshot.metadata;
+        let summary = &snapshot.summary;
+        let configuration = &snapshot.configuration;
         let (root_id, depth) = (summary.root_session_id.get(), i64::from(summary.depth));
         let state = self.state.load_full();
         let selection = state
@@ -58,7 +81,13 @@ impl SessionManager {
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
-            effective_workspace_root: configuration.effective_workspace_root.clone(),
+            effective_workspace_root: Some(
+                self.execution_workspace_root(
+                    metadata.workspace_id,
+                    configuration.effective_workspace_root.as_deref(),
+                )
+                .await?,
+            ),
         };
         let agent = configuration.agent.as_ref();
         Ok(Session {
@@ -77,11 +106,7 @@ impl SessionManager {
             created_at: timestamp(summary.created_at_ms),
             updated_at: timestamp(summary.updated_at_ms),
             message_count: summary.user_message_count,
-            workflow: if !pending.interactions.is_empty() {
-                WorkflowState::AwaitingInteraction
-            } else {
-                WorkflowState::Quiescent
-            },
+            workflow: workflow_from_snapshot(&snapshot),
             execution: context,
             agent_status: agent.map(|t| t.status),
             agent_started_at_ms: agent.and_then(|t| t.started_at_ms),
@@ -121,7 +146,13 @@ impl SessionManager {
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
-            effective_workspace_root: configuration.effective_workspace_root.clone(),
+            effective_workspace_root: Some(
+                self.execution_workspace_root(
+                    metadata.workspace_id,
+                    configuration.effective_workspace_root.as_deref(),
+                )
+                .await?,
+            ),
         })
     }
     pub async fn list_session_summaries(
@@ -509,9 +540,28 @@ impl SessionManager {
         Ok(result)
     }
 }
+fn workflow_from_snapshot(snapshot: &SessionControlSnapshot) -> WorkflowState {
+    if !snapshot.pending_interactions.interactions.is_empty() {
+        WorkflowState::AwaitingInteraction
+    } else if matches!(
+        &snapshot.active_execution,
+        Some(agena_domain::ExecutionLifecycle::Active {
+            phase: agena_domain::ExecutionPhase::ExecutingTools,
+            ..
+        })
+    ) {
+        WorkflowState::ToolPending
+    } else {
+        WorkflowState::Quiescent
+    }
+}
+
 fn timestamp(ms: i64) -> chrono::DateTime<Utc> {
     chrono::DateTime::from_timestamp_millis(ms).unwrap_or(chrono::DateTime::UNIX_EPOCH)
 }
+#[cfg(test)]
+mod tests;
+
 fn query_error(error: AppError) -> SessionQueryError {
     SessionQueryError::internal_error(&error)
 }
@@ -634,11 +684,7 @@ impl SessionQueryService for SessionManager {
                 )
                 .map(str::to_owned)
             },
-            workflow_state: if snapshot.pending_interactions.interactions.is_empty() {
-                WorkflowState::Quiescent
-            } else {
-                WorkflowState::AwaitingInteraction
-            },
+            workflow_state: workflow_from_snapshot(snapshot),
             agent_id: crate::identity::AGENA_AGENT_ID.into(),
             selected_permission: configuration.permission.clone(),
             effective_permission: state

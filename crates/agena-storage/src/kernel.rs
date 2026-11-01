@@ -210,6 +210,33 @@ pub enum SelectionChange {
     ParallelToolCalls(Option<bool>),
 }
 
+/// Durable intent survives queue suspension and service recovery. Control
+/// executions have their own local notice anchor, never a fabricated user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionPurpose {
+    #[default]
+    Message,
+    Continuation,
+    Compaction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlExecutionPurpose {
+    Continuation,
+    Compaction,
+}
+
+impl From<ControlExecutionPurpose> for ExecutionPurpose {
+    fn from(value: ControlExecutionPurpose) -> Self {
+        match value {
+            ControlExecutionPurpose::Continuation => Self::Continuation,
+            ControlExecutionPurpose::Compaction => Self::Compaction,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionView {
     pub id: ExecutionId,
@@ -217,6 +244,8 @@ pub struct ExecutionView {
     pub message_id: EntryId,
     pub generation: AttemptGeneration,
     pub phase: ExecutionPhase,
+    #[serde(default)]
+    pub purpose: ExecutionPurpose,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -395,6 +395,7 @@ pub(super) async fn page(
             });
         }
     }
+    branches::apply_snapshot_entries(&mut transaction, lease.session, &mut entries).await?;
     let next = if has_more {
         entries.last().map(|entry| entry.position)
     } else {

@@ -191,6 +191,7 @@ class ProviderStep:
     payloads: list[str] = dataclasses.field(default_factory=list)
     expected_tool_bytes: str | None = None
     fixture_path: str = "permission-fixture.txt"
+    tool_calls: list[dict[str, Any]] = dataclasses.field(default_factory=list)
     requested: threading.Event = dataclasses.field(default_factory=threading.Event)
     steady_gate: threading.Event = dataclasses.field(default_factory=threading.Event)
     finished: threading.Event = dataclasses.field(default_factory=threading.Event)
@@ -250,6 +251,35 @@ class Provider:
                                 "permission continuation did not contain the actual fs.read fixture bytes")
                         step.facts["actual_fs_read_bytes_verified"] = True
                     step.requested.set()
+                    if request.get("stream") is False:
+                        # Local compaction requests a completed Responses JSON
+                        # document rather than a streaming event sequence.
+                        require(step.mode in ("text", "continuation"),
+                                "non-streaming fixture needs a completed text response")
+                        response = {
+                            "id": f"resp_{step.name}", "object": "response",
+                            "created_at": int(time.time()), "status": "completed",
+                            "model": request.get("model", "fake-model"),
+                            "error": None, "incomplete_details": None,
+                            "output": [{"id": f"msg_{step.name}", "type": "message",
+                                        "status": "completed", "role": "assistant",
+                                        "content": [{"type": "output_text",
+                                                     "text": "".join(step.payloads),
+                                                     "annotations": []}]}],
+                            "usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8,
+                                      "input_tokens_details": {"cached_tokens": 0},
+                                      "output_tokens_details": {"reasoning_tokens": 0}},
+                        }
+                        raw = json.dumps(response, ensure_ascii=False).encode()
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.end_headers()
+                        self.wfile.write(raw)
+                        self.wfile.flush()
+                        step.facts.update(response_completed_ns=now_ns(),
+                                          response_content_type="application/json")
+                        return
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
@@ -269,6 +299,16 @@ class Provider:
                                         "item": {**call, "arguments": ""}})
                             self.event({"type": "response.output_item.done", "output_index": index,
                                         "item": {**call, "arguments": arguments}})
+                        self.complete(step, tool=True)
+                    elif step.mode == "tool-calls":
+                        require(step.tool_calls, "tool-calls fixture needs at least one invocation")
+                        for index, invocation in enumerate(step.tool_calls):
+                            call = {"type": "function_call", "id": f"fc_{step.name}_{index}",
+                                    "call_id": f"call_{step.name}_{index}", "name": "tools_call"}
+                            self.event({"type": "response.output_item.added", "output_index": index,
+                                        "item": {**call, "arguments": ""}})
+                            self.event({"type": "response.output_item.done", "output_index": index,
+                                        "item": {**call, "arguments": json.dumps(invocation)}})
                         self.complete(step, tool=True)
                     elif step.mode == "permission":
                         call = {"type": "function_call", "id": f"fc_{step.name}",
@@ -700,7 +740,9 @@ def prepare_configuration(directory: Path, provider_url: str) -> Path:
                       "fake": {"auth": {"mode": "api", "subtype": "custom", "base_url": provider_url,
                                         "api_key": {"kind": "inline", "value": "local-experience-fixture-only"}},
                                "adapters": {"openai_responses": {"enabled": True,
-                                             "models": {"fake-model": {"agena_tools": {"mode": "provider_protocol"}}}}}}}})
+                                             "models": {"fake-model": {
+                                                 "native_compaction": False,
+                                                 "agena_tools": {"mode": "provider_protocol"}}}}}}}})
     return workspace
 
 

@@ -44,7 +44,15 @@ async fn configure(
         .fetch_one(&mut *connection)
         .await
         .map_err(sql_error)?;
-        if entries != 0 || original.parent_session_id.is_some() || parent == session {
+        let has_children: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agena_sessions WHERE parent_session_id=?)",
+        )
+        .bind(session.get())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if entries != 0 || has_children || original.parent_session_id.is_some() || parent == session
+        {
             return Err(KernelError::Conflict(
                 "parent is immutable after creation".into(),
             ));
@@ -185,6 +193,83 @@ async fn recount(connection: &mut SqliteConnection, session: SessionId) -> Resul
     sqlx::query("UPDATE agena_session_statistics SET entry_count=(SELECT COALESCE(sum(end_ordinal-first_ordinal),0) FROM agena_session_segments WHERE session_id=?),user_message_count=(SELECT count(*) FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user'),last_message_at_ms=(SELECT MAX(e.created_at_ms) FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=?) WHERE session_id=?").bind(session.get()).bind(session.get()).bind(session.get()).bind(session.get()).execute(connection).await.map_err(sql_error)?;
     Ok(())
 }
+
+async fn start_control_execution(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    purpose: ControlExecutionPurpose,
+) -> Result<ExecutionView> {
+    reads::metadata(connection, session).await?;
+    let source: Option<i64> = sqlx::query_scalar(
+        "SELECT e.id FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
+    )
+    .bind(session.get())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    let source = source.ok_or_else(|| invalid("the session has no user context to continue"))?;
+    let active: i64 = sqlx::query_scalar(
+        "SELECT queued_executions+running_executions FROM agena_session_statistics WHERE session_id=?",
+    )
+    .bind(session.get())
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    if active >= 128 {
+        return Err(KernelError::Busy);
+    }
+    let (kind, text) = match purpose {
+        ControlExecutionPurpose::Continuation => (
+            "continuation",
+            "Continue the conversation using the current context.",
+        ),
+        ControlExecutionPurpose::Compaction => ("compaction", "Context compaction requested."),
+    };
+    let now = now_ms();
+    let execution = ExecutionId::new();
+    // A local notice is the FIFO anchor. It does not alter the inherited user
+    // input or increase user_message_count, and its own ID orders later input.
+    let anchor: i64 = sqlx::query_scalar(
+        "INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,1,?,'notice',?,?) RETURNING id",
+    )
+    .bind(session.get())
+    .bind(execution.to_string())
+    .bind(source)
+    .bind(encode(text)?)
+    .bind(now)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    sqlx::query("UPDATE agena_entries SET message_id=? WHERE id=?")
+        .bind(anchor)
+        .bind(anchor)
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    sqlx::query("INSERT INTO agena_executions (id,session_id,message_id,current_generation,created_at_ms) VALUES (?,?,?,1,?)")
+        .bind(execution.to_string()).bind(session.get()).bind(anchor).bind(now)
+        .execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query("INSERT INTO agena_execution_purposes (execution_id,purpose) VALUES (?,?)")
+        .bind(execution.to_string())
+        .bind(kind)
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    sqlx::query("INSERT INTO agena_attempts (execution_id,generation,session_id,phase) VALUES (?,1,?,'queued')")
+        .bind(execution.to_string()).bind(session.get())
+        .execute(&mut *connection).await.map_err(sql_error)?;
+    commands::append_history(connection, session, &[anchor]).await?;
+    sqlx::query("UPDATE agena_session_statistics SET queued_executions=queued_executions+1 WHERE session_id=?")
+        .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query("UPDATE agena_sessions SET updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?")
+        .bind(now)
+        .bind(session.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(reads::execution(connection, session, execution).await?.0)
+}
+
 async fn fork(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -214,7 +299,13 @@ async fn fork(
         if kind != "user" {
             return Err(invalid("rewind requires a user message"));
         }
-        let phase:Option<String>=sqlx::query_scalar("SELECT a.phase FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation WHERE e.id=?").bind(row.try_get::<&str,_>("execution_id").map_err(storage)?).fetch_optional(&mut *connection).await.map_err(sql_error)?;
+        let execution = row
+            .try_get::<&str, _>("execution_id")
+            .map_err(storage)?
+            .parse()
+            .map_err(storage)?;
+        let visible = reads::execution_visible(connection, session, execution).await?;
+        let phase = Some(commands::enum_text(&visible.phase)?);
         if phase
             .as_deref()
             .is_none_or(|phase| matches!(phase, "queued" | "running"))
@@ -246,6 +337,8 @@ async fn fork(
         SessionRelationKind::Fork
     };
     config.agent = None;
+    // Stop/pause belongs to the source queue, never to a new branch.
+    config.message_queue_paused = false;
     // A branch starts a new topic-check schedule. User-assigned names remain
     // locked; automatically named branches may acquire their own names.
     if config.title_state.source != SessionTitleSource::Manual {
@@ -271,6 +364,7 @@ async fn fork(
         .await
         .map_err(sql_error)?;
     sqlx::query("INSERT INTO agena_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation) SELECT ?,sequence,segment_id,first_ordinal,CASE WHEN sequence=? THEN MIN(end_ordinal,?) ELSE end_ordinal END,1 FROM agena_session_segments WHERE session_id=? AND (sequence<? OR (sequence=? AND first_ordinal<?))").bind(id).bind(sequence).bind(end).bind(session.get()).bind(sequence).bind(sequence).bind(end).execute(&mut *connection).await.map_err(sql_error)?;
+    branches::capture(connection, session, target).await?;
     recount(connection, target).await?;
     sqlx::query("INSERT INTO agena_prompt_windows (session_id) VALUES (?)")
         .bind(id)
@@ -455,7 +549,9 @@ async fn notice(
         return Err(invalid("notice exceeds 256 KiB"));
     }
     boundary(connection, session, message).await?;
-    let row=sqlx::query("SELECT e.origin_session_id,e.execution_id,x.current_generation AS generation FROM agena_entries e JOIN agena_executions x ON x.id=e.execution_id WHERE e.id=? AND e.kind='user'").bind(message.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?.ok_or_else(||invalid("notice requires user message"))?;
+    let row=sqlx::query("SELECT e.origin_session_id,e.execution_id,x.current_generation AS generation FROM agena_entries e JOIN agena_executions x ON x.id=e.execution_id WHERE e.id=? AND x.message_id=e.id AND (e.kind='user' OR (e.kind='notice' AND EXISTS(SELECT 1 FROM agena_execution_purposes p WHERE p.execution_id=x.id)))")
+        .bind(message.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?
+        .ok_or_else(||invalid("notice requires an execution input anchor"))?;
     if row
         .try_get::<i64, _>("origin_session_id")
         .map_err(storage)?
@@ -491,9 +587,14 @@ pub(super) async fn apply(
                 ));
             }
             if previous.consumed {
-                let row=sqlx::query("SELECT d.resume_execution_id,d.resume_generation,a.phase,x.message_id FROM agena_deliveries d JOIN agena_executions x ON x.id=d.resume_execution_id JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=d.resume_generation WHERE d.id=? AND d.session_id=?")
+                let row=sqlx::query("SELECT d.resume_execution_id,d.resume_generation,a.phase,x.message_id,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=x.id),'message') AS purpose FROM agena_deliveries d JOIN agena_executions x ON x.id=d.resume_execution_id JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=d.resume_generation WHERE d.id=? AND d.session_id=?")
                     .bind(id.to_string()).bind(session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?.ok_or_else(||KernelError::Conflict("delivery was consumed by an existing execution".into()))?;
-                if row.try_get::<i64, _>("message_id").map_err(storage)? != message.get() {
+                let purpose: ExecutionPurpose = decode(&encode(
+                    row.try_get::<&str, _>("purpose").map_err(storage)?,
+                )?)?;
+                if purpose == ExecutionPurpose::Message
+                    && row.try_get::<i64, _>("message_id").map_err(storage)? != message.get()
+                {
                     return Err(KernelError::Conflict(
                         "delivery continuation message changed".into(),
                     ));
@@ -505,13 +606,17 @@ pub(super) async fn apply(
                         .parse()
                         .map_err(storage)?,
                     session_id: *session,
-                    message_id: *message,
+                    message_id: EntryId::try_from(
+                        row.try_get::<i64, _>("message_id").map_err(storage)?,
+                    )
+                    .map_err(storage)?,
                     generation: AttemptGeneration::try_from(
                         row.try_get::<i64, _>("resume_generation")
                             .map_err(storage)?,
                     )
                     .map_err(storage)?,
                     phase: decode(&encode(row.try_get::<&str, _>("phase").map_err(storage)?)?)?,
+                    purpose,
                 })
             } else {
                 let continued = Box::pin(commands::apply(
@@ -525,7 +630,7 @@ pub(super) async fn apply(
                 let Mutation::Execution(execution) = continued else {
                     return Err(storage("invalid delivery continuation result"));
                 };
-                let entry = notice(connection, *session, *message, text).await?;
+                let entry = notice(connection, *session, execution.message_id, text).await?;
                 sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=?,resume_execution_id=?,resume_generation=?,owner_epoch=NULL,lease_until_ms=NULL WHERE id=? AND session_id=? AND state='pending'")
                     .bind(entry.get()).bind(execution.id.to_string()).bind(execution.generation.get()).bind(id.to_string()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
                 Mutation::Execution(execution)
@@ -633,6 +738,9 @@ pub(super) async fn apply(
         } => fork(connection, *session, *through, *rewind, *conversation_mode).await?,
         Command::Withdraw { session, message } => withdraw(connection, *session, *message).await?,
         Command::DeleteSession { session } => delete(connection, *session).await?,
+        Command::StartControlExecution { session, purpose } => {
+            Mutation::Execution(start_control_execution(connection, *session, *purpose).await?)
+        }
         Command::Continue { session, message } => {
             boundary(connection, *session, *message).await?;
             let id: Option<String> = sqlx::query_scalar(
@@ -643,15 +751,56 @@ pub(super) async fn apply(
             .fetch_optional(&mut *connection)
             .await
             .map_err(sql_error)?;
-            let execution = id.ok_or(KernelError::Ownership)?.parse().map_err(storage)?;
-            Box::pin(commands::apply(
-                connection,
-                &Command::Retry {
-                    session: *session,
-                    execution,
-                },
-            ))
-            .await?
+            if let Some(id) = id {
+                let execution = id.parse().map_err(storage)?;
+                let (view, _) = reads::execution(connection, *session, execution).await?;
+                let newer_control: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM agena_executions x JOIN agena_execution_purposes p ON p.execution_id=x.id WHERE x.session_id=? AND x.message_id>?)",
+                )
+                .bind(session.get())
+                .bind(message.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+                if view.purpose == ExecutionPurpose::Message && !newer_control {
+                    Box::pin(commands::apply(
+                        connection,
+                        &Command::Retry {
+                            session: *session,
+                            execution,
+                        },
+                    ))
+                    .await?
+                } else {
+                    // A continuation after control work needs a fresh anchor:
+                    // retrying an older user anchor would hide newer context.
+                    Mutation::Execution(
+                        start_control_execution(
+                            connection,
+                            *session,
+                            ControlExecutionPurpose::Continuation,
+                        )
+                        .await?,
+                    )
+                }
+            } else {
+                let kind: String = sqlx::query_scalar("SELECT kind FROM agena_entries WHERE id=?")
+                    .bind(message.get())
+                    .fetch_one(&mut *connection)
+                    .await
+                    .map_err(sql_error)?;
+                if kind != "user" {
+                    return Err(KernelError::Ownership);
+                }
+                Mutation::Execution(
+                    start_control_execution(
+                        connection,
+                        *session,
+                        ControlExecutionPurpose::Continuation,
+                    )
+                    .await?,
+                )
+            }
         }
         Command::Notice { scope, text } => {
             let view = commands::check_scope(connection, *scope, true).await?;

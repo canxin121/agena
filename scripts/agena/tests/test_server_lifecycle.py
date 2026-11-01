@@ -255,7 +255,10 @@ class SessionRestartTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='agena-session-restart-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.binary = Path(os.environ['AGENA_TEST_BINARY']).resolve(strict=True)
+        binary_variable = ('AGENA_TEST_PREVIOUS_BINARY'
+                           if self._testMethodName == 'test_previous_schema_upgrades_with_existing_forks'
+                           else 'AGENA_TEST_BINARY')
+        self.binary = Path(os.environ[binary_variable]).resolve(strict=True)
         self.trace_path = self.root / 'http.jsonl'
         self.trace = http_fixture.JsonLines(self.trace_path)
         self.addCleanup(self.trace.close)
@@ -323,6 +326,48 @@ class SessionRestartTests(unittest.TestCase):
                 (session_id,),
             ).fetchall()
 
+    @unittest.skipUnless(os.environ.get('AGENA_TEST_PREVIOUS_BINARY'),
+                         'requires the previous executable to create a genuine predecessor database')
+    def test_previous_schema_upgrades_with_existing_forks(self):
+        root = http_fixture.create_session(self.api, self.workspace_id, 'schema predecessor')
+        seed = self.provider.plan('upgrade_seed', 'text', payloads=['Original completed response'])
+        http_fixture.submit(self.api, root, 'UPGRADE_ORIGINAL_CONTEXT ' + 'history detail ' * 300)
+        http_fixture.wait_idle(self.api, root)
+        self.provider.assert_step(seed)
+        branch = self.api.call('POST', f'/api/v1/sessions/{root}/fork', {})[0]['session']['id']
+        before = http_fixture.read_assistant_text(self.api, branch)
+        user_ids = [part['part_id'] for part in self.api.parts(branch) if part['role'] == 'user']
+        database = (self.root / 'data/agena.db').as_uri() + '?mode=ro'
+        with sqlite3.connect(database, uri=True) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT count(*) FROM sqlite_schema WHERE name='agena_execution_purposes'",
+            ).fetchone()[0], 0, 'the predecessor executable must create the actual old schema')
+        self.stop()
+        self.binary = Path(os.environ['AGENA_TEST_BINARY']).resolve(strict=True)
+        upgraded = self.start()
+        self.assertEqual(upgraded['instance_id'], self.identity['instance_id'])
+        self.assertEqual(http_fixture.read_assistant_text(self.api, branch), before)
+        self.assertEqual([part['part_id'] for part in self.api.parts(branch) if part['role'] == 'user'], user_ids)
+        nested = self.api.call('POST', f'/api/v1/sessions/{branch}/fork', {})[0]['session']['id']
+        summary = self.provider.plan('upgrade_compact', 'text', payloads=[
+            'UPGRADED_BRANCH_SUMMARY: preserve the original branch context.',
+        ])
+        self.api.call('POST', f'/api/v1/sessions/{nested}/compact', {})
+        http_fixture.wait_idle(self.api, nested)
+        self.provider.assert_step(summary)
+        response = self.provider.plan('upgrade_continue', 'text', payloads=['Upgrade continuation succeeded'])
+        self.api.call('POST', f'/api/v1/sessions/{nested}/continue', {})
+        http_fixture.wait_idle(self.api, nested)
+        self.provider.assert_step(response)
+        self.assertIn('Upgrade continuation succeeded', http_fixture.read_assistant_text(self.api, nested))
+        requests = {record['step']: json.dumps(record['request'])
+                    for line in self.trace_path.read_text().splitlines()
+                    if (record := json.loads(line))['kind'] == 'provider_request'}
+        self.assertIn('UPGRADE_ORIGINAL_CONTEXT', requests['upgrade_compact'])
+        self.assertIn('UPGRADED_BRANCH_SUMMARY', requests['upgrade_continue'])
+        self.assertNotIn('UPGRADE_ORIGINAL_CONTEXT', requests['upgrade_continue'])
+        self.assertEqual(self.provider.errors, [])
+
     def test_crash_reconciles_abandoned_attempt_before_first_session_read(self):
         session = http_fixture.create_session(self.api, self.workspace_id, 'crash recovery')
         held = self.provider.plan('abandoned', 'held')
@@ -358,6 +403,325 @@ class SessionRestartTests(unittest.TestCase):
         assistant_boundaries = [part for part in self.api.parts(session)
                                 if part['role'] == 'assistant' and part['message_boundary']]
         self.assertEqual(len(assistant_boundaries), 1, 'the abandoned attempt must not fabricate a reply')
+        self.assertEqual(self.provider.errors, [])
+
+    def test_fork_freezes_inherited_stream_at_its_creation_boundary(self):
+        root = http_fixture.create_session(self.api, self.workspace_id, 'fork streaming boundary')
+        stream = self.provider.plan('fork_stream', 'text',
+                                    payloads=['BEFORE_FORK_BOUNDARY', 'AFTER_FORK_BOUNDARY'])
+        http_fixture.submit(self.api, root, 'Stream an answer for the branch snapshot')
+        http_fixture.poll(lambda: 'BEFORE_FORK_BOUNDARY' in
+                          http_fixture.read_assistant_text(self.api, root), 20,
+                          'parent did not publish its initial text')
+        branch = self.api.call('POST', f'/api/v1/sessions/{root}/fork', {})[0]['session']['id']
+        self.assertEqual(http_fixture.read_assistant_text(self.api, branch), 'BEFORE_FORK_BOUNDARY')
+        stream.steady_gate.set()
+        http_fixture.wait_idle(self.api, root)
+        self.provider.assert_step(stream)
+        self.assertIn('AFTER_FORK_BOUNDARY', http_fixture.read_assistant_text(self.api, root))
+        self.assertEqual(http_fixture.read_assistant_text(self.api, branch), 'BEFORE_FORK_BOUNDARY')
+        nested = self.api.call('POST', f'/api/v1/sessions/{branch}/fork', {})[0]['session']['id']
+        self.assertEqual(http_fixture.read_assistant_text(self.api, nested), 'BEFORE_FORK_BOUNDARY')
+        self.assertEqual(self.provider.errors, [])
+
+    def test_nested_fork_can_continue_without_an_owned_user_message(self):
+        root = http_fixture.create_session(self.api, self.workspace_id, 'continue inherited context')
+        seed = self.provider.plan('continue_seed', 'text', payloads=['Original answer'])
+        http_fixture.submit(self.api, root, 'CONTINUE_INHERITED_TASK')
+        http_fixture.wait_idle(self.api, root)
+        self.provider.assert_step(seed)
+        nested = root
+        for _ in range(2):
+            nested = self.api.call('POST', f'/api/v1/sessions/{nested}/fork', {})[0]['session']['id']
+        user_ids = [part['part_id'] for part in self.api.parts(nested)
+                    if part['role'] == 'user' and part['message_boundary']]
+        continuation = self.provider.plan('continue_nested', 'text', payloads=['CONTINUED_IN_FORK'])
+        self.api.call('POST', f'/api/v1/sessions/{nested}/continue', {})
+        http_fixture.wait_idle(self.api, nested)
+        self.provider.assert_step(continuation)
+        self.assertIn('CONTINUED_IN_FORK', http_fixture.read_assistant_text(self.api, nested))
+        self.assertNotIn('CONTINUED_IN_FORK', http_fixture.read_assistant_text(self.api, root))
+        self.assertEqual([part['part_id'] for part in self.api.parts(nested)
+                          if part['role'] == 'user' and part['message_boundary']], user_ids)
+        self.assertEqual(self.attempts(root), [(1, 'succeeded')])
+        self.assertEqual(self.provider.errors, [])
+
+    def test_paused_compaction_keeps_its_purpose_after_restart(self):
+        session = http_fixture.create_session(self.api, self.workspace_id, 'queued maintenance')
+        seed = self.provider.plan('compact_queue_seed', 'text', payloads=['Seed response'])
+        http_fixture.submit(self.api, session, 'COMPACT_QUEUE_HISTORY ' + 'history detail ' * 200)
+        http_fixture.wait_idle(self.api, session)
+        self.provider.assert_step(seed)
+        user_ids = [part['part_id'] for part in self.api.parts(session)
+                    if part['role'] == 'user' and part['message_boundary']]
+        self.api.call('POST', f'/api/v1/sessions/{session}/queue/pause', {'paused': True})
+        summary = self.provider.plan('compact_queue_summary', 'text',
+                                     payloads=['QUEUED_COMPACT_SUMMARY: retain the original task.'])
+        self.api.call('POST', f'/api/v1/sessions/{session}/compact', {})
+        self.assertTrue(self.api.state(session)['queue_paused'])
+        self.assertFalse(summary.requested.is_set())
+        self.stop()
+        self.start()
+        self.assertTrue(self.api.state(session)['queue_paused'])
+        self.assertFalse(summary.requested.is_set())
+        self.api.call('POST', f'/api/v1/sessions/{session}/queue/pause', {'paused': False})
+        http_fixture.wait_idle(self.api, session)
+        self.provider.assert_step(summary)
+        parts = self.api.parts(session)
+        self.assertTrue(any(part['kind'] == 'compaction' and
+                            part['content'].get('outcome') == 'compacted' for part in parts))
+        self.assertEqual([part['part_id'] for part in parts
+                          if part['role'] == 'user' and part['message_boundary']], user_ids,
+                         'maintenance must not fabricate a new user message')
+        self.assertEqual(self.provider.errors, [])
+
+    def test_other_workspace_and_nested_forks_read_their_own_files(self):
+        secondary = self.root / 'secondary-workspace'
+        secondary.mkdir()
+        (secondary / 'permission-fixture.txt').write_text('SECONDARY_SESSION_BYTES')
+        (self.workspace / 'permission-fixture.txt').write_text('WRONG_SERVER_WORKSPACE')
+        workspace = self.api.call('POST', '/api/v1/workspaces/resolve', {
+            'path': str(secondary), 'create_if_missing': True,
+        })[0]['id']
+        session = http_fixture.create_session(self.api, workspace, 'other owning workspace')
+        for label in ['other_root', 'other_nested_fork']:
+            if label == 'other_nested_fork':
+                for _ in range(2):
+                    session = self.api.call('POST', f'/api/v1/sessions/{session}/fork', {})[0]['session']['id']
+            self.assertEqual(self.api.state(session)['execution']['effective_workspace_root'], str(secondary))
+            http_fixture.ask_permission(self.api, session)
+            tool = self.provider.plan(f'{label}_tool', 'permission')
+            continuation = self.provider.plan(f'{label}_answer', 'continuation',
+                                              payloads=['Read the owning workspace'])
+            http_fixture.submit(self.api, session, 'Read permission-fixture.txt')
+            pending = http_fixture.permission_wait(self.api, session)
+            self.api.call('POST', f'/api/v1/sessions/{session}/permission-replies', {
+                'reply': {'request_id': pending['request_id'], 'kind': 'allow_once'},
+            })
+            http_fixture.wait_idle(self.api, session)
+            self.provider.assert_step(tool)
+            self.provider.assert_step(continuation)
+        requests = {record['step']: json.dumps(record['request'])
+                    for line in self.trace_path.read_text().splitlines()
+                    if (record := json.loads(line))['kind'] == 'provider_request'}
+        for step in ['other_root_answer', 'other_nested_fork_answer']:
+            self.assertIn('SECONDARY_SESSION_BYTES', requests[step])
+            self.assertNotIn('WRONG_SERVER_WORKSPACE', requests[step])
+        self.assertEqual(self.provider.errors, [])
+
+    def test_agent_tools_wait_for_child_file_read_and_compact_without_redelivery(self):
+        secondary = self.root / 'agent-workspace'
+        secondary.mkdir()
+        fixture_token = 'CHILD_OWNING_WORKSPACE_BYTES'
+        (secondary / 'permission-fixture.txt').write_text(fixture_token)
+        (self.workspace / 'permission-fixture.txt').write_text('WRONG_SERVER_WORKSPACE')
+        workspace = self.api.call('POST', '/api/v1/workspaces/resolve', {
+            'path': str(secondary), 'create_if_missing': True,
+        })[0]['id']
+        parent = http_fixture.create_session(self.api, workspace, 'real agent tools')
+        database = (self.root / 'data/agena.db').as_uri() + '?mode=ro'
+
+        def stored(query, *parameters):
+            with sqlite3.connect(database, uri=True) as connection:
+                return connection.execute(query, parameters).fetchall()
+
+        def tool_phases(session):
+            return stored(
+                "SELECT json_extract(t.input_json,'$.tool'),t.phase FROM agena_tool_calls t "
+                'JOIN agena_executions e ON e.id=t.execution_id WHERE e.session_id=? ORDER BY t.id',
+                session,
+            )
+
+        def results():
+            return stored(
+                'SELECT id,payload_json,state,observed_round_id FROM agena_deliveries '
+                "WHERE session_id=? AND json_extract(payload_json,'$.kind')='agent_result' ORDER BY id",
+                parent,
+            )
+
+        # Both tool calls belong to one parent round. The actual agent.wait
+        # blocks its next model request until the independently running child
+        # finishes, giving the FIFO provider an unambiguous child/parent order.
+        delegation = self.provider.plan('agent_spawn_wait', 'tool-calls', tool_calls=[
+            {'tool': 'agent.spawn', 'input': {
+                'name': 'reader',
+                'prompt': 'CHILD_TASK_CONTEXT: Read permission-fixture.txt and report its bytes. '
+                          + 'Preserve the delegated scope. ' * 100,
+            }},
+            {'tool': 'agent.wait', 'input': {'timeout_ms': 15000}},
+        ])
+        child_read = self.provider.plan('agent_child_read', 'permission')
+        child_answer = self.provider.plan('agent_child_answer', 'text',
+                                          payloads=['CHILD_WAITING_FOR_TEST\n',
+                                                    'CHILD_FINAL_RESULT: ' + fixture_token],
+                                          expected_tool_bytes=fixture_token)
+        parent_answer = self.provider.plan('agent_parent_answer', 'text',
+                                           payloads=['PARENT_RECEIVED_CHILD_RESULT'],
+                                           expected_tool_bytes='CHILD_FINAL_RESULT: ' + fixture_token)
+        http_fixture.submit(self.api, parent, 'PARENT_PRIVATE_CONTEXT: delegate the file read and wait.')
+        self.assertTrue(child_read.requested.wait(20), 'spawn did not start the child model request')
+        self.assertTrue(child_answer.requested.wait(20), 'child did not observe its successful fs.read')
+        children = stored('SELECT id FROM agena_sessions WHERE parent_session_id=? AND agent_name=?',
+                          parent, 'reader')
+        self.assertEqual(len(children), 1, 'agent.spawn must create exactly one child')
+        child = children[0][0]
+        child_state = self.api.state(child)
+        self.assertEqual(http_fixture.state_kind(child_state), 'running')
+        self.assertEqual(child_state['session']['parent_id'], parent)
+        self.assertEqual(child_state['session']['root_id'], parent)
+        self.assertEqual(child_state['session']['depth'], 1)
+        self.assertEqual(child_state['session']['relation_kind'], 'subagent')
+        self.assertEqual(child_state['session']['agent_status'], 'running')
+        self.assertEqual(child_state['execution']['effective_workspace_root'], str(secondary))
+        self.assertEqual(http_fixture.pending_permissions(child_state), [])
+        self.assertEqual(tool_phases(child), [('fs.read', 'succeeded')])
+        parent_state = self.api.state(parent)
+        self.assertEqual(http_fixture.state_kind(parent_state), 'running')
+        self.assertEqual(parent_state['session']['state']['data']['workflow'], 'tool_pending')
+        self.assertEqual(http_fixture.pending_permissions(parent_state), [])
+        self.assertIn(('agent.wait', 'running'), tool_phases(parent))
+        self.assertFalse(parent_answer.requested.is_set(), 'agent.wait must wait for the child result')
+        self.assertEqual(results(), [])
+
+        # The delegated read is already authorized by the owning workspace.
+        # Subagents cannot ask users directly; hold their actual model stream
+        # instead so agent.wait is observed before the child finishes.
+        child_answer.steady_gate.set()
+        http_fixture.wait_idle(self.api, parent)
+        completed = http_fixture.wait_idle(self.api, child)
+        for step in [delegation, child_read, child_answer, parent_answer]:
+            self.provider.assert_step(step)
+        self.assertEqual(completed['session']['agent_status'], 'completed')
+        self.assertEqual(http_fixture.pending_permissions(completed), [])
+        self.assertIsNone(completed['execution'].get('agent_failure'))
+        self.assertIsNotNone(completed['execution'].get('agent_finished_at'))
+        self.assertEqual(tool_phases(parent), [('agent.spawn', 'succeeded'), ('agent.wait', 'succeeded')])
+        self.assertEqual(tool_phases(child), [('fs.read', 'succeeded')])
+        wait_reason = stored(
+            "SELECT json_extract(t.result_json,'$.raw_output.payload.reason') FROM agena_tool_calls t "
+            'JOIN agena_executions e ON e.id=t.execution_id '
+            "WHERE e.session_id=? AND json_extract(t.input_json,'$.tool')='agent.wait'", parent,
+        )
+        self.assertEqual(wait_reason, [('message',)], 'agent.wait must wake from delivery, not timeout')
+        delivered = results()
+        self.assertEqual(len(delivered), 1, 'the delegated run must deliver exactly one final result')
+        result = json.loads(delivered[0][1])
+        self.assertEqual(result['agent_id'], child)
+        self.assertEqual(result['status'], 'completed')
+        self.assertIn('CHILD_FINAL_RESULT: ' + fixture_token, result['text'])
+        self.assertEqual(delivered[0][2], 'consumed')
+        self.assertIsNotNone(delivered[0][3], 'the parent model must observe the delivered result')
+        self.assertEqual(self.attempts(parent), [(1, 'succeeded')])
+        self.assertEqual(self.attempts(child), [(1, 'succeeded')])
+        self.assertIn('PARENT_RECEIVED_CHILD_RESULT', http_fixture.read_assistant_text(self.api, parent))
+
+        parent_parts = self.api.parts(parent)
+        child_users = [part['part_id'] for part in self.api.parts(child)
+                       if part['role'] == 'user' and part['message_boundary']]
+        summary = self.provider.plan('agent_child_compact', 'text',
+                                     payloads=['COMPACTED_CHILD_CONTEXT: keep the file read result.'])
+        self.api.call('POST', f'/api/v1/sessions/{child}/compact', {})
+        compacted = http_fixture.wait_idle(self.api, child)
+        self.provider.assert_step(summary)
+        self.assertEqual(summary.facts['response_content_type'], 'application/json')
+        self.assertTrue(any(part['kind'] == 'compaction' and
+                            part['content'].get('outcome') == 'compacted' for part in self.api.parts(child)))
+        for field in ['agent_status', 'agent_started_at', 'agent_finished_at', 'agent_failure']:
+            self.assertEqual(compacted['execution'].get(field), completed['execution'].get(field), field)
+        self.assertEqual(results(), delivered, 'maintenance must not redeliver the delegated answer')
+        self.assertEqual(self.api.parts(parent), parent_parts)
+        self.assertEqual([part['part_id'] for part in self.api.parts(child)
+                          if part['role'] == 'user' and part['message_boundary']], child_users)
+        self.assertEqual(self.attempts(child), [(1, 'succeeded'), (1, 'succeeded')])
+        requests = {record['step']: json.dumps(record['request'])
+                    for line in self.trace_path.read_text().splitlines()
+                    if (record := json.loads(line))['kind'] == 'provider_request'}
+        self.assertNotIn('PARENT_PRIVATE_CONTEXT', requests['agent_child_read'])
+        self.assertIn(fixture_token, requests['agent_child_answer'])
+        self.assertNotIn('WRONG_SERVER_WORKSPACE', requests['agent_child_answer'])
+        self.assertIn('CHILD_FINAL_RESULT: ' + fixture_token, requests['agent_parent_answer'])
+        self.assertIn('CHILD_TASK_CONTEXT', requests['agent_child_compact'])
+        self.assertEqual(self.provider.errors, [])
+
+    def test_nested_forks_compact_use_tools_and_resume_without_parent_state(self):
+        root = http_fixture.create_session(self.api, self.workspace_id, 'independent fork root')
+        seed = self.provider.plan('fork_seed', 'text', payloads=['Original response before branching'])
+        http_fixture.submit(self.api, root, 'ORIGINAL_HISTORY_MARKER ' + 'history detail ' * 600)
+        http_fixture.wait_idle(self.api, root)
+        self.provider.assert_step(seed)
+        branch = self.api.call('POST', f'/api/v1/sessions/{root}/fork', {})[0]['session']
+        nested = self.api.call('POST', f'/api/v1/sessions/{branch["id"]}/fork', {})[0]['session']
+        self.assertEqual(branch['parent_id'], root)
+        self.assertEqual(nested['parent_id'], branch['id'])
+        self.assertEqual(nested['root_id'], root)
+        self.assertEqual(nested['depth'], 2)
+        self.assertEqual(nested['relation_kind'], 'fork')
+        branch_parts = self.api.parts(branch['id'])
+
+        parent_run = self.provider.plan('fork_parent_running', 'held')
+        http_fixture.submit(self.api, root, 'ROOT_ONLY_LIVE_MESSAGE')
+        self.assertTrue(parent_run.requested.wait(20))
+        summary = self.provider.plan('nested_compaction', 'text', payloads=[
+            'COMPACTED_NESTED_CONTEXT: preserve the independent branch investigation.',
+        ])
+        self.api.call('POST', f'/api/v1/sessions/{nested["id"]}/compact', {})
+        http_fixture.wait_idle(self.api, nested['id'])
+        self.provider.assert_step(summary)
+        self.assertTrue(any(part['kind'] == 'compaction' and
+                            part['content'].get('outcome') == 'compacted'
+                            for part in self.api.parts(nested['id'])))
+        self.assertEqual(self.api.parts(branch['id']), branch_parts)
+        self.assertEqual(http_fixture.state_kind(self.api.state(root)), 'running')
+
+        branch_run = self.provider.plan('fork_branch_running', 'held')
+        http_fixture.submit(self.api, branch['id'], 'BRANCH_ONLY_LIVE_MESSAGE')
+        self.assertTrue(branch_run.requested.wait(20))
+        self.api.call('POST', f'/api/v1/sessions/{root}/cancel', {})
+        http_fixture.wait_idle(self.api, root)
+        self.provider.assert_step(parent_run)
+        self.assertEqual(http_fixture.state_kind(self.api.state(branch['id'])), 'running')
+        self.assertFalse(branch_run.disconnected.is_set(), 'stopping the root must not stop a fork')
+        self.api.call('POST', f'/api/v1/sessions/{branch["id"]}/cancel', {})
+        http_fixture.wait_idle(self.api, branch['id'])
+        self.provider.assert_step(branch_run)
+
+        fixture_token = 'NESTED_FORK_ACTUAL_TOOL_BYTES'
+        (self.workspace / 'permission-fixture.txt').write_text(fixture_token)
+        http_fixture.ask_permission(self.api, nested['id'])
+        tool = self.provider.plan('nested_tool', 'permission')
+        continuation = self.provider.plan('nested_tool_continuation', 'continuation',
+                                          payloads=['Nested tool completed'],
+                                          expected_tool_bytes=fixture_token)
+        http_fixture.submit(self.api, nested['id'], 'Read permission-fixture.txt')
+        pending = http_fixture.permission_wait(self.api, nested['id'])
+        self.assertEqual(pending['session_id'], nested['id'])
+        self.assertEqual(http_fixture.pending_permissions(self.api.state(root)), [])
+        self.assertEqual(http_fixture.pending_permissions(self.api.state(branch['id'])), [])
+        self.api.call('POST', f'/api/v1/sessions/{nested["id"]}/permission-replies', {
+            'reply': {'request_id': pending['request_id'], 'kind': 'allow_once'},
+        })
+        http_fixture.wait_idle(self.api, nested['id'])
+        self.provider.assert_step(tool)
+        self.provider.assert_step(continuation)
+        self.assertIn('Nested tool completed', http_fixture.read_assistant_text(self.api, nested['id']))
+
+        self.stop()
+        self.start()
+        resumed = self.provider.plan('nested_after_restart', 'text',
+                                     payloads=['Nested branch resumed after restart'])
+        http_fixture.submit(self.api, nested['id'], 'Continue the nested branch')
+        http_fixture.wait_idle(self.api, nested['id'])
+        self.provider.assert_step(resumed)
+        requests = {record['step']: json.dumps(record['request'])
+                    for line in self.trace_path.read_text().splitlines()
+                    if (record := json.loads(line))['kind'] == 'provider_request'}
+        self.assertIn('ORIGINAL_HISTORY_MARKER', requests['nested_compaction'])
+        self.assertNotIn('ROOT_ONLY_LIVE_MESSAGE', requests['nested_compaction'])
+        for step in ['nested_tool', 'nested_tool_continuation', 'nested_after_restart']:
+            self.assertIn('COMPACTED_NESTED_CONTEXT', requests[step])
+            self.assertNotIn('ORIGINAL_HISTORY_MARKER', requests[step])
+            self.assertNotIn('ROOT_ONLY_LIVE_MESSAGE', requests[step])
+            self.assertNotIn('BRANCH_ONLY_LIVE_MESSAGE', requests[step])
         self.assertEqual(self.provider.errors, [])
 
     def test_crash_restores_queued_messages_in_order_without_the_sender(self):

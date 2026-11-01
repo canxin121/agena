@@ -468,6 +468,25 @@ impl LiveContent {
         tokio::time::Instant::from_std(next)
     }
 
+    /// Commit an owner's already accepted tail at a fork cut without closing
+    /// capture or preventing that owner from continuing afterward. Inherited
+    /// streams keep the source cut recorded by their earlier branch.
+    pub fn branch_snapshot(&self, session: SessionId) -> Vec<StagedSource> {
+        let mut registry = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        registry
+            .sources
+            .values_mut()
+            .filter(|source| {
+                source.scope.session() == session
+                    && (source.head.accepted > source.head.committed || !source.losses.is_empty())
+            })
+            .map(|source| {
+                let state = source.head.state;
+                Self::stage_source(source, state, true)
+            })
+            .collect()
+    }
+
     /// Terminal scopes are selected from the bounded live registry. An
     /// inherited source stays owned by its origin; membership grants reads.
     pub fn terminal(&self, request: RequestId, command: &Command) -> Vec<StagedSource> {
@@ -634,12 +653,16 @@ impl LiveContent {
 
     fn snapshot(
         &self,
+        session: SessionId,
         content: ContentId,
         start: u64,
         limit: usize,
     ) -> Option<(ContentStreamView, Vec<u8>)> {
         let registry = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let source = registry.sources.get(&content)?;
+        if source.scope.session() != session {
+            return None;
+        }
         let Buffer::Text { assembler, blocks } = &source.buffer else {
             return None;
         };
@@ -665,11 +688,12 @@ impl LiveContent {
         Some((source.head.clone(), bytes))
     }
 
-    fn subscribe(&self, content: ContentId) -> Option<ContentWatch> {
+    fn subscribe(&self, session: SessionId, content: ContentId) -> Option<ContentWatch> {
         let registry = self.0.lock().unwrap_or_else(|e| e.into_inner());
         registry
             .sources
             .get(&content)
+            .filter(|source| source.scope.session() == session)
             .map(|source| ContentWatch::from_receiver(source.sender.subscribe()))
     }
 
@@ -1029,7 +1053,7 @@ async fn authorize(
     session: SessionId,
     content: ContentId,
 ) -> Result<()> {
-    let member: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_streams c JOIN agena_segment_entries m ON m.entry_id=c.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE c.id=? AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let member: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_streams c JOIN agena_segment_entries m ON m.entry_id=c.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE c.id=? AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND (NOT EXISTS(SELECT 1 FROM agena_branch_entries frozen WHERE frozen.session_id=s.session_id AND frozen.entry_id=c.entry_id) OR EXISTS(SELECT 1 FROM agena_branch_sources frozen WHERE frozen.session_id=s.session_id AND frozen.content_id=c.id AND frozen.entry_id=c.entry_id)))")
         .bind(content.to_string()).bind(session.get()).fetch_one(connection).await.map_err(sql_error)?;
     if !member {
         return Err(KernelError::Ownership);
@@ -1040,12 +1064,20 @@ async fn authorize(
 async fn validate_boundary(
     connection: &mut SqliteConnection,
     boundary: &ContentStreamView,
+    branch: Option<&ContentStreamView>,
 ) -> Result<ContentStreamView> {
     let current = stored_head(connection, boundary.id).await?;
-    if boundary.epoch != current.epoch
+    // A branch's committed cut remains readable after the source owner's
+    // capture epoch changes during restart. Only a stored branch snapshot
+    // grants that exception; a caller-supplied head never does.
+    let authority = branch.unwrap_or(&current);
+    if boundary.epoch != authority.epoch
         || boundary.entry != current.entry
         || boundary.kind != current.kind
+        || boundary.activity_id != authority.activity_id
+        || boundary.ordinal != authority.ordinal
         || boundary.accepted != boundary.committed
+        || boundary.committed > authority.committed
         || boundary.committed > current.committed
         || boundary.retained_start > boundary.committed
     {
@@ -1056,6 +1088,24 @@ async fn validate_boundary(
     // floor rather than implying that an already pruned prefix is readable.
     frozen.retained_start = current.retained_start.max(frozen.retained_start);
     Ok(frozen)
+}
+
+/// Resolve the session's frozen source cut before considering any live head
+/// or cached authorization. A round may request an earlier prefix, but never
+/// expand an inherited source beyond the branch's persisted cut.
+async fn scoped_boundary(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    content: ContentId,
+    requested: Option<&ContentStreamView>,
+) -> Result<Option<ContentStreamView>> {
+    let branch = super::branches::source(connection, session, content).await?;
+    match requested.or(branch.as_ref()) {
+        Some(boundary) => validate_boundary(connection, boundary, branch.as_ref())
+            .await
+            .map(Some),
+        None => Ok(None),
+    }
 }
 
 pub(super) async fn range(
@@ -1097,7 +1147,7 @@ async fn range_inner(
     // that races this read can only add an already captured suffix to SQLite.
     let snapshot = boundary
         .is_none()
-        .then(|| backend.live.snapshot(content, start, limit))
+        .then(|| backend.live.snapshot(session, content, start, limit))
         .flatten();
     let mut transaction = backend
         .reader
@@ -1106,11 +1156,9 @@ async fn range_inner(
         .await
         .map_err(storage)?;
     authorize(&mut transaction, session, content).await?;
-    let (head, tail) = match (boundary, snapshot) {
-        (Some(boundary), _) => (
-            validate_boundary(&mut transaction, boundary).await?,
-            Vec::new(),
-        ),
+    let frozen = scoped_boundary(&mut transaction, session, content, boundary).await?;
+    let (head, tail) = match (frozen, snapshot) {
+        (Some(frozen), _) => (frozen, Vec::new()),
         (_, Some(snapshot)) => snapshot,
         (_, None) => (stored_head(&mut transaction, content).await?, Vec::new()),
     };
@@ -1207,7 +1255,12 @@ pub(super) async fn watch(
         .await
         .map_err(storage)?;
     authorize(&mut connection, session, content).await?;
-    if let Some(watch) = live.subscribe(content) {
+    if let Some(head) = scoped_boundary(&mut connection, session, content, None).await? {
+        let (sender, receiver) = watch::channel(head);
+        drop(sender);
+        return Ok(ContentWatch::from_receiver(receiver));
+    }
+    if let Some(watch) = live.subscribe(session, content) {
         return Ok(watch);
     }
     let head = stored_head(&mut connection, content).await?;

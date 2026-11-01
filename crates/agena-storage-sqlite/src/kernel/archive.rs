@@ -115,6 +115,7 @@ fn content_references(value: &Value, ids: &mut Vec<String>) -> Result<()> {
 async fn discover(
     backend: &Backend,
     graph: &mut SqliteConnection,
+    session: SessionId,
     kind: &str,
     value: &Value,
 ) -> Result<()> {
@@ -128,10 +129,21 @@ async fn discover(
                 &facts["entry"]["response_entry_id"],
                 &facts["execution"]["message_id"],
                 &facts["attempt"]["response_entry_id"],
+                &facts["branch_facts"]["response_entry_id"],
             ] {
                 if let Some(id) = value.as_i64() {
                     entries.push(id);
                 }
+            }
+            if let Some(interactions) = facts["branch_facts"]["interactions"].as_array() {
+                let linked: Vec<i64> = sqlx::query_scalar(
+                    "SELECT id FROM agena_entries WHERE interaction_id IN (SELECT value FROM json_each(?))",
+                )
+                .bind(encode(interactions)?)
+                .fetch_all(backend.reader.get_sqlite_connection_pool())
+                .await
+                .map_err(sql_error)?;
+                entries.extend(linked);
             }
             if facts["entry"]["payload"]["kind"] == "compaction" {
                 if let Some(id) = facts["entry"]["payload"]["through"].as_i64() {
@@ -188,14 +200,33 @@ async fn discover(
                     .as_str()
                     .ok_or_else(|| storage("archive frozen source has no head"))?,
             )?;
-            let actual =
-                sqlx::query("SELECT entry_id,epoch,kind FROM agena_content_streams WHERE id=?")
-                    .bind(head.id.to_string())
-                    .fetch_one(backend.reader.get_sqlite_connection_pool())
-                    .await
-                    .map_err(sql_error)?;
+            let actual = sqlx::query(
+                "SELECT entry_id,epoch,kind,committed_head FROM agena_content_streams WHERE id=?",
+            )
+            .bind(head.id.to_string())
+            .fetch_one(backend.reader.get_sqlite_connection_pool())
+            .await
+            .map_err(sql_error)?;
+            let mut epoch_matches =
+                actual.try_get::<String, _>("epoch").map_err(storage)? == head.epoch.to_string();
+            if !epoch_matches {
+                let frozen: Option<String> = sqlx::query_scalar("SELECT head_json FROM agena_branch_sources WHERE session_id=? AND content_id=?")
+                    .bind(session.get()).bind(head.id.to_string()).fetch_optional(backend.reader.get_sqlite_connection_pool()).await.map_err(sql_error)?;
+                if let Some(frozen) = frozen {
+                    let frozen: ContentStreamView = decode(&frozen)?;
+                    epoch_matches = frozen.id == head.id
+                        && frozen.entry == head.entry
+                        && frozen.kind == head.kind
+                        && frozen.epoch == head.epoch
+                        && head.committed <= frozen.committed;
+                }
+            }
             if actual.try_get::<i64, _>("entry_id").map_err(storage)? != head.entry.get()
-                || actual.try_get::<String, _>("epoch").map_err(storage)? != head.epoch.to_string()
+                || !epoch_matches
+                || head.committed
+                    > actual
+                        .try_get::<i64, _>("committed_head")
+                        .map_err(storage)? as u64
                 || actual.try_get::<String, _>("kind").map_err(storage)?
                     != commands::enum_text(&head.kind)?
             {
@@ -289,6 +320,7 @@ impl Writer<'_, '_> {
             discover(
                 self.backend,
                 self.graph,
+                self.session,
                 kind,
                 &serde_json::to_value(data).map_err(storage)?,
             )
@@ -352,6 +384,11 @@ struct Bundle {
     created_at_ms: i64,
     round_id: Option<i64>,
     execution: Value,
+    execution_purpose: Option<ControlExecutionPurpose>,
+    branch_facts: Option<Value>,
+    branch_sources: Vec<Value>,
+    branch_round: Option<Value>,
+    branch_activities: Vec<Value>,
     attempt: Value,
     tool: Option<Value>,
     activities: Vec<Value>,
@@ -504,6 +541,48 @@ async fn bundle(
             )
         })
         .collect::<Result<_>>()?;
+    let execution_purpose = sqlx::query_scalar::<_, String>(
+        "SELECT purpose FROM agena_execution_purposes WHERE execution_id=?",
+    )
+    .bind(entry.execution_id.to_string())
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql_error)?
+    .map(|purpose| decode(&encode(&purpose)?))
+    .transpose()?;
+    let branch_facts: Option<String> = sqlx::query_scalar(
+        "SELECT facts_json FROM agena_branch_entries WHERE session_id=? AND entry_id=?",
+    )
+    .bind(lease.session.get())
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    let branch_facts: Option<Value> = branch_facts.as_deref().map(decode).transpose()?;
+    let branch_sources = sqlx::query(
+        "SELECT content_id,entry_id,head_json FROM agena_branch_sources WHERE session_id=? AND entry_id=? ORDER BY content_id LIMIT 129",
+    )
+    .bind(lease.session.get()).bind(id).fetch_all(&mut *tx).await.map_err(sql_error)?
+    .iter().map(|row| raw(row, &["content_id","head_json"], &["entry_id"])).collect::<Result<Vec<_>>>()?;
+    if branch_sources.len() > 128 {
+        return Err(storage("archive frozen source identity budget is corrupt"));
+    }
+    let branch_round = sqlx::query(
+        "SELECT round_id,phase,has_provider_state,finished_at_ms FROM agena_branch_rounds WHERE session_id=? AND round_id=?",
+    )
+    .bind(lease.session.get()).bind(row.try_get::<Option<i64>,_>("round_id").map_err(storage)?)
+    .fetch_optional(&mut *tx).await.map_err(sql_error)?
+    .as_ref().map(|row| raw(row, &["phase"], &["round_id","has_provider_state","finished_at_ms"])).transpose()?;
+    let branch_activities = sqlx::query(
+        "SELECT b.activity_id,b.has_outcome,b.finished_at_ms FROM agena_branch_activities b JOIN agena_background_activities a ON a.id=b.activity_id WHERE b.session_id=? AND a.entry_id=? ORDER BY b.activity_id LIMIT 17",
+    )
+    .bind(lease.session.get()).bind(id).fetch_all(&mut *tx).await.map_err(sql_error)?
+    .iter().map(|row| raw(row, &["activity_id"], &["has_outcome","finished_at_ms"])).collect::<Result<Vec<_>>>()?;
+    if branch_activities.len() > super::activity::MAX_ACTIVITIES_PER_TOOL as usize {
+        return Err(storage(
+            "archive frozen activity identity budget is corrupt",
+        ));
+    }
     let result = Bundle {
         entry,
         created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
@@ -518,6 +597,11 @@ async fn bundle(
                 "created_at_ms",
             ],
         )?,
+        execution_purpose,
+        branch_facts,
+        branch_sources,
+        branch_round,
+        branch_activities,
         attempt: raw(
             &attempt,
             &["execution_id", "owner_epoch", "phase"],
@@ -1454,7 +1538,11 @@ pub(super) async fn export(
                 .line("support_entry", &json!({"facts":&*fact}), true)
                 .await?;
         }
-        if matches!(fact.entry.payload, EntryPayload::User { .. }) {
+        if matches!(fact.entry.payload, EntryPayload::User { .. })
+            || (fact.execution_purpose.is_some()
+                && fact.entry.id == fact.entry.message_id
+                && matches!(fact.entry.payload, EntryPayload::Notice { .. }))
+        {
             let through = fact.execution["current_generation"]
                 .as_i64()
                 .ok_or_else(|| storage("invalid archive execution"))?;

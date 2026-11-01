@@ -20,6 +20,7 @@ mod activity;
 mod archive;
 
 mod blobs;
+mod branches;
 
 mod commands;
 mod content;
@@ -165,6 +166,7 @@ async fn compose_database(
     database: KernelDatabase,
     diagnostics: KernelDiagnostics,
 ) -> Result<(KernelPorts, port::KernelMaintenance)> {
+    branches::backfill(database.writer.get_sqlite_connection_pool()).await?;
     commands::recover(&database.writer).await?;
     let (sender, receiver) = mpsc::channel(1024);
     let epoch = KernelEpoch::new();
@@ -1930,6 +1932,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Withdraw { session, .. }
         | Command::DeleteSession { session }
         | Command::Continue { session, .. }
+        | Command::StartControlExecution { session, .. }
         | Command::Deliver { session, .. }
         | Command::DeliverToExecution { session, .. }
         | Command::ResumeDelivery { session, .. }
@@ -2040,7 +2043,13 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         | Command::DeleteSession { session }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
         Command::Continue { session, .. } | Command::ResumeDelivery { session, .. } => {
-            (*session, ChangeKind::Execution)
+            let kind = if matches!(mutation, Mutation::Execution(view) if view.purpose != ExecutionPurpose::Message)
+            {
+                ChangeKind::Membership
+            } else {
+                ChangeKind::Execution
+            };
+            (*session, kind)
         }
         Command::Notice { scope, .. } => (scope.session, ChangeKind::Membership),
         Command::Deliver { session, .. } | Command::DeliverToExecution { session, .. } => {
@@ -2049,7 +2058,9 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         Command::Metadata { session, .. } | Command::Selection { session, .. } => {
             (*session, ChangeKind::Metadata)
         }
-        Command::Send { session, .. } => (*session, ChangeKind::Membership),
+        Command::Send { session, .. } | Command::StartControlExecution { session, .. } => {
+            (*session, ChangeKind::Membership)
+        }
         Command::Claim { session, .. }
         | Command::EditQueued { session, .. }
         | Command::ClaimNext { session, .. }
@@ -2126,21 +2137,26 @@ async fn execute(
     // installing the checkpoint. Rollback preserves accepted live tails for a
     // retry, just as other failed terminal barriers do.
     let compaction = matches!(pending.command, Command::CommitCompaction { .. });
+    let forking = matches!(pending.command, Command::Fork { .. });
     let mut updates = if compaction {
         live.terminal(pending.request, &pending.command)
+    } else if let Command::Fork { session, .. } = pending.command {
+        live.branch_snapshot(session)
     } else {
         Vec::new()
     };
-    if compaction {
+    if compaction || forking {
         content::persist(connection, &mut updates).await?;
-        content::seal_stored(connection, &pending.command).await?;
+        if compaction {
+            content::seal_stored(connection, &pending.command).await?;
+        }
     }
     let before = match previous_list_session(&pending.command) {
         Some(session) => list_state(connection, session).await?,
         None => None,
     };
     let mut value = commands::apply(connection, &pending.command).await?;
-    if !compaction {
+    if !compaction && !forking {
         updates = live.terminal(pending.request, &pending.command);
         content::persist(connection, &mut updates).await?;
         content::seal_stored(connection, &pending.command).await?;

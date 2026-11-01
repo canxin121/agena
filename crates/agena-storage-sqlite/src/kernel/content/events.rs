@@ -333,6 +333,7 @@ impl LiveContent {
 
     fn event_page_capture(
         &self,
+        session: SessionId,
         content: ContentId,
         after: u64,
         limit: usize,
@@ -342,6 +343,11 @@ impl LiveContent {
         let Some(source) = registry.sources.get(&content) else {
             return Ok(None);
         };
+        // Inherited streams are read from their persisted branch cut. Avoid
+        // copying the owner's tail or reserving a large-frame read for it.
+        if source.scope.session() != session {
+            return Ok(None);
+        }
         let Buffer::Events {
             assembler, blocks, ..
         } = &source.buffer
@@ -393,10 +399,14 @@ impl LiveContent {
 
     fn event_projection_capture(
         &self,
+        session: SessionId,
         content: ContentId,
     ) -> Option<(ContentStreamView, EventProjection)> {
         let registry = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let source = registry.sources.get(&content)?;
+        if source.scope.session() != session {
+            return None;
+        }
         let Buffer::Events { projection, .. } = &source.buffer else {
             return None;
         };
@@ -725,6 +735,7 @@ fn cached_page(
     // Never acquire live while holding a cache guard. The complete live cut
     // precedes authorization lookup, and the final stamp rejects a COMMIT race.
     let capture = backend.live.event_page_capture(
+        session,
         content,
         after.map_or(0, |cursor| cursor.sequence),
         limit,
@@ -817,6 +828,7 @@ async fn page_inner(
     let fill = backend.cache.stamp()?;
     let capture = if boundary.is_none() {
         backend.live.event_page_capture(
+            session,
             content,
             after.map_or(0, |cursor| cursor.sequence),
             limit,
@@ -834,8 +846,11 @@ async fn page_inner(
     let measurement = backend.live.diagnostics().read_transaction();
     let result = async {
         authorize(&mut transaction, session, content).await?;
-        let (head, tail, context, large_read) = if let Some(boundary) = boundary {
-            (validate_boundary(&mut transaction, boundary).await?, Vec::new(), None, None)
+        let frozen = scoped_boundary(&mut transaction, session, content, boundary).await?;
+        let (head, tail, context, large_read) = if let Some(frozen) = frozen {
+            // A branch must never install a live authorization context or
+            // merge its owner's buffered suffix into the inherited cut.
+            (frozen, Vec::new(), None, None)
         } else {
             let stored = stored_head(&mut transaction, content).await?;
             let context = ContentReadContext { head: stored.clone() };
@@ -936,7 +951,7 @@ async fn snapshot_inner(
         .map_err(|_| KernelError::Busy)?;
     let capture = boundary
         .is_none()
-        .then(|| backend.live.event_projection_capture(content))
+        .then(|| backend.live.event_projection_capture(session, content))
         .flatten();
     let mut transaction = backend
         .reader
@@ -947,11 +962,12 @@ async fn snapshot_inner(
     let measurement = backend.live.diagnostics().read_transaction();
     let result = async {
     authorize(&mut transaction, session, content).await?;
-    if let Some((head, projection)) = capture {
+    let frozen = scoped_boundary(&mut transaction, session, content, boundary).await?;
+    if frozen.is_none() && let Some((head, projection)) = capture {
         return projection.snapshot(head);
     }
-    let head = if let Some(boundary) = boundary {
-        validate_boundary(&mut transaction, boundary).await?
+    let head = if let Some(frozen) = frozen {
+        frozen
     } else {
         stored_head(&mut transaction, content).await?
     };

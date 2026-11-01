@@ -156,7 +156,10 @@ pub(in crate::kernel) async fn page(
         .await
         .map_err(storage)?;
     authorize(&mut tx, session, content).await?;
-    let head = stored_head(&mut tx, content).await?;
+    let head = match scoped_boundary(&mut tx, session, content, None).await? {
+        Some(frozen) => frozen,
+        None => stored_head(&mut tx, content).await?,
+    };
     let packet = after.map_or(0, |cursor| cursor.packet);
     if after.is_some_and(|cursor| cursor.content != content || cursor.epoch != head.epoch)
         || packet > head.capture_loss.committed_packets

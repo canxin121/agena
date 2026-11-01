@@ -223,7 +223,7 @@ pub(super) async fn apply(
                     return Err(KernelError::Ownership);
                 }
             } else {
-                let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_blob_references r JOIN agena_segment_entries m ON m.entry_id=r.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE r.blob_id=? AND s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+                let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_blob_references r JOIN agena_segment_entries m ON m.entry_id=r.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE r.blob_id=? AND s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND (NOT EXISTS(SELECT 1 FROM agena_branch_entries f WHERE f.session_id=s.session_id AND f.entry_id=r.entry_id) OR EXISTS(SELECT 1 FROM agena_branch_entries f,json_each(f.facts_json,'$.blobs') b WHERE f.session_id=s.session_id AND f.entry_id=r.entry_id AND b.value=r.blob_id)))")
                     .bind(blob.to_string()).bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
                 if !allowed || row.try_get::<String, _>("state").map_err(storage)? != "ready" {
                     return Err(KernelError::Ownership);
@@ -237,6 +237,9 @@ pub(super) async fn apply(
             blob,
         } => {
             let entry = snapshots::member(connection, *snapshot, *position).await?;
+            // Archives retain complete source dependencies. The imported branch
+            // facts enforce the visible cut; ordinary PinBlob applies that cut
+            // before granting a session read capability.
             let allowed: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM agena_blob_references WHERE entry_id=? AND blob_id=?)",
             )
@@ -425,7 +428,10 @@ pub(super) async fn entry_blobs(
         .map_err(storage)?;
     let read_transaction = backend.live.diagnostics().read_transaction();
     member(&mut tx, session, entry).await?;
-    let result = descriptors(&mut tx, entry.get()).await?;
+    let mut result = descriptors(&mut tx, entry.get()).await?;
+    if let Some(facts) = branches::entry_facts(&mut tx, session, entry).await? {
+        facts.apply_blobs(&mut result);
+    }
     tx.rollback().await.map_err(storage)?;
     read_transaction.complete();
     Ok(result)

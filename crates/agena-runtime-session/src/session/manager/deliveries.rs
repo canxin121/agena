@@ -294,7 +294,10 @@ impl SessionManager {
             let options = self
                 .options_for_selection(&snapshot.metadata.selection.clone().unwrap_or_default())?;
             let permit = self.reserve_execution()?;
-            self.supervise(execution, options, false, permit);
+            // A queued maintenance action keeps its purpose across pause,
+            // shutdown and recovery. It must not turn into an ordinary reply.
+            let compact = execution.purpose == ExecutionPurpose::Compaction;
+            self.supervise(execution, options, compact, permit);
             recovered += 1;
         }
         Ok(recovered)
@@ -312,17 +315,44 @@ impl SessionManager {
         let Some(last) = page.entries.first() else {
             return Ok(None);
         };
-        let user = self
+        let message = self
             .kernel()
             .reader
             .entry(session, last.message_id)
             .await
             .map_err(kernel_error)?;
-        Ok(
-            (user.origin_session_id == session
-                && matches!(user.payload, EntryPayload::User { .. }))
-            .then_some(user.id),
-        )
+        Ok(self
+            .owns_message_boundary(session, &message)
+            .await?
+            .then_some(message.id))
+    }
+
+    async fn owns_message_boundary(
+        &self,
+        session: SessionId,
+        entry: &EntryView,
+    ) -> Result<bool, AppError> {
+        if entry.origin_session_id != session {
+            return Ok(false);
+        }
+        if matches!(entry.payload, EntryPayload::User { .. }) {
+            return Ok(true);
+        }
+        if !matches!(entry.payload, EntryPayload::Notice { .. }) {
+            return Ok(false);
+        }
+        // Only an explicitly typed control execution may use a notice as its
+        // local input boundary. Ordinary notices and inherited history never
+        // acquire permission to receive execution guidance this way.
+        let execution = self
+            .kernel()
+            .reader
+            .execution(session, entry.execution_id)
+            .await
+            .map_err(kernel_error)?;
+        Ok(execution.session_id == session
+            && execution.message_id == entry.id
+            && execution.purpose != ExecutionPurpose::Message)
     }
     async fn delivery_message(
         &self,
@@ -342,10 +372,9 @@ impl SessionManager {
             .entry(session, message)
             .await
             .map_err(kernel_error)?;
-        if entry.origin_session_id != session || !matches!(entry.payload, EntryPayload::User { .. })
-        {
+        if !self.owns_message_boundary(session, &entry).await? {
             return Err(AppError::Config(
-                "background delivery does not own its user message".into(),
+                "background delivery does not own its input boundary".into(),
             ));
         }
         Ok(message)

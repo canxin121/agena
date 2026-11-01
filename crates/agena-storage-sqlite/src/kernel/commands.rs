@@ -4,8 +4,8 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, TransactionTrait};
 
 use super::*;
 
-pub(super) const SOURCE_SIZE_SQL: &str = "SELECT count(*) AS sources,COALESCE(sum(1024+6*capture_error_bytes),0) AS bytes FROM (SELECT c.capture_error_bytes FROM agena_round_inputs input JOIN agena_entries e ON e.id=input.entry_id JOIN agena_content_streams c ON c.entry_id=input.entry_id OR (e.kind='compaction' AND c.id=e.content_id) WHERE input.round_id=? LIMIT 10001)";
-pub(super) const CAPTURE_SOURCES_SQL: &str = "INSERT INTO agena_round_input_sources (round_id,entry_id,content_id,head_json) SELECT ?,input.entry_id,c.id,json_object('id',c.id,'entry',c.entry_id,'epoch',c.epoch,'kind',c.kind,'activity_id',c.activity_id,'ordinal',c.ordinal,'capture_loss',json_object('bytes',c.lost_bytes,'packets',c.lost_packets,'committed_bytes',c.lost_bytes,'committed_packets',c.lost_packets),'accepted',c.committed_head,'committed',c.committed_head,'retained_start',c.retained_start,'state',c.capture_state,'capture_error',c.capture_error) FROM agena_round_inputs input JOIN agena_entries e ON e.id=input.entry_id JOIN agena_content_streams c ON c.entry_id=input.entry_id OR (e.kind='compaction' AND c.id=e.content_id) WHERE input.round_id=? LIMIT 10001 ON CONFLICT(round_id,content_id) DO NOTHING";
+pub(super) const SOURCE_SIZE_SQL: &str = "SELECT count(*) AS sources,COALESCE(sum(bytes),0) AS bytes FROM (SELECT CASE WHEN frozen.content_id IS NOT NULL THEN frozen.head_bytes+256 ELSE 1024+6*c.capture_error_bytes END AS bytes FROM agena_round_inputs input JOIN agena_rounds request ON request.id=input.round_id JOIN agena_entries e ON e.id=input.entry_id JOIN agena_content_streams c ON c.entry_id=input.entry_id OR (e.kind='compaction' AND c.id=e.content_id) LEFT JOIN agena_branch_entries inherited ON inherited.session_id=request.session_id AND inherited.entry_id=c.entry_id LEFT JOIN agena_branch_sources frozen ON frozen.session_id=request.session_id AND frozen.content_id=c.id WHERE input.round_id=? AND (inherited.entry_id IS NULL OR frozen.content_id IS NOT NULL) LIMIT 10001)";
+pub(super) const CAPTURE_SOURCES_SQL: &str = "INSERT INTO agena_round_input_sources (round_id,entry_id,content_id,head_json) SELECT ?,input.entry_id,c.id,COALESCE(frozen.head_json,json_object('id',c.id,'entry',c.entry_id,'epoch',c.epoch,'kind',c.kind,'activity_id',c.activity_id,'ordinal',c.ordinal,'capture_loss',json_object('bytes',c.lost_bytes,'packets',c.lost_packets,'committed_bytes',c.lost_bytes,'committed_packets',c.lost_packets),'accepted',c.committed_head,'committed',c.committed_head,'retained_start',c.retained_start,'state',c.capture_state,'capture_error',c.capture_error)) FROM agena_round_inputs input JOIN agena_rounds request ON request.id=input.round_id JOIN agena_entries e ON e.id=input.entry_id JOIN agena_content_streams c ON c.entry_id=input.entry_id OR (e.kind='compaction' AND c.id=e.content_id) LEFT JOIN agena_branch_entries inherited ON inherited.session_id=request.session_id AND inherited.entry_id=c.entry_id LEFT JOIN agena_branch_sources frozen ON frozen.session_id=request.session_id AND frozen.content_id=c.id WHERE input.round_id=? AND (inherited.entry_id IS NULL OR frozen.content_id IS NOT NULL) LIMIT 10001 ON CONFLICT(round_id,content_id) DO NOTHING";
 
 pub(super) async fn apply(
     connection: &mut SqliteConnection,
@@ -25,6 +25,7 @@ pub(super) async fn apply(
         | Command::Withdraw { .. }
         | Command::DeleteSession { .. }
         | Command::Continue { .. }
+        | Command::StartControlExecution { .. }
         | Command::Notice { .. }
         | Command::Deliver { .. }
         | Command::DeliverToExecution { .. }
@@ -249,6 +250,11 @@ pub(super) async fn apply(
             let (view, _) = reads::execution(connection, *session, *execution).await?;
             let (revision, started): (i64, bool) = sqlx::query_as("SELECT revision,EXISTS(SELECT 1 FROM agena_attempts a WHERE a.execution_id=? AND a.started_at_ms IS NOT NULL) FROM agena_entries WHERE id=?")
                 .bind(execution.to_string()).bind(view.message_id.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+            if view.purpose != ExecutionPurpose::Message {
+                return Err(invalid(
+                    "a control execution is not an editable user message",
+                ));
+            }
             if view.phase != ExecutionPhase::Queued || started {
                 return Err(KernelError::Conflict(
                     "the message has already started or been removed".into(),
@@ -1173,9 +1179,11 @@ pub(super) async fn recover(database: &sea_orm::DatabaseConnection) -> Result<()
         // Agent launches require a supervised handoff and their retained
         // budgets. Even an unclaimed launch waits for explicit followup;
         // generic queued-input recovery must never start it unsupervised.
-        "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT x.message_id FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE a.phase='queued' AND a.session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted'))",
-        "UPDATE agena_session_statistics SET queued_executions=0,last_message_at_ms=MAX(?,COALESCE(last_message_at_ms,?)) WHERE queued_executions>0 AND session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted')",
-        "UPDATE agena_attempts SET phase='interrupted',finished_at_ms=? WHERE phase='queued' AND session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted')",
+        // Queued compaction is independent maintenance: preserve its purpose
+        // and queue count without restarting or settling the agent's task.
+        "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT x.message_id FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE a.phase='queued' AND a.session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted') AND NOT EXISTS(SELECT 1 FROM agena_execution_purposes purpose WHERE purpose.execution_id=x.id AND purpose.purpose='compaction'))",
+        "UPDATE agena_session_statistics SET queued_executions=(SELECT count(*) FROM agena_attempts a JOIN agena_executions x ON x.id=a.execution_id AND x.current_generation=a.generation JOIN agena_execution_purposes purpose ON purpose.execution_id=x.id WHERE a.session_id=agena_session_statistics.session_id AND a.phase='queued' AND purpose.purpose='compaction'),last_message_at_ms=MAX(?,COALESCE(last_message_at_ms,?)) WHERE queued_executions>0 AND session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted')",
+        "UPDATE agena_attempts SET phase='interrupted',finished_at_ms=? WHERE phase='queued' AND session_id IN (SELECT id FROM agena_sessions WHERE deleted_at_ms IS NULL AND agent_status='interrupted') AND NOT EXISTS(SELECT 1 FROM agena_execution_purposes purpose WHERE purpose.execution_id=agena_attempts.execution_id AND purpose.purpose='compaction')",
         "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT x.message_id FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE a.phase='running') OR id IN (SELECT response_entry_id FROM agena_attempts WHERE phase='running')",
         "UPDATE agena_entries SET revision=revision+1 WHERE id IN (SELECT entry_id FROM agena_background_activities WHERE phase='running')",
         "UPDATE agena_background_activities SET phase='interrupted',outcome_json='{\"outcome\":\"interrupted\",\"diagnostic\":\"service restarted; external activity outcome is unknown\"}',finished_at_ms=MAX(?,created_at_ms) WHERE phase='running'",
@@ -1239,6 +1247,7 @@ async fn begin_round(
         .bind(id).bind(identities).execute(&mut *connection).await.map_err(sql_error)?;
     sqlx::query("INSERT INTO agena_round_input_replays (round_id,source_round_id,phase,has_provider_state) SELECT DISTINCT ?,r.id,r.phase,r.provider_state_json IS NOT NULL FROM agena_round_inputs input JOIN agena_entries e ON e.id=input.entry_id JOIN agena_rounds r ON r.id=e.round_id WHERE input.round_id=?")
         .bind(id).bind(id).execute(&mut *connection).await.map_err(sql_error)?;
+    branches::freeze_round(connection, scope.session, id).await?;
     let input_bytes = super::prompt::check_budget(connection, id, None).await?;
     let source_size = sqlx::query(SOURCE_SIZE_SQL)
         .bind(id)

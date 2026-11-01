@@ -101,6 +101,10 @@ pub enum Command {
         session: SessionId,
         message: EntryId,
     },
+    StartControlExecution {
+        session: SessionId,
+        purpose: ControlExecutionPurpose,
+    },
     Notice {
         scope: Scope,
         text: String,

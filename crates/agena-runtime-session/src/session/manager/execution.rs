@@ -31,6 +31,7 @@ impl SessionManager {
         permit: OwnedSemaphorePermit,
         budget: Option<AgentBudget>,
     ) -> Arc<RunControl> {
+        let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
         let state = self.state.load_full();
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(run) = active.get(&execution.id) {
@@ -269,23 +270,44 @@ impl SessionManager {
                 let session = session_id(request.session_id)?;
                 let dispatch = manager.session_dispatch(session);
                 let _submission = dispatch.submission.lock().await;
+                if !compact {
+                    manager.wait_terminal_agent_settlement(session).await?;
+                }
                 manager.restore_queued_executions(session).await?;
                 let mut options = request.options;
                 manager.prepare_options(session, &mut options).await?;
-                let message = manager
-                    .latest_origin_message(session)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::Config("this session has no owned message to continue".into())
-                    })?;
                 let command = RequestId::new();
-                let execution = persist(|| {
-                    manager
-                        .kernel()
-                        .sessions
-                        .continue_execution(command, session, message)
-                })
-                .await
+                let execution = if compact {
+                    persist(|| {
+                        manager.kernel().sessions.start_control_execution(
+                            command,
+                            session,
+                            ControlExecutionPurpose::Compaction,
+                        )
+                    })
+                    .await
+                } else if let Some(message) = manager.latest_origin_message(session).await? {
+                    // Keep the existing generation/retry contract for an
+                    // owned request. A control input creates a new continuation
+                    // at the current boundary instead of reopening an older
+                    // user turn and excluding intervening control responses.
+                    persist(|| {
+                        manager
+                            .kernel()
+                            .sessions
+                            .continue_execution(command, session, message)
+                    })
+                    .await
+                } else {
+                    persist(|| {
+                        manager.kernel().sessions.start_control_execution(
+                            command,
+                            session,
+                            ControlExecutionPurpose::Continuation,
+                        )
+                    })
+                    .await
+                }
                 .map_err(kernel_error)?
                 .value;
                 let outcome = execution_outcome(&execution);
@@ -334,8 +356,19 @@ impl SessionManager {
         // Other stops must persist their own notice below, because the round
         // they follow succeeded.
         let mut structured_round_failure = false;
+        let mut independent_agent = None;
+        let mut timed_out = false;
         let result=async {
             if compact {self.perform_compaction(&attempt,&control,&options,&state,None).await?;return Ok(());}
+            if control.budget.is_none() {
+                independent_agent = self.begin_independent_agent_run(&control, execution.generation).await?;
+            }
+            let agent_budget = control.budget.clone().or_else(|| independent_agent.as_ref().map(|agent| AgentBudget {
+                max_tokens: agent.limits.max_tokens,
+                max_cost_microusd: agent.limits.max_cost_microusd,
+            }));
+            let timeout_ms = independent_agent.as_ref().and_then(|agent| agent.limits.timeout_ms);
+            let work = async {
             let mut usage=agena_provider::CompletionUsage::default();
             let mut follow_ups=0usize;let mut stop_follow_ups=0usize;let mut compactions=0usize;let mut proactive_suppressed=false;
             let mut recent_tools=std::collections::VecDeque::<String>::new();
@@ -348,7 +381,7 @@ impl SessionManager {
                 // Configuration changes are read only at a provider boundary;
                 // the request's frozen facts and route then stay fixed.
                 self.prepare_options_with_state(control.session,&mut options,&state).await?;
-                if let Some(max)=control.budget.as_ref().and_then(|b|b.max_tokens){
+                if let Some(max)=agent_budget.as_ref().and_then(|b|b.max_tokens){
                     let remaining=max.saturating_sub(usage.total_tokens());if remaining==0{return Err(AppError::AgentBudgetExceeded("the delegated run reached its token budget".into()));}
                     let output=options.max_output_tokens.unwrap_or(u32::MAX).min(remaining.min(u32::MAX as u64) as u32);options.max_output_tokens=Some(output);crate::prompt_budget::align_output_token_overrides(&mut options.request_override,output);
                 }
@@ -401,6 +434,9 @@ impl SessionManager {
                 provider_calls+=1;
                 control.phase(agena_domain::ExecutionPhase::StreamingModel);
                 let outcome=self.drive_round(&mut run).await.map_err(kernel_error)?;
+                // The owned outcome survives the runner. Release its modeled
+                // prompt/stream allocations before tools can wait on agents.
+                drop(run);
                 if outcome.cancelled || control.cancel.is_cancelled(){return Err(AppError::Cancelled);}
                 if let Some(failure)=outcome.failure {
                     if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,Some(failure.user.fallback.clone())).await?{continue;}
@@ -408,7 +444,7 @@ impl SessionManager {
                     return Err(AppError::Internal(failure.user.fallback));
                 }
                 if let Some(observed)=&outcome.usage {usage.add_assign(observed);}
-                if let Some(budget)=&control.budget
+                if let Some(budget)=&agent_budget
                     && (budget.max_tokens.is_some_and(|max|usage.total_tokens()>=max)||budget.max_cost_microusd.is_some_and(|max|usage.effective_cost_usd()*1_000_000.0>=max as f64)){
                         return Err(AppError::AgentBudgetExceeded("the delegated run reached its token or cost budget".into()));
                 }
@@ -449,8 +485,38 @@ impl SessionManager {
                 follow_ups+=1;if follow_ups>=4{return Err(AppError::Config("the model reached the continuation limit".into()));}
             }
             Err(AppError::Config("the execution reached its configured model turn limit".into()))
+            };
+            // Keep the direct-agent settlement identity outside plugin and
+            // provider unwind boundaries, so a panic cannot strand Running.
+            let work = std::panic::AssertUnwindSafe(work).catch_unwind();
+            tokio::pin!(work);
+            let outcome = match timeout_ms {
+                Some(ms) => match tokio::time::timeout(Duration::from_millis(ms), &mut work).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        timed_out = true;
+                        // Fence and cancel, then let the provider/tool driver
+                        // release its live capabilities before settlement.
+                        control.cancel.cancel();
+                        self.cancel_execution_with_outcome(control.session.get(), control.execution).await?;
+                        work.await
+                    }
+                },
+                None => work.await,
+            };
+            match outcome {
+                Ok(result) => result,
+                Err(_) => {
+                    control.cancel.cancel();
+                    let fence = RequestId::new();
+                    persist(|| self.kernel().sessions.cancel(fence, control.session, control.execution)).await.map_err(kernel_error)?;
+                    Err(AppError::Internal("execution supervisor caught a panic; the attempt has been fenced".into()))
+                }
+            }
         }.await;
         if completed {
+            self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
+                .await?;
             return result;
         }
         let phase = if control.cancel.is_cancelled() || matches!(result, Err(AppError::Cancelled)) {
@@ -507,6 +573,8 @@ impl SessionManager {
             }
             Err(error) => return Err(kernel_error(error)),
         }
+        self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
+            .await?;
         result
     }
     async fn drive_round(
@@ -1330,11 +1398,10 @@ impl SessionManager {
         )
         .map(u64::from);
         let mut limit = 128usize;
-        let minimum = if status.checkpoint_entry_id.is_some() {
-            2
-        } else {
-            1
-        };
+        // The kernel reserves room for a checkpoint and at least one new
+        // entry. Every shrink step must respect that lower bound, including
+        // the first compaction before a checkpoint exists.
+        let minimum = 2;
         let (round, mut prompt, through, prefix_tokens) = loop {
             let command = RequestId::new();
             let round = persist(|| attempt.begin_compaction(command, limit))
@@ -1729,3 +1796,6 @@ fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &st
         .count()
         >= 4
 }
+
+#[cfg(test)]
+mod compaction_tests;

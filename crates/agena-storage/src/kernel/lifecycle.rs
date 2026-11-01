@@ -371,7 +371,8 @@ impl SessionCommands {
                 .await?,
         )
     }
-    /// Continue a completed, origin-owned user request with a new generation.
+    /// Continue an owned user request with a new generation, or use a new
+    /// local continuation for inherited input and completed control operations.
     pub async fn continue_execution(
         &self,
         request: RequestId,
@@ -381,6 +382,21 @@ impl SessionCommands {
         execution_receipt(
             self.0
                 .command(request, Command::Continue { session, message })
+                .await?,
+        )
+    }
+
+    /// Queue a session-owned control operation over its current visible context.
+    /// Inherited input remains read-only and no user message is synthesized.
+    pub async fn start_control_execution(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        purpose: ControlExecutionPurpose,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(request, Command::StartControlExecution { session, purpose })
                 .await?,
         )
     }

@@ -246,7 +246,22 @@ pub(super) async fn read(
         .map_err(|_| KernelError::Busy)?;
     let row = sqlx::query("SELECT a.* FROM agena_background_activities a WHERE a.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=a.entry_id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(id.to_string()).bind(session.get()).fetch_optional(backend.reader.get_sqlite_connection_pool()).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("activity".into()))?;
-    let value = view(&row)?;
+    let mut value = view(&row)?;
+    let mut connection = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .acquire()
+        .await
+        .map_err(storage)?;
+    if branches::inherited_entry(&mut connection, session, value.launch_entry).await? {
+        let frozen = sqlx::query("SELECT has_outcome,finished_at_ms FROM agena_branch_activities WHERE session_id=? AND activity_id=?")
+            .bind(session.get()).bind(id.to_string()).fetch_optional(&mut *connection).await.map_err(sql_error)?
+            .ok_or_else(|| KernelError::NotFound("activity at branch boundary".into()))?;
+        value.finished_at_ms = frozen.try_get("finished_at_ms").map_err(storage)?;
+        if frozen.try_get::<i64, _>("has_outcome").map_err(storage)? == 0 {
+            value.outcome = None;
+        }
+    }
     let bytes = modeled_read_bytes(&value)?;
     backend.wrap_read(session, value, bytes)
 }

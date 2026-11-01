@@ -90,7 +90,8 @@ async fn bodies(
         .await
         .map_err(sql_error)?;
     metrics::add(&diagnostics.0.history_entry_rows, rows.len());
-    rows.iter()
+    let mut entries = rows
+        .iter()
         .map(|row| {
             metrics::add(
                 &diagnostics.0.history_entry_body_bytes,
@@ -104,7 +105,14 @@ async fn bodies(
             }
             Ok(entry)
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    branches::apply_entries(connection, session, &mut entries).await?;
+    for entry in &mut entries {
+        if matches!(entry.payload, EntryPayload::User { .. }) {
+            entry.response_entry_id = None;
+        }
+    }
+    Ok(entries)
 }
 
 pub(super) async fn history_window(

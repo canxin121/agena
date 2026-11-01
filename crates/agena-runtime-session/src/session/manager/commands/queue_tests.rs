@@ -1,11 +1,61 @@
 use super::*;
 use crate::SessionExecutionControl;
+use agena_domain::{Model, ModelId};
+use agena_runtime_provider::{
+    ProviderError,
+    provider::{CompletionResponse, ModelRuntime},
+};
+
+struct ResumeProvider {
+    model: ModelId,
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl ModelRuntime for ResumeProvider {
+    fn id(&self) -> &str {
+        "queue-resume-test"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.model
+    }
+
+    fn prompt_cache_shape(&self, _: &ModelId) -> Option<agena_provider::PromptCacheShape> {
+        Some(agena_provider::PromptCacheShape::from_fields(
+            self.id(),
+            [("destination_revision", "queue-resume-test")],
+        ))
+    }
+
+    async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _: agena_provider::CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Err(ProviderError::Config(
+            "intentional queue resume test failure".into(),
+        ))
+    }
+}
 
 async fn fixture() -> (SessionManager, SessionId) {
     fixture_with_config(RuntimeSessionManagerConfig::default()).await
 }
 
 async fn fixture_with_config(config: RuntimeSessionManagerConfig) -> (SessionManager, SessionId) {
+    fixture_with_providers(config, ProviderRegistry::default()).await
+}
+
+async fn fixture_with_providers(
+    config: RuntimeSessionManagerConfig,
+    providers: ProviderRegistry,
+) -> (SessionManager, SessionId) {
     let kernel = Arc::new(
         agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
             .await
@@ -49,7 +99,7 @@ async fn fixture_with_config(config: RuntimeSessionManagerConfig) -> (SessionMan
     );
     let manager = SessionManager::new(
         kernel,
-        Arc::new(ProviderRegistry::default()),
+        Arc::new(providers),
         ContextGovernor::new(Default::default()),
         SessionProcessor::new(plugins),
         executor,
@@ -71,6 +121,251 @@ async fn send(manager: &SessionManager, session: SessionId) -> ExecutionId {
         .unwrap()
         .value
         .id
+}
+
+#[tokio::test]
+async fn a_retry_is_not_lost_while_the_previous_generation_is_still_settling() {
+    let (manager, session) = fixture().await;
+    let execution = send(&manager, session).await;
+    let attempt = manager
+        .kernel()
+        .executor
+        .claim_next(RequestId::new(), session, execution)
+        .await
+        .unwrap()
+        .value;
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    let finished = manager
+        .kernel()
+        .reader
+        .execution(session, execution)
+        .await
+        .unwrap();
+
+    // Hold the exact interval after the terminal commit is visible but before
+    // the old supervisor removes its live registration and wakes successors.
+    let previous = Arc::new(RunControl {
+        session,
+        execution,
+        generation: finished.generation,
+        model: ModelRef::new("test", "test"),
+        state: manager.state.load_full(),
+        cancel: CancellationToken::new(),
+        phase: StdMutex::new(agena_domain::ExecutionPhase::PreparingModel),
+        done: Notify::new(),
+        budget: None,
+        failure: Default::default(),
+        settled: std::sync::atomic::AtomicBool::new(false),
+    });
+    manager
+        .active
+        .lock()
+        .unwrap()
+        .insert(execution, previous.clone());
+    let dispatch = manager.session_dispatch(session);
+    *dispatch.tail.lock().unwrap() = Arc::downgrade(&previous);
+    let driver_gate = dispatch.execution.lock().await;
+    let retry = manager
+        .kernel()
+        .sessions
+        .continue_execution(RequestId::new(), session, finished.message_id)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(retry.generation.get(), finished.generation.get() + 1);
+    let options = SessionRunOptions {
+        model: ModelRef::new("test", "test"),
+        thinking_mode: None,
+        speed_mode: None,
+        verbosity: None,
+        model_supports_parallel_tool_calls: None,
+        thinking: None,
+        request_override: Default::default(),
+        system: None,
+        temperature: None,
+        max_output_tokens: None,
+    };
+    let replacement = manager.supervise(
+        retry.clone(),
+        options.clone(),
+        false,
+        manager.reserve_execution().unwrap(),
+    );
+    assert!(
+        !Arc::ptr_eq(&replacement, &previous),
+        "a new attempt generation must get its own supervisor"
+    );
+    let duplicate = manager.supervise(
+        retry,
+        options.clone(),
+        false,
+        manager.reserve_execution().unwrap(),
+    );
+    assert!(
+        Arc::ptr_eq(&replacement, &duplicate),
+        "re-registering the same generation must remain idempotent"
+    );
+    let stale = manager.supervise(
+        (*finished).clone(),
+        options,
+        false,
+        manager.reserve_execution().unwrap(),
+    );
+    assert!(
+        Arc::ptr_eq(&replacement, &stale),
+        "an old receipt must not replace the newer generation"
+    );
+
+    manager.settle_supervised_run(&previous);
+    assert!(
+        Arc::ptr_eq(
+            manager.active.lock().unwrap().get(&execution).unwrap(),
+            &replacement
+        ),
+        "the old supervisor must not remove the replacement registration"
+    );
+    drop(driver_gate);
+    tokio::time::timeout(Duration::from_secs(5), replacement.wait_settled())
+        .await
+        .expect("the retry must progress without another send or restart");
+    let current = manager
+        .kernel()
+        .reader
+        .execution(session, execution)
+        .await
+        .unwrap();
+    assert_eq!(current.generation.get(), finished.generation.get() + 1);
+    assert!(
+        current.phase.is_terminal(),
+        "the new attempt must not remain queued"
+    );
+    assert!(!manager.active.lock().unwrap().contains_key(&execution));
+    manager
+        .kernel_runtime
+        .ports
+        .clone()
+        .shutdown()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn resuming_during_paused_supervisor_retirement_does_not_strand_the_same_attempt() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut providers = ProviderRegistry::new();
+    providers.register(ResumeProvider {
+        model: ModelId::new("test"),
+        calls: calls.clone(),
+    });
+    let (manager, session) = fixture_with_providers(Default::default(), providers).await;
+    let model = ModelRef::new("queue-resume-test", "test");
+    manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            session,
+            SelectionChange::Model(Some(model.clone())),
+        )
+        .await
+        .unwrap();
+    manager
+        .set_message_queue_paused(session.get(), true)
+        .await
+        .unwrap();
+    let execution = send(&manager, session).await;
+    let view = manager
+        .kernel()
+        .reader
+        .execution(session, execution)
+        .await
+        .unwrap();
+    let previous = Arc::new(RunControl {
+        session,
+        execution,
+        generation: view.generation,
+        model,
+        state: manager.state.load_full(),
+        cancel: CancellationToken::new(),
+        phase: StdMutex::new(agena_domain::ExecutionPhase::Starting),
+        done: Notify::new(),
+        budget: None,
+        failure: Default::default(),
+        settled: std::sync::atomic::AtomicBool::new(false),
+    });
+    manager
+        .active
+        .lock()
+        .unwrap()
+        .insert(execution, previous.clone());
+    let dispatch = manager.session_dispatch(session);
+    *dispatch.tail.lock().unwrap() = Arc::downgrade(&previous);
+    let driver_gate = dispatch.execution.lock().await;
+    let permit = manager.reserve_execution().unwrap();
+    let _other_admission = manager
+        .admission
+        .clone()
+        .acquire_many_owned(manager.admission.available_permits() as u32)
+        .await
+        .unwrap();
+
+    // The real serialized writer has rejected this supervisor's claim. Hold
+    // its still-live registration while an explicit resume observes it.
+    assert!(matches!(
+        manager
+            .kernel()
+            .executor
+            .claim_next(RequestId::new(), session, execution,)
+            .await,
+        Err(KernelError::QueuePaused)
+    ));
+    manager
+        .set_message_queue_paused(session.get(), false)
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        manager.active.lock().unwrap().get(&execution).unwrap(),
+        &previous
+    ));
+    manager.retire_supervised_run(&previous, permit, true).await;
+
+    let replacement = manager
+        .active
+        .lock()
+        .unwrap()
+        .get(&execution)
+        .cloned()
+        .expect("resume must replace the retired supervisor without another send or recovery scan");
+    assert!(!Arc::ptr_eq(&previous, &replacement));
+    assert_eq!(
+        replacement.generation, previous.generation,
+        "resume must not retry or replace the durable attempt"
+    );
+    assert!(previous.settled.load(std::sync::atomic::Ordering::Acquire));
+    drop(driver_gate);
+    tokio::time::timeout(Duration::from_secs(5), replacement.wait_settled())
+        .await
+        .expect("the resumed attempt must make progress immediately");
+    let current = manager
+        .kernel()
+        .reader
+        .execution(session, execution)
+        .await
+        .unwrap();
+    assert_eq!(current.generation, previous.generation);
+    assert_eq!(current.phase, ExecutionPhase::Failed);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert!(!manager.active.lock().unwrap().contains_key(&execution));
+    manager
+        .kernel_runtime
+        .ports
+        .clone()
+        .shutdown()
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -283,6 +578,7 @@ async fn tool_authorization_uses_session_workspace_rules_without_default_fallbac
             let control = Arc::new(RunControl {
                 session,
                 execution,
+                generation: attempt.generation(),
                 model: ModelRef::new("test", "test"),
                 state: state.clone(),
                 cancel: CancellationToken::new(),

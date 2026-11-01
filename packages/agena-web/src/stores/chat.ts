@@ -18,6 +18,7 @@ import {
 import { createSessionRunConfigPersister, loadSessionRunConfigMap } from './chat/runConfig'
 import { ApiError } from '../lib/api'
 import { createRevalidator } from '../lib/revalidation'
+import { createLatestRequestGuard } from '../lib/latestRequest'
 import { isDocumentVisible } from '../lib/backgroundReads'
 import {
   canReuseResource,
@@ -91,6 +92,8 @@ function loadStoredTranscriptPartPageSize(): number {
     getLocalJson<unknown>(localStorageKeys.chat.transcriptPartPageSize, DEFAULT_TRANSCRIPT_PART_PAGE_SIZE),
   )
 }
+
+type SessionHydrationOptions = { windowId?: string | null; isCurrent?: () => boolean }
 
 /** Server creation instant of a session, in epoch milliseconds, when known. */
 function sessionCreatedMs(session: Session | null | undefined): number | null {
@@ -250,6 +253,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const executionRecovery = new Set<string>()
   const executionObservations = new Map<string, ReturnType<typeof captureResourceObservation>>()
   const executionWriteEpoch = new Map<string, number>()
+  const executionControlVersions = new Map<string, number>()
   const sessionRecoveryResources = () =>
     [...visibleSessions.keys()].flatMap((sid) => [`session:${sid}:state`, `session:${sid}:parts`])
   const visibleSessions = new Map<string, number>()
@@ -319,6 +323,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     statusRevalidators.get(sid)?.resume()
     messageRevalidators.get(sid)?.resume()
+    // Changes can advance the shared revision index while this session has
+    // no mounted subscriber. Reopening it must compare its retained body,
+    // even when the next heartbeat repeats an already-known token.
+    executionRecovery.add(sid)
+    invalidateResources([`session:${sid}:state`])
+    scheduleSessionStatusRefresh(sid, 0)
     if (evictedTranscriptSessions.delete(sid)) void refreshMessages(sid, { silent: true }).catch(() => {})
     return () => {
       const count = (visibleSessions.get(sid) || 1) - 1
@@ -359,6 +369,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   let transcriptCacheGeneration = 0
   let createSessionInFlight: Promise<Session | null> | null = null
   const workspaceRequestById = new Map<number, Promise<{ id: number; path: string } | null>>()
+  const directoryHydrationOwners = new Map<string, object>()
   const lastSessionErrorToastByKey = new Map<string, { at: number; message: string }>()
 
   function loadStoredSelectedSession(): string | null {
@@ -393,21 +404,38 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── session list ─────────────────────────────────────────────────────────
 
+  function sessionMetadataSnapshot<T extends Partial<Session> & { id: string }>(incoming: T): T {
+    const sid = incoming.id
+    const current = sessionsById.value[sid]
+    if (!current?.state || !incoming.state || !executionControlVersions.has(sid)) return incoming
+    // Lists carry metadata versions, not execution control versions. Retain
+    // the last ordered execution snapshot and treat this row as a hint to
+    // reconcile it. Inactive sessions retain the invalidation until opened.
+    executionRecovery.add(sid)
+    invalidateResources([`session:${sid}:state`])
+    scheduleSessionStatusRefresh(sid, 0)
+    return { ...incoming, state: current.state }
+  }
+
   function indexSessions(list: Session[]) {
     const nextById = sessionsById.value
     for (const s of list) {
       const sid = typeof s?.id === 'string' ? s.id.trim() : ''
       if (sid && !deletedSessions.has(sid) && !(Number(nextById[sid]?.version || 0) > Number(s.version || 0)))
-        nextById[sid] = s
+        nextById[sid] = sessionMetadataSnapshot(s)
     }
     sessionsById.value = nextById
   }
 
-  function upsertSessionCache(updated: (Partial<Session> & { id: string }) | null | undefined) {
+  function upsertSessionCache(
+    updated: (Partial<Session> & { id: string }) | null | undefined,
+    executionSnapshot = false,
+  ) {
     if (!updated || typeof updated !== 'object') return
     const sid = typeof updated.id === 'string' ? updated.id.trim() : ''
     if (!sid || deletedSessions.has(sid)) return
     if (updated.version !== undefined && Number(sessionsById.value[sid]?.version || 0) > updated.version) return
+    if (!executionSnapshot) updated = sessionMetadataSnapshot(updated)
     const merged = { ...(sessionsById.value[sid] || {}), ...updated, id: sid } as Session
     sessionsById.value[sid] = merged
     const hasInCurrent = sessions.value.some((s) => s.id === sid)
@@ -499,9 +527,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return workspace
   }
 
-  async function hydrateSessionDirectory(session: Session, windowId?: string | null): Promise<void> {
+  async function hydrateSessionDirectory(
+    session: Session,
+    windowId?: string | null,
+    isCurrent?: () => boolean,
+  ): Promise<void> {
     const workspace = await workspaceForSession(session)
-    if (!workspace) return
+    if (!workspace || isCurrent?.() === false) return
     const targetWindowId = String(windowId || '').trim()
     if (targetWindowId) {
       directoryStore.setDirectoryForWindow(targetWindowId, workspace.path)
@@ -510,9 +542,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (selectedSessionId.value === session.id) directoryStore.setDirectory(workspace.path)
   }
 
-  async function hydrateSession(id: string | null, opts?: { windowId?: string | null }) {
+  async function hydrateSession(id: string | null, opts?: SessionHydrationOptions) {
     const sid = String(id || '').trim()
     if (!sid) return
+    const windowId = String(opts?.windowId || '').trim()
+    const owner = {}
+    if (windowId) directoryHydrationOwners.set(windowId, owner)
+    const isCurrent = () =>
+      (!windowId || directoryHydrationOwners.get(windowId) === owner) && opts?.isCurrent?.() !== false
 
     let session = getSessionById(sid)
     if (!session) {
@@ -526,7 +563,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
       session = await request
       upsertSessionCache(session)
     }
-    void hydrateSessionDirectory(session, opts?.windowId)
+    void hydrateSessionDirectory(session, windowId, isCurrent).finally(() => {
+      if (windowId && directoryHydrationOwners.get(windowId) === owner) directoryHydrationOwners.delete(windowId)
+    })
 
     if (!Array.isArray(messagesBySession.value[sid])) {
       messagesBySession.value = { ...messagesBySession.value, [sid]: [] }
@@ -535,6 +574,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!messagesHydratedBySession.value[sid]) {
       await refreshMessages(sid)
     }
+    // A cached transcript does not imply a current execution/queue snapshot.
+    void refreshExecutionStatus(sid).catch(() => scheduleSessionStatusRefresh(sid))
   }
 
   // ─── selection ────────────────────────────────────────────────────────────
@@ -545,9 +586,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
    */
   async function selectSession(id: string | null, opts?: { windowId?: string | null }) {
     const sid = (id || '').trim()
+    const windowId = String(opts?.windowId || '').trim()
+    if (!sid && windowId) directoryHydrationOwners.delete(windowId)
     selectedSessionId.value = sid || null
     persistSelectedSession(sid || null)
     messagesError.value = null
+    messagesLoading.value = false
 
     if (!sid) return
     await hydrateSession(sid, opts)
@@ -909,7 +953,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const msg = err instanceof Error ? err.message : String(err)
       const authRequired = err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
-      if (isSelected) {
+      if (selectedSessionId.value === sid) {
         messagesError.value = null
         if (authRequired) {
           clearMessageRefreshRetry(sid)
@@ -930,7 +974,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
         setSessionMessages(sid, [])
       }
     } finally {
-      if (generation === transcriptCacheGeneration && !silent && isSelected) messagesLoading.value = false
+      if (generation === transcriptCacheGeneration && !silent && selectedSessionId.value === sid)
+        messagesLoading.value = false
     }
   }
 
@@ -1220,6 +1265,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return
     if (!st) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
     if (
+      st.controlVersion === undefined &&
       writeEpoch !== (executionWriteEpoch.get(sid) ?? 0) &&
       Number(st.session.version || 0) <= Number(getSessionById(sid)?.version || 0)
     ) {
@@ -1227,8 +1273,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
       scheduleSessionStatusRefresh(sid, 0)
       return
     }
+    if (!applyExecutionStatus(st, activityGeneration)) return
     if (st.observation) executionObservations.set(sid, st.observation)
-    applyExecutionStatus(st, activityGeneration)
     await reconcileExecutionParts(sid)
   }
 
@@ -1305,16 +1351,24 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   function applyExecutionStatus(st: chatApi.SessionExecutionStatus, activityGeneration?: number) {
     const sid = st.session.id
+    const controlVersion = st.controlVersion
+    const previous = executionControlVersions.get(sid)
+    // Metadata versions do not advance for execution/queue/tool transitions.
+    // All projections from one control snapshot must pass the same gate,
+    // including a delayed mutation acknowledgement arriving after a GET.
+    if (controlVersion !== undefined && (!Number.isSafeInteger(controlVersion) || controlVersion < 0)) return false
+    if (previous !== undefined && (controlVersion === undefined || controlVersion < previous)) return false
+    if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return false
+    if ((interactiveBySession.value[sid]?.version ?? -1) > Number(st.session.version || 0)) return false
+    if (controlVersion !== undefined) executionControlVersions.set(sid, controlVersion)
     // Shells may carry the real pending-operation parts. Merge them before
     // attention so the request is rendered on its durable owner immediately.
     mergeExecutionParts(sid, st.parts)
-    if (Number(getSessionById(sid)?.version || 0) > Number(st.session.version || 0)) return
-    if ((interactiveBySession.value[sid]?.version ?? -1) > Number(st.session.version || 0)) return
     interactiveBySession.value[sid] = {
       version: Number(st.session.version || 0),
       requests: interactiveRequests(sessionStateRequests(st.state), sid),
     }
-    upsertSessionCache(st.session)
+    upsertSessionCache(st.session, true)
     applyAttention(sid, st.state)
     if (activityGeneration === undefined || activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
       backgroundActivityGeneration.set(sid, (backgroundActivityGeneration.get(sid) ?? 0) + 1)
@@ -1357,6 +1411,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         [sid]: { ...st.usage },
       }
     }
+    return true
   }
 
   function applyExecutionResource(
@@ -1372,6 +1427,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const activities = state.background_activities || []
     applyExecutionStatus(
       {
+        controlVersion: state.latest_event_seq ?? undefined,
         session,
         state: normalizeSessionState(session.state),
         parts: state.parts || [],
@@ -1693,6 +1749,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     executionRecovery.delete(sid)
     executionObservations.delete(sid)
     executionWriteEpoch.delete(sid)
+    executionControlVersions.delete(sid)
     delete interactiveBySession.value[sid]
     delete interactionDrafts.value[sid]
     backgroundActivityGeneration.delete(sid)
@@ -2046,6 +2103,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return false
     if (!state) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
     if (
+      state.controlVersion !== undefined ||
       epoch === (executionWriteEpoch.get(sid) ?? 0) ||
       Number(state.session.version || 0) > Number(getSessionById(sid)?.version || 0)
     )
@@ -2218,7 +2276,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
    *   lagged           → full resync (handled by useAppRuntime onEvent too)
    *
    */
-  function applyEvent(evt: SseEvent, propagateShared = true) {
+  function applyEvent(evt: SseEvent) {
     const t = evt.type || ''
     if (!t) return
     const props = asRecord(evt.properties)
@@ -2231,16 +2289,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
         forgetSession(sid)
         return
       }
-      // Forks share canonical part IDs. Update only memberships already
-      // loaded in another conversation; removals remain session-specific.
-      if (propagateShared && changeKind === 'part_updated' && isRecord(props.part)) {
-        const id = String(props.part.part_id)
-        for (const target of [...transcriptCache.members(id)]) {
-          if (target !== sid) {
-            applyEvent({ ...evt, properties: { ...props, session_id: Number(target) } }, false)
-          }
-        }
-      }
+      // A fork shares part identities, but its inherited facts are frozen at
+      // the branch boundary. Only the session named by the server owns this
+      // update; another session's projection must be read through its API.
       if (deletedSessions.has(sid)) return
       if (sid && (changeKind === 'part_added' || changeKind === 'part_updated')) {
         const part = props.part
@@ -2519,13 +2570,23 @@ const useChatStoreDefinition = defineStore('chat', () => {
 type ChatStore = ReturnType<typeof useChatStoreDefinition>
 
 function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
+  // Different consumers of the same pane share selection ownership. A late
+  // hydration may fill its own session cache, but cannot navigate the pane.
+  const beginSelection = createLatestRequestGuard(() => pane.windowId.value, pane)
   function selectedSessionId(): string | null {
     return readSessionIdFromQuery(pane.route.value.query) || null
   }
 
   async function selectSession(id: string | null) {
     const sid = String(id || '').trim()
-    if (sid) await store.hydrateSession(sid, { windowId: pane.windowId.value })
+    const ownsSelection = beginSelection()
+    const initialRoute = pane.route.value
+    const isCurrent = () =>
+      ownsSelection() &&
+      (pane.route.value === initialRoute ||
+        (pane.route.value.path === '/chat' && (readSessionIdFromQuery(pane.route.value.query) || '') === sid))
+    if (sid) await store.hydrateSession(sid, { windowId: pane.windowId.value, isCurrent })
+    if (!isCurrent()) return
 
     const query: Record<string, string> = {}
     for (const [rawKey, rawValue] of Object.entries(pane.route.value.query || {})) {

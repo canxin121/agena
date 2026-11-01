@@ -160,6 +160,9 @@ enum Notice {
 struct FeedState {
     head: Option<CommitPosition>,
     floor: Option<CommitPosition>,
+    /// A reset may follow the change at this exact position. A cursor that
+    /// received that change does not prove that it also received the reset.
+    reset_floor: Option<CommitPosition>,
     replay: VecDeque<ReadView<KernelChange>>,
     sender: Option<broadcast::Sender<Notice>>,
 }
@@ -188,6 +191,7 @@ impl ChangeFeed {
             state: Mutex::new(FeedState {
                 head: None,
                 floor: None,
+                reset_floor: None,
                 replay: VecDeque::new(),
                 sender: Some(sender),
             }),
@@ -278,6 +282,7 @@ impl ChangeFeed {
                 // business receipt. No observer can retain unaccounted changes.
                 state.replay.clear();
                 state.floor = Some(position);
+                state.reset_floor = Some(position);
                 if let Some(sender) = &state.sender {
                     let _ = sender.send(Notice::Reset);
                 }
@@ -306,6 +311,7 @@ impl ChangeFeed {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.replay.clear();
         state.floor = state.head;
+        state.reset_floor = state.head;
         if let Some(sender) = &state.sender {
             let _ = sender.send(Notice::Reset);
         }
@@ -325,6 +331,9 @@ impl ChangeFeed {
                 && cursor.epoch == self.epoch
                 && state.head.is_some_and(|head| cursor.position <= head)
                 && state.floor.is_none_or(|floor| cursor.position >= floor)
+                && state
+                    .reset_floor
+                    .is_none_or(|floor| cursor.position > floor)
         });
         let replay = if resumable {
             let position = after.as_ref().expect("resumable cursor").position;
@@ -364,5 +373,61 @@ impl ChangeFeed {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state.sender = None;
         state.replay.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> SessionId {
+        SessionId::try_from(1).unwrap()
+    }
+
+    fn position(sequence: i64) -> CommitPosition {
+        CommitPosition {
+            sequence: super::super::CommitSequence::try_from(sequence).unwrap(),
+            ordinal: 0,
+        }
+    }
+
+    #[test]
+    fn reconnect_at_the_invalidated_head_requires_a_snapshot_without_a_reset_loop() {
+        let feed = ChangeFeed::new(KernelEpoch::new(), 8);
+        let session = session();
+        let mut original = feed.watch(session, None);
+        feed.publish(position(1), session, ChangeKind::Execution);
+        let delivered = original.try_recv().unwrap().unwrap().cursor.clone();
+        // The transport may disconnect after this change but before the
+        // following reset notice reaches it.
+        feed.invalidate();
+        drop(original);
+        let mut resumed = feed.watch(session, Some(delivered));
+        assert!(resumed.needs_snapshot());
+        // Snapshot bootstrap is a flag, not an endlessly replayed Reset.
+        assert!(matches!(resumed.try_recv(), Ok(None)));
+        let same_head = resumed.head().cloned().unwrap();
+        let mut again = feed.watch(session, Some(same_head));
+        assert!(again.needs_snapshot());
+        assert!(matches!(again.try_recv(), Ok(None)));
+        feed.publish(position(2), session, ChangeKind::Execution);
+        let next = again.try_recv().unwrap().unwrap().cursor.clone();
+        assert!(!feed.watch(session, Some(next)).needs_snapshot());
+    }
+
+    #[test]
+    fn normal_replay_eviction_still_accepts_its_inclusive_floor() {
+        let feed = ChangeFeed::new(KernelEpoch::new(), 1);
+        let session = session();
+        feed.publish(position(1), session, ChangeKind::Execution);
+        let after_first = feed.watch(session, None).head().cloned().unwrap();
+        feed.publish(position(2), session, ChangeKind::Content);
+        let mut resumed = feed.watch(session, Some(after_first));
+        assert!(!resumed.needs_snapshot());
+        assert_eq!(
+            resumed.try_recv().unwrap().unwrap().cursor.position,
+            position(2)
+        );
+        assert!(matches!(resumed.try_recv(), Ok(None)));
     }
 }

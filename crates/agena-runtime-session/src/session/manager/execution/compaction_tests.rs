@@ -144,6 +144,7 @@ async fn oversized_compaction_prefix_fails_with_budget_error_without_changing_co
     let control = RunControl {
         session,
         execution: execution.id,
+        generation: execution.generation,
         model: options.model.clone(),
         state: state.clone(),
         cancel: CancellationToken::new(),

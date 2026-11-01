@@ -1293,7 +1293,7 @@ async fn writer(
                 _ = live.admission_changed(), if fatal.is_none() => { continue; }
                 _ = tokio::time::sleep_until(live.next_checkpoint().max(retry_after)), if fatal.is_none() => {
                     if tokio::time::Instant::now() >= retry_after {
-                        match content::checkpoint(&database,&live,true,false).await {
+                        match content::checkpoint(&database,&live,&feed,true,false).await {
                             // The next deadline remains due while older sources
                             // await their bounded turn. New tails have their own
                             // deadline and cannot be sealed by this sweep.
@@ -1442,7 +1442,8 @@ async fn writer(
                     let _ = append.response.send(result);
                 }
                 if tokio::time::Instant::now() >= retry_after
-                    && let Err(error) = content::checkpoint(&database, &live, false, false).await
+                    && let Err(error) =
+                        content::checkpoint(&database, &live, &feed, false, false).await
                 {
                     tracing::warn!(%error, "content checkpoint failed; accepted tail retained");
                     retry_after = tokio::time::Instant::now() + Duration::from_millis(500);
@@ -1471,7 +1472,8 @@ async fn writer(
                     let _ = append.response.send(result);
                 }
                 if tokio::time::Instant::now() >= retry_after
-                    && let Err(error) = content::checkpoint(&database, &live, false, false).await
+                    && let Err(error) =
+                        content::checkpoint(&database, &live, &feed, false, false).await
                 {
                     tracing::warn!(%error,"event checkpoint failed; accepted content retained");
                     retry_after = tokio::time::Instant::now() + Duration::from_millis(500);
@@ -1537,7 +1539,7 @@ async fn writer(
     let checkpoint = if let Some(error) = fatal {
         Err(error)
     } else {
-        content::checkpoint(&database, &live, true, true)
+        content::checkpoint(&database, &live, &feed, true, true)
             .await
             .map_err(storage)
     };

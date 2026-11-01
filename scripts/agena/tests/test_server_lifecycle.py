@@ -405,6 +405,71 @@ class SessionRestartTests(unittest.TestCase):
         self.assertEqual(len(assistant_boundaries), 1, 'the abandoned attempt must not fabricate a reply')
         self.assertEqual(self.provider.errors, [])
 
+    def test_session_stream_reconnect_refreshes_parts_with_unchanged_metadata_version(self):
+        session = http_fixture.create_session(self.api, self.workspace_id, 'stream reconnect version')
+        stream = self.provider.plan('reconnect_parts', 'text',
+                                    payloads=['BEFORE_RECONNECT', 'AFTER_RECONNECT'])
+        prompt = 'Keep streaming while the observer disconnects'
+        http_fixture.submit(self.api, session, prompt)
+        http_fixture.poll(lambda: http_fixture.read_assistant_text(self.api, session) == 'BEFORE_RECONNECT',
+                          self.api.timeout, 'provider did not reach the observer baseline')
+        # The first text delta is visible and the provider cannot finish until
+        # this observer has captured its parts/version. Submission options are
+        # already persisted; completion changes only execution/content facts.
+        before = self.api.get(f'/api/v1/sessions/{session}/parts?limit=32')
+        before_text = next(part for part in before['parts']
+                           if part['role'] == 'assistant' and part['kind'] == 'text')
+        self.assertEqual(before_text['state'], 'running')
+        stream.steady_gate.set()
+        http_fixture.wait_idle(self.api, session)
+        self.provider.assert_step(stream)
+        after = self.api.get(f'/api/v1/sessions/{session}/parts?limit=32')
+        self.assertEqual(after['version'], before['version'],
+                         'stream completion keeps the metadata version unchanged')
+        after_text = next(part for part in after['parts'] if part['part_id'] == before_text['part_id'])
+        self.assertEqual(after_text['state'], 'completed')
+        self.assertGreater(after_text['revision'], before_text['revision'])
+        self.assertEqual(http_fixture.read_assistant_text(self.api, session),
+                         'BEFORE_RECONNECTAFTER_RECONNECT')
+
+        connection = self.api.connection()
+        connection.timeout = 5
+        self.addCleanup(connection.close)
+        connection.request('GET',
+                           f'/api/v1/sessions/{session}/changes/stream?since_version={before["version"]}',
+                           headers={'Accept': 'text/event-stream'})
+        try:
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            event = None
+            data = []
+            while True:
+                raw = response.readline()
+                self.assertTrue(raw, 'session stream closed before its initial snapshot')
+                line = raw.decode('utf-8').rstrip('\r\n')
+                if not line:
+                    if data:
+                        break
+                    continue
+                if line.startswith('event:'):
+                    event = line.removeprefix('event:').strip()
+                elif line.startswith('data:'):
+                    data.append(line.removeprefix('data:').lstrip())
+        except TimeoutError:
+            self.fail('reconnect skipped the initial snapshot after a parts-only mutation')
+        self.assertEqual(event, 'session_snapshot')
+        snapshot = json.loads('\n'.join(data))
+        self.assertEqual(snapshot['version'], before['version'])
+        expected = {part['part_id'] for part in after['parts'] if part['role'] == 'user'}
+        self.assertEqual({part['part_id'] for part in snapshot['parts'] if part['role'] == 'user'}, expected)
+        snapshot_text = next(part for part in snapshot['parts'] if part['part_id'] == after_text['part_id'])
+        self.assertEqual(snapshot_text['state'], after_text['state'])
+        self.assertEqual(snapshot_text['revision'], after_text['revision'])
+        self.assertEqual(snapshot_text['content'], after_text['content'])
+        snapshot_user = next(part for part in snapshot['parts'] if part['role'] == 'user')
+        self.assertEqual(snapshot_user['content']['document'], [{'type': 'text', 'text': prompt}])
+        self.assertEqual(self.provider.errors, [])
+
     def test_fork_freezes_inherited_stream_at_its_creation_boundary(self):
         root = http_fixture.create_session(self.api, self.workspace_id, 'fork streaming boundary')
         stream = self.provider.plan('fork_stream', 'text',
@@ -444,6 +509,65 @@ class SessionRestartTests(unittest.TestCase):
         self.assertEqual([part['part_id'] for part in self.api.parts(nested)
                           if part['role'] == 'user' and part['message_boundary']], user_ids)
         self.assertEqual(self.attempts(root), [(1, 'succeeded')])
+        self.assertEqual(self.provider.errors, [])
+
+    def test_frozen_open_content_stream_finishes_as_a_complete_session_view(self):
+        parent = http_fixture.create_session(self.api, self.workspace_id, 'finite fork content')
+        held = self.provider.plan('finite_fork_content', 'held', payloads=['FROZEN_STREAM_PREFIX'])
+        http_fixture.submit(self.api, parent, 'Keep the parent source open while its forks are read')
+        http_fixture.poll(lambda: http_fixture.read_assistant_text(self.api, parent) == 'FROZEN_STREAM_PREFIX',
+                          self.api.timeout, 'parent source did not expose its initial bytes')
+        branch = self.api.call('POST', f'/api/v1/sessions/{parent}/fork', {})[0]['session']['id']
+        nested = self.api.call('POST', f'/api/v1/sessions/{branch}/fork', {})[0]['session']['id']
+
+        for session in [branch, nested]:
+            with self.subTest(session=session):
+                part = next(part for part in self.api.parts(session)
+                            if part['role'] == 'assistant' and part['kind'] == 'text')
+                reference = next(reference for reference in part['content']['resources']
+                                 if reference['kind'] == 'text')
+                path = f'/api/v1/sessions/{session}/content/{reference["resource_id"]}'
+                connection = self.api.connection()
+                connection.timeout = 5
+                try:
+                    connection.request('GET', path + '/stream?max_bytes=65536',
+                                       headers={'Accept': 'text/event-stream'})
+                    response = connection.getresponse()
+                    self.assertEqual(response.status, 200)
+                    raw = response.read(1024 * 1024).decode('utf-8')
+                except TimeoutError:
+                    self.fail('a frozen source stream waited for another parent update')
+                finally:
+                    connection.close()
+                events = []
+                for frame in raw.replace('\r\n', '\n').split('\n\n'):
+                    name = None
+                    data = []
+                    for line in frame.splitlines():
+                        if line.startswith('event:'):
+                            name = line.removeprefix('event:').strip()
+                        elif line.startswith('data:'):
+                            data.append(line.removeprefix('data:').lstrip())
+                    if data:
+                        events.append((name, json.loads('\n'.join(data))))
+                self.assertTrue(events, 'frozen source stream had no initial page')
+                self.assertTrue(all(name == 'content' for name, _ in events), events)
+                self.assertEqual(events[-1][1]['resource']['state'], 'complete')
+                self.assertFalse(events[-1][1]['has_more'])
+                text = ''.join(chunk['payload']['text'] for _, page in events for chunk in page['chunks']
+                               if chunk['payload']['type'] == 'text')
+                self.assertEqual(text, 'FROZEN_STREAM_PREFIX')
+                self.assertEqual(self.api.get(path)['resource']['state'], 'complete')
+                self.assertEqual(part['state'], 'running', 'the historical part fact remains frozen')
+
+        parent_part = next(part for part in self.api.parts(parent)
+                           if part['role'] == 'assistant' and part['kind'] == 'text')
+        source = next(reference for reference in parent_part['content']['resources']
+                      if reference['kind'] == 'text')
+        self.assertEqual(self.api.get(f'/api/v1/sessions/{parent}/content/{source["resource_id"]}')
+                         ['resource']['state'], 'active')
+        self.api.call('POST', f'/api/v1/sessions/{parent}/cancel', {})
+        self.provider.assert_step(held)
         self.assertEqual(self.provider.errors, [])
 
     def test_paused_compaction_keeps_its_purpose_after_restart(self):

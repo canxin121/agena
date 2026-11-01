@@ -987,6 +987,9 @@ pub struct SessionExecutionResource {
     /// include the durable owners of pending interactions. A bounded history
     /// selection always carries metadata, including when its window is empty.
     pub part_page: Option<crate::pagination::PageInfo>,
+    /// Durable session control version for ordering execution snapshots and
+    /// mutation receipts. The legacy field name is retained for wire
+    /// compatibility; this is neither a metadata version nor an SSE cursor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]

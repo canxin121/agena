@@ -59,6 +59,7 @@ struct AgentBudget {
 struct RunControl {
     session: SessionId,
     execution: ExecutionId,
+    generation: AttemptGeneration,
     model: ModelRef,
     state: Arc<ExecutionState>,
     cancel: CancellationToken,

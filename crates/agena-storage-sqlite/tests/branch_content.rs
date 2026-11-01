@@ -92,7 +92,18 @@ async fn nested_branches_freeze_text_and_keep_their_prefix_after_source_recovery
         .watch_content(fork, output.id())
         .await
         .unwrap();
+    assert!(watch.is_snapshot());
     assert_eq!(watch.head().unwrap().accepted, 6);
+    assert_eq!(watch.head().unwrap().state, CaptureState::Open);
+    assert!(
+        !runtime
+            .ports
+            .reader
+            .watch_content(root, output.id())
+            .await
+            .unwrap()
+            .is_snapshot()
+    );
     assert!(matches!(
         tokio::time::timeout(std::time::Duration::from_secs(1), watch.changed()).await,
         Ok(Err(KernelError::Closed))

@@ -82,7 +82,7 @@ async fn inline_ui_authorized_sidecars_survive_four_byte_source_pages_without_ch
     let head = changes.head().unwrap();
     let watch = super::ContentWatch {
         inline_reply: true,
-        resource: resource(session.get(), &head),
+        resource: resource(session.get(), &head, changes.is_snapshot()),
         session,
         reader: runtime.ports.reader.clone(),
         changes,

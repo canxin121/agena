@@ -25,8 +25,9 @@ pub enum Notification {
         revisions: std::collections::BTreeMap<String, String>,
     },
     /// The subscription's broadcast channel dropped `skipped` messages
-    /// because this client was too slow. The client must re-read the current
-    /// ordered session parts (and compare `sessions.version`) to catch up.
+    /// because this client was too slow. The client must re-read its current
+    /// ordered session parts and execution state to catch up. An unchanged
+    /// session metadata version does not mean those resources are unchanged.
     Lagged {
         subscription: SubscriptionId,
         skipped: u64,

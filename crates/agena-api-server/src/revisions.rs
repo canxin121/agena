@@ -3,7 +3,9 @@ use crate::{error::ServerError, state::AppState};
 use agena_api::live::{RuntimeSignalResource, SessionChangeResource};
 use agena_domain::SessionStateKind;
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalObservation};
-use agena_storage::kernel::{KernelChange, SessionListChange, SessionListState, WatchCursor};
+use agena_storage::kernel::{
+    KernelChange, KernelWatch, SessionListChange, SessionListState, WatchCursor, WatchError,
+};
 use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -182,6 +184,7 @@ fn list_change_keys(change: &SessionListChange) -> BTreeSet<String> {
 pub(crate) struct ResourceRevisions {
     epoch: String,
     clock: Arc<Mutex<Clock>>,
+    durable_watch: Mutex<Option<KernelWatch>>,
     _signal_observation: Option<RuntimeLiveSignalObservation>,
 }
 impl ResourceRevisions {
@@ -199,6 +202,7 @@ impl ResourceRevisions {
         Ok(Self {
             epoch: state.server().id.to_string(),
             clock,
+            durable_watch: Mutex::new(None),
             _signal_observation: observation,
         })
     }
@@ -279,35 +283,55 @@ impl ResourceRevisions {
     /// The kernel has one process owner. Observe the in-memory committed head;
     /// normal requests never rescan the database or every session's metadata.
     pub(crate) async fn refresh_durable(&self, state: &AppState) -> Result<(), ServerError> {
-        let after = self
-            .clock
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .position
-            .clone();
-        let mut watch = state
-            .application()
-            .session_kernel()?
-            .reader
-            .watch_all(after)
-            .map_err(|e| ServerError::internal_error(&e))?;
-        if watch.needs_snapshot() {
+        self.refresh_durable_with(|after| {
+            state
+                .application()
+                .session_kernel()?
+                .reader
+                .watch_all(after)
+                .map_err(|error| ServerError::internal_error(&error))
+        })
+    }
+    fn refresh_durable_with(
+        &self,
+        mut open_watch: impl FnMut(Option<WatchCursor>) -> Result<KernelWatch, ServerError>,
+    ) -> Result<(), ServerError> {
+        // One bounded subscriber records resets independently of commit
+        // positions. Reopening after the same reset head on every HTTP read
+        // cannot distinguish a handled reset from one missed on disconnect.
+        let mut watch = self.durable_watch.lock().unwrap_or_else(|e| e.into_inner());
+        if watch.is_none() {
+            let replacement = open_watch(None)?;
+            let head = replacement.head().cloned();
+            *watch = Some(replacement);
             let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
             // An empty owner has no durable mutations to invalidate. Keep its
             // clocks stable across idle conditional reads before the first commit.
-            if watch.head().is_some() || clock.position.is_some() {
-                clock.reset(watch.head().cloned());
+            if head.is_some() || clock.position.is_some() {
+                clock.reset(head);
             }
-            return Ok(());
         }
         loop {
-            match watch.try_recv() {
+            match watch
+                .as_mut()
+                .expect("initialized durable subscriber")
+                .try_recv()
+            {
                 Ok(Some(change)) => self.observe_kernel_change(&change),
                 Ok(None) => break,
-                Err(_) => {
+                Err(WatchError::Reset { .. }) => {
+                    // Install the replacement before publishing new tokens;
+                    // changes during a client's catch-up stay in this watch.
+                    let replacement = open_watch(None)?;
+                    let head = replacement.head().cloned();
+                    *watch = Some(replacement);
                     let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
-                    clock.reset(watch.head().cloned());
+                    clock.reset(head);
                     break;
+                }
+                Err(error @ WatchError::Closed) => {
+                    *watch = None;
+                    return Err(ServerError::internal_error(&error));
                 }
             }
         }
@@ -447,6 +471,7 @@ mod tests {
         ResourceRevisions {
             epoch: "test-server".into(),
             clock: Arc::new(Mutex::new(Clock::new())),
+            durable_watch: Mutex::new(None),
             _signal_observation: None,
         }
     }
@@ -510,5 +535,75 @@ mod tests {
             }),
         );
         assert!(!tokens.contains_key("session:7:plan"));
+    }
+
+    #[test]
+    fn idle_revision_reads_stabilize_after_each_reset_at_the_same_commit_head() {
+        use agena_storage::backend::kernel::ChangeFeed;
+        use agena_storage::kernel::{ChangeKind, CommitPosition, CommitSequence, SessionId};
+
+        let revisions = revisions();
+        let feed = ChangeFeed::new(agena_domain::KernelEpoch::new(), 4);
+        let session = SessionId::try_from(7).unwrap();
+        let key = "session:7:state";
+        let refresh = || {
+            revisions
+                .refresh_durable_with(|after| Ok(feed.watch_all(after)))
+                .unwrap()
+        };
+        let initial = revisions.token(key);
+        refresh();
+        refresh();
+        assert_eq!(
+            revisions.token(key),
+            initial,
+            "an idle empty owner stays cacheable"
+        );
+
+        feed.publish(
+            CommitPosition {
+                sequence: CommitSequence::INITIAL,
+                ordinal: 0,
+            },
+            session,
+            ChangeKind::Metadata,
+        );
+        refresh();
+        let mut previous = revisions.token(key);
+        for _ in 0..2 {
+            feed.invalidate();
+            refresh();
+            let invalidated = revisions.token(key);
+            assert_ne!(
+                invalidated, previous,
+                "every explicit reset invalidates cached bodies"
+            );
+            for _ in 0..3 {
+                refresh();
+                assert_eq!(
+                    revisions.token(key),
+                    invalidated,
+                    "observing the same idle reset boundary must not invalidate again"
+                );
+            }
+            previous = invalidated;
+        }
+        feed.publish(
+            CommitPosition {
+                sequence: CommitSequence::INITIAL.next().unwrap(),
+                ordinal: 0,
+            },
+            session,
+            ChangeKind::Metadata,
+        );
+        refresh();
+        assert_ne!(
+            revisions.token(key),
+            previous,
+            "the replacement watch keeps later commits"
+        );
+        let committed = revisions.token(key);
+        refresh();
+        assert_eq!(revisions.token(key), committed);
     }
 }

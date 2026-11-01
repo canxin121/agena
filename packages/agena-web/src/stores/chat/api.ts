@@ -193,6 +193,8 @@ function messageFoldsFromWindow(page: AgenaSessionParts): MessageFold[] {
 }
 
 export type SessionExecutionStatus = {
+  /** Durable session control version; independent of session metadata and SSE cursors. */
+  controlVersion?: number
   queuedMessages?: QueuedMessage[]
   queuePaused?: boolean
   observation?: Awaited<ReturnType<typeof conditionalJsonObserved>>['observation']
@@ -1404,6 +1406,7 @@ export async function getSessionExecutionStatus(
     ? raw.background_activities.map((item) => str(asRecord(item).kind).toLowerCase()).filter((kind) => kind.length > 0)
     : []
   return {
+    controlVersion: state.latest_event_seq ?? undefined,
     session: toSession(state.session, observation.scope)!,
     state: s,
     execution: state.execution,

@@ -10,7 +10,7 @@ use agena_api::{
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
 use agena_runtime_contracts::part_content::ToolCallContent;
-use agena_storage::kernel::{ChangeKind, WatchError};
+use agena_storage::kernel::{ChangeKind, KernelError, KernelWatch, WatchError};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 #[cfg(feature = "ws")]
@@ -102,6 +102,23 @@ pub(crate) fn subscribe(state: &AppState, scope: Scope) -> Result<LiveSubscripti
     subscribe_with_queue_capacity(state, scope, 256)
 }
 
+async fn recover_watch(
+    watch: &mut KernelWatch,
+    replacement: impl FnOnce() -> Result<KernelWatch, KernelError>,
+    tx: &mpsc::Sender<LiveItem>,
+) -> bool {
+    // Recovery reads may begin as soon as the reset reaches the transport.
+    // Install their live tail first, including while delivery is backpressured.
+    match replacement() {
+        Ok(replacement) => *watch = replacement,
+        Err(error) => {
+            tracing::warn!(%error, "kernel change feed ended during recovery");
+            return false;
+        }
+    }
+    tx.send(LiveItem::Lagged(1)).await.is_ok()
+}
+
 fn subscribe_with_queue_capacity(
     state: &AppState,
     scope: Scope,
@@ -131,10 +148,10 @@ fn subscribe_with_queue_capacity(
                 notice=watch.recv()=>{
                     let change=match notice {Ok(change)=>change,Err(WatchError::Closed)=>break,
                         Err(WatchError::Reset{..})=>{
-                            if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}
-                            let replacement=match scope {Scope::Session{session_id}=>kernel.reader.watch(match session_id.try_into(){Ok(id)=>id,Err(_)=>break},None),
+                            let replacement=||match scope {Scope::Session{session_id}=>kernel.reader.watch(
+                                session_id.try_into().map_err(|error:agena_domain::session_kernel::InvalidKernelNumber|KernelError::Invalid(error.to_string()))?,None),
                                 _=>kernel.reader.watch_all(None)};
-                            match replacement { Ok(replacement)=>watch=replacement,Err(error)=>{tracing::warn!(%error,"kernel change feed ended during recovery");break;} }
+                            if !recover_watch(&mut watch,replacement,&tx).await {break;}
                             continue;
                         }};
                     // Session watches can omit other sessions' earlier commits.
@@ -306,3 +323,6 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
         },
     }
 }
+
+#[cfg(test)]
+mod tests;

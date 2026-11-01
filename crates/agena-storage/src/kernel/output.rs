@@ -108,10 +108,17 @@ pub struct TextRange {
 /// requesting the indexed byte range.
 pub struct ContentWatch {
     receiver: watch::Receiver<ContentStreamView>,
+    snapshot: bool,
     _lease: Option<ReadLease>,
 }
 
 impl ContentWatch {
+    /// True for a finite inherited view. Its historical capture state may be
+    /// Open, but the view will never follow the source owner's later output.
+    pub fn is_snapshot(&self) -> bool {
+        self.snapshot
+    }
+
     pub fn with_lease(mut self, lease: ReadLease) -> Self {
         self._lease = Some(lease);
         self
@@ -139,6 +146,20 @@ impl ContentWatch {
     pub fn from_receiver(receiver: watch::Receiver<ContentStreamView>) -> Self {
         Self {
             receiver,
+            snapshot: false,
+            _lease: None,
+        }
+    }
+
+    /// Infrastructure constructor for an already-authorized immutable cut.
+    /// Keep the historical head intact and expose finite transport semantics
+    /// separately, instead of disguising a live failure as normal completion.
+    pub fn from_snapshot(head: ContentStreamView) -> Self {
+        let (sender, receiver) = watch::channel(head);
+        drop(sender);
+        Self {
+            receiver,
+            snapshot: true,
             _lease: None,
         }
     }

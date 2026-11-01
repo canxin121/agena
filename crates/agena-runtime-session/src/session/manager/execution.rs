@@ -4,6 +4,11 @@ use agena_domain::{PermissionAction, PermissionDecision, Role, ToolInvocation};
 use futures_util::{FutureExt, StreamExt, stream};
 use serde_json::{Value, json};
 
+enum DriveExit {
+    Settled,
+    QueuePaused,
+}
+
 impl SessionManager {
     pub(super) fn reserve_execution(&self) -> Result<OwnedSemaphorePermit, AppError> {
         if self.shutdown.is_cancelled() {
@@ -34,12 +39,15 @@ impl SessionManager {
         let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
         let state = self.state.load_full();
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(run) = active.get(&execution.id) {
+        if let Some(run) = active.get(&execution.id)
+            && run.generation >= execution.generation
+        {
             return run.clone();
         }
         let run = Arc::new(RunControl {
             session: execution.session_id,
             execution: execution.id,
+            generation: execution.generation,
             model: options.model.clone(),
             state: state.clone(),
             cancel: self.shutdown.child_token(),
@@ -102,17 +110,53 @@ impl SessionManager {
                 *run.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.failure());
                 tracing::error!(session_id=run.session.get(),execution_id=%run.execution,%error,"supervised execution settled with an error");
             }
+            let recover_queued = matches!(result, Ok(DriveExit::QueuePaused));
+            drop(_session);
             manager
-                .active
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .remove(&run.execution);
-            run.settled
-                .store(true, std::sync::atomic::Ordering::Release);
-            run.done.notify_waiters();
+                .retire_supervised_run(&run, _permit, recover_queued)
+                .await;
             manager.schedule_title(run.session);
         });
         result
+    }
+    pub(super) fn settle_supervised_run(&self, run: &Arc<RunControl>) {
+        // A continuation may commit its next generation before this task has
+        // finished settling. Only remove the registration owned by this task.
+        let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
+        if active
+            .get(&run.execution)
+            .is_some_and(|current| Arc::ptr_eq(current, run))
+        {
+            active.remove(&run.execution);
+        }
+        drop(active);
+        run.settled
+            .store(true, std::sync::atomic::Ordering::Release);
+        run.done.notify_waiters();
+    }
+    pub(super) fn retire_supervised_run<'a>(
+        &'a self,
+        run: &'a Arc<RunControl>,
+        permit: OwnedSemaphorePermit,
+        recover_queued: bool,
+    ) -> futures_util::future::BoxFuture<'a, ()> {
+        async move {
+            self.settle_supervised_run(run);
+            drop(permit);
+            if !recover_queued || self.shutdown.is_cancelled() {
+                return;
+            }
+            // Resume may have observed this registration after the writer
+            // rejected its paused claim. Retire and release admission before
+            // sharing resume's lock; either side can then register the queue.
+            let dispatch = self.session_dispatch(run.session);
+            let _submission = dispatch.submission.lock().await;
+            if let Err(error) = self.restore_queued_executions(run.session).await {
+                tracing::warn!(session_id = run.session.get(), %error,
+                    "queued input recovery after paused supervision was deferred");
+            }
+        }
+        .boxed()
     }
     pub(super) async fn submit(
         &self,
@@ -327,12 +371,15 @@ impl SessionManager {
         mut options: SessionRunOptions,
         compact: bool,
         state: Arc<ExecutionState>,
-    ) -> Result<(), AppError> {
+    ) -> Result<DriveExit, AppError> {
         let claim = RequestId::new();
         let attempt = match persist(|| {
-            self.kernel()
-                .executor
-                .claim_next(claim, control.session, control.execution)
+            self.kernel().executor.claim_next_generation(
+                claim,
+                control.session,
+                control.execution,
+                control.generation,
+            )
         })
         .await
         {
@@ -340,7 +387,13 @@ impl SessionManager {
             // Pausing releases in-memory supervision/admission, but leaves the
             // durable input queued. Explicit resume or recovery registers it
             // again; a paused queue never turns into failed user turns.
-            Err(KernelError::QueuePaused | KernelError::QueueOutOfOrder) => return Ok(()),
+            Err(KernelError::QueuePaused) => return Ok(DriveExit::QueuePaused),
+            // A blocked FIFO owner still needs to settle, and a newer
+            // generation owns its own supervisor. Neither should be claimed
+            // or immediately rescheduled by this retiring task.
+            Err(KernelError::QueueOutOfOrder | KernelError::StaleAttempt) => {
+                return Ok(DriveExit::Settled);
+            }
             Err(error) => return Err(kernel_error(error)),
         };
         let execution = persist(|| {
@@ -517,7 +570,7 @@ impl SessionManager {
         if completed {
             self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
                 .await?;
-            return result;
+            return result.map(|()| DriveExit::Settled);
         }
         let phase = if control.cancel.is_cancelled() || matches!(result, Err(AppError::Cancelled)) {
             ExecutionPhase::Cancelled
@@ -575,7 +628,7 @@ impl SessionManager {
         }
         self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
             .await?;
-        result
+        result.map(|()| DriveExit::Settled)
     }
     async fn drive_round(
         &self,

@@ -124,8 +124,10 @@ pub struct SessionPartListQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
-/// Reconnect cursor for the live session-change stream.
+/// Compatibility options for the live session-change stream.
 pub struct SessionChangeStreamQuery {
+    /// Legacy metadata-version hint. It cannot establish transcript freshness;
+    /// every connection receives the current bounded session snapshot.
     #[serde(default)]
     pub since_version: Option<i64>,
     /// UI language for human headlines. Stored part data stays English.

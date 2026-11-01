@@ -175,7 +175,8 @@ pub struct RunSummaryResource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionPartsResource {
     pub session_id: i64,
-    /// Monotonic `sessions.version` high-water mark.
+    /// Session metadata/configuration version. Execution and content changes
+    /// can keep this value unchanged; it is not a transcript replay cursor.
     pub version: i64,
     pub parts: Vec<PartResource>,
     pub runs: Vec<RunSummaryResource>,

@@ -307,7 +307,17 @@ pub(super) async fn apply(
             session,
             execution,
             epoch,
+            ..
         } => {
+            let (view, _) = reads::execution(connection, *session, *execution).await?;
+            if let Command::ClaimNext {
+                expected_generation: Some(expected),
+                ..
+            } = command
+                && *expected != view.generation
+            {
+                return Err(KernelError::StaleAttempt);
+            }
             // This check and the claim share the serialized writer transaction.
             // A stop must persist pause before releasing the current execution.
             if super::lifecycle::configuration(connection, *session)
@@ -316,7 +326,6 @@ pub(super) async fn apply(
             {
                 return Err(KernelError::QueuePaused);
             }
-            let (view, _) = reads::execution(connection, *session, *execution).await?;
             if matches!(command, Command::ClaimNext { .. }) {
                 let blocked: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.session_id=? AND (a.phase='running' OR (a.phase='queued' AND x.message_id<?)))")
                     .bind(session.get()).bind(view.message_id.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;

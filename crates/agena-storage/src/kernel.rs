@@ -762,7 +762,8 @@ impl ExecutorCommands {
         session: SessionId,
         execution: ExecutionId,
     ) -> Result<CommitReceipt<AttemptHandle>> {
-        self.claim_ordered(request, session, execution, false).await
+        self.claim_ordered(request, session, execution, false, None)
+            .await
     }
     /// Claim only the FIFO head, with no concurrent running owner. This writer
     /// fence also covers resume while an old paused supervisor is settling.
@@ -772,7 +773,21 @@ impl ExecutorCommands {
         session: SessionId,
         execution: ExecutionId,
     ) -> Result<CommitReceipt<AttemptHandle>> {
-        self.claim_ordered(request, session, execution, true).await
+        self.claim_ordered(request, session, execution, true, None)
+            .await
+    }
+    /// Claim the FIFO head only for the generation selected by this
+    /// supervisor. Cancelling and retrying queued input must not transfer a
+    /// later attempt to an older supervisor with different options or budget.
+    pub async fn claim_next_generation(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+        expected_generation: AttemptGeneration,
+    ) -> Result<CommitReceipt<AttemptHandle>> {
+        self.claim_ordered(request, session, execution, true, Some(expected_generation))
+            .await
     }
     async fn claim_ordered(
         &self,
@@ -780,12 +795,14 @@ impl ExecutorCommands {
         session: SessionId,
         execution: ExecutionId,
         ordered: bool,
+        expected_generation: Option<AttemptGeneration>,
     ) -> Result<CommitReceipt<AttemptHandle>> {
         let command = if ordered {
             Command::ClaimNext {
                 session,
                 execution,
                 epoch: self.0.epoch,
+                expected_generation,
             }
         } else {
             Command::Claim {

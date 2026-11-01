@@ -249,7 +249,7 @@ impl ContentWatch {
             };
             return Ok(ContentPage {
                 inline_ui,
-                resource: resource(self.session.get(), &page.stream),
+                resource: resource(self.session.get(), &page.stream, self.changes.is_snapshot()),
                 chunks,
                 next_cursor: next,
                 has_more: page.has_more || length < body.len(),
@@ -369,7 +369,7 @@ impl ContentWatch {
         }
         Ok(ContentPage {
             inline_ui: None,
-            resource: resource(self.session.get(), &page.stream),
+            resource: resource(self.session.get(), &page.stream, self.changes.is_snapshot()),
             has_more: page.has_more || chunks.len() < page.records.len(),
             chunks,
             next_cursor: next,
@@ -543,7 +543,7 @@ impl Application {
                 Err(error) => return Err(crate::kernel_error(error)),
             }
         };
-        let resource = resource(session_id, &head);
+        let resource = resource(session_id, &head, changes.is_snapshot());
         let inline_reply = if head.kind == ContentKind::Text {
             let owner = reader
                 .entry(session, head.entry)
@@ -566,15 +566,18 @@ impl Application {
     }
 }
 
-fn resource(session_id: i64, head: &ContentStreamView) -> ContentResource {
+fn resource(session_id: i64, head: &ContentStreamView, is_snapshot: bool) -> ContentResource {
     ContentResource {
         resource_id: head.id,
         owner_session_id: session_id,
         part_id: head.entry.get(),
         kind: head.kind,
+        // This envelope describes the session's readable content view. An
+        // inherited snapshot is finite even when its historical capture was
+        // still open. Keep that underlying capture/entry fact unchanged.
         state: match head.state {
-            CaptureState::Open => ContentState::Active,
-            CaptureState::Complete => ContentState::Complete,
+            CaptureState::Open if !is_snapshot => ContentState::Active,
+            CaptureState::Open | CaptureState::Complete => ContentState::Complete,
             CaptureState::Interrupted => ContentState::Interrupted,
         },
         cursor: ContentCursor {
@@ -604,3 +607,6 @@ fn resource(session_id: i64, head: &ContentStreamView) -> ContentResource {
 
 #[cfg(test)]
 mod inline_ui_tests;
+
+#[cfg(test)]
+mod snapshot_tests;

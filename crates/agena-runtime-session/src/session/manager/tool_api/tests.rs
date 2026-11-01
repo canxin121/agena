@@ -73,6 +73,7 @@ impl Fixture {
         let control = Arc::new(RunControl {
             session: self.session,
             execution: self.attempt.execution_id(),
+            generation: self.attempt.generation(),
             model: self.model.clone(),
             state,
             cancel: CancellationToken::new(),
@@ -244,6 +245,7 @@ impl Fixture {
         let control = Arc::new(RunControl {
             session: self.session,
             execution: self.attempt.execution_id(),
+            generation: self.attempt.generation(),
             model: self.model.clone(),
             state: state.clone(),
             cancel: CancellationToken::new(),

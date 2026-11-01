@@ -165,6 +165,8 @@ pub enum Command {
         session: SessionId,
         execution: ExecutionId,
         epoch: KernelEpoch,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_generation: Option<AttemptGeneration>,
     },
     Cancel {
         session: SessionId,

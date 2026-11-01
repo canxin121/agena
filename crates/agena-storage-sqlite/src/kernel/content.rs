@@ -239,6 +239,9 @@ impl LiveContent {
         {
             source.producers = source.producers.saturating_sub(1);
             source.abandoned = source.producers == 0;
+            if source.abandoned {
+                self.2.notify_one();
+            }
         }
     }
 
@@ -999,6 +1002,7 @@ impl CheckpointError {
 pub(super) async fn checkpoint(
     database: &KernelDatabase,
     live: &LiveContent,
+    feed: &ChangeFeed,
     timed: bool,
     closing: bool,
 ) -> std::result::Result<(), CheckpointError> {
@@ -1021,6 +1025,13 @@ pub(super) async fn checkpoint(
         abort_transaction(transaction).await?;
         return Err(error.into());
     }
+    let publication = match checkpoint_publication(&mut transaction, &sources).await {
+        Ok(publication) => publication,
+        Err(error) => {
+            abort_transaction(transaction).await?;
+            return Err(error.into());
+        }
+    };
     // Ordinary checkpoints do not change entry views. Abandoned/shutdown
     // captures do advance revisions and must fence warm metadata/history reads.
     let fence = sources
@@ -1044,8 +1055,98 @@ pub(super) async fn checkpoint(
     }
     live.acknowledge(&sources);
 
+    if let Some(publication) = publication {
+        for (ordinal, (session, change)) in publication.changes.into_iter().enumerate() {
+            feed.publish_scoped(
+                CommitPosition {
+                    sequence: publication.sequence,
+                    ordinal: ordinal as u32,
+                },
+                session,
+                change.workspace_id,
+                change.include_in_lists,
+                ChangeKind::Content,
+                change.entries,
+                change.requires_snapshot,
+                change.list_change,
+            );
+        }
+    }
+
     metrics::add(&live.diagnostics().0.checkpoint_transactions, 1);
     Ok(())
+}
+
+struct CheckpointPublication {
+    sequence: CommitSequence,
+    changes: Vec<(SessionId, EntryChanges)>,
+}
+
+/// Ordinary byte checkpoints remain coalesced content-watch updates. A
+/// terminal checkpoint also changes durable entry/control facts, so it needs
+/// a real commit position and a resumable session event in the same protocol
+/// as an explicit finish command.
+async fn checkpoint_publication(
+    connection: &mut SqliteConnection,
+    sources: &[StagedSource],
+) -> Result<Option<CheckpointPublication>> {
+    let entries: Vec<_> = sources
+        .iter()
+        .filter(|source| source.head.state != CaptureState::Open)
+        .map(|source| source.head.entry.get())
+        .collect();
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let rows = sqlx::query("SELECT id,origin_session_id FROM agena_entries WHERE id IN (SELECT value FROM json_each(?)) ORDER BY origin_session_id,id")
+        .bind(encode(&entries)?).fetch_all(&mut *connection).await.map_err(sql_error)?;
+    let mut sessions = std::collections::BTreeMap::<SessionId, Vec<EntryId>>::new();
+    for row in rows {
+        let session = SessionId::try_from(
+            row.try_get::<i64, _>("origin_session_id")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?;
+        let entry =
+            EntryId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?;
+        sessions.entry(session).or_default().push(entry);
+    }
+    let mut changes = Vec::with_capacity(sessions.len());
+    for (session, mut entries) in sessions {
+        let Some(state) = list_state(connection, session).await? else {
+            continue;
+        };
+        if sqlx::query("UPDATE agena_sessions SET control_version=control_version+1 WHERE id=? AND control_version<9223372036854775807")
+            .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?.rows_affected() != 1
+        {
+            return Err(KernelError::Conflict("session control version exhausted".into()));
+        }
+        let requires_snapshot = entries.len() > 128;
+        entries.truncate(128);
+        changes.push((
+            session,
+            EntryChanges {
+                entries,
+                requires_snapshot,
+                workspace_id: state.workspace_id,
+                include_in_lists: state.include_in_lists,
+                list_change: Some(SessionListChange {
+                    before: Some(state.clone()),
+                    after: Some(state),
+                    parents: Vec::new(),
+                }),
+            },
+        ));
+    }
+    if changes.is_empty() {
+        return Ok(None);
+    }
+    let sequence: i64 = sqlx::query_scalar("UPDATE agena_commits SET sequence=sequence+1 WHERE id=1 AND sequence<9223372036854775807 RETURNING sequence")
+        .fetch_one(connection).await.map_err(sql_error)?;
+    Ok(Some(CheckpointPublication {
+        sequence: CommitSequence::try_from(sequence).map_err(storage)?,
+        changes,
+    }))
 }
 
 async fn authorize(
@@ -1256,9 +1357,7 @@ pub(super) async fn watch(
         .map_err(storage)?;
     authorize(&mut connection, session, content).await?;
     if let Some(head) = scoped_boundary(&mut connection, session, content, None).await? {
-        let (sender, receiver) = watch::channel(head);
-        drop(sender);
-        return Ok(ContentWatch::from_receiver(receiver));
+        return Ok(ContentWatch::from_snapshot(head));
     }
     if let Some(watch) = live.subscribe(session, content) {
         return Ok(watch);

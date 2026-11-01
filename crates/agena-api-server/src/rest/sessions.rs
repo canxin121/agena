@@ -317,15 +317,17 @@ pub async fn stream_session_changes(
     let session_queries = state.application().session_query_service()?;
     let mut initial = crate::live::session_parts(&state, session_id).await?;
     agena_application::part_locale::localize_session_parts(&mut initial, locale.as_deref());
+    // Metadata versions do not advance for every execution, tool or queued
+    // input mutation. Preserve the legacy hint without using it to skip the
+    // bounded snapshot acquired after installing this connection's listener.
+    let _metadata_hint = query.since_version;
 
     let stream = stream! {
-        if query.since_version != Some(initial.version) {
-            match Event::default().event("session_snapshot").json_data(&initial) {
-                Ok(frame) => yield Ok::<Event, Infallible>(frame),
-                Err(error) => {
-                    yield Ok::<Event, Infallible>(sse_error_event(error));
-                    return;
-                }
+        match Event::default().event("session_snapshot").json_data(&initial) {
+            Ok(frame) => yield Ok::<Event, Infallible>(frame),
+            Err(error) => {
+                yield Ok::<Event, Infallible>(sse_error_event(error));
+                return;
             }
         }
 

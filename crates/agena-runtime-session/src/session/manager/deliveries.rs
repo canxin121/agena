@@ -287,7 +287,8 @@ impl SessionManager {
                 .active
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .contains_key(&execution.id)
+                .get(&execution.id)
+                .is_some_and(|run| run.generation >= execution.generation)
             {
                 continue;
             }

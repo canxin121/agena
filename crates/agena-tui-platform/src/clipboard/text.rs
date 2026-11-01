@@ -185,7 +185,7 @@ fn set_clipboard_text_via_tmux(text: &str) -> Result<(), ClipboardTextError> {
     let mut command = Command::new("tmux");
     command.args(["load-buffer", "-w", "-"]);
     let status = crate::helper_runner::run_with_input(
-        &mut command,
+        command,
         text.as_bytes().to_vec(),
         "tmux clipboard copy",
         Duration::from_secs(10),

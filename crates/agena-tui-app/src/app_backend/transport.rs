@@ -218,7 +218,9 @@ struct RemoteBackend {
     activity_kinds: tokio::sync::RwLock<Vec<agena_domain::ActivityKind>>,
     /// Server-owned workspace inventory used by synchronous pickers/search.
     workspace_files: tokio::sync::RwLock<Option<agena_api::resource::WorkspaceFileTreeResource>>,
-    workspace_file_index: tokio::sync::RwLock<Vec<PathBuf>>,
+    // Search runs in the synchronous key handler. Share immutable snapshots
+    // instead of cloning up to 50,000 paths on each character typed.
+    workspace_file_index: arc_swap::ArcSwap<Vec<super::file_index::IndexedWorkspaceFile>>,
     /// Non-ignore-aware, shallow directory pages for path browsers. Keeping
     /// this separate prevents ignored build/config paths from disappearing
     /// while the workspace-wide mention index remains ignore-aware. Writes
@@ -1127,22 +1129,30 @@ impl TuiBackend {
             .client
             .workspace_file_tree(self.inner.workspace_id, None, 64, 50_000, true)
             .await?;
-        let tree = value;
-        let mut index = Vec::new();
-        collect_workspace_file_paths(&tree.entries, &mut index);
-        index.sort();
+        // Indexing and sorting large workspaces must not occupy a Tokio worker
+        // (which may also be the thread driving the terminal event loop).
+        let (tree, index) = tokio::task::spawn_blocking(move || {
+            let mut index = Vec::new();
+            collect_workspace_file_paths(&value.entries, &mut index);
+            index.sort();
+            let indexed = index
+                .into_iter()
+                .map(super::file_index::IndexedWorkspaceFile::new)
+                .collect();
+            (value, std::sync::Arc::new(indexed))
+        })
+        .await?;
         *self.inner.workspace_files.write().await = Some(tree);
-        *self.inner.workspace_file_index.write().await = index;
+        self.inner.workspace_file_index.store(index);
         Ok(())
     }
 
-    pub(crate) fn workspace_file_index(&self) -> Vec<PathBuf> {
-        self.inner
-            .workspace_file_index
-            .try_read()
-            .ok()
-            .map(|guard| guard.clone())
-            .unwrap_or_default()
+    pub(crate) fn workspace_file_index(
+        &self,
+    ) -> std::sync::Arc<Vec<super::file_index::IndexedWorkspaceFile>> {
+        // Lock-free snapshot load: a concurrent server refresh never stalls a
+        // keystroke or presents a transiently empty suggestion list.
+        self.inner.workspace_file_index.load_full()
     }
 
     pub(crate) async fn refresh_workspace_directory(&self, path: &Path) -> Result<()> {

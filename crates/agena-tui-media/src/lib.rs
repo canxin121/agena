@@ -44,6 +44,10 @@ use ratex_layout::{
 };
 use ratex_parser::parser::parse;
 
+mod background;
+mod graphics_jobs;
+mod usage;
+pub use usage::track_media_usage;
 mod graphics_selection;
 mod render;
 use ratex_render::{RenderOptions, render_to_png};
@@ -108,9 +112,30 @@ pub struct MathRenderContext {
     workspace: Option<Arc<PathBuf>>,
     images_enabled: bool,
     image_background: [u8; 3],
+    background: Option<Arc<background::BackgroundMedia>>,
 }
 
 impl MathRenderContext {
+    /// Live rendering uses a bounded cache and background decode/raster jobs.
+    /// Export and pager callers retain their synchronous rendering policy.
+    pub fn enable_background_rendering(&mut self) {
+        self.background
+            .get_or_insert_with(|| Arc::new(Default::default()));
+    }
+
+    pub fn background_rendering_enabled(&self) -> bool {
+        self.background.is_some()
+    }
+
+    /// Wait without polling for a new live media artifact. This never makes a
+    /// synchronous export opt in to background work.
+    pub async fn background_changed(&self) {
+        match &self.background {
+            Some(background) => background.changed().await,
+            None => std::future::pending::<()>().await,
+        }
+    }
+
     pub fn new(graphics: Option<&MathGraphicsConfig>, workspace: &Path) -> Self {
         let workspace = match fs::canonicalize(workspace) {
             Ok(workspace) => workspace,
@@ -129,6 +154,7 @@ impl MathRenderContext {
             layout: graphics.map_or_else(MathLayoutConfig::default, |graphics| graphics.layout),
             workspace: Some(Arc::new(workspace)),
             images_enabled: true,
+            background: None,
             image_background: graphics.map_or(
                 [
                     DEFAULT_DARK_BACKGROUND.red,
@@ -453,6 +479,10 @@ pub fn render_formula(source: &str, display: bool) -> Result<Arc<MathArtifact>, 
         return Err("formula is too large".to_string());
     }
 
+    if let Some(result) = background::render(background::Request::Formula(display), source) {
+        return result;
+    }
+
     let config = layout_config();
     let mut hasher = DefaultHasher::new();
     source.hash(&mut hasher);
@@ -670,6 +700,9 @@ pub fn with_deferred_remote_images<T>(render: impl FnOnce() -> T) -> T {
 }
 
 pub fn request_remote_image(source: &str) {
+    if source.len() > 8 * 1024 {
+        return;
+    }
     if let Ok(url) = url::Url::parse(source)
         && matches!(url.scheme(), "http" | "https")
     {
@@ -685,16 +718,34 @@ pub fn render_markdown_image(source: &str) -> Result<Arc<MathArtifact>, String> 
     if source.is_empty() {
         return Err("image URL is empty".to_string());
     }
+    let maximum = if source.starts_with("data:") {
+        MAX_MARKDOWN_IMAGE_BYTES
+            .div_ceil(3)
+            .saturating_mul(4)
+            .saturating_add(256)
+    } else {
+        8 * 1024
+    };
+    if source.len() > maximum {
+        return Err("image source exceeds the encoded byte safety limit".into());
+    }
+    if let Some(result) = background::render(background::Request::Image, source) {
+        return result;
+    }
     let bytes = if source.starts_with("data:") {
         Arc::new(decode_data_image(source)?)
     } else if let Ok(url) = url::Url::parse(source)
         && matches!(url.scheme(), "http" | "https")
     {
-        if DEFER_REMOTE_IMAGES.get() {
-            remote_image::cached(&url)?
+        let result = if DEFER_REMOTE_IMAGES.get() {
+            remote_image::cached(&url)
         } else {
-            remote_image::load(&url)?
+            remote_image::load(&url)
+        };
+        if result.is_err() {
+            usage::record();
         }
+        result?
     } else {
         Arc::new(read_workspace_image(source)?)
     };
@@ -706,5 +757,12 @@ pub fn render_markdown_image(source: &str) -> Result<Arc<MathArtifact>, String> 
 }
 
 pub fn remote_image_generation() -> u64 {
-    remote_image::generation()
+    let background = RENDER_CONTEXT_STACK.with(|stack| {
+        stack
+            .borrow()
+            .last()
+            .and_then(|context| context.background.as_ref())
+            .map_or(0, |cache| cache.generation())
+    });
+    remote_image::generation().wrapping_add(background)
 }

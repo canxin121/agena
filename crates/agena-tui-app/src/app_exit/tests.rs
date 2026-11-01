@@ -2,6 +2,7 @@ use super::*;
 use crate::{ComposerDraft, DraftSlot, Route, RunOperation};
 use agena_api::resource::{ActiveExecutionResource, SessionExecutionResource, SessionState};
 use crossterm::event::KeyEventKind;
+use std::time::Duration;
 
 fn snapshot(state: SessionState) -> SessionExecutionResource {
     serde_json::from_value(serde_json::json!({
@@ -404,6 +405,89 @@ async fn hidden_draft_has_two_actions_and_exit_flushes_it_without_cancellation()
         );
         assert!(!app.draft_store_dirty);
     }
+}
+
+#[tokio::test]
+async fn prompt_history_save_coalesces_bursts_and_keeps_latest_order() {
+    let (_temp, mut app) = app(None);
+    app.record_prompt_history_from_draft(&draft("first prompt"));
+    assert!(app.prompt_history_persist_in_flight);
+    app.record_prompt_history_from_draft(&draft("second prompt"));
+
+    for _ in 0..2 {
+        let message = tokio::time::timeout(Duration::from_secs(5), app.rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let crate::AppMessage::AsyncOperationCompleted(completion) = message else {
+            panic!("expected prompt history persistence completion")
+        };
+        completion(&mut app);
+    }
+    assert!(!app.prompt_history_persist_in_flight);
+    assert!(!app.prompt_history_dirty);
+    assert_eq!(
+        crate::PromptHistory::load(&app.prompt_history_path)
+            .unwrap()
+            .items,
+        vec!["first prompt", "second prompt"]
+    );
+}
+
+#[tokio::test]
+async fn pending_prompt_history_is_flushed_when_tui_exits() {
+    let (_temp, mut app) = app(None);
+    app.record_prompt_history_from_draft(&draft("must survive exit"));
+    let path = app.prompt_history_path.clone();
+    drop(app);
+    assert_eq!(
+        crate::PromptHistory::load(&path).unwrap().items,
+        vec!["must survive exit"]
+    );
+}
+
+#[tokio::test]
+async fn periodic_draft_save_cannot_overwrite_newer_forced_draft() {
+    let (_temp, mut app) = app(None);
+    app.composer.set_text("first draft".into());
+    app.sync_current_draft_slot();
+    app.draft_store_last_persist_at = std::time::Instant::now() - Duration::from_secs(1);
+    app.try_persist_draft_store(false).unwrap();
+    assert!(app.draft_persist_in_flight);
+
+    // The user edits and submits before the scheduled blocking save runs.
+    // Regardless of which worker acquires the lock first, the newer draft
+    // must be the durable one and the obsolete result cannot clear dirty.
+    app.composer.set_text("newer draft".into());
+    app.sync_current_draft_slot();
+    app.try_persist_draft_store(true).unwrap();
+    assert_eq!(
+        crate::DraftStore::load(&app.draft_store_path)
+            .unwrap()
+            .get(DraftSlot::NewSession)
+            .unwrap()
+            .text(),
+        "newer draft"
+    );
+
+    let message = tokio::time::timeout(Duration::from_secs(5), app.rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let crate::AppMessage::AsyncOperationCompleted(completion) = message else {
+        panic!("expected periodic draft persistence completion")
+    };
+    completion(&mut app);
+    assert!(!app.draft_persist_in_flight);
+    assert!(!app.draft_store_dirty);
+    assert_eq!(
+        crate::DraftStore::load(&app.draft_store_path)
+            .unwrap()
+            .get(DraftSlot::NewSession)
+            .unwrap()
+            .text(),
+        "newer draft"
+    );
 }
 
 #[tokio::test]

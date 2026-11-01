@@ -40,6 +40,7 @@ impl App {
     }
 
     pub(crate) fn refresh_input_derived_state(&mut self) {
+        self.input_derived_refresh_at = Instant::now();
         self.refresh_exit_menu();
         self.sync_composer_suggestions();
         if let Route::SessionModelChooser(dialog) = &mut self.current_route {
@@ -590,6 +591,7 @@ impl App {
     }
 
     pub(crate) fn sync_current_draft_slot(&mut self) {
+        self.draft_sync_last_at = Instant::now();
         if self.current_slot_has_in_flight_draft() {
             return;
         }
@@ -600,14 +602,23 @@ impl App {
 
     pub(crate) fn set_draft_for_slot(&mut self, slot: DraftSlot, draft: ComposerDraft) {
         if self.draft_store.set(slot, draft) {
-            self.draft_store_dirty = true;
+            self.mark_draft_store_dirty();
         }
     }
 
     pub(crate) fn clear_draft_for_slot(&mut self, slot: DraftSlot) {
         if self.draft_store.clear(slot) {
-            self.draft_store_dirty = true;
+            self.mark_draft_store_dirty();
         }
+    }
+
+    fn mark_draft_store_dirty(&mut self) {
+        self.draft_store_dirty = true;
+        self.draft_store_revision = self.draft_store_revision.wrapping_add(1);
+        self.draft_persist_revision.store(
+            self.draft_store_revision,
+            std::sync::atomic::Ordering::Release,
+        );
     }
 
     pub(crate) fn restore_draft_for_slot(&mut self, slot: DraftSlot) {
@@ -637,6 +648,56 @@ impl App {
             return Ok(());
         }
 
+        if !force && tokio::runtime::Handle::try_current().is_ok() {
+            if self.draft_persist_in_flight {
+                return Ok(());
+            }
+            self.draft_persist_in_flight = true;
+            self.draft_store_last_persist_at = Instant::now();
+            let store = self.draft_store.clone();
+            let path = self.draft_store_path.clone();
+            let lock = self.draft_persist_lock.clone();
+            let revision = self.draft_store_revision;
+            let shared_revision = self.draft_persist_revision.clone();
+            let tx = self.tx.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    let _guard = lock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if shared_revision.load(std::sync::atomic::Ordering::Acquire) != revision {
+                        return Ok(false);
+                    }
+                    store.persist(&path).map(|()| true)
+                })
+                .await
+                .map_err(crate::UiFailure::internal)
+                .and_then(|result| result);
+                let _ = tx
+                    .send(crate::AppMessage::AsyncOperationCompleted(Box::new(
+                        move |app| {
+                            app.draft_persist_in_flight = false;
+                            match result {
+                                Ok(wrote) if wrote && app.draft_store_revision == revision => {
+                                    app.draft_store_dirty = false;
+                                    app.draft_store_reported_error = None;
+                                }
+                                Ok(_) => {} // Replaced by a newer revision.
+                                Err(error) => app.report_draft_store_error(error),
+                            }
+                        },
+                    )))
+                    .await;
+            });
+            return Ok(());
+        }
+
+        // Submission and shutdown require a durable write before proceeding.
+        // The lock ensures a prior periodic write cannot overwrite that state.
+        let lock = self.draft_persist_lock.clone();
+        let _guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.draft_store.persist(&self.draft_store_path)?;
         self.draft_store_dirty = false;
         self.draft_store_last_persist_at = Instant::now();
@@ -671,11 +732,81 @@ impl App {
         if !self.prompt_history.push(text) {
             return;
         }
-        if let Err(error) = self.prompt_history.persist(&self.prompt_history_path) {
-            self.report_prompt_history_error(error);
-        } else {
-            self.prompt_history_reported_error = None;
+        self.prompt_history_dirty = true;
+        self.prompt_history_revision = self.prompt_history_revision.wrapping_add(1);
+        self.prompt_history_persist_revision.store(
+            self.prompt_history_revision,
+            std::sync::atomic::Ordering::Release,
+        );
+        self.persist_prompt_history_with_feedback();
+    }
+
+    /// The backend's turn acknowledgement must not block TUI input while an
+    /// atomic prompt-history write performs fsync. Concurrent acknowledgements
+    /// are ordered by revision, with a final durable flush on App shutdown.
+    fn persist_prompt_history_with_feedback(&mut self) {
+        if !self.prompt_history_dirty || self.prompt_history_persist_in_flight {
+            return;
         }
+        if tokio::runtime::Handle::try_current().is_err() {
+            let lock = self.prompt_history_persist_lock.clone();
+            let _guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match self.prompt_history.persist(&self.prompt_history_path) {
+                Ok(()) => {
+                    self.prompt_history_dirty = false;
+                    self.prompt_history_reported_error = None;
+                }
+                Err(error) => self.report_prompt_history_error(error),
+            }
+            return;
+        }
+
+        self.prompt_history_persist_in_flight = true;
+        let history = self.prompt_history.clone();
+        let path = self.prompt_history_path.clone();
+        let lock = self.prompt_history_persist_lock.clone();
+        let revision = self.prompt_history_revision;
+        let shared_revision = self.prompt_history_persist_revision.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                let _guard = lock
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if shared_revision.load(std::sync::atomic::Ordering::Acquire) != revision {
+                    return Ok(false);
+                }
+                history.persist(&path).map(|()| true)
+            })
+            .await
+            .map_err(crate::UiFailure::internal)
+            .and_then(|result| result);
+            let _ = tx
+                .send(crate::AppMessage::AsyncOperationCompleted(Box::new(
+                    move |app| {
+                        app.prompt_history_persist_in_flight = false;
+                        let retry_stale = match result {
+                            Ok(wrote) => {
+                                if wrote && app.prompt_history_revision == revision {
+                                    app.prompt_history_dirty = false;
+                                    app.prompt_history_reported_error = None;
+                                }
+                                true
+                            }
+                            Err(error) => {
+                                app.report_prompt_history_error(error);
+                                false // No unbounded retries on persistent disk errors.
+                            }
+                        };
+                        if retry_stale && app.prompt_history_dirty {
+                            app.persist_prompt_history_with_feedback();
+                        }
+                    },
+                )))
+                .await;
+        });
     }
 
     pub(crate) fn report_prompt_history_error(&mut self, error: crate::UiFailure) {
@@ -802,14 +933,15 @@ impl App {
         match action {
             UiAction::CopyText { text, success } => {
                 let context = terminal.context().clone();
-                match set_clipboard_text(text.as_str(), &context, |sequence| {
-                    terminal.write_protocol(sequence).map_err(|error| {
-                        ClipboardTextError(agena_failure::diagnostic::format_error_chain(
-                            error.as_ref(),
-                        ))
-                    })
-                }) {
-                    Ok(method) => self.flash_clipboard_copy_success(method, success),
+                self.copy_text_without_blocking(text, success, context);
+                Ok(())
+            }
+            UiAction::WriteClipboard { sequence, success } => {
+                match terminal.write_protocol(&sequence) {
+                    Ok(()) => self.flash_clipboard_copy_success(
+                        agena_tui_platform::clipboard::ClipboardCopyMethod::Osc52,
+                        success,
+                    ),
                     Err(error) => self.flash_error(self.i18n.text_args(
                         "flash-clipboard-copy-failed",
                         &agena_tui::fl_args!("error" => error.to_string()),
@@ -817,7 +949,21 @@ impl App {
                 }
                 Ok(())
             }
-            UiAction::PasteClipboard => self.paste_from_clipboard(terminal),
+            UiAction::PasteClipboard => {
+                self.paste_without_blocking(terminal.context().clone());
+                Ok(())
+            }
+            UiAction::PreparedClipboardPaste {
+                snapshot,
+                epoch,
+                slot,
+            } => {
+                if self.accepts_clipboard_read(epoch, slot) {
+                    self.paste_from_clipboard(terminal, snapshot)
+                } else {
+                    Ok(())
+                }
+            }
             UiAction::EditComposerExternally => self.edit_composer_externally(terminal),
             UiAction::ExportTranscript { path } => {
                 self.request_transcript_export(path.as_deref());
@@ -836,19 +982,20 @@ impl App {
         }
     }
 
-    fn paste_from_clipboard(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
-        self.reset_prompt_history_recall();
-        self.focus = Focus::Composer;
+    fn paste_from_clipboard(
+        &mut self,
+        terminal: &mut TerminalRuntime,
+        mut snapshot: crate::app_clipboard::ClipboardSnapshot,
+    ) -> Result<()> {
         let context = terminal.context().clone();
         let available_slots = self.remaining_resource_attachment_slots();
         let mut failures = Vec::new();
 
-        if context.capabilities.clipboard_read_native.is_operational() {
-            match clipboard_file_list() {
+        if let Some(files) = snapshot.files.take() {
+            match files {
                 Ok(paths) => {
                     let mut candidates = paths
                         .into_iter()
-                        .filter(|path| path.is_file())
                         .map(|path| ClipboardUploadCandidate {
                             path,
                             temporary: false,
@@ -882,17 +1029,19 @@ impl App {
             }
         }
 
-        match acquire_clipboard_image(&context, terminal)? {
+        let acquisition = match snapshot.image.take() {
+            Some(Ok(acquisition)) => Ok(acquisition),
+            native => {
+                if let Some(Err(error)) = native {
+                    failures.push(error);
+                }
+                acquire_terminal_clipboard_image(&context, terminal)?
+            }
+        };
+        match acquisition {
             Ok(acquisition) => {
                 if available_slots == 0 {
-                    if let Some(root) = acquisition.cleanup_root.as_ref() {
-                        let _ = std::fs::remove_dir_all(root);
-                    }
-                    for item in &acquisition.items {
-                        if item.temporary {
-                            let _ = std::fs::remove_file(&item.path);
-                        }
-                    }
+                    crate::app_clipboard::ClipboardSnapshot::discard_image(acquisition);
                     self.flash_warning(self.i18n.text_args(
                         "flash-attachment-count-limit",
                         &agena_tui::fl_args!("count" => MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE as i64),
@@ -911,11 +1060,11 @@ impl App {
                     })
                     .collect::<Vec<_>>();
                 if !candidates.is_empty() {
-                    if let Ok(text) = get_clipboard_text(&context)
+                    if let Some(Ok(text)) = snapshot.text.as_ref()
                         && !text.is_empty()
                         && text.len() <= 1024 * 1024
                     {
-                        self.composer.insert_str(&text);
+                        self.composer.insert_str(text);
                         self.after_composer_text_mutated();
                     }
                     self.dispatch_clipboard_uploads(candidates, acquisition.cleanup_root);
@@ -928,7 +1077,11 @@ impl App {
             )),
         }
 
-        match get_clipboard_text(&context) {
+        match snapshot
+            .text
+            .take()
+            .unwrap_or_else(|| Err("native clipboard text is unavailable".into()))
+        {
             Ok(text) if !text.is_empty() => {
                 self.handle_paste(text);
                 return Ok(());
@@ -1337,18 +1490,17 @@ fn unique_composer_placeholder_text(
 
 use crate::Result;
 use crate::{
-    App, AttachmentKind, BTreeMap, ClipboardTextError, ComposerDraft, ComposerItem,
-    DRAFT_PERSIST_INTERVAL_MS, DraftSlot, Duration, HashSet, I18n, Instant, Overlay, Path, PathBuf,
-    PromptHistory, Route, RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
+    App, AttachmentKind, BTreeMap, ComposerDraft, ComposerItem, DRAFT_PERSIST_INTERVAL_MS,
+    DraftSlot, Duration, HashSet, I18n, Instant, Overlay, Path, PathBuf, PromptHistory, Route,
+    RunActivityTarget, RunOperation, TerminalRuntime, UiAction, UiResult,
     attachment_placeholder_base, edit_text, find_placeholder_occurrence, normalize_pasted_path,
-    open_path, set_clipboard_text, ui_text,
+    open_path, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
 use agena_tui_components::sanitize_editor_text;
 use agena_tui_platform::{
-    attachment_source::acquire_clipboard_image,
-    clipboard::{PastedImageInfo, clipboard_file_list, get_clipboard_text},
+    attachment_source::acquire_terminal_clipboard_image, clipboard::PastedImageInfo,
 };
 
 struct ClipboardUploadCleanup {

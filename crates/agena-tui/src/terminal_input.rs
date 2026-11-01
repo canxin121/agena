@@ -16,6 +16,10 @@ const INPUT_RECHECK_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_INTERVAL: Duration = Duration::from_millis(8);
 const LEGACY_PASTE_MIN_CHARS: usize = 3;
 const LEGACY_PASTE_MAX_BYTES: usize = 256 * 1024;
+
+#[cfg(test)]
+#[path = "terminal_input_responsiveness_tests.rs"]
+mod responsiveness_tests;
 /// Terminals that forward the key press which confirmed an input-method (IME)
 /// candidate deliver the composed text and that `Enter` inside the same input
 /// burst. An application cannot query a terminal for its composition state, so
@@ -66,6 +70,9 @@ impl TerminalInput {
 
     pub async fn next(&self) -> io::Result<Event> {
         loop {
+            // Readiness may be spurious (or a tty may repeatedly wake without
+            // a complete event). Never spin forever inside one async poll.
+            tokio::task::consume_budget().await;
             if event::poll(Duration::ZERO)? {
                 return event::read();
             }
@@ -198,6 +205,12 @@ impl InputNormalizer {
     /// Recognize the `Enter` a terminal forwards together with an IME commit
     /// after the committed text already reached the target as its own burst.
     fn absorb_ime_commit_enter(&mut self, key: KeyEvent, now: Instant) -> bool {
+        // A new burst is still accumulating (possibly the continuation of a
+        // size-limited paste). Its newline belongs to that pending text, not
+        // to the previously delivered IME commit.
+        if !self.pending.is_empty() {
+            return false;
+        }
         if key.code != KeyCode::Enter || !key.modifiers.is_empty() {
             return false;
         }
@@ -220,7 +233,9 @@ impl InputNormalizer {
     /// application as an `Enter` command.
     fn accept_text_enter(&mut self, key: KeyEvent, text: &str, now: Instant) {
         if self.pending_text.len().saturating_add(text.len()) > LEGACY_PASTE_MAX_BYTES {
-            self.flush_pending(false);
+            // A full machine-delivered chunk is text, not 262k individual
+            // key commands. Replaying it key-by-key makes editing quadratic.
+            self.flush_pending(true);
         }
         self.pending.push(key);
         self.pending_text.push_str(text);
@@ -318,7 +333,7 @@ impl InputNormalizer {
             self.flush_pending(false);
         }
         if self.pending_text.len().saturating_add(ch.len_utf8()) > LEGACY_PASTE_MAX_BYTES {
-            self.flush_pending(false);
+            self.flush_pending(true);
         }
         self.pending.push(key);
         self.pending_text.push(ch);

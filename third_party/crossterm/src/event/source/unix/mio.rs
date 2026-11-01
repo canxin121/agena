@@ -94,6 +94,12 @@ impl EventSource for UnixInternalEventSource {
                     TTY_TOKEN => {
                         loop {
                             match self.tty_fd.read(&mut self.tty_buffer) {
+                                Ok(0) => {
+                                    return Err(io::Error::new(
+                                        io::ErrorKind::UnexpectedEof,
+                                        "terminal input closed",
+                                    ));
+                                }
                                 Ok(read_count) => {
                                     if read_count > 0 {
                                         self.parser.advance(
@@ -110,6 +116,10 @@ impl EventSource for UnixInternalEventSource {
                                     // once more data is available to read.
                                     else if e.kind() == io::ErrorKind::Interrupted {
                                         continue;
+                                    } else {
+                                        // EIO on a closed PTY and other fatal
+                                        // errors must not spin inside poll().
+                                        return Err(e);
                                     }
                                 }
                             };

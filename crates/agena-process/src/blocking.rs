@@ -76,13 +76,41 @@ impl ManagedChild {
 /// pipe policy. A dedicated thread avoids nesting Tokio on the caller's
 /// thread. Pipe readers never outlive the operation.
 pub fn output(command: Command, timeout: Duration, maximum_bytes: usize) -> io::Result<Output> {
+    output_inner(command, None, timeout, maximum_bytes)
+}
+
+/// The same bounded process-tree policy, including stdin delivery. Unlike a
+/// detached blocking pipe writer, input cannot outlive the operation's timeout.
+pub fn output_with_input(
+    command: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+    maximum_bytes: usize,
+) -> io::Result<Output> {
+    output_inner(command, Some(input), timeout, maximum_bytes)
+}
+
+fn output_inner(
+    command: Command,
+    input: Option<Vec<u8>>,
+    timeout: Duration,
+    maximum_bytes: usize,
+) -> io::Result<Output> {
     std::thread::Builder::new()
         .name("agena-process-output".into())
         .spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            runtime.block_on(super::output(command.into(), timeout, maximum_bytes))
+            runtime.block_on(async move {
+                match input {
+                    Some(input) => {
+                        super::output_with_input(command.into(), &input, timeout, maximum_bytes)
+                            .await
+                    }
+                    None => super::output(command.into(), timeout, maximum_bytes).await,
+                }
+            })
         })?
         .join()
         .map_err(|_| io::Error::other("managed output worker panicked"))?

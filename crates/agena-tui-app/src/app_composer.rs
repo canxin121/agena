@@ -528,9 +528,13 @@ impl App {
                                 "agena-open-{}-{filename}",
                                 uuid::Uuid::new_v4().simple()
                             ));
-                            std::fs::write(local_path.as_path(), bytes).map_err(|error| {
-                                anyhow::anyhow!("failed to stage server file for editing: {error}")
-                            })?;
+                            tokio::fs::write(local_path.as_path(), bytes)
+                                .await
+                                .map_err(|error| {
+                                    anyhow::anyhow!(
+                                        "failed to stage server file for editing: {error}"
+                                    )
+                                })?;
                             Ok::<_, anyhow::Error>(local_path)
                         },
                         |app, result| match result {

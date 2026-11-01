@@ -1,7 +1,37 @@
 use super::*;
 
 pub fn render_markdown_svg(source: &str) -> Result<Arc<MathArtifact>, String> {
+    if source.len() > MAX_SVG_BYTES {
+        return Err("SVG exceeds the encoded byte safety limit".into());
+    }
+    if let Some(result) = background::render(background::Request::Svg, source) {
+        return result;
+    }
     svg_artifact(source.as_bytes())
+}
+
+/// Live terminal fallback with non-blocking raster resizing. Pending previews
+/// keep the final row count so their arrival does not move surrounding text.
+/// Synchronous/export contexts keep the existing immediate rendering policy.
+pub fn image_halfblock_lines_shared(
+    artifact: &Arc<MathArtifact>,
+    size: Size,
+) -> Vec<ratatui::text::Line<'static>> {
+    let width = u32::from(size.width);
+    let height = u32::from(size.height) * 2;
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || u64::from(width) * u64::from(height) > MAX_IMAGE_PIXELS
+    {
+        return Vec::new();
+    }
+    match background::halfblock_preview(artifact, size) {
+        Some(Ok(preview)) => image_halfblock_lines(&preview, size),
+        Some(Err(_)) => vec![ratatui::text::Line::default(); usize::from(size.height)],
+        None => image_halfblock_lines(artifact, size),
+    }
 }
 
 /// Render the same decoded image as ordinary terminal cells when kitty,
@@ -36,10 +66,14 @@ pub fn image_halfblock_lines(
             |context| context.image_background,
         )
     });
-    let image = artifact
-        .image
-        .resize_exact(width, height, image::imageops::FilterType::Triangle)
-        .to_rgba8();
+    let image = if artifact.image.width() == width && artifact.image.height() == height {
+        artifact.image.to_rgba8()
+    } else {
+        artifact
+            .image
+            .resize_exact(width, height, image::imageops::FilterType::Triangle)
+            .to_rgba8()
+    };
     let color = |pixel: &Rgba<u8>| {
         let alpha = u16::from(pixel.0[3]);
         let channels = std::array::from_fn::<_, 3, _>(|index| {
@@ -175,9 +209,26 @@ pub(super) fn read_workspace_image(source: &str) -> Result<Vec<u8>, String> {
     if metadata.len() > MAX_MARKDOWN_IMAGE_BYTES as u64 {
         return Err("image exceeds the encoded byte safety limit".to_string());
     }
-    let bytes = fs::read(path).map_err(|error| {
+    let file = fs::File::open(path).map_err(|error| {
         agena_failure::diagnostic::format_error_chain_with_context("cannot read image", &error)
     })?;
+    // Metadata is only a snapshot. A file can grow between stat and read; do
+    // not let that race turn a 20 MiB limit into an unbounded allocation.
+    read_image_bytes(file, MAX_MARKDOWN_IMAGE_BYTES)
+}
+
+fn read_image_bytes(reader: impl std::io::Read, maximum: usize) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader
+        .take(maximum.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            agena_failure::diagnostic::format_error_chain_with_context("cannot read image", &error)
+        })?;
+    if bytes.len() > maximum {
+        return Err("image exceeds the encoded byte safety limit".into());
+    }
     Ok(bytes)
 }
 
@@ -744,6 +795,8 @@ fn explicit_latex_fallback(source: &str) -> Vec<String> {
 pub struct MathGraphicsRenderer {
     picker: Picker,
     protocols: HashMap<(u64, u16, u16), (u64, SlicedProtocol)>,
+    protocol_order: VecDeque<(u64, u16, u16)>,
+    jobs: crate::graphics_jobs::GraphicsJobs,
     generation: u64,
 }
 
@@ -752,6 +805,8 @@ impl MathGraphicsRenderer {
         config.is_native().then(|| Self {
             picker: config.picker,
             protocols: HashMap::new(),
+            protocol_order: VecDeque::new(),
+            jobs: Default::default(),
             generation: 0,
         })
     }
@@ -760,7 +815,17 @@ impl MathGraphicsRenderer {
         if self.generation != generation {
             self.generation = generation;
             self.protocols.clear();
+            self.protocol_order.clear();
+            // Drop the old completion receiver. Work already running may
+            // finish, but cannot paint a pre-resume terminal generation.
+            self.jobs = Default::default();
         }
+    }
+
+    /// Drain completed encodes even when another route or an empty viewport
+    /// hides images. Unread results retain worker permits until consumed.
+    pub fn poll_completed(&mut self) -> bool {
+        self.jobs.poll()
     }
 
     pub fn render(
@@ -770,9 +835,24 @@ impl MathGraphicsRenderer {
         scroll: usize,
         placements: &[TranscriptMathPlacement],
     ) {
+        self.poll_completed();
         for placement in placements {
             let y = placement.line as i64 - scroll as i64;
             if y >= i64::from(area.height) || y + i64::from(placement.size.height) <= 0 {
+                continue;
+            }
+            let visible_width = placement
+                .size
+                .width
+                .min(area.width.saturating_sub(placement.column));
+            let skip = u16::try_from((-y).max(0)).unwrap_or(u16::MAX);
+            let screen_y = u16::try_from(y.max(0)).unwrap_or(u16::MAX);
+            let visible_height = placement
+                .size
+                .height
+                .saturating_sub(skip)
+                .min(area.height.saturating_sub(screen_y));
+            if visible_width == 0 || visible_height == 0 {
                 continue;
             }
             // Images are sent as one terminal control sequence. Consume the
@@ -792,6 +872,36 @@ impl MathGraphicsRenderer {
                 placement.size.height,
             );
             let style_hash = style_hash.finish();
+            let background = RENDER_CONTEXT_STACK.with(|stack| {
+                stack
+                    .borrow()
+                    .last()
+                    .and_then(|context| context.background.clone())
+            });
+            if let Some(background) = background {
+                let viewport = crate::graphics_jobs::Viewport {
+                    skip,
+                    width: visible_width,
+                    height: visible_height,
+                };
+                if let Some(graphic) = self.jobs.prepare(
+                    placement,
+                    style_hash,
+                    viewport,
+                    highlights,
+                    self.picker.clone(),
+                    background,
+                ) {
+                    let x = i16::try_from(placement.column).unwrap_or(i16::MAX);
+                    let y = i16::try_from(y).unwrap_or(if y < 0 { i16::MIN } else { i16::MAX });
+                    graphic.paint(frame.buffer_mut(), area, SignedPosition::from((x, y)));
+                }
+                continue;
+            }
+            if self.protocols.contains_key(&key) {
+                self.protocol_order.retain(|candidate| *candidate != key);
+                self.protocol_order.push_back(key);
+            }
             if self
                 .protocols
                 .get(&key)
@@ -799,8 +909,11 @@ impl MathGraphicsRenderer {
             {
                 // Keep one highlight variant per image size. A long pointer
                 // drag must not retain every intermediate encoded raster.
-                if !self.protocols.contains_key(&key) && self.protocols.len() >= MAX_PROTOCOLS {
-                    self.protocols.clear();
+                if !self.protocols.contains_key(&key)
+                    && self.protocols.len() >= MAX_PROTOCOLS
+                    && let Some(oldest) = self.protocol_order.pop_front()
+                {
+                    self.protocols.remove(&oldest);
                 }
                 let Some(image) = crate::graphics_selection::highlighted_graphic(
                     &placement.artifact,
@@ -819,6 +932,8 @@ impl MathGraphicsRenderer {
                     continue;
                 };
                 self.protocols.insert(key, (style_hash, protocol));
+                self.protocol_order.retain(|candidate| *candidate != key);
+                self.protocol_order.push_back(key);
             }
             let Some((_, protocol)) = self.protocols.get(&key) else {
                 continue;
@@ -849,3 +964,21 @@ pub fn formula_foreground_for_background(background: TerminalRgb) -> TerminalRgb
 #[cfg(test)]
 #[path = "graphics_tests.rs"]
 mod graphics_tests;
+
+#[cfg(test)]
+mod image_read_tests {
+    use super::*;
+
+    #[test]
+    fn growing_file_reads_stop_at_the_byte_limit() {
+        let mut reader = std::io::Cursor::new(vec![0; 1024]);
+        assert!(read_image_bytes(&mut reader, 32).is_err());
+        assert_eq!(reader.position(), 33);
+        assert_eq!(
+            read_image_bytes(std::io::Cursor::new(vec![1; 32]), 32)
+                .unwrap()
+                .len(),
+            32
+        );
+    }
+}

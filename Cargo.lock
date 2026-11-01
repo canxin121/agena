@@ -1353,9 +1353,11 @@ dependencies = [
  "agena-tui-settings",
  "agena-tui-transcript",
  "anyhow",
+ "arc-swap",
  "base64 0.22.1",
  "chrono",
  "crossterm",
+ "futures-util",
  "hex",
  "indexmap",
  "mime_guess",
@@ -1432,6 +1434,7 @@ name = "agena-tui-platform"
 version = "0.1.0"
 dependencies = [
  "agena-failure",
+ "agena-process",
  "agena-tui",
  "agena-tui-components",
  "agena-tui-media",

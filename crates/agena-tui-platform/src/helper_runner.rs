@@ -1,7 +1,6 @@
 use std::{
     env,
     ffi::OsStr,
-    io::{Read, Write},
     path::Path,
     process::{Command, ExitStatus, Output, Stdio},
     sync::{Mutex, MutexGuard, OnceLock},
@@ -68,34 +67,15 @@ where
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(ProviderError::Io)?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let stdout_reader = thread::spawn(move || read_limited(stdout, 256 * 1024));
-    let stderr_reader = thread::spawn(move || read_limited(stderr, 256 * 1024));
-    let status = wait_for_child(
-        &mut child,
-        PROBE_TIMEOUT,
-        "terminal helper probe",
-        &mut || Ok(()),
-    )?;
-    let stdout = stdout_reader
-        .join()
-        .unwrap_or_else(|_| Ok(Vec::new()))
-        .map_err(ProviderError::Io)?;
-    let stderr = stderr_reader
-        .join()
-        .unwrap_or_else(|_| Ok(Vec::new()))
-        .map_err(ProviderError::Io)?;
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
-    })
+    // A leader can exit while descendants retain stdout/stderr. The shared
+    // runner bounds pipe EOF as well as child lifetime and cleans up the tree;
+    // joining raw blocking readers after wait_for_child did neither.
+    agena_process::blocking::output(command, PROBE_TIMEOUT, 256 * 1024)
+        .map_err(|error| helper_io_error(error, "terminal helper probe", PROBE_TIMEOUT))
 }
 
 pub(crate) fn run_with_input(
-    command: &mut Command,
+    mut command: Command,
     input: Vec<u8>,
     operation: impl Into<String>,
     timeout: Duration,
@@ -105,29 +85,20 @@ pub(crate) fn run_with_input(
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = command.spawn().map_err(ProviderError::Io)?;
-    let mut stdin = child.stdin.take().ok_or_else(|| {
-        ProviderError::Protocol(format!("{operation} helper stdin is unavailable"))
-    })?;
-    let writer = thread::spawn(move || stdin.write_all(input.as_slice()));
-    let status = wait_for_child(&mut child, timeout, operation.as_str(), &mut || Ok(()));
-    let write_result = writer.join().unwrap_or_else(|_| {
-        Err(std::io::Error::other(
-            "terminal helper stdin writer panicked",
-        ))
-    });
-    let status = status?;
-    write_result.map_err(ProviderError::Io)?;
-    Ok(status)
+    agena_process::blocking::output_with_input(command, input, timeout, 256 * 1024)
+        .map(|output| output.status)
+        .map_err(|error| helper_io_error(error, &operation, timeout))
 }
 
-fn read_limited<R: Read>(reader: Option<R>, limit: usize) -> std::io::Result<Vec<u8>> {
-    let Some(reader) = reader else {
-        return Ok(Vec::new());
-    };
-    let mut bytes = Vec::new();
-    reader.take(limit as u64).read_to_end(&mut bytes)?;
-    Ok(bytes)
+fn helper_io_error(error: std::io::Error, operation: &str, timeout: Duration) -> ProviderError {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        ProviderError::Timeout {
+            operation: operation.to_owned(),
+            seconds: timeout.as_secs().max(1),
+        }
+    } else {
+        ProviderError::Io(error)
+    }
 }
 
 fn wait_for_child(
@@ -249,5 +220,87 @@ impl Drop for ParentInterruptGuard {
             // SAFETY: previous was returned by signal for SIGINT in install.
             let _ = unsafe { libc::signal(libc::SIGINT, self.previous) };
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn probe_does_not_wait_for_descendants_holding_output_pipes() {
+        let start = Instant::now();
+        let output = run_probe(Path::new("/bin/sh"), ["-c", "sleep 5 & printf ready"])
+            .expect("leader output must be collected without waiting for its descendant");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"ready");
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn stdin_delivery_shares_the_process_deadline() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 5"]);
+        let start = Instant::now();
+        let result = run_with_input(
+            command,
+            vec![b'x'; 4 * 1024 * 1024],
+            "blocked stdin",
+            Duration::from_millis(100),
+        );
+        assert!(
+            matches!(result, Err(ProviderError::Timeout { .. })),
+            "{result:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn exiting_leader_cannot_leave_a_blocked_stdin_writer() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 5 & exit 0"]);
+        let start = Instant::now();
+        let result = run_with_input(
+            command,
+            vec![b'x'; 4 * 1024 * 1024],
+            "orphaned stdin",
+            Duration::from_millis(500),
+        );
+        assert!(result.is_err(), "not all input could have been delivered");
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn noisy_probe_is_bounded_without_blocking_on_a_full_pipe() {
+        let start = Instant::now();
+        let result = run_probe(
+            Path::new("/bin/sh"),
+            [
+                "-c",
+                "head -c 300000 /dev/zero; head -c 300000 /dev/zero >&2",
+            ],
+        );
+        assert!(
+            matches!(result, Err(ProviderError::Io(ref error))
+            if error.kind() == std::io::ErrorKind::FileTooLarge),
+            "{result:?}"
+        );
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn successful_input_is_fully_written() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "test \"$(wc -c)\" -eq 1048576"]);
+        assert!(
+            run_with_input(
+                command,
+                vec![b'x'; 1024 * 1024],
+                "complete stdin",
+                Duration::from_secs(2),
+            )
+            .unwrap()
+            .success()
+        );
     }
 }

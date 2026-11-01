@@ -91,9 +91,7 @@ use agena_tui_components::{
     drive_editor_dialog_key, drive_input_dialog_key, format_key_value_segment,
     join_inline_segments,
 };
-use agena_tui_platform::clipboard::{
-    ClipboardCopyMethod, ClipboardTextError, normalize_pasted_path, set_clipboard_text,
-};
+use agena_tui_platform::clipboard::{ClipboardCopyMethod, normalize_pasted_path};
 use agena_tui_platform::external_editor::{edit_text, open_path};
 use agena_tui_platform::terminal::TerminalRuntime;
 
@@ -101,6 +99,7 @@ mod app_activities;
 mod app_backend;
 mod app_btw;
 mod app_choice_helpers;
+mod app_clipboard;
 mod app_command_actions;
 mod app_command_helpers;
 mod app_composer;
@@ -204,9 +203,8 @@ pub(crate) use self::surface_selection::{
     apply_cell_range_highlight, surface_selection_ranges, surface_selection_text,
 };
 use agena_tui_session::session_helpers::{
-    contains_case_insensitive, execution_model_name_status_label, execution_model_status_label,
-    find_search_ranges, model_name_status_label, user_input_answer_values,
-    user_input_question_label,
+    execution_model_name_status_label, execution_model_status_label, find_search_ranges,
+    model_name_status_label, user_input_answer_values, user_input_question_label,
 };
 use agena_tui_transcript::markdown::truncate_display_width;
 pub(crate) use agena_tui_transcript::renderer as transcript_view;

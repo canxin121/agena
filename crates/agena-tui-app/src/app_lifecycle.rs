@@ -61,6 +61,7 @@ impl App {
             command_tx,
             command_rx: Some(command_rx),
             command_actor: None,
+            deferred_ui_completions: Default::default(),
             settings_runtime_snapshot_summary: None,
             settings_session_permission: None,
             session_selection_revision: 0,
@@ -115,10 +116,21 @@ impl App {
             draft_store_last_persist_at: Instant::now()
                 .checked_sub(Duration::from_millis(DRAFT_PERSIST_INTERVAL_MS))
                 .unwrap_or_else(Instant::now),
+            draft_persist_lock: Default::default(),
+            draft_persist_revision: Default::default(),
+            draft_persist_in_flight: false,
+            draft_store_revision: 0,
+            draft_sync_last_at: Instant::now(),
+            input_derived_refresh_at: Instant::now(),
             draft_store_reported_error: None,
             pending_draft_store_error,
             prompt_history,
             prompt_history_path,
+            prompt_history_dirty: false,
+            prompt_history_revision: 0,
+            prompt_history_persist_revision: Default::default(),
+            prompt_history_persist_lock: Default::default(),
+            prompt_history_persist_in_flight: false,
             prompt_history_reported_error: None,
             pending_prompt_history_error,
             run_activity: RunActivityTracker::default(),
@@ -215,10 +227,14 @@ impl App {
         // all contain resolved appearance colors. Refresh them together so a
         // live light/dark switch cannot mix both themes.
         apply_math_graphics_appearance(&mut self.launch);
+        let background_media = self.math_render_context.background_rendering_enabled();
         self.math_render_context = agena_tui_media::MathRenderContext::new(
             self.launch.math_graphics.as_ref(),
             self.application.media_workspace_root(),
         );
+        if background_media {
+            self.math_render_context.enable_background_rendering();
+        }
         self.transcript
             .set_math_render_context(self.math_render_context.clone());
         self.math_renderer = self
@@ -235,35 +251,66 @@ impl App {
     }
 
     pub async fn run(&mut self, terminal: &mut TerminalRuntime) -> Result<()> {
+        self.math_render_context.enable_background_rendering();
+        self.transcript
+            .set_math_render_context(self.math_render_context.clone());
         self.start_command_actor();
         self.bootstrap();
 
         let mut ticker = interval(Duration::from_millis(UI_TICK_MS));
+        // A slow render or a suspended terminal must not replay a backlog of
+        // missed maintenance ticks before accepting the next keystroke.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut frames = FrameScheduler::default();
 
         loop {
-            // TerminalRuntime may have observed a new background after focus
-            // regain or terminal resume. Apply it before drawing so the text
-            // palette, cached formula rasters, SVG currentColor, and native
-            // image compositor all advance in the same frame.
-            self.sync_terminal_appearance(terminal);
-            if let Some(renderer) = self.math_renderer.as_mut() {
-                renderer.sync_generation(terminal.generation());
+            if self.apply_deferred_ui_completions() {
+                frames.mark_dirty();
             }
-            let mouse_capture_active = self.mouse_capture_active();
-            if !mouse_capture_active {
-                self.cancel_active_pointer_gesture();
+            if self
+                .math_renderer
+                .as_mut()
+                .is_some_and(|renderer| renderer.poll_completed())
+            {
+                frames.mark_dirty();
             }
-            terminal.set_mouse_capture_active(mouse_capture_active)?;
-            let math_render_context = self.math_render_context.clone();
-            terminal.draw(|frame| {
-                agena_tui_media::with_math_render_context(&math_render_context, || {
-                    self.draw(frame);
-                });
-            })?;
+            let animated = self.current_session_activity() == crate::SessionActivity::Running
+                || self.session_load.loading
+                || self.transcript.state_loading
+                || self.transcript.transcript_older_loading
+                || matches!(&self.current_route, Route::Hub(state) if state.loading);
+            if frames.is_due(Instant::now(), animated) {
+                // TerminalRuntime may have observed a new background after focus
+                // regain or terminal resume. Apply it before drawing so the text
+                // palette, cached formula rasters, SVG currentColor, and native
+                // image compositor all advance in the same frame.
+                self.sync_terminal_appearance(terminal);
+                if let Some(renderer) = self.math_renderer.as_mut() {
+                    renderer.sync_generation(terminal.generation());
+                }
+                let mouse_capture_active = self.mouse_capture_active();
+                if !mouse_capture_active {
+                    self.cancel_active_pointer_gesture();
+                }
+                terminal.set_mouse_capture_active(mouse_capture_active)?;
+                let math_render_context = self.math_render_context.clone();
+                terminal.draw(|frame| {
+                    agena_tui_media::with_math_render_context(&math_render_context, || {
+                        self.draw(frame);
+                    });
+                })?;
+                crate::sync_terminal_title(self, terminal)?;
+                crate::sync_terminal_progress(self, terminal)?;
+                crate::drain_terminal_notification(self, terminal)?;
+                frames.did_draw(Instant::now());
+            }
+
+            // Focus and overlay transitions happen between frames. Input
+            // normalization (including IME commit and legacy paste) must see
+            // the new target before reading another key, not after a redraw.
             terminal.set_text_input_active(self.has_active_text_input());
-            crate::sync_terminal_title(self, terminal)?;
-            crate::sync_terminal_progress(self, terminal)?;
-            crate::drain_terminal_notification(self, terminal)?;
+            let next_frame = frames.next_deadline(animated);
+            let media_context = self.math_render_context.clone();
 
             tokio::select! {
                 maybe_event = terminal.next_event() => {
@@ -273,17 +320,19 @@ impl App {
                                 terminal.refresh_color_on_focus();
                             }
                             self.handle_terminal_event(event);
+                            frames.mark_dirty();
                         }
-                        Some(Err(error)) => self.flash_error(self.i18n.text_args(
-                            "flash-terminal-event-error",
-                            &agena_tui::fl_args!("error" => error.to_string()),
-                        )),
+                        // An unreadable tty is not a recoverable UI event.
+                        // Retrying immediately would burn a CPU core while
+                        // repeatedly drawing an error the user cannot read.
+                        Some(Err(error)) => return Err(error.into()),
                         None => self.should_quit = true,
                     }
                 }
                 maybe_message = self.rx.recv() => {
                     if let Some(message) = maybe_message {
                         self.handle_message(message);
+                        frames.mark_dirty();
                     } else {
                         self.should_quit = true;
                     }
@@ -291,10 +340,15 @@ impl App {
                 _ = ticker.tick() => {
                     self.on_tick();
                 }
+                _ = tokio::time::sleep_until(next_frame.into()) => {}
+                _ = media_context.background_changed() => {
+                    frames.mark_dirty();
+                }
             }
 
             if let Some(action) = self.pending_ui_action.take() {
                 self.run_ui_action(action, terminal)?;
+                frames.mark_dirty();
             }
 
             if self.should_quit {
@@ -349,7 +403,17 @@ impl App {
 
     pub(crate) fn on_tick(&mut self) {
         let now = Instant::now();
-        self.refresh_input_derived_state();
+        // Exit confirmation must revalidate the authoritative execution on
+        // every tick, even if a server transition arrives without a keypress.
+        // It is cheap; throttling it can leave a stale Stop action visible.
+        self.refresh_exit_menu();
+        // Key handling already refreshes choices and completions. Rebuilding
+        // large picker lists every 100ms while the user is idle caused
+        // unnecessary filtering, sorting and allocations. Keep a slow safety
+        // refresh for out-of-band state changes.
+        if now.duration_since(self.input_derived_refresh_at) >= Duration::from_secs(1) {
+            self.refresh_input_derived_state();
+        }
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
         self.refresh_activities_panel_if_due(now);
@@ -410,10 +474,14 @@ impl App {
             self.request_refresh(session_id, force);
         }
 
-        if self.file_mention_suggestions.is_some() {
-            self.sync_file_mention_suggestions();
+        // Completion refresh already runs after text edits, remote-index
+        // updates and the bounded input-derived refresh above. Doing it
+        // again on every tick rescanned the composer and index unnecessarily.
+        if now.duration_since(self.draft_sync_last_at)
+            >= Duration::from_millis(DRAFT_PERSIST_INTERVAL_MS)
+        {
+            self.sync_current_draft_slot();
         }
-        self.sync_current_draft_slot();
         self.persist_draft_store_with_feedback(false);
     }
 
@@ -567,10 +635,76 @@ use crate::{
     LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, REFRESH_STALL_TIMEOUT_MS, Route,
     RunActivityTracker, RunOptionsState, SessionComposerState, SessionListLoadState,
     TerminalIntegrationState, TerminalRuntime, TranscriptState, UI_COMMAND_QUEUE_CAPACITY,
-    UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
-    provider_studio_auth_poll_interval, ui_text,
+    UI_IDLE_FRAME_MS, UI_MIN_FRAME_MS, UI_TICK_MS, default_draft_store_path,
+    default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;
 use agena_tui_media::MathGraphicsRenderer;
 use agena_tui_session::session_list::SessionListPresentation;
+
+/// Coalesce rapid server events and mouse motion into at most ~30 full
+/// layouts/second. Keep immediate startup drawing and a periodic clock for
+/// spinners, expired notices and terminals which do not send resize events.
+#[derive(Default)]
+struct FrameScheduler {
+    last_draw: Option<Instant>,
+    dirty: bool,
+}
+
+impl FrameScheduler {
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    fn did_draw(&mut self, at: Instant) {
+        self.last_draw = Some(at);
+        self.dirty = false;
+    }
+
+    fn next_deadline(&self, animated: bool) -> Instant {
+        let Some(last) = self.last_draw else {
+            return Instant::now();
+        };
+        let periodic = Duration::from_millis(if animated {
+            UI_TICK_MS
+        } else {
+            UI_IDLE_FRAME_MS
+        });
+        let interval = if self.dirty {
+            periodic.min(Duration::from_millis(UI_MIN_FRAME_MS))
+        } else {
+            periodic
+        };
+        last + interval
+    }
+
+    fn is_due(&self, now: Instant, animated: bool) -> bool {
+        self.last_draw.is_none() || now >= self.next_deadline(animated)
+    }
+}
+
+#[cfg(test)]
+mod frame_scheduler_tests {
+    use super::*;
+
+    #[test]
+    fn coalesces_bursts_but_keeps_idle_and_running_frames() {
+        let start = Instant::now();
+        let mut frames = FrameScheduler::default();
+        assert!(frames.is_due(start, false));
+        frames.did_draw(start);
+        assert!(!frames.is_due(start + Duration::from_millis(100), false));
+        assert!(frames.is_due(start + Duration::from_millis(UI_IDLE_FRAME_MS), false));
+
+        frames.mark_dirty();
+        assert!(!frames.is_due(start + Duration::from_millis(10), false));
+        assert!(frames.is_due(start + Duration::from_millis(UI_MIN_FRAME_MS), false));
+        frames.did_draw(start + Duration::from_millis(UI_MIN_FRAME_MS));
+        assert!(!frames.is_due(start + Duration::from_millis(50), true));
+        assert!(frames.is_due(
+            start + Duration::from_millis(UI_MIN_FRAME_MS + UI_TICK_MS),
+            true
+        ));
+    }
+}

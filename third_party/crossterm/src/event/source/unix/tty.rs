@@ -88,6 +88,12 @@ impl UnixInternalEventSource {
 fn read_complete(fd: &FileDesc, buf: &mut [u8]) -> io::Result<usize> {
     loop {
         match fd.read(buf) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "terminal input closed",
+                ));
+            }
             Ok(x) => return Ok(x),
             Err(e) => match e.kind() {
                 io::ErrorKind::WouldBlock => return Ok(0),
@@ -100,6 +106,11 @@ fn read_complete(fd: &FileDesc, buf: &mut [u8]) -> io::Result<usize> {
 
 impl EventSource for UnixInternalEventSource {
     fn try_read(&mut self, timeout: Option<Duration>) -> io::Result<Option<InternalEvent>> {
+        // A single read may parse several keys. They remain ready even after
+        // the descriptor has been drained; do not wait for another keypress.
+        if let Some(event) = self.parser.next() {
+            return Ok(Some(event));
+        }
         let timeout = PollTimeout::new(timeout);
 
         fn make_pollfd<F: AsRawFd>(fd: &F) -> pollfd {
@@ -144,7 +155,9 @@ impl EventSource for UnixInternalEventSource {
                 }
                 Ok(_) => (),
             };
-            if fds[0].revents & POLLIN != 0 {
+            // HUP/ERR may arrive without POLLIN. Let read report EOF or the
+            // actual error rather than polling a permanently ready fd forever.
+            if fds[0].revents != 0 {
                 loop {
                     let read_count = read_complete(&self.tty, &mut self.tty_buffer)?;
                     if read_count > 0 {

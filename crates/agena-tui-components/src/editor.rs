@@ -2,7 +2,9 @@
 
 use std::{
     cmp::{max, min},
+    collections::VecDeque,
     ops::Range,
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -15,6 +17,10 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::search_picker::SearchPickerInput;
 
+#[cfg(test)]
+#[path = "editor_responsiveness_tests.rs"]
+mod responsiveness_tests;
+
 #[derive(Debug, Clone, Default)]
 /// A text editor widget.
 pub struct Editor {
@@ -23,7 +29,19 @@ pub struct Editor {
     preferred_column: Option<usize>,
     kill_buffer: String,
     elements: Vec<EditorElement>,
+    // Cloned dialog projections share immutable layout until their text is
+    // edited. Repainting must not wrap the whole prompt again.
+    layout: Arc<EditorLayoutCache>,
 }
+
+#[derive(Debug, Default)]
+struct EditorLayoutCache {
+    logical: OnceLock<Arc<Vec<Range<usize>>>>,
+    wrapped: Mutex<VecDeque<(u16, WrappedLayout)>>,
+    column: Mutex<Option<(usize, usize)>>,
+}
+
+type WrappedLayout = Arc<Vec<WrappedEditorLine>>;
 
 #[derive(Debug, Clone)]
 /// View of the text editor.
@@ -48,6 +66,7 @@ impl Editor {
             preferred_column: None,
             kill_buffer: String::new(),
             elements: Vec::new(),
+            layout: Default::default(),
         }
     }
 
@@ -74,6 +93,7 @@ impl Editor {
 
     pub fn set_text(&mut self, text: String) {
         self.text = sanitize_editor_text(&text);
+        self.layout = Default::default();
         self.cursor = self.text.len();
         self.preferred_column = None;
         self.elements.clear();
@@ -110,6 +130,7 @@ impl Editor {
 
     pub fn clear(&mut self) {
         self.text.clear();
+        self.layout = Default::default();
         self.cursor = 0;
         self.preferred_column = None;
         self.elements.clear();
@@ -143,13 +164,51 @@ impl Editor {
     }
 
     pub fn logical_line_count(&self) -> usize {
-        split_editor_lines_with_offsets(self.text.as_str()).len()
+        self.logical_lines().len()
     }
 
     /// Number of terminal rows needed when the editor is soft-wrapped to the
     /// supplied width. Explicit newlines still start a new logical line.
     pub fn wrapped_line_count(&self, width: u16) -> usize {
-        wrapped_editor_lines(self.text.as_str(), width).len()
+        self.wrapped_lines(width).len()
+    }
+
+    fn logical_lines(&self) -> Arc<Vec<Range<usize>>> {
+        self.layout
+            .logical
+            .get_or_init(|| Arc::new(split_editor_lines_with_offsets(&self.text)))
+            .clone()
+    }
+
+    fn wrapped_lines(&self, width: u16) -> WrappedLayout {
+        let width = width.max(1);
+        {
+            let cache = self
+                .layout
+                .wrapped
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((_, lines)) = cache
+                .iter()
+                .find(|(cached_width, _)| *cached_width == width)
+            {
+                return lines.clone();
+            }
+        }
+        // Work outside the lock so another clone is not held up by Unicode
+        // layout. Retain only two widths even through repeated terminal resize.
+        let lines = Arc::new(wrapped_editor_lines(&self.text, width));
+        let mut cache = self
+            .layout
+            .wrapped
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.retain(|(cached_width, _)| *cached_width != width);
+        cache.push_back((width, lines.clone()));
+        while cache.len() > 2 {
+            cache.pop_front();
+        }
+        lines
     }
 
     pub fn handle_line_input_key(&mut self, key: KeyEvent) {
@@ -163,7 +222,7 @@ impl Editor {
     pub fn render_view(&self, width: u16, height: u16) -> EditorView {
         let width = max(width as usize, 1);
         let height = max(height as usize, 1);
-        let lines = split_editor_lines_with_offsets(self.text.as_str());
+        let lines = self.logical_lines();
         let current_line_index = self.current_line_index();
         let current_col = self.current_display_column();
         // Scroll only once the cursor moves past the last visible column.
@@ -210,27 +269,36 @@ impl Editor {
     pub fn render_wrapped_view(&self, width: u16, height: u16) -> EditorView {
         let width = max(width as usize, 1);
         let height = max(height as usize, 1);
-        let lines = wrapped_editor_lines(self.text.as_str(), width as u16);
-        let cursor_line_index = self.current_line_index();
-        let cursor_column = self.current_display_column();
-        let cursor_visual_line = lines
-            .iter()
-            .enumerate()
-            .find(|(_, line)| {
-                line.logical_line_index == cursor_line_index
-                    && cursor_column >= line.start_column
-                    && cursor_column < line.end_column
-            })
-            .map(|(index, _)| index)
-            .or_else(|| {
-                lines
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, line)| line.logical_line_index == cursor_line_index)
-                    .map(|(index, _)| index)
-            })
-            .unwrap_or(0);
+        let lines = self.wrapped_lines(width as u16);
+        let byte_row = lines
+            .partition_point(|line| line.visible_range.start <= self.cursor)
+            .saturating_sub(1);
+        let logical_line = lines
+            .get(byte_row)
+            .map_or(0, |line| line.logical_line_index);
+        let cursor_column = lines.get(byte_row).map_or(0, |line| {
+            line.start_column
+                + self.text[line.visible_range.start..self.cursor]
+                    .graphemes(true)
+                    .map(grapheme_cell_width)
+                    .sum::<usize>()
+        });
+        // set_cursor also accepts a UTF-8 boundary inside a multi-codepoint
+        // grapheme. Preserve the existing display-column rule for that case.
+        let candidate = lines.partition_point(|line| {
+            line.logical_line_index < logical_line
+                || (line.logical_line_index == logical_line && line.end_column <= cursor_column)
+        });
+        let cursor_visual_line = if lines
+            .get(candidate)
+            .is_some_and(|line| line.logical_line_index == logical_line)
+        {
+            candidate
+        } else {
+            lines
+                .partition_point(|line| line.logical_line_index <= logical_line)
+                .saturating_sub(1)
+        };
         let vscroll = cursor_visual_line.saturating_sub(height.saturating_sub(1));
         let visible_lines = lines
             .iter()
@@ -239,20 +307,15 @@ impl Editor {
             .map(|line| {
                 slice_display_window_styled(
                     self.text.as_str(),
-                    line.range.clone(),
-                    line.start_column,
-                    line.end_column,
+                    line.visible_range.clone(),
+                    0,
+                    line.end_column.saturating_sub(line.start_column),
                     self.elements.as_slice(),
                 )
             })
             .collect::<Vec<_>>();
         let cursor_x = cursor_column
-            .saturating_sub(
-                lines
-                    .get(cursor_visual_line)
-                    .map(|line| line.start_column)
-                    .unwrap_or_default(),
-            )
+            .saturating_sub(lines[cursor_visual_line].start_column)
             .min(width.saturating_sub(1));
 
         EditorView {
@@ -267,7 +330,7 @@ impl Editor {
 
     /// Place the cursor in the same wrapped viewport used by the renderer.
     pub fn move_to_visual_cell(&mut self, width: u16, height: u16, column: u16, row: u16) {
-        let lines = wrapped_editor_lines(&self.text, width.max(1));
+        let lines = self.wrapped_lines(width);
         let current = visual_row_index_for_cursor(
             &lines,
             self.current_line_index(),
@@ -299,7 +362,7 @@ impl Editor {
     pub fn move_visual_up(&mut self, width: u16) {
         let cursor_column = self.current_display_column();
         let target_col = self.preferred_column.unwrap_or(cursor_column);
-        let lines = wrapped_editor_lines(self.text.as_str(), width);
+        let lines = self.wrapped_lines(width);
         let Some(visual_index) =
             visual_row_index_for_cursor(&lines, self.current_line_index(), cursor_column)
         else {
@@ -338,7 +401,7 @@ impl Editor {
     pub fn move_visual_down(&mut self, width: u16) {
         let cursor_column = self.current_display_column();
         let target_col = self.preferred_column.unwrap_or(cursor_column);
-        let lines = wrapped_editor_lines(self.text.as_str(), width);
+        let lines = self.wrapped_lines(width);
         let Some(visual_index) =
             visual_row_index_for_cursor(&lines, self.current_line_index(), cursor_column)
         else {
@@ -833,6 +896,7 @@ impl Editor {
         }
         let removed = self.text[range.clone()].to_string();
         self.text.replace_range(range.clone(), "");
+        self.layout = Default::default();
         self.update_elements_after_replace(range.start, range.end, 0);
         self.cursor = self.clamp_pos_to_nearest_boundary(range.start);
         self.preferred_column = None;
@@ -840,10 +904,9 @@ impl Editor {
     }
 
     fn current_line_index(&self) -> usize {
-        self.text[..self.cursor]
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count()
+        self.logical_lines()
+            .partition_point(|line| line.start <= self.cursor)
+            .saturating_sub(1)
     }
 
     fn current_line_start(&self) -> usize {
@@ -877,10 +940,25 @@ impl Editor {
     }
 
     fn current_display_column(&self) -> usize {
-        self.text[self.current_line_start()..self.cursor]
+        if let Some((cursor, column)) = *self
+            .layout
+            .column
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            && cursor == self.cursor
+        {
+            return column;
+        }
+        let column = self.text[self.current_line_start()..self.cursor]
             .graphemes(true)
             .map(grapheme_cell_width)
-            .sum()
+            .sum();
+        *self
+            .layout
+            .column
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((self.cursor, column));
+        column
     }
 
     fn beginning_of_previous_word(&self) -> usize {
@@ -928,6 +1006,7 @@ impl Editor {
             return;
         }
         self.text.insert_str(at, &text);
+        self.layout = Default::default();
         self.update_elements_after_replace(at, at, text.len());
         self.cursor = at + text.len();
         self.preferred_column = None;
@@ -1088,6 +1167,8 @@ fn split_editor_lines_with_offsets(text: &str) -> Vec<Range<usize>> {
 #[derive(Debug, Clone)]
 struct WrappedEditorLine {
     range: Range<usize>,
+    // Exact row bytes; visible rows no longer rescan the entire logical line.
+    visible_range: Range<usize>,
     logical_line_index: usize,
     start_column: usize,
     end_column: usize,
@@ -1107,24 +1188,28 @@ fn wrapped_editor_lines(text: &str, width: u16) -> Vec<WrappedEditorLine> {
         // overflows the requested width or offsets the cursor. Each row keeps
         // the absolute start/end display column of its content.
         let mut start_column = 0_usize;
+        let mut start_byte = range.start;
         let mut column = 0_usize;
-        for (_, grapheme) in line_text.grapheme_indices(true) {
+        for (offset, grapheme) in line_text.grapheme_indices(true) {
             let grapheme_width = grapheme_cell_width(grapheme);
             let row_width = column.saturating_sub(start_column);
             if row_width > 0 && row_width.saturating_add(grapheme_width) > width {
                 lines.push(WrappedEditorLine {
                     range: range.clone(),
+                    visible_range: start_byte..range.start + offset,
                     logical_line_index,
                     start_column,
                     end_column: column,
                 });
                 start_column = column;
+                start_byte = range.start + offset;
             }
             column = column.saturating_add(grapheme_width);
         }
         // The final (possibly empty) row of the logical line.
         lines.push(WrappedEditorLine {
             range: range.clone(),
+            visible_range: start_byte..range.end,
             logical_line_index,
             start_column,
             end_column: column,

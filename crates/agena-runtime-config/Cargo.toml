@@ -17,12 +17,14 @@ agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-provider = { workspace = true }
+agena-prompt-layers = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 async-trait = { workspace = true }
 merge = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

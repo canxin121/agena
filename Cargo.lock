@@ -753,6 +753,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-prompt-layers"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "agena-provider"
 version = "0.1.0"
 dependencies = [
@@ -900,6 +909,7 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-plugin-host",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-runtime-contracts",
  "agena-storage-layout",
@@ -916,6 +926,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]

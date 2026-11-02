@@ -19,6 +19,7 @@ pub mod config_values;
 pub mod lsp_config;
 pub mod mcp_config;
 pub mod mcp_connections;
+pub mod prompts;
 pub mod runtime_config_settings_service;
 pub mod runtime_configuration_service;
 
@@ -43,6 +44,10 @@ pub use config_paths::{default_config_path, project_config_path, try_default_wor
 pub use config_values::*;
 pub use lsp_config::*;
 pub use mcp_config::*;
+pub use prompts::{
+    FragmentIssue, FragmentLibrary, ModelPromptConfig, PromptLayersConfig, PromptScopeConfig,
+    delete_fragment, load_library, parse_fragment, render_fragment, write_fragment,
+};
 pub use runtime_config_settings_service::*;
 pub use runtime_configuration_service::*;
 

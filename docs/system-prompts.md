@@ -5,6 +5,19 @@ one default for every project, a project default, a model override, or a session
 override. The chosen value is added after the built-in prompt; conversation
 boundaries and repository guidance are assembled separately.
 
+## What the built-in prompt already covers
+
+You do not need additional instructions to make the assistant inspect its own
+state. The built-in prompt tells it that its identity, model, provider, adapter,
+token limits, session, and environment are runtime facts: it must inspect them
+with the available `agena.session` tools (and `agena.provider` for configured
+routes) before answering, and must not state a model name, context window, or
+token count from memory. When a session exposes no such tool, it says the fact
+cannot be verified instead of guessing.
+
+Add instructions here for preference and workflow rules rather than repeating
+that contract.
+
 ## Inheritance and explicit disabling
 
 The persistent scopes have this precedence, from highest to lowest:

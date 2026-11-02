@@ -57,6 +57,48 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
     let has = |name: &str| tools.contains_key(name);
     let mut paragraphs = Vec::new();
 
+    // Inspect-then-answer guidance for the model's own identity and runtime
+    // state. Only tools advertised to this session are named.
+    let session_roles: &[(&str, &str)] = &[
+        ("get", "session identity, relation, and title"),
+        (
+            "model",
+            "the serving model, provider, adapter, runtime modes, and model token limits",
+        ),
+        (
+            "tokens",
+            "measured and projected token use and the remaining budget",
+        ),
+        (
+            "environment",
+            "the workspace path, Git state, shell, platform, and host toolchain",
+        ),
+        (
+            "executables",
+            "installed host CLIs and their task-specific usage",
+        ),
+    ];
+
+    let mut sources = session_roles
+        .iter()
+        .filter_map(|(name, purpose)| {
+            tools
+                .get(&format!("agena.session.{name}"))
+                .map(|advertised| format!("`{advertised}` for {purpose}"))
+        })
+        .collect::<Vec<_>>();
+    if let Some(models) = tools.get("agena.provider.models") {
+        sources.push(format!(
+            "`{models}` for the other model routes configured on the current provider"
+        ));
+    }
+    if !sources.is_empty() {
+        paragraphs.push(format!(
+            "Questions about your own identity, the current session, or its runtime state are facts to inspect rather than recall. Call the relevant tool before answering and report what it returns, including provider and adapter identifiers: {}. Never substitute a model name, version, context window, or token count from memory, and name any fact you could not verify.",
+            sources.join("; ")
+        ));
+    }
+
     let plan = plugin_tools(
         tools,
         "agena.plan",
@@ -248,6 +290,12 @@ mod tests {
     use agena_domain::{ConversationMode, SessionConversation};
 
     const ALL_WORKFLOW_TOOLS: &[&str] = &[
+        "session.get",
+        "session.model",
+        "session.tokens",
+        "session.environment",
+        "session.executables",
+        "provider.models",
         "plan.get",
         "plan.set",
         "plan.edit",
@@ -369,14 +417,79 @@ mod tests {
         assert!(!prompt.contains("# Workflows"));
         assert!(prompt.contains("If the relevant tools"));
         assert!(!prompt.contains("Use Inline Generative UI ("));
+        assert!(!prompt.contains("facts to inspect rather than recall"));
         for plugin in [
             "agena.plan",
             "agena.interaction",
             "agena.agent",
             "agena.memory",
+            "agena.session",
+            "agena.provider",
         ] {
             assert!(!prompt.contains(&format!("`{plugin}`")), "{plugin}");
         }
+    }
+
+    #[test]
+    fn self_knowledge_routes_identity_questions_to_session_tools() {
+        // The failure this guards against: a model answering "which model are
+        // you?" from memory because nothing in the prompt points at the
+        // inspection tools that are actually available.
+        let full = prompt(SessionRelationKind::Root, true, ALL_WORKFLOW_TOOLS);
+        let section = full
+            .split("\n\n")
+            .find(|paragraph| paragraph.contains("facts to inspect rather than recall"))
+            .expect("self-knowledge paragraph");
+        for name in [
+            "session.get",
+            "session.model",
+            "session.tokens",
+            "session.environment",
+            "session.executables",
+            "provider.models",
+        ] {
+            assert!(section.contains(&format!("`{name}`")), "{name}");
+        }
+        assert!(section.contains("Never substitute a model name"));
+
+        // Partial catalogues advertise only what this session can actually call.
+        let limited = prompt(
+            SessionRelationKind::Root,
+            true,
+            &["session.model", "session.tokens"],
+        );
+        let section = limited
+            .split("\n\n")
+            .find(|paragraph| paragraph.contains("facts to inspect rather than recall"))
+            .expect("self-knowledge paragraph");
+        assert!(section.contains("`session.model`"));
+        assert!(section.contains("`session.tokens`"));
+        for name in [
+            "session.get",
+            "session.environment",
+            "session.executables",
+            "provider.models",
+        ] {
+            assert!(!section.contains(&format!("`{name}`")), "{name}");
+        }
+
+        // A provider-only catalogue still routes "which models are configured?".
+        let provider_only = prompt(SessionRelationKind::Root, true, &["provider.models"]);
+        assert!(provider_only.contains("facts to inspect rather than recall"));
+        assert!(provider_only.contains("`provider.models`"));
+        assert!(!provider_only.contains("`session.model`"));
+    }
+
+    #[test]
+    fn subagents_get_the_same_self_knowledge_guidance() {
+        let full = prompt(SessionRelationKind::Subagent, true, ALL_WORKFLOW_TOOLS);
+        let section = full
+            .split("\n\n")
+            .find(|paragraph| paragraph.contains("facts to inspect rather than recall"))
+            .expect("self-knowledge paragraph");
+        assert!(section.contains("`session.model`"));
+        assert!(section.contains("`session.tokens`"));
+        assert!(!section.contains("`session.rename`"));
     }
 
     #[test]

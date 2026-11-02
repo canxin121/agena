@@ -124,4 +124,3 @@ impl Default for ResolvedProviderModelConfig {
 fn is_true(value: &bool) -> bool {
     *value
 }
-

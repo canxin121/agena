@@ -451,13 +451,21 @@ impl SessionManager {
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
-                let additional_system=super::session_prompt::resolve_additional_system_prompt(options.system.as_deref(),context.additional_system_prompt.as_deref(),super::session_prompt::model_additional_system_prompt(&state,&options.model),state.config.additional_system_prompt.as_deref());
-                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,additional_system,!bindings.is_empty());
+                let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:None,model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),tools_enabled:!bindings.is_empty()};
+                let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
+                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
                 let system=Some(system_text);
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
                 let metadata=state.providers.model_metadata(&options.model).unwrap_or_default();
                 let hard_limit=crate::prompt_budget::prompt_token_budget(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens).map(u64::from);
+                if let Some(limit)=hard_limit{
+                    let layer_tokens=system.as_deref().map(|text|crate::estimate_prompt_tokens_from_chars(text.chars().count())).unwrap_or(0);
+                    if layer_tokens>limit{
+                        let contributors=super::session_prompt::prompt_layer_contributors(&state,&prompt_inputs);
+                        return Err(AppError::Config(format!("additional instructions alone need about {layer_tokens} tokens but the prompt budget for this model is {limit}; shorten or disable these fragments: {}",contributors.join(", "))));
+                    }
+                }
                 let budget=crate::estimate_auto_compaction_limit_tokens(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens,state.config.auto_compaction.reserved_tokens).unwrap_or_else(||crate::estimate_prompt_tokens_from_chars(state.governor.max_prompt_chars()));
                 let policy=compaction_policy_key(&options,&state)?;
                 let status=self.kernel().reader.prompt_window_status(control.session).await.map_err(kernel_error)?;
@@ -1430,14 +1438,25 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
-        let additional_system = super::session_prompt::resolve_additional_system_prompt(
-            options.system.as_deref(),
-            context.additional_system_prompt.as_deref(),
-            super::session_prompt::model_additional_system_prompt(state, &options.model),
-            state.config.additional_system_prompt.as_deref(),
+        let prompt_inputs = super::session_prompt::PromptInputs {
+            session: &context.prompts,
+            request_layer: None,
+            model: &options.model,
+            session_id: control.session.get(),
+            workspace: context
+                .effective_workspace_root
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            tools_enabled: false,
+        };
+        let additional_system =
+            super::session_prompt::resolve_configured_prompts(state, &prompt_inputs);
+        let mut system = self.assemble_session_system_prompt_with_executor(
+            &executor,
+            (!additional_system.is_empty()).then_some(additional_system.as_str()),
+            false,
         );
-        let mut system =
-            self.assemble_session_system_prompt_with_executor(&executor, additional_system, false);
         system.push_str(&self.agent_roster(control.session).await?);
         let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());
         let metadata = state

@@ -250,7 +250,8 @@ async fn migrate_retired_prompt_configuration(database: &DatabaseConnection) -> 
                 }],
             })
         };
-        let layer = serde_json::to_string(&layer).map_err(|error| DbErr::Json(error.to_string()))?;
+        let layer =
+            serde_json::to_string(&layer).map_err(|error| DbErr::Json(error.to_string()))?;
         database
             .execute(Statement::from_sql_and_values(
                 database.get_database_backend(),

@@ -1063,6 +1063,7 @@ dependencies = [
  "agena-failure",
  "agena-permission",
  "agena-plugin-host",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-runtime-config",
  "agena-runtime-contracts",
@@ -1101,6 +1102,7 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-runtime-contracts",
  "chrono",
  "serde",

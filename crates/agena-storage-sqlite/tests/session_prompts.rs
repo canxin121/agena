@@ -7,7 +7,10 @@ fn layer(body: &str) -> PromptLayer {
         mode: agena_prompt_layers::LayerMode::Append,
         order: vec![FragmentId::parse("session-note").unwrap()],
         disabled: Vec::new(),
-        inline: vec![PromptFragment::new(FragmentId::parse("session-note").unwrap(), body)],
+        inline: vec![PromptFragment::new(
+            FragmentId::parse("session-note").unwrap(),
+            body,
+        )],
     }
 }
 
@@ -31,7 +34,17 @@ async fn session_prompt_layer_round_trips_and_updates() {
         .unwrap()
         .value
         .id;
-    let stored = runtime.ports.sessions.configure(RequestId::new(), session, SessionConfigurationChange::default()).await.unwrap().value;
+    let stored = runtime
+        .ports
+        .sessions
+        .configure(
+            RequestId::new(),
+            session,
+            SessionConfigurationChange::default(),
+        )
+        .await
+        .unwrap()
+        .value;
     assert_eq!(stored.prompts.inline[0].body, "initial");
 
     runtime

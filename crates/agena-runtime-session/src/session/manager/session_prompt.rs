@@ -1,43 +1,146 @@
-//! Compose shared rules, session responsibilities, and available workflows.
+//! Compose shared rules, session responsibilities, and prompt layers.
 //! Tool schemas and execution manuals remain in live tool help.
 
 use std::collections::BTreeMap;
 
-use agena_domain::{ExecutionSelection, ModelRef, SessionRelationKind};
+use agena_domain::{ModelRef, SessionRelationKind};
+use agena_prompt_layers::{
+    LayerSource, PromptContext, PromptLayer, PromptRoute, PromptScope, route_matches,
+};
 
 use crate::merge_system_prompts;
 use crate::tool::ToolExecutor;
 
 use super::{ExecutionState, SessionManager};
 
-/// Resolve inheritance before trimming: an explicit empty value blocks fallback.
-/// The project/global default has already been merged by configuration loading.
-pub(super) fn resolve_additional_system_prompt<'a>(
-    request: Option<&'a str>,
-    session: Option<&'a str>,
-    model: Option<&'a str>,
-    default: Option<&'a str>,
-) -> Option<&'a str> {
-    request.or(session).or(model).or(default)
+/// Everything needed to resolve one request's additional instructions.
+pub(super) struct PromptInputs<'a> {
+    pub session: &'a PromptLayer,
+    pub request_layer: Option<&'a PromptLayer>,
+    pub model: &'a ModelRef,
+    pub session_id: i64,
+    pub workspace: String,
+    pub tools_enabled: bool,
 }
 
-/// Use the same adapter resolution as execution, including implicit selections.
-pub(super) fn model_additional_system_prompt<'a>(
-    state: &'a ExecutionState,
-    model: &ModelRef,
-) -> Option<&'a str> {
-    let selection = ExecutionSelection {
-        provider: Some(model.provider_id.to_string()),
-        adapter: model.adapter_id.as_ref().map(ToString::to_string),
-        model: Some(model.model_id.to_string()),
-        ..Default::default()
+/// Resolve the configured layers plus the session and request layers.
+///
+/// Assembly failures are reported to the model instead of aborting the turn:
+/// a bad fragment id must not make a session unusable, but it must be visible.
+pub(super) fn resolve_configured_prompts(
+    state: &ExecutionState,
+    inputs: &PromptInputs<'_>,
+) -> String {
+    match resolve_prompt_layers(state, inputs) {
+        Ok(resolution) => {
+            for warning in &resolution.warnings {
+                tracing::warn!(
+                    scope = warning.scope.as_str(),
+                    fragment = %warning.id,
+                    detail = %warning.detail,
+                    "prompt fragment skipped"
+                );
+            }
+            resolution.text
+        }
+        Err(error) => {
+            tracing::error!(%error, "prompt layers could not be assembled");
+            format!("[Additional instructions could not be assembled: {error}]")
+        }
+    }
+}
+
+/// The fragments that consume the most budget, largest first.
+pub(super) fn prompt_layer_contributors(
+    state: &ExecutionState,
+    inputs: &PromptInputs<'_>,
+) -> Vec<String> {
+    let mut fragments = resolve_prompt_layers(state, inputs)
+        .map(|resolution| resolution.fragments)
+        .unwrap_or_default();
+    fragments.sort_by(|left, right| right.bytes.cmp(&left.bytes));
+    fragments
+        .into_iter()
+        .take(3)
+        .map(|fragment| {
+            format!(
+                "{} ({}), {} bytes",
+                fragment.id,
+                fragment.scope.as_str(),
+                fragment.bytes
+            )
+        })
+        .collect()
+}
+
+fn resolve_prompt_layers(
+    state: &ExecutionState,
+    inputs: &PromptInputs<'_>,
+) -> Result<agena_prompt_layers::PromptResolution, agena_prompt_layers::PromptError> {
+    let config = &state.config.prompts;
+    let route = PromptRoute::new(
+        inputs.model.provider_id.as_ref(),
+        inputs.model.adapter_id.as_ref().map(ToString::to_string),
+        inputs.model.model_id.as_ref(),
+    );
+    let context = PromptContext {
+        route: Some(route.clone()),
+        workspace: inputs.workspace.clone(),
+        platform: std::env::consts::OS.to_owned(),
+        session_id: inputs.session_id,
+        tools_enabled: inputs.tools_enabled,
     };
-    let adapter_id = state.providers.tool_execution_adapter(&selection).ok()?;
-    let resolved = ModelRef {
-        adapter_id,
-        ..model.clone()
-    };
-    state.config.model_additional_system_prompt(&resolved)
+    let global_library = config
+        .library(PromptScope::Global)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let workspace_library = config
+        .library(PromptScope::Workspace)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let empty = BTreeMap::new();
+    let global_layer = config.global.layer();
+    let workspace_layer = config.workspace.layer();
+    let empty_layer = PromptLayer::default();
+    let mut sources = vec![
+        LayerSource::new(PromptScope::Global, &global_layer, &global_library),
+        LayerSource::new(PromptScope::Workspace, &workspace_layer, &workspace_library),
+    ];
+    // A model layer keeps its own scope's library so it can reference
+    // fragments declared beside it.
+    let global_model_layers = matching_layers(&config.global.models, &route);
+    let workspace_model_layers = matching_layers(&config.workspace.models, &route);
+    for layer in &global_model_layers {
+        sources.push(LayerSource::new(PromptScope::Model, layer, &global_library));
+    }
+    for layer in &workspace_model_layers {
+        sources.push(LayerSource::new(
+            PromptScope::Model,
+            layer,
+            &workspace_library,
+        ));
+    }
+    sources.push(LayerSource::new(
+        PromptScope::Session,
+        inputs.session,
+        &empty,
+    ));
+    sources.push(LayerSource::new(
+        PromptScope::Request,
+        inputs.request_layer.unwrap_or(&empty_layer),
+        &empty,
+    ));
+    agena_prompt_layers::resolve(&sources, &context)
+}
+
+/// Model-scoped layers whose `match` pattern selects this request route.
+fn matching_layers(
+    models: &[crate::config::ModelPromptConfig],
+    route: &PromptRoute,
+) -> Vec<PromptLayer> {
+    models
+        .iter()
+        .filter(|model| route_matches(&model.match_pattern, route))
+        .map(crate::config::ModelPromptConfig::layer)
+        .collect()
 }
 
 /// Canonical tool identities mapped to the names advertised by this catalog.
@@ -641,88 +744,11 @@ mod tests {
     }
 
     #[test]
-    fn additional_prompt_precedence_and_explicit_empty_values() {
-        let cases = [
-            ([None, None, None, None], None),
-            (
-                [None, None, None, Some("global/project")],
-                Some("global/project"),
-            ),
-            (
-                [None, None, Some("model"), Some("global/project")],
-                Some("model"),
-            ),
-            (
-                [None, Some("session"), Some("model"), Some("global/project")],
-                Some("session"),
-            ),
-            (
-                [
-                    Some("request"),
-                    Some("session"),
-                    Some("model"),
-                    Some("global/project"),
-                ],
-                Some("request"),
-            ),
-            ([None, None, None, Some("")], Some("")),
-            ([None, None, Some(""), Some("global/project")], Some("")),
-            (
-                [None, Some(""), Some("model"), Some("global/project")],
-                Some(""),
-            ),
-            (
-                [
-                    Some(""),
-                    Some("session"),
-                    Some("model"),
-                    Some("global/project"),
-                ],
-                Some(""),
-            ),
-            (
-                [None, Some(" \n\t"), Some("model"), Some("global/project")],
-                Some(" \n\t"),
-            ),
-        ];
-        for ([request, session, model, default], expected) in cases {
-            assert_eq!(
-                resolve_additional_system_prompt(request, session, model, default),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn disabling_additional_instructions_preserves_each_role_and_boundary() {
-        for role in [SessionRelationKind::Root, SessionRelationKind::Subagent] {
-            for empty in ["", " \n\t"] {
-                let base = assemble_system_prompt(
-                    role,
-                    false,
-                    &AvailableTools::new(),
-                    None,
-                    Some("Conversation boundary."),
-                    "Project guidance.",
-                );
-                let selected = resolve_additional_system_prompt(
-                    None,
-                    None,
-                    Some(empty),
-                    Some("Inherited global instructions."),
-                );
-                let actual = assemble_system_prompt(
-                    role,
-                    false,
-                    &AvailableTools::new(),
-                    selected,
-                    Some("Conversation boundary."),
-                    "Project guidance.",
-                );
-                assert_eq!(actual, base);
-                assert!(!actual.contains("Inherited global instructions."));
-            }
-        }
+    fn retired_string_prompt_field_is_gone() {
+        let error = serde_json::from_str::<crate::config::SessionConfig>(
+            r#"{"additional_system_prompt":"legacy"}"#,
+        );
+        assert!(error.is_err());
     }
 
     #[test]

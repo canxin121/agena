@@ -3,11 +3,16 @@
 use std::fs;
 use std::path::Path;
 
-use agena_runtime_config::{ConfigLoader, LoadConfigRequest, ProcessEnvironment, PromptScopeConfig};
 use agena_prompt_layers::{FragmentId, LayerMode};
+use agena_runtime_config::{
+    ConfigLoader, LoadConfigRequest, ProcessEnvironment, PromptScopeConfig,
+};
 use serde_json::json;
 
-fn fixture(global: serde_json::Value, workspace: serde_json::Value) -> (tempfile::TempDir, LoadConfigRequest) {
+fn fixture(
+    global: serde_json::Value,
+    workspace: serde_json::Value,
+) -> (tempfile::TempDir, LoadConfigRequest) {
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("agena.json");
     fs::write(&config_path, serde_json::to_vec_pretty(&global).unwrap()).unwrap();
@@ -49,26 +54,42 @@ fn global_and_workspace_layers_stay_separate_and_compose() {
             }
         }),
     );
-    write_fragment(&dir.path().join("prompts"), "house-style", "Global house style.\n");
+    write_fragment(
+        &dir.path().join("prompts"),
+        "house-style",
+        "Global house style.\n",
+    );
     write_fragment(
         &dir.path().join("workspace/.agena/prompts"),
         "project-notes",
         "Project notes.\n",
     );
 
-    let resolution = ConfigLoader::new(ProcessEnvironment).load(&request).unwrap();
+    let resolution = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap();
     let prompts = &resolution.config.prompts;
-    assert_eq!(prompts.global.order, vec![FragmentId::parse("house-style").unwrap()]);
-    assert_eq!(prompts.workspace.order, vec![FragmentId::parse("project-notes").unwrap()]);
-    assert_eq!(prompts.workspace.disabled, vec![FragmentId::parse("house-style").unwrap()]);
-    assert_eq!(prompts.global.inline.len(), 1);
     assert_eq!(
-        prompts.global_dir,
-        dir.path().join("prompts")
+        prompts.global.order,
+        vec![FragmentId::parse("house-style").unwrap()]
     );
     assert_eq!(
+        prompts.workspace.order,
+        vec![FragmentId::parse("project-notes").unwrap()]
+    );
+    assert_eq!(
+        prompts.workspace.disabled,
+        vec![FragmentId::parse("house-style").unwrap()]
+    );
+    assert_eq!(prompts.global.inline.len(), 1);
+    assert_eq!(prompts.global_dir, dir.path().join("prompts"));
+    assert_eq!(
         prompts.workspace_dir,
-        request.workspace_root.as_ref().unwrap().join(".agena/prompts")
+        request
+            .workspace_root
+            .as_ref()
+            .unwrap()
+            .join(".agena/prompts")
     );
     assert_eq!(prompts.global.mode, LayerMode::Append);
 }
@@ -93,18 +114,20 @@ fn missing_project_file_leaves_the_global_layer_intact() {
             overrides: Vec::new(),
         })
         .unwrap();
-    assert_eq!(resolution.config.prompts.workspace, PromptScopeConfig::default());
+    assert_eq!(
+        resolution.config.prompts.workspace,
+        PromptScopeConfig::default()
+    );
     assert_eq!(resolution.config.prompts.global.inline.len(), 1);
 }
 
 #[test]
 fn referencing_a_missing_fragment_fails_at_load_time() {
-    let (dir, request) = fixture(
-        json!({"prompts": {"order": ["absent"]}}),
-        json!({}),
-    );
+    let (dir, request) = fixture(json!({"prompts": {"order": ["absent"]}}), json!({}));
     write_fragment(&dir.path().join("prompts"), "present", "Present.\n");
-    let error = ConfigLoader::new(ProcessEnvironment).load(&request).unwrap_err();
+    let error = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap_err();
     let message = error.to_string();
     assert!(message.contains("absent"), "{message}");
     assert!(message.contains("absent.md"), "{message}");
@@ -122,7 +145,9 @@ fn model_scoped_layers_round_trip_and_require_a_pattern() {
         json!({}),
     );
     write_fragment(&dir.path().join("prompts"), "base", "Base.\n");
-    let resolution = ConfigLoader::new(ProcessEnvironment).load(&request).unwrap();
+    let resolution = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap();
     let models = &resolution.config.prompts.global.models;
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].match_pattern, "anthropic/*");
@@ -133,7 +158,9 @@ fn model_scoped_layers_round_trip_and_require_a_pattern() {
         json!({}),
     );
     write_fragment(&dir.path().join("prompts"), "base", "Base.\n");
-    let error = ConfigLoader::new(ProcessEnvironment).load(&request).unwrap_err();
+    let error = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap_err();
     assert!(error.to_string().contains("non-empty `match`"), "{error}");
 }
 
@@ -143,7 +170,9 @@ fn retired_session_prompt_field_is_rejected() {
         json!({"session": {"additional_system_prompt": "legacy"}}),
         json!({}),
     );
-    let error = ConfigLoader::new(ProcessEnvironment).load(&request).unwrap_err();
+    let error = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap_err();
     assert!(
         error.to_string().contains("additional_system_prompt"),
         "{error}"

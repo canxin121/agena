@@ -130,7 +130,12 @@ impl SessionManager {
         model: &agena_domain::ModelRef,
     ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
         let state = self.state.load_full();
-        let configuration = self.kernel().reader.configuration(id).await.map_err(kernel_error)?;
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(id)
+            .await
+            .map_err(kernel_error)?;
         let workspace = configuration
             .effective_workspace_root
             .as_ref()
@@ -594,6 +599,28 @@ fn query_error(error: AppError) -> SessionQueryError {
 }
 #[async_trait::async_trait]
 impl SessionQueryService for SessionManager {
+    async fn prompt_preview(
+        &self,
+        id: i64,
+    ) -> Result<agena_prompt_layers::PromptResolution, SessionQueryError> {
+        let session = super::session_id(id).map_err(query_error)?;
+        let context = self
+            .execution_context_value(session)
+            .await
+            .map_err(query_error)?;
+        let state = self.state.load_full();
+        let model = state
+            .providers
+            .resolve_default_model_selection(&context.selection)
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                SessionQueryError::internal("no model route is available for this session")
+            })?;
+        SessionManager::prompt_preview(self, session, &model)
+            .await
+            .map_err(query_error)
+    }
     async fn list_session_summaries(
         &self,
         r: SessionListRequest,

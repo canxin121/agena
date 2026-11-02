@@ -466,6 +466,10 @@ pub fn router(state: AppState) -> Router {
                 get(rest::get_session_state),
             )
             .route(
+                "/api/v1/sessions/{session_id}/prompts/preview",
+                get(rest::get_session_prompt_preview),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/file-changes",
                 get(rest::get_session_file_changes),
             )

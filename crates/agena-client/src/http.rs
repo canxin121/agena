@@ -1297,15 +1297,15 @@ impl AgenaClient {
         .await
     }
 
-    /// Set a session override, or restore inheritance with None.
-    pub async fn set_session_additional_system_prompt(
+    /// Replace the session prompt layer.
+    pub async fn set_session_prompts(
         &self,
         session_id: i64,
-        additional_system_prompt: Option<String>,
+        prompts: Option<agena_prompt_layers::PromptLayer>,
     ) -> Result<SessionResource, ClientError> {
         self.put_json(
             &format!("/api/v1/sessions/{session_id}"),
-            serde_json::json!({ "additional_system_prompt": additional_system_prompt }),
+            serde_json::json!({ "prompts": prompts }),
         )
         .await
     }

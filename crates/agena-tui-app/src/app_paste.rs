@@ -187,7 +187,9 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                 }
                 Overlay::SessionPromptEdit(dialog) => {
-                    dialog.input.insert_str(text.as_str());
+                    if let Some(editor) = dialog.editor.as_mut() {
+                        editor.input.insert_str(text.as_str());
+                    }
                 }
                 Overlay::TranscriptFoldLoad(dialog) => {
                     dialog.input.insert_str(text.as_str());

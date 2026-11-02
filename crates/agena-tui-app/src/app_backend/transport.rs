@@ -2152,14 +2152,14 @@ impl TuiBackend {
         Ok(session)
     }
 
-    pub async fn set_session_additional_system_prompt(
+    pub async fn set_session_prompts(
         &self,
         session_id: i64,
-        value: Option<String>,
+        prompts: Option<agena_prompt_layers::PromptLayer>,
     ) -> Result<SessionResource> {
         Ok(self
             .client()
-            .set_session_additional_system_prompt(session_id, value)
+            .set_session_prompts(session_id, prompts)
             .await?)
     }
 

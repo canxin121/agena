@@ -1471,37 +1471,48 @@ impl AgenaCli {
                 let update = if args.inherit {
                     Some(None)
                 } else if let Some(path) = args.file {
-                    Some(Some(tokio::fs::read_to_string(&path).await.map_err(
-                        |error| {
+                    let text = tokio::fs::read_to_string(&path).await.map_err(|error| {
+                        AppError::Internal(format!("read prompt layer {}: {error}", path.display()))
+                    })?;
+                    let layer: agena_prompt_layers::PromptLayer = serde_json::from_str(&text)
+                        .map_err(|error| {
                             AppError::Internal(format!(
-                                "read system prompt {}: {error}",
+                                "parse prompt layer {}: {error}",
                                 path.display()
                             ))
-                        },
-                    )?))
+                        })?;
+                    Some(Some(layer))
                 } else {
-                    args.text.map(Some)
+                    args.text.map(|text| {
+                        let id = agena_prompt_layers::FragmentId::parse("session-prompt")
+                            .expect("static fragment id");
+                        Some(agena_prompt_layers::PromptLayer {
+                            mode: agena_prompt_layers::LayerMode::Replace,
+                            order: vec![id.clone()],
+                            disabled: Vec::new(),
+                            inline: vec![agena_prompt_layers::PromptFragment::new(id, text)],
+                        })
+                    })
                 };
                 if let Some(value) = update {
                     server
                         .client
-                        .set_session_additional_system_prompt(args.session_id, value)
+                        .set_session_prompts(args.session_id, value)
                         .await
                         .map_err(|error| {
-                            client_error("failed to update session system prompt", error)
+                            client_error("failed to update session prompt layer", error)
                         })?;
                 }
                 let execution = server
                     .client
                     .get_session_state(args.session_id)
                     .await
-                    .map_err(|error| client_error("failed to read session system prompt", error))?;
+                    .map_err(|error| client_error("failed to read session prompt layer", error))?;
                 render_serialized(
                     args.format,
                     &serde_json::json!({
                         "session_id": args.session_id,
-                        "additional_system_prompt": execution.execution.additional_system_prompt,
-                        "effective_additional_system_prompt": execution.execution.effective_additional_system_prompt,
+                        "prompts": execution.execution.prompts,
                     }),
                 )
             }

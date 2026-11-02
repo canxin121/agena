@@ -191,13 +191,8 @@ pub(crate) fn merge_provider_model_adapter_patch_for_save(
     let Some(models_object) = models.as_object_mut() else {
         return Err(ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject);
     };
-    // A complete model edit omits this key to inherit. The settings merge patch
-    // needs an explicit null to remove an existing override.
-    if let Some(model) = model_value.as_object_mut() {
-        model
-            .entry("additional_system_prompt".to_owned())
-            .or_insert(JsonValue::Null);
-    }
+    // A complete model edit replaces the entry; prompts are configured on
+    // prompt layers, not on provider model routes.
     models_object.insert(
         canonical_provider_model_id(adapter_id, model_id),
         model_value,

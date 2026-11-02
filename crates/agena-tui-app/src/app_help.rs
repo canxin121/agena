@@ -182,7 +182,9 @@ impl App {
             }
             Overlay::HubProject(dialog) => self.help_for_editor(dialog.editor.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
-            Overlay::SessionPromptEdit(dialog) => self.help_for_editor(dialog.title.clone(), true),
+            Overlay::SessionPromptEdit(_) => {
+                self.help_for_editor("Session prompt layers".to_owned(), true)
+            }
             Overlay::TranscriptFoldLoad(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)
             }

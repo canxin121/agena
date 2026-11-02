@@ -88,16 +88,20 @@ impl App {
             }
 
             Overlay::SessionPromptEdit(dialog) => {
-                agena_tui_components::render_workbench_editor_dialog(
-                    frame,
-                    area,
-                    SurfaceMode::Overlay,
-                    sanitize_display_text(dialog.title.as_str()).into(),
-                    sanitize_display_text(dialog.prompt.as_str()).into(),
-                    sanitize_display_text(dialog.footer.as_str()).into(),
-                    true,
-                    &dialog.input,
-                );
+                if let Some(editor) = dialog.editor.as_ref() {
+                    agena_tui_components::render_workbench_editor_dialog(
+                        frame,
+                        area,
+                        SurfaceMode::Overlay,
+                        sanitize_display_text(editor.title.as_str()).into(),
+                        sanitize_display_text(editor.prompt.as_str()).into(),
+                        sanitize_display_text(editor.footer.as_str()).into(),
+                        true,
+                        &editor.input,
+                    );
+                    return;
+                }
+                self.render_prompt_layer_list(frame, area, dialog);
             }
             Overlay::QueueEditor(dialog) => self.render_queue_editor(frame, area, dialog),
             Overlay::Choice(dialog) => {

@@ -62,7 +62,7 @@ pub async fn dispatch_command(
                         title,
                         parent_id,
                         auto_title,
-                        additional_system_prompt: None,
+                        prompts: None,
                     },
                 })
                 .await?;
@@ -174,7 +174,7 @@ pub async fn dispatch_command(
                         favorite: None,
                         pinned: None,
                         auto_title: None,
-                        additional_system_prompt: None,
+                        prompts: None,
                     },
                 )
                 .await?;

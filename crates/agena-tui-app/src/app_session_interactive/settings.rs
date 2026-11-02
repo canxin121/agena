@@ -203,16 +203,10 @@ impl App {
         ));
         if let Some(session_id) = self.current_or_selected_session_id() {
             runtime_session_items.push(SettingsStudioItem::new(
-                "Session additional system prompt",
+                "Session prompt layers",
                 format!("Session {session_id}"),
-                "Edit instructions for this session. Saving an empty value disables inherited additional instructions.",
-                SettingsPickerAction::EditSessionAdditionalSystemPrompt(session_id),
-            ));
-            runtime_session_items.push(SettingsStudioItem::new(
-                "Restore session prompt inheritance",
-                "Use inherited instructions",
-                "Remove this session's override and use the model, project, or global additional system prompt.",
-                SettingsPickerAction::InheritSessionAdditionalSystemPrompt(session_id),
+                "Add session-only instruction fragments, hide inherited ones, or switch the layer mode.",
+                SettingsPickerAction::EditSessionPrompts(session_id),
             ));
         }
         let permission_items = settings_studio_permission_items(

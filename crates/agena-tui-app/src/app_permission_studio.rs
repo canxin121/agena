@@ -376,12 +376,8 @@ impl App {
                 self.open_settings_field_editor(field, "");
                 false
             }
-            SettingsPickerAction::EditSessionAdditionalSystemPrompt(session_id) => {
-                self.open_session_additional_system_prompt_editor(session_id);
-                false
-            }
-            SettingsPickerAction::InheritSessionAdditionalSystemPrompt(session_id) => {
-                self.save_session_additional_system_prompt(session_id, None);
+            SettingsPickerAction::EditSessionPrompts(session_id) => {
+                self.open_prompt_studio(session_id);
                 false
             }
             SettingsPickerAction::ToggleMcpServer => {

@@ -357,8 +357,7 @@ impl ApplicationService {
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
-                additional_system_prompt: context.additional_system_prompt,
-                effective_additional_system_prompt: context.effective_additional_system_prompt,
+                prompts: context.prompts,
                 provider_retry: execution_control.provider_retry(session_id).await,
                 conversation: context.conversation,
                 agent_id: context.agent_id,

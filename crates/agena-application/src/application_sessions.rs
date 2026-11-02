@@ -687,7 +687,7 @@ impl Application {
                     title,
                     parent_id,
                     auto_title: false,
-                    additional_system_prompt: None,
+                    prompts: None,
                 },
             })
             .await
@@ -728,7 +728,7 @@ impl Application {
                     favorite: None,
                     pinned: None,
                     auto_title: None,
-                    additional_system_prompt: None,
+                    prompts: None,
                 },
             )
             .await

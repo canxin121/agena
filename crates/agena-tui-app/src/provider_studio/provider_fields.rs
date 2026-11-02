@@ -317,7 +317,6 @@ pub(crate) fn provider_model_config_draft_from_overlay(
         model_id: model_id.to_owned(),
         enabled: overlay.enabled,
         native_compaction: overlay.native_compaction,
-        additional_system_prompt: overlay.additional_system_prompt,
         manual_overrides: definition.manual_overrides,
         agena_tool_mode: overlay.agena_tools.mode,
         agena_tool_mode_configured: overlay.agena_tools.configured_mode().is_some(),
@@ -453,7 +452,6 @@ pub(crate) fn provider_model_config_draft_to_model_value(
     let overlay = ResolvedProviderModelConfig {
         enabled: draft.enabled,
         native_compaction: draft.native_compaction,
-        additional_system_prompt: draft.additional_system_prompt.clone(),
         agena_tools: if draft.agena_tool_mode_configured {
             AgenaToolsConfig::from_mode(draft.agena_tool_mode)
         } else {

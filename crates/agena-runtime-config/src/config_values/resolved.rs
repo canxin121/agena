@@ -1,6 +1,7 @@
 use super::{
     BTreeMap, PathBuf, ResolvedProviderConfig, RuntimeConfig, Serialize, SessionConfig, UiConfig,
 };
+use crate::PromptLayersConfig;
 use crate::RuntimeTracingConfiguration;
 use agena_domain::{ExecutionSelection, PermissionConfig};
 use agena_plugin_host::PluginsConfig as PluginConfig;
@@ -229,6 +230,9 @@ pub struct ResolvedConfig {
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
     pub session: SessionConfig,
+    /// Both configuration prompt layers plus their fragment directories.
+    #[serde(default, skip_serializing_if = "PromptLayersConfig::is_empty")]
+    pub prompts: PromptLayersConfig,
     #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
     pub plugins: PluginConfig,

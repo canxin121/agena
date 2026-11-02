@@ -1236,6 +1236,7 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-storage-layout",
  "async-trait",
  "hex",
@@ -1266,6 +1267,7 @@ dependencies = [
  "agena-async",
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-scheduler",
  "agena-storage",

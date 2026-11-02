@@ -27,6 +27,13 @@ pub struct PromptScopeConfig {
 }
 
 impl PromptScopeConfig {
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+            && self.disabled.is_empty()
+            && self.inline.is_empty()
+            && self.models.is_empty()
+    }
+
     pub fn layer(&self) -> PromptLayer {
         PromptLayer {
             mode: self.mode,
@@ -106,6 +113,57 @@ impl PromptLayersConfig {
             PromptScope::Workspace => Some(&self.workspace),
             _ => None,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.global.is_empty()
+            && self.workspace.is_empty()
+            && self.global_dir.as_os_str().is_empty()
+            && self.workspace_dir.as_os_str().is_empty()
+    }
+
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.global.validate().map_err(ConfigError::Validation)?;
+        self.workspace.validate().map_err(ConfigError::Validation)
+    }
+
+    /// Fail when a layer references an id that no file or inline fragment provides.
+    pub fn check_libraries(&self) -> Result<(), ConfigError> {
+        for (scope, config) in [
+            (PromptScope::Global, &self.global),
+            (PromptScope::Workspace, &self.workspace),
+        ] {
+            let library = self.library(scope)?;
+            let dir = if scope == PromptScope::Global {
+                &self.global_dir
+            } else {
+                &self.workspace_dir
+            };
+            for id in &config.order {
+                let inline = config.inline.iter().any(|fragment| &fragment.id == id);
+                if !inline && !library.contains_key(id) {
+                    return Err(ConfigError::Validation(format!(
+                        "{} prompts reference `{id}`, but {} does not exist",
+                        scope.as_str(),
+                        dir.join(format!("{id}.md")).display()
+                    )));
+                }
+            }
+            for model in &config.models {
+                for id in &model.order {
+                    let inline = model.inline.iter().any(|fragment| &fragment.id == id);
+                    let own = config.inline.iter().any(|fragment| &fragment.id == id);
+                    if !inline && !own && !library.contains_key(id) {
+                        return Err(ConfigError::Validation(format!(
+                            "{} prompts for `{}` reference `{id}`, but no fragment file or inline fragment provides it",
+                            scope.as_str(),
+                            model.match_pattern
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

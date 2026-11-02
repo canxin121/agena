@@ -1,5 +1,5 @@
 use crate::{
-    ConfigError, ConfigResolution, LoadConfigRequest, RawConfig, RawConfigFile,
+    ConfigError, ConfigResolution, LoadConfigRequest, PromptLayersConfig, RawConfig, RawConfigFile,
     apply_config_override,
 };
 
@@ -41,6 +41,16 @@ where
         let env_overlay = RawConfig::from_env(&self.env)?;
         let environment_applied = !env_overlay.is_empty();
 
+        // Prompt layers stay separate per file: the global file owns the global
+        // layer, the project file owns the workspace layer, so they compose
+        // rather than the project silently replacing the global layer.
+        let global_prompts = file_state.config.prompts.clone().unwrap_or_default();
+        let workspace_prompts = project_file_state
+            .config
+            .prompts
+            .clone()
+            .unwrap_or_default();
+
         let mut merged = if file_state.found {
             file_state.config.clone()
         } else {
@@ -63,7 +73,17 @@ where
             }
         }
 
-        let config = merged.resolve()?;
+        let mut config = merged.resolve()?;
+        config.prompts = PromptLayersConfig {
+            global: global_prompts,
+            workspace: workspace_prompts,
+            global_dir: prompt_dir(config_path.as_path()),
+            workspace_dir: workspace_root.join(".agena").join("prompts"),
+        };
+        // Fragment directories are configuration: a referenced id that has no
+        // file must fail here instead of silently dropping instructions.
+        config.prompts.validate()?;
+        config.prompts.check_libraries()?;
         Ok(ConfigResolution {
             config,
             meta: crate::ConfigResolutionMeta::from_layer_presence(
@@ -76,4 +96,11 @@ where
             ),
         })
     }
+}
+
+fn prompt_dir(config_path: &std::path::Path) -> std::path::PathBuf {
+    config_path
+        .parent()
+        .map(|dir| dir.join("prompts"))
+        .unwrap_or_else(|| std::path::PathBuf::from("prompts"))
 }

@@ -221,6 +221,49 @@ fn incompatible_database(reason: &str) -> DbErr {
     ))
 }
 
+/// Move the retired string-valued prompt override into the session prompt layer.
+///
+/// The retired field no longer deserializes, so this rewrite runs once during
+/// schema initialization and leaves no runtime compatibility path behind.
+async fn migrate_retired_prompt_configuration(database: &DatabaseConnection) -> Result<(), DbErr> {
+    let rows = database
+        .query_all(Statement::from_string(
+            database.get_database_backend(),
+            "SELECT id, json_extract(configuration_json,'$.additional_system_prompt') AS retired_text \
+             FROM agena_sessions WHERE json_type(configuration_json,'$.additional_system_prompt')='text'",
+        ))
+        .await?;
+    for row in rows {
+        let id: i64 = row.try_get("", "id")?;
+        let text: String = row.try_get("", "retired_text")?;
+        // An empty retired value meant "no additional instructions", which is
+        // exactly an absent session layer.
+        let layer = if text.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::json!({
+                "order": ["legacy-session-prompt"],
+                "inline": [{
+                    "id": "legacy-session-prompt",
+                    "title": "Retired session prompt",
+                    "body": text,
+                }],
+            })
+        };
+        let layer = serde_json::to_string(&layer).map_err(|error| DbErr::Json(error.to_string()))?;
+        database
+            .execute(Statement::from_sql_and_values(
+                database.get_database_backend(),
+                "UPDATE agena_sessions SET configuration_json = json_remove(\
+                    json_set(configuration_json,'$.prompts',json(?)),'$.additional_system_prompt'\
+                 ) WHERE id=?",
+                [layer.into(), id.into()],
+            ))
+            .await?;
+    }
+    Ok(())
+}
+
 async fn validate_objects(
     database: &DatabaseConnection,
     actual: std::collections::BTreeMap<(String, String), String>,
@@ -262,6 +305,7 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
         if validate_objects(database, actual).await? {
+            migrate_retired_prompt_configuration(database).await?;
             return Ok(());
         }
         // Only the exact recognized predecessor may receive these additive
@@ -275,7 +319,9 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
                 ))
                 .await?;
         }
-        return transaction.commit().await;
+        transaction.commit().await?;
+        migrate_retired_prompt_configuration(database).await?;
+        return Ok(());
     }
     // The full schema and baseline identity reach the main database together,
     // before the connection owner enables WAL. Immutable preflight reads can

@@ -161,9 +161,9 @@ fn workspace_overrides_complete_connections_even_when_disabled_and_retains_other
 #[test]
 fn scoped_crud_preserves_sibling_settings_and_removing_override_restores_global_connection() {
     let mut global = document(json!({"shared":stdio("global-mcp")}));
-    global["session"] = json!({"additional_system_prompt":"keep global prompt"});
+    global["session"] = json!({"max_turns":11});
     let workspace = json!({
-        "session":{"additional_system_prompt":"keep project prompt"},
+        "session":{"max_turns":22},
         "plugins":{"list":{"example.custom":{
             "package":{"kind":"static"}, "settings":{"keep":[1,2,3]}
         }}}
@@ -177,10 +177,7 @@ fn scoped_crud_preserves_sibling_settings_and_removing_override_restores_global_
     );
     let saved = read_document(&fixture.store.workspace_path);
     assert_eq!(fs::read(&fixture.store.global_path).unwrap(), before.0);
-    assert_eq!(
-        saved["session"]["additional_system_prompt"],
-        "keep project prompt"
-    );
+    assert_eq!(saved["session"]["max_turns"], json!(22));
     assert_eq!(
         saved["plugins"]["list"]["example.custom"]["settings"],
         json!({"keep":[1,2,3]})
@@ -199,10 +196,7 @@ fn scoped_crud_preserves_sibling_settings_and_removing_override_restores_global_
     assert_eq!(global.summary.state, "disconnected");
     assert_eq!(fs::read(&fixture.store.global_path).unwrap(), before.0);
     let saved = read_document(&fixture.store.workspace_path);
-    assert_eq!(
-        saved["session"]["additional_system_prompt"],
-        "keep project prompt"
-    );
+    assert_eq!(saved["session"]["max_turns"], json!(22));
     assert_eq!(
         saved["plugins"]["list"]["example.custom"]["settings"],
         json!({"keep":[1,2,3]})

@@ -488,15 +488,19 @@ pub fn provider_model_draft_value_from_resource(
 
 /// Copy one selected catalog definition into an editable provider-model value.
 /// The selected catalog ID is UI state only; the returned value contains just
-/// ordinary model fields and keeps the route's operational settings.
+/// ordinary model fields and keeps the route's operational settings. A manual
+/// selection opts the route out of automatic catalog refreshes so the values
+/// copied here survive a save and the next edit.
 pub fn apply_catalog_template_to_model_value(
     model_value: serde_json::Value,
     catalog_model: &super::CatalogModelResource,
+    manual_overrides: bool,
 ) -> Result<serde_json::Value, serde_json::Error> {
     let mut configured: agena_provider::ResolvedProviderModelConfig =
         serde_json::from_value(model_value)?;
     configured.definition =
         catalog_model_to_catalog_definition(catalog_model).into_configured_definition();
+    configured.definition.manual_overrides = manual_overrides;
     serde_json::to_value(configured)
 }
 
@@ -518,12 +522,42 @@ mod tests {
             if let Some(prompt) = prompt {
                 value["additional_system_prompt"] = json!(prompt);
             }
-            let refreshed = apply_catalog_template_to_model_value(value, &catalog).unwrap();
+            let refreshed = apply_catalog_template_to_model_value(value, &catalog, false).unwrap();
             assert_eq!(refreshed["display_name"], json!("Refreshed name"));
             assert_eq!(
                 refreshed.get("additional_system_prompt"),
                 prompt.map(|value| json!(value)).as_ref()
             );
         }
+    }
+
+    #[test]
+    fn manual_catalog_template_preserves_selection_and_route_fields() {
+        let catalog = serde_json::from_value(json!({
+            "model_id": "selected-model",
+            "source": "generated",
+            "display_name": "Selected name",
+            "context_window_tokens": 200000
+        }))
+        .unwrap();
+        let value = json!({
+            "enabled": false,
+            "native_compaction": false,
+            "additional_system_prompt": "keep",
+            "display_name": "Previous name",
+            "context_window_tokens": 1000
+        });
+
+        let manual = apply_catalog_template_to_model_value(value.clone(), &catalog, true).unwrap();
+        assert_eq!(manual["manual_overrides"], json!(true));
+        assert_eq!(manual["display_name"], json!("Selected name"));
+        assert_eq!(manual["context_window_tokens"], json!(200000));
+        assert_eq!(manual["enabled"], json!(false));
+        assert_eq!(manual["native_compaction"], json!(false));
+        assert_eq!(manual["additional_system_prompt"], json!("keep"));
+
+        let automatic = apply_catalog_template_to_model_value(value, &catalog, false).unwrap();
+        assert!(automatic.get("manual_overrides").is_none());
+        assert_eq!(automatic["display_name"], json!("Selected name"));
     }
 }

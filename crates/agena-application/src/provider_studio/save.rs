@@ -521,6 +521,7 @@ pub(crate) fn provider_model_draft_value(
                 return agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
                     configured,
                     catalog_model,
+                    false,
                 )
                 .map_err(|error| {
                     crate::ApplicationError::internal_error_with_context(

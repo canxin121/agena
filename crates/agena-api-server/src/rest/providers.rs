@@ -131,6 +131,8 @@ pub struct ProviderStudioModelDraftRequest {
 pub struct ProviderStudioCatalogTemplateRequest {
     pub catalog_model_id: String,
     pub model_value: serde_json::Value,
+    #[serde(default)]
+    pub manual_overrides: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -232,7 +234,11 @@ pub async fn apply_provider_studio_catalog_template(
 ) -> Result<impl IntoResponse, ServerError> {
     let value = state
         .application()
-        .provider_model_catalog_template_value(request.catalog_model_id.trim(), request.model_value)
+        .provider_model_catalog_template_value(
+            request.catalog_model_id.trim(),
+            request.model_value,
+            request.manual_overrides,
+        )
         .map_err(server_error_from_application)?;
     Ok(Json(serde_json::json!({ "value": value })))
 }

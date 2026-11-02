@@ -1745,7 +1745,11 @@ async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) 
     const response = await apiJson<{ value?: JsonValue }>('/api/v1/provider-studio/draft/model/catalog-template', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ catalog_model_id: catalog.model_id, model_value: current }),
+      body: JSON.stringify({
+        catalog_model_id: catalog.model_id,
+        model_value: current,
+        manual_overrides: manual,
+      }),
     })
     if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
     const next = canonicalizeModelConfig(response.value ?? {})

@@ -113,6 +113,7 @@ impl Application {
         &self,
         catalog_model_id: &str,
         model_value: serde_json::Value,
+        manual_overrides: bool,
     ) -> Result<serde_json::Value, ApplicationError> {
         let catalog = self
             .lookup_model_catalog_models(&[catalog_model_id.to_owned()])
@@ -122,6 +123,7 @@ impl Application {
         agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
             model_value,
             &catalog,
+            manual_overrides,
         )
         .map_err(|error| {
             ApplicationError::bad_request_with_diagnostic(

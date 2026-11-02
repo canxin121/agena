@@ -121,6 +121,33 @@ impl SessionManager {
         self.execution_context_with_state(id, &self.state.load_full())
             .await
     }
+
+    /// Resolve the additional-instruction layers for a preview, using the same
+    /// inputs assembly would use for this session and model.
+    pub async fn prompt_preview(
+        &self,
+        id: SessionId,
+        model: &agena_domain::ModelRef,
+    ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
+        let state = self.state.load_full();
+        let configuration = self.kernel().reader.configuration(id).await.map_err(kernel_error)?;
+        let workspace = configuration
+            .effective_workspace_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let inputs = super::session_prompt::PromptInputs {
+            session: &configuration.prompts,
+            request_layer: None,
+            model,
+            session_id: id.get(),
+            workspace,
+            tools_enabled: true,
+        };
+        super::session_prompt::prompt_preview(&state, &inputs).map_err(|error| {
+            AppError::Internal(format!("prompt layers could not be resolved: {error}"))
+        })
+    }
     pub(super) async fn execution_context_with_state(
         &self,
         id: SessionId,

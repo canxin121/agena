@@ -73,6 +73,14 @@ pub(super) fn prompt_layer_contributors(
         .collect()
 }
 
+/// Resolve the same layers assembly uses, for a preview request.
+pub(super) fn prompt_preview(
+    state: &ExecutionState,
+    inputs: &PromptInputs<'_>,
+) -> Result<agena_prompt_layers::PromptResolution, agena_prompt_layers::PromptError> {
+    resolve_prompt_layers(state, inputs)
+}
+
 fn resolve_prompt_layers(
     state: &ExecutionState,
     inputs: &PromptInputs<'_>,

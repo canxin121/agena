@@ -200,12 +200,12 @@ fn adapter_models_failure(
     let kind = error.provider_error_kind();
     let (code, category, responsibility, retry, recovery, fallback) = match kind {
         Some(ProviderErrorKind::Authentication) => (
-            "provider.authentication_required",
+            "provider.authentication_rejected",
             FailureCategory::AuthenticationRequired,
             FailureResponsibility::Caller,
             RetryDirective::AfterUserAction,
-            RecoveryDirective::Reauthenticate,
-            "Provider authentication is required before models can be listed.",
+            RecoveryDirective::OpenSettings,
+            "The provider rejected authentication while listing models. Check its credentials and settings.",
         ),
         Some(ProviderErrorKind::RateLimited) => (
             "provider.rate_limited",
@@ -383,5 +383,29 @@ pub(crate) fn resolved_adapter_models_base_url(
                 provider_endpoint_root(auth, provider_id)?.0.to_owned(),
             )),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_authentication_failure_points_to_provider_settings() {
+        let error = agena_runtime_provider::ProviderError::ProviderClassified {
+            provider: "local".to_owned(),
+            message: "unauthorized".to_owned(),
+            kind: agena_provider::ProviderErrorKind::Authentication,
+            retryable: false,
+        };
+
+        let failure = adapter_models_failure("local", "openai_responses", &error);
+
+        assert_eq!(failure.code.as_str(), "provider.authentication_rejected");
+        assert_eq!(
+            failure.recovery,
+            agena_failure::RecoveryDirective::OpenSettings
+        );
+        assert!(failure.user.fallback.contains("rejected authentication"));
     }
 }

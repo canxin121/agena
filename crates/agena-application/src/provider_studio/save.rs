@@ -917,7 +917,7 @@ pub(crate) async fn patch_provider_settings(
         })
         .await
         .map_err(ProviderStudioSaveError::other)?
-        .map_err(|error| ProviderStudioSaveError::Other(error.failure().into()))?;
+        .map_err(provider_studio_save_error_from_settings)?;
 
     if response.reload_required {
         app.runtime_control()
@@ -954,7 +954,7 @@ pub(crate) async fn patch_provider_settings_root(
         })
         .await
         .map_err(ProviderStudioSaveError::other)?
-        .map_err(|error| ProviderStudioSaveError::Other(error.failure().into()))?;
+        .map_err(provider_studio_save_error_from_settings)?;
 
     if response.reload_required {
         app.runtime_control()
@@ -988,7 +988,7 @@ pub(crate) async fn set_provider_settings(
         })
         .await
         .map_err(ProviderStudioSaveError::other)?
-        .map_err(|error| ProviderStudioSaveError::Other(error.failure().into()))?;
+        .map_err(provider_studio_save_error_from_settings)?;
 
     if response.reload_required {
         app.runtime_control()
@@ -1045,4 +1045,16 @@ pub(crate) fn provider_studio_save_error_from_anyhow(
         );
     }
     ProviderStudioSaveError::other(diagnostic)
+}
+
+fn provider_studio_save_error_from_settings(
+    error: agena_runtime::RuntimeConfigSettingsError,
+) -> ProviderStudioSaveError {
+    tracing::error!(
+        failure_id = %error.failure().id,
+        failure_code = %error.failure().code,
+        diagnostic = error.diagnostic(),
+        "Provider Studio settings update failed"
+    );
+    ProviderStudioSaveError::Other(error.failure().into())
 }

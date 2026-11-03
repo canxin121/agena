@@ -630,14 +630,73 @@ impl Application {
                             else {
                                 continue;
                             };
-                            let notice =
-                                serde_json::from_str::<agena_runtime_contracts::NoticePart>(text)
-                                    .unwrap_or_else(|_| agena_runtime_contracts::NoticePart {
-                                        kind: "session_notice".into(),
-                                        summary: text.clone(),
-                                        detail: None,
-                                        title: None,
-                                    });
+                            use agena_runtime_contracts::part_content::DecodedNotice;
+                            let notice = match agena_runtime_contracts::part_content::decode_notice(
+                                text,
+                            ) {
+                                DecodedNotice::Hook(decoded) => {
+                                    if let Err(error) = decoded {
+                                        tracing::warn!(
+                                            session_id = change.session.get(),
+                                            entry_id = id.get(),
+                                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                                "decode plugin hook notice for notification aggregation",
+                                                &error,
+                                            ),
+                                            "plugin hook notice could not be decoded; skipping notification"
+                                        );
+                                    }
+                                    // Hook activity is transcript content, not a
+                                    // user-facing notification.
+                                    continue;
+                                }
+                                DecodedNotice::LegacyHook(_)
+                                | DecodedNotice::LegacyStopHookFollowup(_) => {
+                                    // Pre-marker hook observations are also
+                                    // transcript activity.
+                                    continue;
+                                }
+                                DecodedNotice::SystemNotification(decoded) => {
+                                    if let Err(error) = decoded {
+                                        tracing::warn!(
+                                            session_id = change.session.get(),
+                                            entry_id = id.get(),
+                                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                                "decode background notification for notification aggregation",
+                                                &error,
+                                            ),
+                                            "background notification could not be decoded; skipping notification"
+                                        );
+                                    }
+                                    // Background operations already own their
+                                    // activity notification; this notice is the
+                                    // typed transcript projection.
+                                    continue;
+                                }
+                                DecodedNotice::Failure(decoded) => {
+                                    if let Err(error) = decoded {
+                                        tracing::warn!(
+                                            session_id = change.session.get(),
+                                            entry_id = id.get(),
+                                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                                "decode execution failure notice for notification aggregation",
+                                                &error,
+                                            ),
+                                            "execution failure notice could not be decoded; skipping notification"
+                                        );
+                                    }
+                                    // Failures are projected as error parts, not
+                                    // banner notices.
+                                    continue;
+                                }
+                                DecodedNotice::StructuredNotice(notice) => notice,
+                                DecodedNotice::Plain(text) => agena_runtime_contracts::NoticePart {
+                                    kind: "session_notice".into(),
+                                    summary: text.to_owned(),
+                                    detail: None,
+                                    title: None,
+                                },
+                            };
                             let mut notification = agena_runtime_notifications::from_notice_part(
                                 &notice,
                                 NotificationScope::Session(change.session.get()),

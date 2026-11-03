@@ -608,7 +608,10 @@ async fn session_transcript_parts(
         .await
         .map_err(crate::kernel_error)?;
     let mut parts = Vec::with_capacity(page.entries.len());
-    for entry in &page.entries {
+    for (index, entry) in page.entries.iter().enumerate() {
+        if crate::application_parts::is_paired_legacy_hook_followup(&page.entries, index) {
+            continue;
+        }
         parts.push(crate::application_parts::project_kernel_entry(reader, session, entry).await?);
     }
     crate::application_parts::append_execution_failures(reader, &page.entries, &mut parts).await?;

@@ -425,7 +425,8 @@ impl SessionManager {
             let mut usage=agena_provider::CompletionUsage::default();
             let mut follow_ups=0usize;let mut stop_follow_ups=0usize;let mut compactions=0usize;let mut proactive_suppressed=false;
             let mut recent_tools=std::collections::VecDeque::<String>::new();
-            let max_turns=state.config.max_turns.unwrap_or(DEFAULT_MAX_MODEL_TURNS).max(1);let mut provider_calls=0usize;
+            let max_turns=match state.config.max_turns{Some(0)=>usize::MAX,Some(max)=>max,None=>DEFAULT_MAX_MODEL_TURNS};let mut provider_calls=0usize;
+            'turns: loop {
             while provider_calls<max_turns {
                 if control.cancel.is_cancelled(){return Err(AppError::Cancelled);}
                 self.flush_hook_runs(&attempt,control.session,&state).await?;
@@ -545,7 +546,13 @@ impl SessionManager {
                 }
                 follow_ups+=1;if follow_ups>=4{return Err(AppError::Config("the model reached the continuation limit".into()));}
             }
-            Err(AppError::Config("the execution reached its configured model turn limit".into()))
+            let budget_error=AppError::ModelTurnBudgetExhausted{max_turns};
+            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,Some(budget_error.public_message().to_owned())).await?{
+                provider_calls=0;
+                continue 'turns;
+            }
+            return Err(budget_error);
+            }
             };
             // Keep the direct-agent settlement identity outside plugin and
             // provider unwind boundaries, so a panic cannot strand Running.
@@ -1019,7 +1026,11 @@ impl SessionManager {
             .dispatch_agent_stop_cancellable(
                 agena_plugin_host::AgentStopInput {
                     session_id: control.session.get(),
-                    stop_hook_active: *count > 0,
+                    // Every dispatch follows a completed or failed model round;
+                    // the continuation counter below is the loop guard. Reusing
+                    // that counter here makes the workflow plugin drop every
+                    // plan autorun after its first continuation.
+                    stop_hook_active: false,
                     last_assistant_message: last,
                     run_error: error,
                 },
@@ -1038,27 +1049,25 @@ impl SessionManager {
         };
         self.flush_hook_runs(attempt, control.session, state)
             .await?;
-        let Some(message) = dispatch.patch.continue_with_message else {
+        let plan_autorun = dispatch.patch.reason.as_deref() == Some("workflow plan autorun");
+        if dispatch.patch.continue_with_message.is_none() {
             return Ok(false);
-        };
-        if *count >= 4 {
+        }
+        // Plan autorun is bounded by the model-turn budget instead: it is
+        // expected to continue across multiple steps, while other stop hooks
+        // keep the tighter guard against repeatedly vetoing a stop.
+        if !plan_autorun && *count >= 4 {
             return Err(AppError::Config(
                 "plugin stop hooks reached their continuation limit".into(),
             ));
         }
-        *count += 1;
-        let text = format!(
-            "Plugin stop hook follow-up:\n{}",
-            crate::prompt_budget::truncate_prompt_text(
-                &message,
-                256 * 1024,
-                " [hook continuation limited]"
-            )
-        );
-        let command = RequestId::new();
-        persist(|| attempt.notice(command, text.clone()))
-            .await
-            .map_err(kernel_error)?;
+        if !plan_autorun {
+            *count += 1;
+        }
+        // The hook run recorded by `flush_hook_runs` already carries the
+        // continuation in its `message` field. The next prompt projects that
+        // message from the hook part, so writing a second plain-text notice
+        // here would duplicate the continuation and surface it as text.
         Ok(true)
     }
     pub(super) async fn wait_interaction(
@@ -1728,7 +1737,7 @@ impl SessionManager {
         // aggregate. User instructions remain present through the checkpoint.
         let history = self.kernel().reader.history(session, None, 64).await.ok()?;
         let mut transcript = String::new();
-        for entry in history.entries.iter().rev() {
+        for (reverse_index, entry) in history.entries.iter().rev().enumerate() {
             match &entry.payload {
                 EntryPayload::User { document } => {
                     for node in &document.0 {
@@ -1739,7 +1748,58 @@ impl SessionManager {
                     }
                 }
                 EntryPayload::Notice { text } => {
-                    transcript.push_str(text);
+                    use agena_runtime_contracts::part_content::DecodedNotice;
+                    let decoded = agena_runtime_contracts::part_content::decode_notice(text);
+                    match &decoded {
+                        DecodedNotice::Hook(Err(error)) => tracing::warn!(
+                            session_id = session.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode plugin hook notice for permission context",
+                                error,
+                            ),
+                            "plugin hook notice could not be decoded; omitting it from permission context"
+                        ),
+                        DecodedNotice::SystemNotification(Err(error)) => tracing::warn!(
+                            session_id = session.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode background notification for permission context",
+                                error,
+                            ),
+                            "background notification could not be decoded; omitting it from permission context"
+                        ),
+                        DecodedNotice::Failure(Err(error)) => tracing::warn!(
+                            session_id = session.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode execution failure notice for permission context",
+                                error,
+                            ),
+                            "execution failure notice could not be decoded; omitting it from permission context"
+                        ),
+                        _ => {}
+                    }
+                    if matches!(&decoded, DecodedNotice::LegacyStopHookFollowup(_)) {
+                        let original_index =
+                            history.entries.len().saturating_sub(reverse_index + 1);
+                        let paired = original_index
+                            .checked_sub(1)
+                            .and_then(|index| history.entries.get(index))
+                            .is_some_and(|previous| {
+                                let EntryPayload::Notice { text } = &previous.payload else {
+                                    return false;
+                                };
+                                agena_runtime_contracts::part_content::decode_legacy_hook_observation(
+                                    text,
+                                )
+                                .is_some()
+                            });
+                        if paired {
+                            continue;
+                        }
+                    }
+                    let Some(message) = decoded.model_text() else {
+                        continue;
+                    };
+                    transcript.push_str(message);
                     transcript.push('\n');
                 }
                 _ => {}
@@ -1871,3 +1931,5 @@ fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &st
 
 #[cfg(test)]
 mod compaction_tests;
+#[cfg(test)]
+mod stop_hook_tests;

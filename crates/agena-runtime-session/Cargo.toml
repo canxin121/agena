@@ -44,5 +44,8 @@ tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+agena-plugin-sdk = { workspace = true }
+
 [lints]
 workspace = true

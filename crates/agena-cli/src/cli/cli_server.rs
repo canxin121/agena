@@ -49,8 +49,8 @@ use agena_application::dto::{MemoryResource, OperatorToolResource};
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
 
-struct ServerSessionClient {
-    client: AgenaClient,
+pub(super) struct ServerSessionClient {
+    pub(super) client: AgenaClient,
     workspace_id: i64,
     workspace_root: std::path::PathBuf,
 }
@@ -166,7 +166,10 @@ struct McpReconnectOutput {
 }
 
 impl ServerSessionClient {
-    async fn connect(cli: &AgenaCli, workspace: Option<&Path>) -> Result<Self, AppError> {
+    pub(super) async fn connect(
+        cli: &AgenaCli,
+        workspace: Option<&Path>,
+    ) -> Result<Self, AppError> {
         let client = connect_server_client(cli).await?;
         let workspace_root = workspace
             .map(Path::to_path_buf)
@@ -1466,55 +1469,6 @@ impl AgenaCli {
                     filter_session_summaries_by_view(summaries, args.view, args.anchor_session_id)?;
                 let sessions = paginate_session_summaries(summaries, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
-            }
-            SessionsSubcommand::SystemPrompt(args) => {
-                let update = if args.inherit {
-                    Some(None)
-                } else if let Some(path) = args.file {
-                    let text = tokio::fs::read_to_string(&path).await.map_err(|error| {
-                        AppError::Internal(format!("read prompt layer {}: {error}", path.display()))
-                    })?;
-                    let layer: agena_prompt_layers::PromptLayer = serde_json::from_str(&text)
-                        .map_err(|error| {
-                            AppError::Internal(format!(
-                                "parse prompt layer {}: {error}",
-                                path.display()
-                            ))
-                        })?;
-                    Some(Some(layer))
-                } else {
-                    args.text.map(|text| {
-                        let id = agena_prompt_layers::FragmentId::parse("session-prompt")
-                            .expect("static fragment id");
-                        Some(agena_prompt_layers::PromptLayer {
-                            mode: agena_prompt_layers::LayerMode::Replace,
-                            order: vec![id.clone()],
-                            disabled: Vec::new(),
-                            inline: vec![agena_prompt_layers::PromptFragment::new(id, text)],
-                        })
-                    })
-                };
-                if let Some(value) = update {
-                    server
-                        .client
-                        .set_session_prompts(args.session_id, value)
-                        .await
-                        .map_err(|error| {
-                            client_error("failed to update session prompt layer", error)
-                        })?;
-                }
-                let execution = server
-                    .client
-                    .get_session_state(args.session_id)
-                    .await
-                    .map_err(|error| client_error("failed to read session prompt layer", error))?;
-                render_serialized(
-                    args.format,
-                    &serde_json::json!({
-                        "session_id": args.session_id,
-                        "prompts": execution.execution.prompts,
-                    }),
-                )
             }
             SessionsSubcommand::Export(args) => {
                 let mut output = tokio::io::stdout();

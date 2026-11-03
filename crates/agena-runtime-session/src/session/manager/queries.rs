@@ -136,6 +136,11 @@ impl SessionManager {
             .configuration(id)
             .await
             .map_err(kernel_error)?;
+        let tools_enabled = state
+            .providers
+            .agena_tool_mode(model)
+            .map(|mode| !mode.is_disabled())
+            .unwrap_or(true);
         let workspace = configuration
             .effective_workspace_root
             .as_ref()
@@ -147,7 +152,7 @@ impl SessionManager {
             model,
             session_id: id.get(),
             workspace,
-            tools_enabled: true,
+            tools_enabled,
         };
         super::session_prompt::prompt_preview(&state, &inputs).map_err(|error| {
             AppError::Internal(format!("prompt layers could not be resolved: {error}"))

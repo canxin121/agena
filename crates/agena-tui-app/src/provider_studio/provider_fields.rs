@@ -652,29 +652,3 @@ use super::{
     provider_studio_detail_fields, split_csv_tokens, trimmed_owned_local,
 };
 use crate::ui_text;
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        provider_model_config_draft_from_value, provider_model_config_draft_to_model_value,
-    };
-    use serde_json::json;
-
-    #[test]
-    fn model_edits_preserve_additional_system_prompt() {
-        for prompt in [None, Some(""), Some("  keep formatting\n")] {
-            let mut value = json!({});
-            if let Some(prompt) = prompt {
-                value["additional_system_prompt"] = json!(prompt);
-            }
-            let mut draft = provider_model_config_draft_from_value("model", value).unwrap();
-            draft.display_name = "Edited name".to_owned();
-            let (_, saved) = provider_model_config_draft_to_model_value(&draft).unwrap();
-            assert_eq!(saved["display_name"], json!("Edited name"));
-            assert_eq!(
-                saved.get("additional_system_prompt"),
-                prompt.map(|value| json!(value)).as_ref()
-            );
-        }
-    }
-}

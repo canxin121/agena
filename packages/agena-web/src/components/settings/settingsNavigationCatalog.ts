@@ -97,7 +97,8 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     {
       id: 'connections',
       label: () => st('MCP connections'),
-      description: () => st('Connect external MCP services and manage their configuration, authentication, tools, and resources.'),
+      description: () =>
+        st('Connect external MCP services and manage their configuration, authentication, tools, and resources.'),
       keywords: ['mcp', 'client', 'external', 'servers', 'stdio', 'http', 'oauth', 'tools', 'resources', 'prompts'],
       fillsViewport: true,
     },
@@ -113,10 +114,11 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   'runtime-session': [
     {
-      id: 'additional-system-prompt',
-      label: () => st('Additional system prompt'),
-      description: () => st('Add instructions globally, for a workspace, or for the current session.'),
-      keywords: ['system', 'prompt', 'instructions', 'inherit', 'global', 'workspace', 'session'],
+      id: 'prompt-layers',
+      label: () => st('Prompt layers'),
+      description: () =>
+        st('Compose reusable instruction fragments globally, for a workspace, or for the current session.'),
+      keywords: ['system', 'prompt', 'instructions', 'fragments', 'layers', 'global', 'workspace', 'session'],
     },
     {
       id: 'client-versions',

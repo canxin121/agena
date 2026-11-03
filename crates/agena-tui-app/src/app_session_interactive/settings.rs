@@ -203,9 +203,9 @@ impl App {
         ));
         if let Some(session_id) = self.current_or_selected_session_id() {
             runtime_session_items.push(SettingsStudioItem::new(
-                "Session prompt layers",
-                format!("Session {session_id}"),
-                "Add session-only instruction fragments, hide inherited ones, or switch the layer mode.",
+                "Prompt layers",
+                format!("Configured for session {session_id}"),
+                "Edit global, workspace, and session instruction layers, their order, titles, and hidden inherited fragments. Preview reflects saved server state only.",
                 SettingsPickerAction::EditSessionPrompts(session_id),
             ));
         }

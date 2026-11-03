@@ -20,6 +20,7 @@ use async_trait::async_trait;
 
 mod cli_auth_helpers;
 mod cli_permissions;
+mod cli_prompts;
 mod cli_run;
 mod cli_runtime_helpers;
 mod cli_server;
@@ -179,6 +180,7 @@ pub enum AgenaCommand {
     Mcp(McpCommand),
     McpServer(McpServerArgs),
     Permissions(PermissionsArgs),
+    Prompts(PromptsCommand),
     Provider(ProviderCommand),
     Plugin(PluginCommand),
     Resume(ResumeArgs),
@@ -1101,8 +1103,6 @@ pub enum MemorySubcommand {
 /// Sessions subcommands.
 pub enum SessionsSubcommand {
     List(SessionListArgs),
-    /// Read or change a session's additional system prompt.
-    SystemPrompt(SessionSystemPromptArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -1113,18 +1113,229 @@ pub enum SessionsSubcommand {
 }
 
 #[derive(Debug, Clone, Args)]
-/// Arguments for a session's additional instructions.
-pub struct SessionSystemPromptArgs {
+/// Prompt layer management command.
+pub struct PromptsCommand {
+    #[command(subcommand)]
+    pub command: Option<PromptsSubcommand>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+/// Prompt layer subcommands.
+pub enum PromptsSubcommand {
+    /// Print one scope's stored prompt layer.
+    List(PromptListArgs),
+    /// Print the fully resolved prompt for a session.
+    Preview(PromptPreviewArgs),
+    /// Add an inline fragment and place it at the end of the order.
+    Add(PromptAddArgs),
+    /// Edit an inline fragment.
+    Edit(PromptEditArgs),
+    /// Remove a fragment from this layer.
+    Remove(PromptRemoveArgs),
+    /// Move an ordered fragment up, down, or to a one-based position.
+    Move(PromptMoveArgs),
+    /// Hide a fragment from this scope.
+    Disable(PromptToggleArgs),
+    /// Stop hiding a fragment from this scope.
+    Enable(PromptToggleArgs),
+    /// Set how this layer combines with broader scopes.
+    Mode(PromptModeArgs),
+    /// Replace this scope's layer from a JSON file (`-` reads stdin).
+    Set(PromptSetArgs),
+    /// Delete this scope's layer and resume inheritance.
+    Clear(PromptClearArgs),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+/// Configuration scope edited by a prompt command.
+pub enum PromptScopeArg {
+    #[default]
+    Global,
+    Workspace,
+    Session,
+}
+
+impl PromptScopeArg {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Workspace => "workspace",
+            Self::Session => "session",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+/// Scope selection shared by prompt layer commands.
+pub struct PromptTargetArgs {
+    /// Scope whose prompt layer is read or edited.
+    #[arg(long, value_enum, default_value_t = PromptScopeArg::Global)]
+    pub scope: PromptScopeArg,
+    /// Session id required when `--scope session` is selected.
+    #[arg(long)]
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts list`.
+pub struct PromptListArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts preview`.
+pub struct PromptPreviewArgs {
     pub session_id: i64,
-    /// Set an explicit override. Pass an empty string to disable inherited instructions.
-    #[arg(long, conflicts_with_all = ["file", "inherit"])]
-    pub text: Option<String>,
-    /// Read the exact prompt text from a UTF-8 file.
-    #[arg(long, conflicts_with_all = ["text", "inherit"])]
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Tool-availability condition of a prompt fragment.
+pub enum PromptRequiresToolsArg {
+    #[value(name = "true", alias = "required")]
+    True,
+    #[value(name = "false", alias = "not-required")]
+    False,
+    #[value(name = "inherit")]
+    Inherit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// How a prompt layer combines with broader scopes.
+pub enum PromptModeArg {
+    Append,
+    Replace,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts add`.
+pub struct PromptAddArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    /// Fragment id. Use lowercase letters, digits, dots, underscores, or hyphens.
+    #[arg(long)]
+    pub id: String,
+    #[arg(long)]
+    pub title: Option<String>,
+    /// Inline fragment body. Conflicts with --file.
+    #[arg(long, conflicts_with = "file")]
+    pub body: Option<String>,
+    /// Read the inline fragment body from a UTF-8 file. Conflicts with --body.
+    #[arg(long, conflicts_with = "body")]
     pub file: Option<PathBuf>,
-    /// Remove the session override and resume model/project/global inheritance.
-    #[arg(long, conflicts_with_all = ["text", "file"])]
-    pub inherit: bool,
+    /// Repeatable model route pattern such as `anthropic/*`.
+    #[arg(long = "model")]
+    pub models: Vec<String>,
+    /// Only apply when tools are available (`true`), unavailable (`false`),
+    /// or without a tool-availability condition (`inherit`).
+    #[arg(long, value_enum)]
+    pub requires_tools: Option<PromptRequiresToolsArg>,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts edit`.
+pub struct PromptEditArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    /// Inline fragment id to edit.
+    #[arg(long)]
+    pub id: String,
+    /// Rename the fragment and update every order/disabled reference.
+    #[arg(long)]
+    pub new_id: Option<String>,
+    #[arg(long)]
+    pub title: Option<String>,
+    #[arg(long, conflicts_with = "file")]
+    pub body: Option<String>,
+    #[arg(long, conflicts_with = "body")]
+    pub file: Option<PathBuf>,
+    /// Replace the condition with these model patterns.
+    #[arg(long = "model", conflicts_with = "clear_models")]
+    pub models: Vec<String>,
+    /// Remove every model pattern from the condition.
+    #[arg(long, conflicts_with = "models")]
+    pub clear_models: bool,
+    /// Replace the tool-availability condition.
+    #[arg(long, value_enum)]
+    pub requires_tools: Option<PromptRequiresToolsArg>,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts remove`.
+pub struct PromptRemoveArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts move`.
+pub struct PromptMoveArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long, conflicts_with_all = ["down", "position"])]
+    pub up: bool,
+    #[arg(long, conflicts_with_all = ["up", "position"])]
+    pub down: bool,
+    /// One-based destination position in the order.
+    #[arg(long, conflicts_with_all = ["up", "down"])]
+    pub position: Option<usize>,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts disable` and `enable`.
+pub struct PromptToggleArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    #[arg(long)]
+    pub id: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts mode`.
+pub struct PromptModeArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    #[arg(value_enum)]
+    pub mode: PromptModeArg,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts set`.
+pub struct PromptSetArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
+    /// JSON file containing a prompt layer. `-` reads stdin.
+    #[arg(long)]
+    pub file: PathBuf,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Arguments for `agena prompts clear`.
+pub struct PromptClearArgs {
+    #[command(flatten)]
+    pub target: PromptTargetArgs,
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }

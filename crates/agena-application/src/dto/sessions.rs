@@ -179,6 +179,20 @@ mod prompt_layer_tests {
         let missing: SessionUpdateRequest = serde_json::from_value(serde_json::json!({})).unwrap();
         assert!(missing.prompts.is_none());
 
+        let explicit_null: SessionUpdateRequest =
+            serde_json::from_value(serde_json::json!({"prompts": null})).unwrap();
+        assert!(
+            explicit_null.prompts.is_none(),
+            "an explicit null keeps the current session layer"
+        );
+
+        let empty: SessionUpdateRequest =
+            serde_json::from_value(serde_json::json!({"prompts": {}})).unwrap();
+        assert!(
+            empty.prompts.unwrap().is_empty(),
+            "an empty layer is a request to clear the session layer"
+        );
+
         assert!(
             serde_json::from_value::<SessionUpdateRequest>(
                 serde_json::json!({"additional_system_prompt": "legacy"})
@@ -192,7 +206,7 @@ mod prompt_layer_tests {
         let request: SessionCreateRequest = serde_json::from_value(serde_json::json!({
             "workspace_id": 1,
             "title": "Test",
-            "session": {"prompts": layer_json()}
+            "prompts": layer_json()
         }))
         .unwrap();
         assert_eq!(request.session.prompts.unwrap().order.len(), 1);

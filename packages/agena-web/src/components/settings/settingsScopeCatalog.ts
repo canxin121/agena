@@ -88,7 +88,7 @@ const PROMPT_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
     id: 'effective',
     label: () => st('Effective settings'),
     description: () =>
-      st('Resolved additional instructions for the selected session. Built-in instructions are not shown here.'),
+      st('Resolved prompt fragments for the selected session. Built-in instructions are not shown here.'),
   },
   {
     id: 'global',
@@ -117,7 +117,7 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
     'model-settings': MODEL_SCOPE_SOURCES,
   },
   'runtime-session': {
-    'additional-system-prompt': PROMPT_SCOPE_SOURCES,
+    'prompt-layers': PROMPT_SCOPE_SOURCES,
   },
   diagnostics: {
     'advanced-settings': LAYER_SCOPE_SOURCES,

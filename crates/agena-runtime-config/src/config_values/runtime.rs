@@ -52,7 +52,7 @@ impl Default for ProviderClientVersionSettings {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 /// Resolved session configuration.
 pub struct SessionConfig {
     pub compaction: SessionCompactionConfig,

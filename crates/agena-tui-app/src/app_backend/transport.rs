@@ -2163,6 +2163,13 @@ impl TuiBackend {
             .await?)
     }
 
+    pub async fn session_prompt_preview(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_prompt_layers::PromptResolution> {
+        Ok(self.client().session_prompt_preview(session_id).await?)
+    }
+
     pub async fn set_session_favorite(
         &self,
         session_id: i64,

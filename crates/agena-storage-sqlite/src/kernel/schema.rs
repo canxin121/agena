@@ -221,48 +221,113 @@ fn incompatible_database(reason: &str) -> DbErr {
     ))
 }
 
-/// Move the retired string-valued prompt override into the session prompt layer.
+/// Move the retired session prompt override into the session prompt layer.
 ///
 /// The retired field no longer deserializes, so this rewrite runs once during
 /// schema initialization and leaves no runtime compatibility path behind.
+///
+/// The old field distinguished inheritance (`null`) from an explicit empty
+/// override (`""`). A string becomes one inline session fragment; an empty
+/// string becomes a `replace` layer so broader additional instructions stay
+/// disabled. `null` and a missing key both mean inheritance, so the key is
+/// simply removed.
 async fn migrate_retired_prompt_configuration(database: &DatabaseConnection) -> Result<(), DbErr> {
     let rows = database
         .query_all(Statement::from_string(
             database.get_database_backend(),
-            "SELECT id, json_extract(configuration_json,'$.additional_system_prompt') AS retired_text \
-             FROM agena_sessions WHERE json_type(configuration_json,'$.additional_system_prompt')='text'",
+            "SELECT id, configuration_json FROM agena_sessions \
+             WHERE json_type(configuration_json,'$.additional_system_prompt') IS NOT NULL",
         ))
         .await?;
+    let mut rewrites = Vec::with_capacity(rows.len());
     for row in rows {
         let id: i64 = row.try_get("", "id")?;
-        let text: String = row.try_get("", "retired_text")?;
-        // An empty retired value meant "no additional instructions", which is
-        // exactly an absent session layer.
-        let layer = if text.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::json!({
-                "order": ["legacy-session-prompt"],
-                "inline": [{
-                    "id": "legacy-session-prompt",
-                    "title": "Retired session prompt",
-                    "body": text,
-                }],
-            })
-        };
-        let layer =
-            serde_json::to_string(&layer).map_err(|error| DbErr::Json(error.to_string()))?;
-        database
+        let raw: String = row.try_get("", "configuration_json")?;
+        let mut configuration: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
+            DbErr::Custom(format!(
+                "session {id} has an invalid configuration object: {error}"
+            ))
+        })?;
+        let object = configuration.as_object_mut().ok_or_else(|| {
+            DbErr::Custom(format!(
+                "session {id} configuration is not a JSON object; the retired prompt field cannot be migrated"
+            ))
+        })?;
+        let retired = object.remove("additional_system_prompt").ok_or_else(|| {
+            DbErr::Custom(format!(
+                "session {id} reported a retired prompt field that disappeared during migration"
+            ))
+        })?;
+        match retired {
+            // `null` meant "inherit from broader scopes"; removing the key is
+            // the new representation of that same state.
+            serde_json::Value::Null => {}
+            serde_json::Value::String(text) if text.trim().is_empty() => {
+                // `""` disabled inherited additional instructions while keeping
+                // built-in instructions. A replace layer with no content does
+                // exactly that, and leaves any already-migrated layer intact.
+                if object.get("prompts").is_none_or(serde_json::Value::is_null) {
+                    object.insert("prompts".into(), serde_json::json!({"mode": "replace"}));
+                }
+            }
+            serde_json::Value::String(text) => {
+                if object.get("prompts").is_none_or(serde_json::Value::is_null) {
+                    object.insert(
+                        "prompts".into(),
+                        serde_json::json!({
+                            "order": ["legacy-session-prompt"],
+                            "inline": [{
+                                "id": "legacy-session-prompt",
+                                "title": "Retired session prompt",
+                                "body": text,
+                            }],
+                        }),
+                    );
+                }
+            }
+            other => {
+                return Err(DbErr::Custom(format!(
+                    "session {id} has an unsupported retired additional_system_prompt value of type `{}`; expected a string or null",
+                    json_kind(&other)
+                )));
+            }
+        }
+        if object
+            .get("prompts")
+            .is_some_and(serde_json::Value::is_null)
+        {
+            object.remove("prompts");
+        }
+        let configuration = serde_json::to_string(&configuration)
+            .map_err(|error| DbErr::Json(error.to_string()))?;
+        rewrites.push((id, configuration));
+    }
+    if rewrites.is_empty() {
+        return Ok(());
+    }
+    let transaction = database.begin().await?;
+    for (id, configuration) in rewrites {
+        transaction
             .execute(Statement::from_sql_and_values(
-                database.get_database_backend(),
-                "UPDATE agena_sessions SET configuration_json = json_remove(\
-                    json_set(configuration_json,'$.prompts',json(?)),'$.additional_system_prompt'\
-                 ) WHERE id=?",
-                [layer.into(), id.into()],
+                transaction.get_database_backend(),
+                "UPDATE agena_sessions SET configuration_json=? WHERE id=?",
+                [configuration.into(), id.into()],
             ))
             .await?;
     }
+    transaction.commit().await?;
     Ok(())
+}
+
+fn json_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
 }
 
 async fn validate_objects(

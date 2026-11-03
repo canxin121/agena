@@ -1067,6 +1067,7 @@ dependencies = [
  "agena-failure",
  "agena-permission",
  "agena-plugin-host",
+ "agena-plugin-sdk",
  "agena-prompt-layers",
  "agena-provider",
  "agena-runtime-config",

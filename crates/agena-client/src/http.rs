@@ -1310,6 +1310,15 @@ impl AgenaClient {
         .await
     }
 
+    /// Read the fully resolved prompt for one session without starting a run.
+    pub async fn session_prompt_preview(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_prompt_layers::PromptResolution, ClientError> {
+        self.get_json(&format!("/api/v1/sessions/{session_id}/prompts/preview"))
+            .await
+    }
+
     /// Update the independent durable navigation pin.
     pub async fn set_session_pinned(
         &self,

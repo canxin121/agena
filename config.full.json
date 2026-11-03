@@ -35,8 +35,34 @@
     },
     "auxiliary_model": null
   },
+  "prompts": {
+    "mode": "append",
+    "order": ["house-style"],
+    "disabled": ["legacy-verbose"],
+    "inline": [
+      {
+        "id": "house-style",
+        "title": "House style",
+        "body": "Prefer direct, concise explanations and show concrete commands."
+      }
+    ],
+    "models": [
+      {
+        "match": "anthropic/*",
+        "mode": "append",
+        "order": ["anthropic-notes"],
+        "disabled": [],
+        "inline": [
+          {
+            "id": "anthropic-notes",
+            "title": "Anthropic model notes",
+            "body": "When relevant, call out behavior specific to {{model}}."
+          }
+        ]
+      }
+    ]
+  },
   "session": {
-    "additional_system_prompt": null,
     "compaction": {
       "auto": true,
       "reserved_tokens": 12000

@@ -303,14 +303,14 @@ pub struct PromptContext {
     pub tools_enabled: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptWarningKind {
     ConditionNotMatched,
     UnknownVariable,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// A fragment that was skipped or partially substituted.
 pub struct PromptWarning {
     pub scope: PromptScope,
@@ -319,7 +319,7 @@ pub struct PromptWarning {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// One fragment in the assembled prompt.
 pub struct ResolvedFragment {
     pub id: FragmentId,
@@ -331,7 +331,7 @@ pub struct ResolvedFragment {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 /// The assembled additional instructions plus provenance.
 pub struct PromptResolution {
     pub text: String,
@@ -772,5 +772,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolution.text, "inline body");
+    }
+
+    #[test]
+    fn resolution_round_trips_through_the_preview_contract() {
+        let mut model_only = fragment("m", "model only");
+        model_only.when.models = vec!["anthropic/*".to_owned()];
+        let library = library(&[fragment("body", "inline body"), model_only]);
+        let mut conditional = layer(&["body", "m"]);
+        conditional.inline = vec![fragment("body", "inline body")];
+        let resolution = resolve(
+            &[LayerSource::new(
+                PromptScope::Session,
+                &conditional,
+                &library,
+            )],
+            &context(),
+        )
+        .unwrap();
+        assert_eq!(resolution.warnings.len(), 1);
+
+        // The preview endpoint sends this value as JSON and every client
+        // decodes it back, so both directions are part of the contract.
+        let json = serde_json::to_value(&resolution).unwrap();
+        let decoded: PromptResolution = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, resolution);
     }
 }

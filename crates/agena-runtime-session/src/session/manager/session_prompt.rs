@@ -58,7 +58,7 @@ pub(super) fn prompt_layer_contributors(
     let mut fragments = resolve_prompt_layers(state, inputs)
         .map(|resolution| resolution.fragments)
         .unwrap_or_default();
-    fragments.sort_by(|left, right| right.bytes.cmp(&left.bytes));
+    fragments.sort_by_key(|fragment| std::cmp::Reverse(fragment.bytes));
     fragments
         .into_iter()
         .take(3)

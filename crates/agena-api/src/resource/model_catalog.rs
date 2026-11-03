@@ -503,33 +503,10 @@ pub fn apply_catalog_template_to_model_value(
     configured.definition.manual_overrides = manual_overrides;
     serde_json::to_value(configured)
 }
-
 #[cfg(test)]
 mod tests {
     use super::apply_catalog_template_to_model_value;
     use serde_json::json;
-
-    #[test]
-    fn catalog_refresh_preserves_additional_system_prompt() {
-        let catalog = serde_json::from_value(json!({
-            "model_id": "catalog-model",
-            "source": "generated",
-            "display_name": "Refreshed name"
-        }))
-        .unwrap();
-        for prompt in [None, Some(""), Some("  keep formatting\n")] {
-            let mut value = json!({"display_name": "Previous name"});
-            if let Some(prompt) = prompt {
-                value["additional_system_prompt"] = json!(prompt);
-            }
-            let refreshed = apply_catalog_template_to_model_value(value, &catalog, false).unwrap();
-            assert_eq!(refreshed["display_name"], json!("Refreshed name"));
-            assert_eq!(
-                refreshed.get("additional_system_prompt"),
-                prompt.map(|value| json!(value)).as_ref()
-            );
-        }
-    }
 
     #[test]
     fn manual_catalog_template_preserves_selection_and_route_fields() {
@@ -543,7 +520,6 @@ mod tests {
         let value = json!({
             "enabled": false,
             "native_compaction": false,
-            "additional_system_prompt": "keep",
             "display_name": "Previous name",
             "context_window_tokens": 1000
         });
@@ -554,7 +530,6 @@ mod tests {
         assert_eq!(manual["context_window_tokens"], json!(200000));
         assert_eq!(manual["enabled"], json!(false));
         assert_eq!(manual["native_compaction"], json!(false));
-        assert_eq!(manual["additional_system_prompt"], json!("keep"));
 
         let automatic = apply_catalog_template_to_model_value(value, &catalog, false).unwrap();
         assert!(automatic.get("manual_overrides").is_none());

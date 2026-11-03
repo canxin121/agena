@@ -29,6 +29,7 @@ members = [
     "crates/agena-runtime",
     "crates/agena-runtime-contracts",
     "crates/agena-runtime-config",
+    "crates/agena-prompt-layers",
     "crates/agena-runtime-provider",
     "crates/agena-runtime-provider-adapters",
     "crates/agena-runtime-tools",
@@ -86,6 +87,7 @@ authors = ["Agena Contributors"]
 agena-cli = { path = "crates/agena-cli" }
 agena-application = { path = "crates/agena-application" }
 agena-domain = { path = "crates/agena-domain" }
+agena-prompt-layers = { path = "crates/agena-prompt-layers" }
 agena-failure = { path = "crates/agena-failure" }
 agena-provider = { path = "crates/agena-provider" }
 agena-provider-bedrock-auth = { path = "crates/agena-provider-bedrock-auth" }

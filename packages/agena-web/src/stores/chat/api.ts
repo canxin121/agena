@@ -24,6 +24,7 @@ import { toolInputRecord } from '../../lib/toolInput'
 import { toolFailurePresentation } from '../../lib/toolFailures'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
+import type { PromptLayer, PromptResolution } from '@/lib/promptLayers'
 import type { MessageEntry, MessageFold, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
 import { compareChatIds } from './messageIndex'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE } from '@/pages/chat/transcriptPartPaging'
@@ -132,8 +133,7 @@ export type AgenaExecutionState = {
     model_speed_mode?: string | null
     model_verbosity?: string | null
     model_parallel_tool_calls?: boolean | null
-    additional_system_prompt?: string | null
-    effective_additional_system_prompt?: string | null
+    prompts?: PromptLayer
     effective_workspace_root?: string | null
     [k: string]: JsonValue
   }
@@ -852,8 +852,8 @@ export type SessionUpdatePayload = {
   title?: string
   favorite?: boolean
   pinned?: boolean
-  // Omitted leaves the setting unchanged; null inherits; "" explicitly disables.
-  additional_system_prompt?: string | null
+  /** Omitted leaves the session layer unchanged; an object replaces it. */
+  prompts?: PromptLayer
 }
 
 /** PUT /api/v1/sessions/{id} — atomically update user-editable settings. */
@@ -866,13 +866,21 @@ export async function patchSessionMetadata(sessionId: string, patch: SessionUpda
   })
   const session = toSession(updated, scope)
   if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
-  const change = Object.prototype.hasOwnProperty.call(patch, 'additional_system_prompt') ? 'execution' : 'metadata'
+  const change = Object.prototype.hasOwnProperty.call(patch, 'prompts') ? 'execution' : 'metadata'
   reconcileSessionMutation(session.id, change, scope, patch)
   return session
 }
 
-export async function setSessionAdditionalSystemPrompt(sessionId: string, value: string | null): Promise<Session> {
-  return patchSessionMetadata(sessionId, { additional_system_prompt: value })
+export async function setSessionPrompts(sessionId: string, prompts: PromptLayer): Promise<Session> {
+  return patchSessionMetadata(sessionId, { prompts })
+}
+
+/** GET /api/v1/sessions/{id}/prompts/preview — resolved fragments and warnings. */
+export async function getSessionPromptPreview(sessionId: string, signal?: AbortSignal): Promise<PromptResolution> {
+  return await apiJson<PromptResolution>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompts/preview`,
+    signal ? { signal } : undefined,
+  )
 }
 
 export async function patchSessionTitle(sessionId: string, title: string): Promise<Session> {

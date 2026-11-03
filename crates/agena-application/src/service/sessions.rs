@@ -76,6 +76,29 @@ impl ApplicationService {
         Ok(result)
     }
 
+    /// Replace the session prompt layer and return the updated session.
+    pub async fn set_session_prompts(
+        &self,
+        session_id: i64,
+        prompts: Option<agena_prompt_layers::PromptLayer>,
+    ) -> ApplicationResult<SessionResource> {
+        self.session_kernel
+            .sessions
+            .update_metadata(
+                RequestId::new(),
+                crate::kernel_session_id(session_id)?,
+                MetadataChange {
+                    prompts,
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(crate::kernel_error)?;
+        self.get_session(session_id)
+            .await?
+            .ok_or_else(|| ApplicationError::bad_request("session not found"))
+    }
+
     pub async fn get_session(&self, session_id: i64) -> ApplicationResult<Option<SessionResource>> {
         match self
             .session_kernel
@@ -95,7 +118,7 @@ impl ApplicationService {
     ) -> ApplicationResult<SessionResource> {
         self.ensure_workspace_exists(request.workspace_id).await?;
         let configuration = agena_storage::kernel::SessionConfiguration {
-            additional_system_prompt: request.session.additional_system_prompt,
+            prompts: request.session.prompts.unwrap_or_default(),
             title_state: if request.session.auto_title {
                 agena_storage::kernel::SessionTitleState::automatic()
             } else {
@@ -138,10 +161,10 @@ impl ApplicationService {
             && request.favorite.is_none()
             && request.pinned.is_none()
             && request.auto_title.is_none()
-            && request.additional_system_prompt.is_none()
+            && request.prompts.is_none()
         {
             return Err(ApplicationError::bad_request(
-                "Include title, favorite, pinned, auto_title, or additional_system_prompt in a session update.",
+                "Include title, favorite, pinned, auto_title, or prompts in a session update.",
             ));
         }
         self.session_kernel
@@ -154,7 +177,7 @@ impl ApplicationService {
                     favorite: request.favorite,
                     pinned: request.pinned,
                     auto_title: request.auto_title,
-                    additional_system_prompt: request.additional_system_prompt,
+                    prompts: request.prompts,
                     ..Default::default()
                 },
             )

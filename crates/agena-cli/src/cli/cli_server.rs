@@ -49,8 +49,8 @@ use agena_application::dto::{MemoryResource, OperatorToolResource};
 use agena_client::{AgenaClient, ClientError};
 use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
 
-struct ServerSessionClient {
-    client: AgenaClient,
+pub(super) struct ServerSessionClient {
+    pub(super) client: AgenaClient,
     workspace_id: i64,
     workspace_root: std::path::PathBuf,
 }
@@ -166,7 +166,10 @@ struct McpReconnectOutput {
 }
 
 impl ServerSessionClient {
-    async fn connect(cli: &AgenaCli, workspace: Option<&Path>) -> Result<Self, AppError> {
+    pub(super) async fn connect(
+        cli: &AgenaCli,
+        workspace: Option<&Path>,
+    ) -> Result<Self, AppError> {
         let client = connect_server_client(cli).await?;
         let workspace_root = workspace
             .map(Path::to_path_buf)
@@ -1466,44 +1469,6 @@ impl AgenaCli {
                     filter_session_summaries_by_view(summaries, args.view, args.anchor_session_id)?;
                 let sessions = paginate_session_summaries(summaries, args.offset, args.limit);
                 render_serialized(args.format, &SessionListOutput { sessions })
-            }
-            SessionsSubcommand::SystemPrompt(args) => {
-                let update = if args.inherit {
-                    Some(None)
-                } else if let Some(path) = args.file {
-                    Some(Some(tokio::fs::read_to_string(&path).await.map_err(
-                        |error| {
-                            AppError::Internal(format!(
-                                "read system prompt {}: {error}",
-                                path.display()
-                            ))
-                        },
-                    )?))
-                } else {
-                    args.text.map(Some)
-                };
-                if let Some(value) = update {
-                    server
-                        .client
-                        .set_session_additional_system_prompt(args.session_id, value)
-                        .await
-                        .map_err(|error| {
-                            client_error("failed to update session system prompt", error)
-                        })?;
-                }
-                let execution = server
-                    .client
-                    .get_session_state(args.session_id)
-                    .await
-                    .map_err(|error| client_error("failed to read session system prompt", error))?;
-                render_serialized(
-                    args.format,
-                    &serde_json::json!({
-                        "session_id": args.session_id,
-                        "additional_system_prompt": execution.execution.additional_system_prompt,
-                        "effective_additional_system_prompt": execution.execution.effective_additional_system_prompt,
-                    }),
-                )
             }
             SessionsSubcommand::Export(args) => {
                 let mut output = tokio::io::stdout();

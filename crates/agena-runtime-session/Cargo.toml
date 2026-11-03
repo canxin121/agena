@@ -18,6 +18,7 @@ agena-plugin-host = { workspace = true }
 agena-permission = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-config = { workspace = true }
+agena-prompt-layers = { workspace = true }
 agena-runtime-session-core = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-plugins = { workspace = true }
@@ -42,6 +43,9 @@ tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "proce
 tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+agena-plugin-sdk = { workspace = true }
 
 [lints]
 workspace = true

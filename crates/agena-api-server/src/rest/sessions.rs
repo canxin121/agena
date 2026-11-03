@@ -118,6 +118,18 @@ pub async fn get_session_state(
     .await
 }
 
+pub async fn get_session_prompt_preview(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    let queries = state.application().session_query_service()?;
+    let preview = queries
+        .prompt_preview(session_id)
+        .await
+        .map_err(|error| ServerError::internal_error(&error))?;
+    Ok(Json(preview))
+}
+
 pub async fn get_session_cost(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,

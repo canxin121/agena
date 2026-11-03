@@ -614,14 +614,16 @@ additional output contracts they need, since parent history is not copied.
 
 `crates/agena-runtime-session/src/session/manager/session_prompt.rs` selects
 brief workflow guidance from the scoped executor's available tool catalog,
-then appends user instructions, conversation instructions, and root project
-guidance. Requests without the Tool API omit tool discovery and workflows.
-Additional user instructions resolve from session, model, project, and global
-settings, with an optional per-request override. Missing values inherit and
-explicit empty strings disable the addition. See
-[additional system prompts](system-prompts.md) for configuration, API, and UI
-semantics. The model setting stays in route configuration rather than the public
-model catalog; native compaction uses the same resolution as ordinary requests.
+then appends configured prompt-layer fragments, conversation instructions, and
+root project guidance. Requests without the Tool API omit tool discovery and
+workflows. Prompt layers compose global, workspace, matching global model,
+matching workspace model, session, and internal request scopes; each layer can
+append, replace broader configured fragments, hide inherited fragment ids, or
+define inline fragments. See
+[layered prompt fragments](prompt-layers.md) for the data model, fragment file
+layout, budgets, CLI, API, and editor semantics. Model overlays live under the
+`prompts.models` configuration key rather than the model catalog; native
+compaction uses the same resolution as ordinary requests.
 Only `SessionRelationKind::Subagent` selects the delegated role; ordinary
 children, forks, rewinds, and side conversations retain their user-facing
 role and applicable conversation boundaries. The Agent roster carries

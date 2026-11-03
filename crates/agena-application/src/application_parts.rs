@@ -414,28 +414,88 @@ pub(crate) async fn project_kernel_entry(
                 "run_kind":"compaction"});
         }
         EntryPayload::Notice { text } => {
-            match agena_runtime_contracts::part_content::decode_failure_notice(text) {
-                Some(Ok(failure)) => {
-                    part.kind = "error".into();
-                    part.state = "failed".into();
-                    part.run_state = Some("failed".into());
-                    part.content = failure_content(&failure)?;
+            match agena_runtime_contracts::part_content::decode_notice(text) {
+                agena_runtime_contracts::part_content::DecodedNotice::Hook(decoded) => {
+                    match decoded {
+                        Ok(hook) => {
+                            apply_hook_content(&mut part, hook);
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                entry_id = entry.id.get(),
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "decode plugin hook notice for transcript projection",
+                                    &error,
+                                ),
+                                "plugin hook notice could not be decoded; hiding its marker"
+                            );
+                            apply_unreadable_notice(
+                                &mut part,
+                                "Plugin hook activity could not be decoded.",
+                            );
+                        }
+                    }
                 }
-                Some(Err(error)) => {
-                    tracing::warn!(
-                        entry_id = entry.id.get(),
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "decode execution failure notice for transcript projection",
-                            &error,
-                        ),
-                        "execution failure notice could not be decoded; keeping it as a notice"
-                    );
-                    part.kind = "text".into();
-                    part.content = serde_json::json!({"text":text,"synthetic":true});
+                agena_runtime_contracts::part_content::DecodedNotice::LegacyHook(hook) => {
+                    // Session history written by the pre-marker runtime stored
+                    // each observed hook run in a human-readable notice. Project
+                    // it as the same first-class activity on read, without
+                    // rewriting durable history.
+                    apply_hook_content(&mut part, hook);
                 }
-                None => {
-                    part.kind = "text".into();
-                    part.content = serde_json::json!({"text":text,"synthetic":true});
+                agena_runtime_contracts::part_content::DecodedNotice::LegacyStopHookFollowup(
+                    message,
+                ) => {
+                    apply_hook_content(&mut part, legacy_followup_hook(message));
+                }
+                agena_runtime_contracts::part_content::DecodedNotice::SystemNotification(
+                    decoded,
+                ) => match decoded {
+                    Ok(notification) => apply_system_notification(&mut part, notification),
+                    Err(error) => {
+                        tracing::warn!(
+                            entry_id = entry.id.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode background notification for transcript projection",
+                                &error,
+                            ),
+                            "background notification could not be decoded; hiding its marker"
+                        );
+                        apply_unreadable_notice(
+                            &mut part,
+                            "Background notification could not be decoded.",
+                        );
+                    }
+                },
+                agena_runtime_contracts::part_content::DecodedNotice::Failure(decoded) => {
+                    match decoded {
+                        Ok(failure) => {
+                            part.kind = "error".into();
+                            part.state = "failed".into();
+                            part.run_state = Some("failed".into());
+                            part.content = failure_content(&failure)?;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                entry_id = entry.id.get(),
+                                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                    "decode execution failure notice for transcript projection",
+                                    &error,
+                                ),
+                                "execution failure notice could not be decoded; hiding its marker"
+                            );
+                            apply_unreadable_notice(
+                                &mut part,
+                                "Execution failure details could not be decoded.",
+                            );
+                        }
+                    }
+                }
+                agena_runtime_contracts::part_content::DecodedNotice::StructuredNotice(notice) => {
+                    apply_notice_part(&mut part, notice);
+                }
+                agena_runtime_contracts::part_content::DecodedNotice::Plain(text) => {
+                    apply_notice_text(&mut part, text);
                 }
             }
         }
@@ -678,6 +738,88 @@ pub(crate) async fn project_kernel_entry(
     Ok(part)
 }
 
+fn apply_hook_content(
+    part: &mut PartResource,
+    hook: agena_runtime_contracts::part_content::HookContent,
+) {
+    part.kind = agena_runtime_contracts::part_content::HookContent::kind().into();
+    part.summary = Some(hook.summary.clone());
+    part.content = hook.as_value();
+}
+
+fn apply_system_notification(
+    part: &mut PartResource,
+    notification: agena_runtime_contracts::part_content::SystemNotificationContent,
+) {
+    part.kind = agena_runtime_contracts::part_content::SystemNotificationContent::kind().into();
+    part.summary = Some(notification.summary.clone());
+    part.content = notification.as_value();
+}
+
+fn apply_notice_part(part: &mut PartResource, notice: agena_runtime_contracts::NoticePart) {
+    part.kind = agena_runtime_contracts::part_content::NoticeContent::kind().into();
+    part.summary = Some(notice.summary.clone());
+    part.content = agena_runtime_contracts::part_content::NoticeContent {
+        kind: notice.kind,
+        summary: notice.summary,
+        detail: notice.detail,
+        title: notice.title,
+        extra: Default::default(),
+    }
+    .as_value();
+}
+
+fn apply_notice_text(part: &mut PartResource, text: &str) {
+    part.kind = agena_runtime_contracts::part_content::TextContent::kind().into();
+    part.content = agena_runtime_contracts::part_content::TextContent {
+        text: text.to_owned(),
+        synthetic: true,
+        ..Default::default()
+    }
+    .as_value();
+}
+
+fn apply_unreadable_notice(part: &mut PartResource, text: &str) {
+    apply_notice_text(part, text);
+}
+
+fn legacy_followup_hook(message: &str) -> agena_runtime_contracts::part_content::HookContent {
+    let mut extra = std::collections::BTreeMap::new();
+    extra.insert(
+        "status".to_owned(),
+        serde_json::Value::String("applied".into()),
+    );
+    extra.insert("legacy_notice".to_owned(), serde_json::Value::Bool(true));
+    agena_runtime_contracts::part_content::HookContent {
+        hook: "agent.stop".into(),
+        plugin_id: None,
+        summary: "agent.stop hook blocked stop".into(),
+        detail: None,
+        message: Some(message.to_owned()),
+        extra,
+    }
+}
+
+/// The old stop-hook path wrote the continuation twice: once inside the hook
+/// observation and once as a separate notice immediately after it. The
+/// observation already becomes a hook part with `message`, so the duplicate is
+/// suppressed only when the two entries are adjacent in the same page.
+pub(crate) fn is_paired_legacy_hook_followup(entries: &[EntryView], index: usize) -> bool {
+    let Some(EntryPayload::Notice { text }) = entries.get(index).map(|entry| &entry.payload) else {
+        return false;
+    };
+    if agena_runtime_contracts::part_content::legacy_stop_hook_followup_message(text).is_none() {
+        return false;
+    }
+    let Some(previous) = index.checked_sub(1).and_then(|index| entries.get(index)) else {
+        return false;
+    };
+    let EntryPayload::Notice { text } = &previous.payload else {
+        return false;
+    };
+    agena_runtime_contracts::part_content::decode_legacy_hook_observation(text).is_some()
+}
+
 fn project_interaction(
     session: SessionId,
     interaction: &agena_storage::kernel::InteractionView,
@@ -877,7 +1019,10 @@ impl Application {
             ((*metadata).clone(), entries, None, false)
         };
         let mut parts = Vec::with_capacity(entries.len());
-        for entry in &entries {
+        for (index, entry) in entries.iter().enumerate() {
+            if is_paired_legacy_hook_followup(&entries, index) {
+                continue;
+            }
             if !matches!(entry.payload, EntryPayload::Interaction { .. }) {
                 parts.push(
                     self.project_entry(
@@ -921,7 +1066,10 @@ impl Application {
             .await
             .map_err(crate::kernel_error)?;
         let mut parts = Vec::with_capacity(page.entries.len());
-        for entry in &page.entries {
+        for (index, entry) in page.entries.iter().enumerate() {
+            if is_paired_legacy_hook_followup(&page.entries, index) {
+                continue;
+            }
             parts.push(
                 self.project_entry(
                     request.session_id,
@@ -984,7 +1132,10 @@ mod tool_input_projection_tests {
     use agena_domain::{
         ComposerDocument, ComposerNode, StructuredObject, ToolApiCall, ToolApiFunction,
     };
-    use agena_runtime_contracts::part_content::ToolCallContent;
+    use agena_runtime_contracts::part_content::{
+        HookContent, NoticeContent, SystemNotificationContent, ToolCallContent, hook_notice_text,
+        system_notification_notice_text,
+    };
     use agena_storage::kernel::{RequestId, ToolHandle, ToolResult, ToolStart};
     use serde_json::{Value, json};
 
@@ -1830,6 +1981,354 @@ mod tool_input_projection_tests {
         assert_eq!(
             parts.iter().filter(|part| part.kind == "tool_call").count(),
             7
+        );
+    }
+
+    #[tokio::test]
+    async fn hook_notice_projects_as_a_structured_hook_part() {
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/hook-notice-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Run the plan".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let hook = HookContent {
+            hook: "agent.stop".into(),
+            plugin_id: Some("agena.plan".into()),
+            summary: "agent.stop hook blocked stop".into(),
+            detail: Some("workflow plan autorun".into()),
+            message: Some("Continue the active approved plan.".into()),
+            ..Default::default()
+        };
+        let entry_id = attempt
+            .notice(RequestId::new(), hook_notice_text(&hook).unwrap())
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let entry = reader.entry(session, entry_id).await.unwrap();
+        let part = project_kernel_entry(reader, session, &entry).await.unwrap();
+        assert_eq!(part.kind, "hook");
+        assert_eq!(part.summary.as_deref(), Some(hook.summary.as_str()));
+        let mut expected = hook.clone();
+        expected
+            .extra
+            .insert("execution_id".into(), json!(entry.execution_id));
+        expected
+            .extra
+            .insert("execution_phase".into(), json!(entry.execution_phase));
+        expected
+            .extra
+            .insert("generation".into(), json!(entry.generation));
+        assert_eq!(HookContent::try_from(&part.content).unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn system_notification_projects_as_a_structured_part() {
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/system-notification-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Run a command".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let notification = SystemNotificationContent {
+            operation_id: "proc_1".into(),
+            operation_kind: "shell".into(),
+            status: "completed".into(),
+            summary: "Command finished".into(),
+            body: "exit code 0".into(),
+            event_seq: Some(3),
+            ..Default::default()
+        };
+        let entry_id = attempt
+            .notice(
+                RequestId::new(),
+                system_notification_notice_text(&notification).unwrap(),
+            )
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let entry = reader.entry(session, entry_id).await.unwrap();
+        let part = project_kernel_entry(reader, session, &entry).await.unwrap();
+        assert_eq!(part.kind, "system_notification");
+        assert_eq!(part.summary.as_deref(), Some("Command finished"));
+        let mut expected = notification.clone();
+        expected
+            .extra
+            .insert("execution_id".into(), json!(entry.execution_id));
+        expected
+            .extra
+            .insert("execution_phase".into(), json!(entry.execution_phase));
+        expected
+            .extra
+            .insert("generation".into(), json!(entry.generation));
+        assert_eq!(
+            SystemNotificationContent::try_from(&part.content).unwrap(),
+            expected
+        );
+    }
+
+    #[tokio::test]
+    async fn serialized_notice_part_projects_as_notice_instead_of_text() {
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/notice-part-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Reach the turn limit".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let notice = agena_runtime_contracts::NoticePart {
+            kind: "max_turns_exhausted".into(),
+            summary: "Turn limit reached".into(),
+            detail: Some("Send another message to continue.".into()),
+            title: Some("Turn limit".into()),
+        };
+        let entry_id = attempt
+            .notice(RequestId::new(), serde_json::to_string(&notice).unwrap())
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let entry = reader.entry(session, entry_id).await.unwrap();
+        let part = project_kernel_entry(reader, session, &entry).await.unwrap();
+        assert_eq!(part.kind, "notice");
+        assert_eq!(part.summary.as_deref(), Some("Turn limit reached"));
+        let content = NoticeContent::try_from(&part.content).unwrap();
+        assert_eq!(content.kind, notice.kind);
+        assert_eq!(content.detail, notice.detail);
+        assert_eq!(content.title, notice.title);
+    }
+
+    #[tokio::test]
+    async fn malformed_structured_notice_never_exposes_its_marker() {
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/malformed-notice-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Malformed notice".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let marker = format!(
+            "{}{{",
+            agena_runtime_contracts::part_content::SYSTEM_NOTIFICATION_NOTICE_PREFIX
+        );
+        let entry_id = attempt
+            .notice(RequestId::new(), marker.clone())
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let entry = reader.entry(session, entry_id).await.unwrap();
+        let part = project_kernel_entry(reader, session, &entry).await.unwrap();
+        assert_eq!(part.kind, "text");
+        assert_eq!(
+            part.content["text"],
+            "Background notification could not be decoded."
+        );
+        assert!(!part.content.to_string().contains(&marker));
+    }
+
+    #[tokio::test]
+    async fn legacy_hook_observation_and_followup_project_without_duplicate_text() {
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/legacy-hook-notice-projection-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Run the plan".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let continuation = "<plan_context>\nContinue the active approved plan.\n</plan_context>";
+        let observation = format!(
+            "Plugin hook observations:\nagena.plan agent.stop Applied: agent.stop hook blocked stop: workflow plan autorun ({continuation})\n"
+        );
+        let followup = format!("Plugin stop hook follow-up:\n{continuation}");
+        let observation_id = attempt
+            .notice(RequestId::new(), observation)
+            .await
+            .unwrap()
+            .value;
+        let followup_id = attempt
+            .notice(RequestId::new(), followup)
+            .await
+            .unwrap()
+            .value;
+        let reader = &runtime.ports.reader;
+        let entries = vec![
+            (*reader.entry(session, observation_id).await.unwrap()).clone(),
+            (*reader.entry(session, followup_id).await.unwrap()).clone(),
+        ];
+        assert!(!is_paired_legacy_hook_followup(&entries, 0));
+        assert!(is_paired_legacy_hook_followup(&entries, 1));
+        let part = project_kernel_entry(reader, session, &entries[0])
+            .await
+            .unwrap();
+        let hook = HookContent::try_from(&part.content).unwrap();
+        assert_eq!(part.kind, "hook");
+        assert_eq!(hook.plugin_id.as_deref(), Some("agena.plan"));
+        assert_eq!(hook.message.as_deref(), Some(continuation));
+        let standalone = project_kernel_entry(reader, session, &entries[1])
+            .await
+            .unwrap();
+        assert_eq!(standalone.kind, "hook");
+        assert_eq!(
+            HookContent::try_from(&standalone.content)
+                .unwrap()
+                .message
+                .as_deref(),
+            Some(continuation)
         );
     }
 }

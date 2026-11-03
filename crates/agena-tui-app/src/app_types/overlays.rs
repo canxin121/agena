@@ -105,7 +105,83 @@ pub(crate) enum PermissionStudioTextTarget {
 }
 
 pub(crate) type SettingsValueEditOverlay = InputDialogState<SettingsFieldSpec>;
-pub(crate) type SessionPromptEditOverlay = EditorDialogState<i64>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptStudioScope {
+    Global,
+    Workspace,
+    Session,
+}
+
+impl PromptStudioScope {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Global => "global",
+            Self::Workspace => "workspace",
+            Self::Session => "session",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PromptStudioDraft {
+    pub layer: agena_prompt_layers::PromptLayer,
+    /// Model-scoped overlays are configuration-only and are preserved while
+    /// this editor changes the top-level layer.
+    pub models: Vec<serde_json::Value>,
+}
+
+impl PromptStudioDraft {
+    pub(crate) fn is_empty(&self) -> bool {
+        // A `replace` layer with no fragments still has meaning: it suppresses
+        // every inherited fragment. Only the default (append) empty layer can
+        // be deleted without changing behavior.
+        self.layer.is_empty()
+            && self.layer.mode == agena_prompt_layers::LayerMode::Append
+            && self.models.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum PromptStudioEditorAction {
+    Body(String),
+    Title(String),
+    Rename(String),
+    AddOrder,
+    AddDisabled,
+    EnableDisabled,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PromptStudioOverlay {
+    pub session_id: i64,
+    pub scope: PromptStudioScope,
+    pub global: PromptStudioDraft,
+    pub workspace: PromptStudioDraft,
+    pub session: PromptStudioDraft,
+    pub selected: usize,
+    pub editor: Option<EditorDialogState<PromptStudioEditorAction>>,
+    pub status: String,
+    pub preview: Option<agena_prompt_layers::PromptResolution>,
+}
+
+impl PromptStudioOverlay {
+    pub(crate) fn draft(&self) -> &PromptStudioDraft {
+        match self.scope {
+            PromptStudioScope::Global => &self.global,
+            PromptStudioScope::Workspace => &self.workspace,
+            PromptStudioScope::Session => &self.session,
+        }
+    }
+
+    pub(crate) fn draft_mut(&mut self) -> &mut PromptStudioDraft {
+        match self.scope {
+            PromptStudioScope::Global => &mut self.global,
+            PromptStudioScope::Workspace => &mut self.workspace,
+            PromptStudioScope::Session => &mut self.session,
+        }
+    }
+}
 
 pub(crate) use agena_tui::choice::ChoicePickerItem as ChoiceItem;
 
@@ -206,8 +282,7 @@ pub(crate) enum SettingsFieldKind {
 #[derive(Debug, Clone)]
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
-    EditSessionAdditionalSystemPrompt(i64),
-    InheritSessionAdditionalSystemPrompt(i64),
+    EditSessionPrompts(i64),
     ToggleMcpServer,
     EditMcpServerUrl,
     OpenGlobalDefaultModelChooser,
@@ -508,7 +583,6 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) model_id: String,
     pub(crate) enabled: bool,
     pub(crate) native_compaction: bool,
-    pub(crate) additional_system_prompt: Option<String>,
     pub(crate) manual_overrides: bool,
     pub(crate) agena_tool_mode: AgenaToolMode,
     pub(crate) agena_tool_mode_configured: bool,

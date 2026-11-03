@@ -40,9 +40,9 @@ pub struct SessionHierarchyRequest {
     pub auto_title: bool,
     #[serde(default)]
     pub parent_id: Option<i64>,
-    /// None inherits; an empty string disables inherited additional instructions.
+    /// Session prompt layer for list projections.
     #[serde(default)]
-    pub additional_system_prompt: Option<String>,
+    pub prompts: Option<agena_prompt_layers::PromptLayer>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -59,21 +59,9 @@ pub struct SessionUpdateRequest {
     /// next user turn; assigning a title alone always locks it.
     #[serde(default)]
     pub auto_title: Option<bool>,
-    /// Omit to keep the current value, use null to inherit, or a string to override.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_additional_system_prompt_update"
-    )]
-    pub additional_system_prompt: Option<Option<String>>,
-}
-
-fn deserialize_additional_system_prompt_update<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
+    /// Omit to keep the current session layer; an object replaces it.
+    #[serde(default)]
+    pub prompts: Option<agena_prompt_layers::PromptLayer>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -169,50 +157,59 @@ pub struct SessionRewindRequestBody {
 }
 
 #[cfg(test)]
-mod additional_system_prompt_tests {
+mod prompt_layer_tests {
     use super::*;
 
+    fn layer_json() -> serde_json::Value {
+        serde_json::json!({
+            "mode": "replace",
+            "order": ["session-note"],
+            "inline": [{"id": "session-note", "title": "Note", "body": "Only this session"}]
+        })
+    }
+
     #[test]
-    fn update_preserves_missing_null_empty_and_text() {
-        let cases = [
-            (serde_json::json!({}), None),
-            (
-                serde_json::json!({"additional_system_prompt": null}),
-                Some(None),
-            ),
-            (
-                serde_json::json!({"additional_system_prompt": ""}),
-                Some(Some(String::new())),
-            ),
-            (
-                serde_json::json!({"additional_system_prompt": "  Keep this spacing.\n"}),
-                Some(Some("  Keep this spacing.\n".to_owned())),
-            ),
-        ];
-        for (json, expected) in cases {
-            let request: SessionUpdateRequest = serde_json::from_value(json).unwrap();
-            assert_eq!(request.additional_system_prompt, expected);
-        }
+    fn update_accepts_a_layer_and_rejects_the_retired_string() {
+        let request: SessionUpdateRequest =
+            serde_json::from_value(serde_json::json!({"prompts": layer_json()})).unwrap();
+        let layer = request.prompts.unwrap();
+        assert_eq!(layer.mode, agena_prompt_layers::LayerMode::Replace);
+        assert_eq!(layer.inline[0].body, "Only this session");
+
+        let missing: SessionUpdateRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(missing.prompts.is_none());
+
+        let explicit_null: SessionUpdateRequest =
+            serde_json::from_value(serde_json::json!({"prompts": null})).unwrap();
+        assert!(
+            explicit_null.prompts.is_none(),
+            "an explicit null keeps the current session layer"
+        );
+
+        let empty: SessionUpdateRequest =
+            serde_json::from_value(serde_json::json!({"prompts": {}})).unwrap();
+        assert!(
+            empty.prompts.unwrap().is_empty(),
+            "an empty layer is a request to clear the session layer"
+        );
+
         assert!(
             serde_json::from_value::<SessionUpdateRequest>(
-                serde_json::json!({"additional_system_prompt": false})
+                serde_json::json!({"additional_system_prompt": "legacy"})
             )
             .is_err()
         );
     }
 
     #[test]
-    fn creation_and_per_request_system_preserve_empty_strings() {
+    fn creation_accepts_a_layer_and_per_request_system_is_unchanged() {
         let request: SessionCreateRequest = serde_json::from_value(serde_json::json!({
             "workspace_id": 1,
             "title": "Test",
-            "additional_system_prompt": ""
+            "prompts": layer_json()
         }))
         .unwrap();
-        assert_eq!(
-            request.session.additional_system_prompt.as_deref(),
-            Some("")
-        );
+        assert_eq!(request.session.prompts.unwrap().order.len(), 1);
         let run: SessionRunRequestBody =
             serde_json::from_value(serde_json::json!({"system": ""})).unwrap();
         assert_eq!(run.options.system.as_deref(), Some(""));

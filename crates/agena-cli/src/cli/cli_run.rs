@@ -39,6 +39,7 @@ impl AgenaCli {
             Some(AgenaCommand::Permissions(args)) => self.run_permissions(args).await,
             Some(AgenaCommand::Provider(command)) => self.run_provider(command).await,
             Some(AgenaCommand::Plugin(command)) => self.run_plugin(command).await,
+            Some(AgenaCommand::Prompts(command)) => self.run_prompts(command).await,
             Some(AgenaCommand::Resume(args)) => self.run_resume(args).await,
             Some(AgenaCommand::Review(args)) => self.run_review(args).await,
             Some(AgenaCommand::Sessions(command)) => self.run_sessions(command).await,

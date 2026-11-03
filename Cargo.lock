@@ -201,6 +201,7 @@ dependencies = [
  "agena-failure",
  "agena-notification",
  "agena-plugin-sdk",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-skills",
  "chrono",
@@ -261,6 +262,7 @@ dependencies = [
  "agena-notification",
  "agena-plugin-host",
  "agena-process",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-runtime",
  "agena-runtime-contracts",
@@ -361,6 +363,7 @@ dependencies = [
  "agena-mcp-server",
  "agena-plugin-host",
  "agena-plugin-marketplace",
+ "agena-prompt-layers",
  "agena-runtime",
  "agena-storage",
  "agena-storage-layout",
@@ -386,6 +389,7 @@ dependencies = [
  "agena-api",
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-storage-layout",
  "chrono",
  "futures-util",
@@ -753,6 +757,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-prompt-layers"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "agena-provider"
 version = "0.1.0"
 dependencies = [
@@ -900,6 +913,7 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-plugin-host",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-runtime-contracts",
  "agena-storage-layout",
@@ -916,6 +930,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tracing",
  "url",
+ "yaml_serde",
 ]
 
 [[package]]
@@ -1052,6 +1067,8 @@ dependencies = [
  "agena-failure",
  "agena-permission",
  "agena-plugin-host",
+ "agena-plugin-sdk",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-runtime-config",
  "agena-runtime-contracts",
@@ -1090,6 +1107,7 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-runtime-contracts",
  "chrono",
  "serde",
@@ -1225,6 +1243,7 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-storage-layout",
  "async-trait",
  "hex",
@@ -1255,6 +1274,7 @@ dependencies = [
  "agena-async",
  "agena-domain",
  "agena-failure",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-scheduler",
  "agena-storage",
@@ -1340,6 +1360,7 @@ dependencies = [
  "agena-notification",
  "agena-plugin-sdk",
  "agena-process",
+ "agena-prompt-layers",
  "agena-provider",
  "agena-storage-layout",
  "agena-tui",

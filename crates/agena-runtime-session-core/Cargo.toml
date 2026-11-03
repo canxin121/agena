@@ -10,6 +10,7 @@ description = "Neutral Agena session values and runtime state"
 agena-failure = { workspace = true }
 agena-domain = { workspace = true }
 agena-runtime-contracts = { workspace = true }
+agena-prompt-layers = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 

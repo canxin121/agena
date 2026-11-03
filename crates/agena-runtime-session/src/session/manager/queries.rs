@@ -73,7 +73,7 @@ impl SessionManager {
             scope_session_id: Some(id),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
-            additional_system_prompt: configuration.additional_system_prompt.clone(),
+            prompts: configuration.prompts.clone(),
             selection,
             effective_permission: state
                 .config
@@ -121,6 +121,43 @@ impl SessionManager {
         self.execution_context_with_state(id, &self.state.load_full())
             .await
     }
+
+    /// Resolve the additional-instruction layers for a preview, using the same
+    /// inputs assembly would use for this session and model.
+    pub async fn prompt_preview(
+        &self,
+        id: SessionId,
+        model: &agena_domain::ModelRef,
+    ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
+        let state = self.state.load_full();
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(id)
+            .await
+            .map_err(kernel_error)?;
+        let tools_enabled = state
+            .providers
+            .agena_tool_mode(model)
+            .map(|mode| !mode.is_disabled())
+            .unwrap_or(true);
+        let workspace = configuration
+            .effective_workspace_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let inputs = super::session_prompt::PromptInputs {
+            session: &configuration.prompts,
+            request_layer: None,
+            model,
+            session_id: id.get(),
+            workspace,
+            tools_enabled,
+        };
+        super::session_prompt::prompt_preview(&state, &inputs).map_err(|error| {
+            AppError::Internal(format!("prompt layers could not be resolved: {error}"))
+        })
+    }
     pub(super) async fn execution_context_with_state(
         &self,
         id: SessionId,
@@ -135,7 +172,7 @@ impl SessionManager {
             scope_session_id: Some(id.get()),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
-            additional_system_prompt: configuration.additional_system_prompt.clone(),
+            prompts: configuration.prompts.clone(),
             selection: state
                 .config
                 .default_selection
@@ -567,6 +604,28 @@ fn query_error(error: AppError) -> SessionQueryError {
 }
 #[async_trait::async_trait]
 impl SessionQueryService for SessionManager {
+    async fn prompt_preview(
+        &self,
+        id: i64,
+    ) -> Result<agena_prompt_layers::PromptResolution, SessionQueryError> {
+        let session = super::session_id(id).map_err(query_error)?;
+        let context = self
+            .execution_context_value(session)
+            .await
+            .map_err(query_error)?;
+        let state = self.state.load_full();
+        let model = state
+            .providers
+            .resolve_default_model_selection(&context.selection)
+            .ok()
+            .flatten()
+            .ok_or_else(|| {
+                SessionQueryError::internal("no model route is available for this session")
+            })?;
+        SessionManager::prompt_preview(self, session, &model)
+            .await
+            .map_err(query_error)
+    }
     async fn list_session_summaries(
         &self,
         r: SessionListRequest,
@@ -667,23 +726,7 @@ impl SessionQueryService for SessionManager {
         let agent = configuration.agent.as_ref();
         Ok(SessionExecutionContext {
             conversation: configuration.conversation.clone(),
-            additional_system_prompt: configuration.additional_system_prompt.clone(),
-            effective_additional_system_prompt: {
-                let model = state
-                    .providers
-                    .resolve_default_model_selection(&selection)
-                    .ok()
-                    .flatten();
-                super::session_prompt::resolve_additional_system_prompt(
-                    None,
-                    configuration.additional_system_prompt.as_deref(),
-                    model.as_ref().and_then(|model| {
-                        super::session_prompt::model_additional_system_prompt(&state, model)
-                    }),
-                    state.config.additional_system_prompt.as_deref(),
-                )
-                .map(str::to_owned)
-            },
+            prompts: configuration.prompts.clone(),
             workflow_state: workflow_from_snapshot(snapshot),
             agent_id: crate::identity::AGENA_AGENT_ID.into(),
             selected_permission: configuration.permission.clone(),

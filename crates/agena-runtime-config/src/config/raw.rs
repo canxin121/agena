@@ -192,6 +192,9 @@ pub struct RawConfig {
     pub ui: Option<RawUiConfig>,
     pub runtime: Option<RawRuntimeConfig>,
     pub session: Option<RawSessionConfig>,
+    /// This file's prompt layer: global in the global file, workspace in the
+    /// project file. The loader keeps both layers separate.
+    pub prompts: Option<crate::PromptScopeConfig>,
     pub permission: Option<agena_domain::PermissionConfig>,
     pub plugins: Option<PluginConfig>,
     pub providers: RawProvidersConfig,
@@ -302,6 +305,7 @@ impl RawConfig {
             ui,
             runtime,
             session,
+            prompts: None,
             permission: None,
             plugins: None,
             providers: RawProvidersConfig::default(),
@@ -334,6 +338,9 @@ impl RawConfig {
             preferences: raw_ui.preferences,
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
+        if let Some(prompts) = &self.prompts {
+            prompts.validate().map_err(ConfigError::Validation)?;
+        }
         let session = SessionConfig::from_raw(self.session.unwrap_or_default());
         if session.auto_title.message_interval == 0 {
             return Err(ConfigError::Validation(
@@ -372,6 +379,7 @@ impl RawConfig {
             ui,
             runtime,
             session,
+            prompts: crate::PromptLayersConfig::default(),
             permission,
             plugins,
             providers,
@@ -702,9 +710,6 @@ fn normalize_provider_client_version(
 #[serde(default, deny_unknown_fields)]
 /// Raw session configuration.
 pub struct RawSessionConfig {
-    /// Default additional instructions. Omitted inherits; an empty string disables them.
-    #[merge(strategy = option_override)]
-    pub additional_system_prompt: Option<String>,
     #[merge(strategy = option_struct_merge)]
     pub compaction: Option<RawSessionCompactionConfig>,
     #[merge(strategy = option_struct_merge)]
@@ -742,7 +747,6 @@ impl SessionConfig {
         let title = raw.auto_title.unwrap_or_default();
         let defaults = crate::SessionAutoTitleConfig::default();
         Self {
-            additional_system_prompt: raw.additional_system_prompt,
             auto_title: crate::SessionAutoTitleConfig {
                 enabled: title.enabled.unwrap_or(defaults.enabled),
                 message_interval: title.message_interval.unwrap_or(defaults.message_interval),

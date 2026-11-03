@@ -12,6 +12,7 @@ use agena_failure::UserProblem;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::NoticePart;
 use crate::part::OperationPart;
 use agena_domain::{
     OperationAuthorization, OperationError, OperationUserInput, RawOutput, StructuredObject,
@@ -207,7 +208,7 @@ impl TryFrom<&Value> for NoticeContent {
 /// `message` is the hook-sent continuation (for example the workflow plan
 /// autorun's `agent.stop` continuation). It is carried by the hook activity
 /// itself — never injected as a separate assistant message — and is projected
-/// back into the model prompt as assistant text on the next run.
+/// into the next model prompt as a system message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct HookContent {
     #[serde(default)]
@@ -390,6 +391,207 @@ pub fn decode_failure_notice(text: &str) -> Option<serde_json::Result<agena_fail
     Some(serde_json::from_str(payload))
 }
 
+/// Decode the canonical human-facing notice shape from a kernel notice body.
+///
+/// Older sessions stored a serialized [`NoticePart`] directly in the notice
+/// text. Requiring the exact, closed shape (and non-empty identity fields)
+/// keeps arbitrary JSON or ordinary text from being mistaken for a structured
+/// part.
+pub fn decode_notice_part(text: &str) -> Option<NoticePart> {
+    let notice: NoticePart = serde_json::from_str(text).ok()?;
+    (!notice.kind.trim().is_empty() && !notice.summary.trim().is_empty()).then_some(notice)
+}
+
+/// One durable kernel notice classified by its canonical read-time shape.
+///
+/// Markers are recognized before legacy and ordinary text so every consumer
+/// makes the same safe decision about malformed structured payloads. The
+/// `Err` variants still identify the marker: a malformed hook, failure, or
+/// system-notification marker must never be downgraded to user-visible text.
+#[derive(Debug)]
+pub enum DecodedNotice<'a> {
+    Hook(serde_json::Result<HookContent>),
+    LegacyHook(HookContent),
+    LegacyStopHookFollowup(&'a str),
+    SystemNotification(serde_json::Result<SystemNotificationContent>),
+    Failure(serde_json::Result<agena_failure::Failure>),
+    StructuredNotice(NoticePart),
+    Plain(&'a str),
+}
+
+/// Classify a kernel notice body. This is the single ordering contract shared
+/// by transcript projection, provider input, permission context, notification
+/// aggregation, and delivery materialization.
+pub fn decode_notice(text: &str) -> DecodedNotice<'_> {
+    if let Some(decoded) = decode_hook_notice(text) {
+        return DecodedNotice::Hook(decoded);
+    }
+    if let Some(hook) = decode_legacy_hook_observation(text) {
+        return DecodedNotice::LegacyHook(hook);
+    }
+    if let Some(message) = legacy_stop_hook_followup_message(text) {
+        return DecodedNotice::LegacyStopHookFollowup(message);
+    }
+    if let Some(decoded) = decode_system_notification_notice(text) {
+        return DecodedNotice::SystemNotification(decoded);
+    }
+    if let Some(decoded) = decode_failure_notice(text) {
+        return DecodedNotice::Failure(decoded);
+    }
+    if let Some(notice) = decode_notice_part(text) {
+        return DecodedNotice::StructuredNotice(notice);
+    }
+    DecodedNotice::Plain(text)
+}
+
+impl DecodedNotice<'_> {
+    /// Text that may enter provider or permission-classifier input. Structured
+    /// user-facing notices, failures, and malformed markers are intentionally
+    /// omitted; hook diagnostics contribute only their stop continuation.
+    pub fn model_text(&self) -> Option<&str> {
+        match self {
+            Self::Hook(Ok(hook)) => hook
+                .message
+                .as_deref()
+                .filter(|message| !message.trim().is_empty()),
+            Self::LegacyHook(hook) => hook
+                .message
+                .as_deref()
+                .filter(|message| !message.trim().is_empty()),
+            Self::LegacyStopHookFollowup(message) => {
+                (!message.trim().is_empty()).then_some(*message)
+            }
+            Self::SystemNotification(Ok(notification)) => {
+                if !notification.body.trim().is_empty() {
+                    Some(notification.body.as_str())
+                } else if !notification.summary.trim().is_empty() {
+                    Some(notification.summary.as_str())
+                } else {
+                    None
+                }
+            }
+            Self::Plain(text) if !text.trim().is_empty() => Some(*text),
+            Self::Hook(Err(_))
+            | Self::SystemNotification(Err(_))
+            | Self::Failure(_)
+            | Self::StructuredNotice(_)
+            | Self::Plain(_) => None,
+        }
+    }
+}
+
+/// Marker prefix for a synthetic notice that carries a background-operation
+/// [`SystemNotificationContent`]. The kernel notice body is still a string, so
+/// the typed content rides inside it and is projected back at read time.
+pub const SYSTEM_NOTIFICATION_NOTICE_PREFIX: &str = "\u{1f}agena.system_notification:";
+
+pub fn system_notification_notice_text(
+    notification: &SystemNotificationContent,
+) -> serde_json::Result<String> {
+    Ok(format!(
+        "{SYSTEM_NOTIFICATION_NOTICE_PREFIX}{}",
+        serde_json::to_string(notification)?
+    ))
+}
+
+/// Decode a system-notification marker. `None` means this is an ordinary
+/// notice; `Some(Err(_))` means the marker was present but malformed and must
+/// not be exposed to a model or rendered as user text.
+pub fn decode_system_notification_notice(
+    text: &str,
+) -> Option<serde_json::Result<SystemNotificationContent>> {
+    let payload = text.strip_prefix(SYSTEM_NOTIFICATION_NOTICE_PREFIX)?;
+    Some(serde_json::from_str(payload))
+}
+
+/// Marker prefix for a synthetic notice that carries one observed plugin hook
+/// run. Hook activity is a first-class transcript part in the read contract,
+/// but the kernel notice payload is still a plain string, so the structured
+/// [`HookContent`] rides inside the text and is projected back at read time.
+/// Consumers that build model input must use only `HookContent::message` and
+/// must never send the marker itself.
+pub const HOOK_NOTICE_PREFIX: &str = "\u{1f}agena.hook:";
+
+pub fn hook_notice_text(hook: &HookContent) -> serde_json::Result<String> {
+    Ok(format!(
+        "{HOOK_NOTICE_PREFIX}{}",
+        serde_json::to_string(hook)?
+    ))
+}
+
+/// Decode a hook marker notice body. `None` means this is an ordinary notice;
+/// `Some(Err(_))` means the marker was present but its payload was malformed
+/// and must not be exposed to a model or rendered as user text.
+pub fn decode_hook_notice(text: &str) -> Option<serde_json::Result<HookContent>> {
+    let payload = text.strip_prefix(HOOK_NOTICE_PREFIX)?;
+    Some(serde_json::from_str(payload))
+}
+
+/// Prefix used by the pre-kernel hook recorder. These notices predate the
+/// structured hook marker, so they are decoded only while reading history;
+/// no new write may use this format.
+pub const LEGACY_HOOK_OBSERVATIONS_PREFIX: &str = "Plugin hook observations:\n";
+
+/// Prefix of the duplicate continuation notice written by the pre-kernel stop
+/// hook path immediately after [`LEGACY_HOOK_OBSERVATIONS_PREFIX`]. The same
+/// continuation is already present in the observation detail.
+pub const LEGACY_STOP_HOOK_FOLLOWUP_PREFIX: &str = "Plugin stop hook follow-up:\n";
+
+/// Decode one hook observation written before hook runs became structured
+/// parts. The old payload is a human-readable line rather than JSON:
+///
+/// `agena.plan agent.stop Applied: <summary> (<continuation>)`
+///
+/// The old writer could batch several runs into one notice. The first header
+/// identifies the activity; any following text stays in `detail`, so the
+/// original record is not lost. The stop-hook path emitted one run per notice.
+pub fn decode_legacy_hook_observation(text: &str) -> Option<HookContent> {
+    let payload = text.strip_prefix(LEGACY_HOOK_OBSERVATIONS_PREFIX)?;
+    let payload = payload.strip_suffix('\n').unwrap_or(payload);
+    let (plugin_id, rest) = payload.split_once(' ')?;
+    let (hook, rest) = rest.split_once(' ')?;
+    let (status, body) = rest.split_once(": ")?;
+    if !matches!(status, "Applied" | "Skipped" | "Failed" | "TimedOut") {
+        return None;
+    }
+    let (summary, detail) = match body.rsplit_once(" (") {
+        Some((summary, detail)) if detail.ends_with(')') => (
+            summary.trim_end().to_owned(),
+            Some(detail[..detail.len() - 1].to_owned()),
+        ),
+        _ => (body.trim_end().to_owned(), None),
+    };
+    if summary.is_empty() {
+        return None;
+    }
+    let message = detail
+        .as_ref()
+        .filter(|_| hook == "agent.stop" && summary.contains("blocked stop"))
+        .cloned();
+    Some(HookContent {
+        hook: hook.to_owned(),
+        plugin_id: Some(plugin_id.to_owned()),
+        summary,
+        detail,
+        message,
+        extra: [(
+            "status".to_owned(),
+            Value::String(status.to_ascii_lowercase()),
+        )]
+        .into_iter()
+        .collect(),
+    })
+}
+
+/// The pre-kernel stop-hook path also wrote the continuation as a separate
+/// plain-text notice. Pair-aware readers suppress it when it directly follows
+/// an observation; standalone readers can still render it as hook activity.
+pub fn legacy_stop_hook_followup_message(text: &str) -> Option<&str> {
+    let message = text.strip_prefix(LEGACY_STOP_HOOK_FOLLOWUP_PREFIX)?;
+    let message = message.strip_suffix('\n').unwrap_or(message);
+    (!message.trim().is_empty()).then_some(message)
+}
+
 impl TryFrom<&Value> for ErrorContent {
     type Error = String;
 
@@ -423,5 +625,112 @@ pub fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
         error: part.error.clone(),
         metadata: part.metadata.clone(),
         lifecycle: part.lifecycle.clone(),
+    }
+}
+
+#[cfg(test)]
+mod notice_marker_tests {
+    use super::*;
+
+    #[test]
+    fn hook_notice_round_trips_structured_activity() {
+        let hook = HookContent {
+            hook: "agent.stop".into(),
+            plugin_id: Some("agena.plan".into()),
+            summary: "agent.stop hook blocked stop".into(),
+            detail: Some("workflow plan autorun".into()),
+            message: Some("Continue the active approved plan.".into()),
+            ..Default::default()
+        };
+        let text = hook_notice_text(&hook).unwrap();
+        assert!(text.starts_with(HOOK_NOTICE_PREFIX));
+        let decoded = decode_hook_notice(&text).unwrap().unwrap();
+        assert_eq!(decoded, hook);
+    }
+
+    #[test]
+    fn malformed_hook_payload_is_never_mistaken_for_plain_text() {
+        let text = format!("{HOOK_NOTICE_PREFIX}{{");
+        assert!(decode_hook_notice(&text).is_some_and(|result| result.is_err()));
+        assert!(decode_hook_notice("ordinary notice").is_none());
+    }
+
+    #[test]
+    fn system_notification_marker_round_trips_as_structured_activity() {
+        let notification = SystemNotificationContent {
+            operation_id: "proc_1".into(),
+            operation_kind: "shell".into(),
+            status: "completed".into(),
+            summary: "Command finished".into(),
+            body: "exit code 0".into(),
+            event_seq: Some(7),
+            ..Default::default()
+        };
+        let text = system_notification_notice_text(&notification).unwrap();
+        assert!(text.starts_with(SYSTEM_NOTIFICATION_NOTICE_PREFIX));
+        let decoded = decode_system_notification_notice(&text).unwrap().unwrap();
+        assert_eq!(decoded, notification);
+        assert!(matches!(
+            decode_notice(&text),
+            DecodedNotice::SystemNotification(Ok(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_system_notification_is_classified_but_not_exposed() {
+        let text = format!("{SYSTEM_NOTIFICATION_NOTICE_PREFIX}{{");
+        assert!(decode_system_notification_notice(&text).is_some_and(|result| result.is_err()));
+        let decoded = decode_notice(&text);
+        assert!(matches!(decoded, DecodedNotice::SystemNotification(Err(_))));
+        assert!(decoded.model_text().is_none());
+    }
+
+    #[test]
+    fn notice_part_decoding_requires_the_closed_non_empty_shape() {
+        let text = br#"{"kind":"max_turns_exhausted","summary":"Turn limit reached"}"#;
+        let notice = decode_notice_part(std::str::from_utf8(text).unwrap()).unwrap();
+        assert_eq!(notice.kind, "max_turns_exhausted");
+
+        assert!(decode_notice_part("ordinary notice").is_none());
+        assert!(decode_notice_part(r#"{"kind":"","summary":"missing kind"}"#).is_none());
+        assert!(decode_notice_part(r#"{"kind":"notice","summary":""}"#).is_none());
+        assert!(
+            decode_notice_part(
+                r#"{"kind":"notice","summary":"summary","unexpected":"not a NoticePart"}"#,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn legacy_hook_observation_decodes_as_hook_activity() {
+        let text = concat!(
+            "Plugin hook observations:\n",
+            "agena.plan agent.stop Applied: agent.stop hook blocked stop: workflow plan autorun ",
+            "(<plan_context>\nContinue the active approved plan.\n</plan_context>)\n",
+        );
+        let hook = decode_legacy_hook_observation(text).unwrap();
+        assert_eq!(hook.hook, "agent.stop");
+        assert_eq!(hook.plugin_id.as_deref(), Some("agena.plan"));
+        assert_eq!(
+            hook.summary,
+            "agent.stop hook blocked stop: workflow plan autorun"
+        );
+        assert_eq!(
+            hook.detail.as_deref(),
+            Some("<plan_context>\nContinue the active approved plan.\n</plan_context>")
+        );
+        assert_eq!(hook.message, hook.detail);
+        assert_eq!(hook.extra["status"], "applied");
+    }
+
+    #[test]
+    fn legacy_followup_is_recognized_separately() {
+        let text = "Plugin stop hook follow-up:\n<plan_context>\nContinue\n</plan_context>";
+        assert_eq!(
+            legacy_stop_hook_followup_message(text),
+            Some("<plan_context>\nContinue\n</plan_context>")
+        );
+        assert!(decode_legacy_hook_observation(text).is_none());
     }
 }

@@ -64,7 +64,7 @@ pub(super) async fn apply(
                     || change.favorite.is_some()
                     || change.pinned.is_some()
                     || change.auto_title.is_some()
-                    || change.additional_system_prompt.is_some()
+                    || change.prompts.is_some()
                 {
                     return Err(invalid(
                         "automatic title cannot be combined with manual metadata",
@@ -136,8 +136,8 @@ pub(super) async fn apply(
                     SessionTitleState::default()
                 };
             }
-            if let Some(value) = &change.additional_system_prompt {
-                config.additional_system_prompt.clone_from(value);
+            if let Some(value) = &change.prompts {
+                config.prompts.clone_from(value);
             }
             if metadata != original || config != original_config {
                 let configuration = encode(&config)?;

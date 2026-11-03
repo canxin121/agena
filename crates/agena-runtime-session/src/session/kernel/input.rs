@@ -364,7 +364,7 @@ impl KernelPromptHydrator {
                 item.entry.id,
             )
         });
-        for item in entries {
+        for (entry_index, item) in entries.iter().copied().enumerate() {
             if item.entry.origin_session_id == facts.metadata.id
                 && matches!(item.entry.payload, EntryPayload::User { .. })
                 && let Some(text) = boundary.take()
@@ -520,7 +520,59 @@ impl KernelPromptHydrator {
                 }
                 EntryPayload::Interaction { .. } => continue,
                 EntryPayload::Notice { text } => {
-                    parts.push(CompletionInputPart::SystemMessage { text: text.clone() });
+                    use agena_runtime_contracts::part_content::DecodedNotice;
+                    let decoded = agena_runtime_contracts::part_content::decode_notice(text);
+                    match &decoded {
+                        DecodedNotice::Hook(Err(error)) => tracing::warn!(
+                            entry_id = item.entry.id.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode plugin hook notice for model input",
+                                error,
+                            ),
+                            "plugin hook notice could not be decoded; omitting it from model input"
+                        ),
+                        DecodedNotice::SystemNotification(Err(error)) => tracing::warn!(
+                            entry_id = item.entry.id.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode background notification for model input",
+                                error,
+                            ),
+                            "background notification could not be decoded; omitting it from model input"
+                        ),
+                        DecodedNotice::Failure(Err(error)) => tracing::warn!(
+                            entry_id = item.entry.id.get(),
+                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                                "decode execution failure notice for model input",
+                                error,
+                            ),
+                            "execution failure notice could not be decoded; omitting it from model input"
+                        ),
+                        _ => {}
+                    }
+                    // The old writer emitted the stop continuation twice: once
+                    // inside the hook observation and once immediately after
+                    // it. Suppress the adjacent duplicate in model input.
+                    if matches!(&decoded, DecodedNotice::LegacyStopHookFollowup(_)) {
+                        let paired = entry_index.checked_sub(1).is_some_and(|index| {
+                            let EntryPayload::Notice { text } = &entries[index].entry.payload
+                            else {
+                                return false;
+                            };
+                            agena_runtime_contracts::part_content::decode_legacy_hook_observation(
+                                text,
+                            )
+                            .is_some()
+                        });
+                        if paired {
+                            continue;
+                        }
+                    }
+                    let Some(message) = decoded.model_text() else {
+                        continue;
+                    };
+                    parts.push(CompletionInputPart::SystemMessage {
+                        text: message.to_owned(),
+                    });
                     Role::System
                 }
                 EntryPayload::Compaction { summary, .. } => {

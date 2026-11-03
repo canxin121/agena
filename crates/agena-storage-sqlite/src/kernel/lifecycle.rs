@@ -104,8 +104,8 @@ async fn configure(
     if let Some(value) = &change.conversation {
         next.conversation = value.clone();
     }
-    if let Some(value) = &change.additional_system_prompt {
-        next.additional_system_prompt = value.clone();
+    if let Some(value) = &change.prompts {
+        next.prompts = value.clone();
     }
     if let Some(value) = &change.permission {
         next.permission = value.clone();
@@ -688,7 +688,7 @@ pub(super) async fn apply(
                     parent_session_id: config.parent_session_id,
                     relation_kind: Some(config.relation_kind),
                     conversation: Some(config.conversation.clone()),
-                    additional_system_prompt: Some(config.additional_system_prompt.clone()),
+                    prompts: Some(config.prompts.clone()),
                     permission: Some(config.permission.clone()),
                     permission_ceiling: Some(config.permission_ceiling.clone()),
                     capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),

@@ -123,6 +123,7 @@ mod app_permissions;
 mod app_plan_document;
 mod app_plan_viewer;
 mod app_pointer;
+mod app_prompt_studio;
 mod app_provider_runtime;
 mod app_provider_text;
 mod app_queue_editor;

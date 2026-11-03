@@ -883,12 +883,12 @@ pub struct ActiveExecutionResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
-    /// The session override. Null inherits; an empty string disables inheritance.
-    #[serde(default)]
-    pub additional_system_prompt: Option<String>,
-    /// Selected session/model/project/global value, excluding per-request overrides.
-    #[serde(default)]
-    pub effective_additional_system_prompt: Option<String>,
+    /// The session prompt layer: inline fragments that apply to this session.
+    #[serde(
+        default,
+        skip_serializing_if = "agena_prompt_layers::PromptLayer::is_empty"
+    )]
+    pub prompts: agena_prompt_layers::PromptLayer,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_retry: Option<agena_domain::ProviderRetryStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

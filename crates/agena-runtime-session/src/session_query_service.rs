@@ -34,8 +34,7 @@ pub struct SessionPresentation {
 /// Execution context of a session.
 pub struct SessionExecutionContext {
     pub conversation: Option<agena_domain::SessionConversation>,
-    pub additional_system_prompt: Option<String>,
-    pub effective_additional_system_prompt: Option<String>,
+    pub prompts: agena_prompt_layers::PromptLayer,
     pub workflow_state: WorkflowState,
     pub agent_id: String,
     pub selected_permission: PermissionConfig,
@@ -121,6 +120,13 @@ pub trait SessionQueryService: Send + Sync {
         &self,
         session_id: i64,
     ) -> Result<SessionCostSummary, SessionQueryError>;
+
+    /// Resolve the session's additional instructions exactly as assembly would,
+    /// returning the rendered text plus per-fragment provenance.
+    async fn prompt_preview(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_prompt_layers::PromptResolution, SessionQueryError>;
 
     async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, SessionQueryError>;
 

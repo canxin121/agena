@@ -60,7 +60,7 @@ export function reconcileSessionMutation(
   sessionId: string,
   change: 'created' | 'deleted' | 'metadata' | 'execution',
   scope: number,
-  patch?: { title?: string; favorite?: boolean; pinned?: boolean },
+  patch?: { title?: string; favorite?: boolean; pinned?: boolean; prompts?: unknown },
 ) {
   if (scope !== sessionRoutingScope()) return
   const route = routes.get(sessionId)

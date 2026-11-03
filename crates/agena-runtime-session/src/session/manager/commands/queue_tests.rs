@@ -672,12 +672,18 @@ async fn tool_authorization_uses_session_workspace_rules_without_default_fallbac
 }
 
 #[tokio::test]
-async fn prompt_projection_preserves_overrides_without_a_usable_provider() {
-    let (manager, session) = fixture_with_config(RuntimeSessionManagerConfig {
-        additional_system_prompt: Some("Inherited instructions".into()),
-        ..Default::default()
-    })
-    .await;
+async fn prompt_projection_preserves_the_session_layer_without_a_usable_provider() {
+    fn session_layer(body: &str) -> agena_prompt_layers::PromptLayer {
+        let id = agena_prompt_layers::FragmentId::parse("session-note").unwrap();
+        agena_prompt_layers::PromptLayer {
+            mode: agena_prompt_layers::LayerMode::Append,
+            order: vec![id.clone()],
+            disabled: Vec::new(),
+            inline: vec![agena_prompt_layers::PromptFragment::new(id, body)],
+        }
+    }
+
+    let (manager, session) = fixture_with_config(RuntimeSessionManagerConfig::default()).await;
     for model in [
         None,
         Some(agena_domain::ModelRef::new(
@@ -691,11 +697,8 @@ async fn prompt_projection_preserves_overrides_without_a_usable_provider() {
             .update_selection(RequestId::new(), session, SelectionChange::Model(model))
             .await
             .unwrap();
-        for raw in [
-            None,
-            Some(String::new()),
-            Some("Session instructions".to_owned()),
-        ] {
+        for body in [None, Some("Session instructions")] {
+            let layer = body.map(session_layer).unwrap_or_default();
             manager
                 .kernel()
                 .sessions
@@ -703,7 +706,7 @@ async fn prompt_projection_preserves_overrides_without_a_usable_provider() {
                     RequestId::new(),
                     session,
                     SessionConfigurationChange {
-                        additional_system_prompt: Some(raw.clone()),
+                        prompts: Some(layer.clone()),
                         ..Default::default()
                     },
                 )
@@ -717,19 +720,14 @@ async fn prompt_projection_preserves_overrides_without_a_usable_provider() {
                 .unwrap();
             let context =
                 crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
-            assert_eq!(context.additional_system_prompt, raw);
-            assert_eq!(
-                context.effective_additional_system_prompt,
-                raw.clone()
-                    .or_else(|| Some("Inherited instructions".into()))
-            );
+            assert_eq!(context.prompts, layer);
             assert_eq!(
                 manager
                     .execution_context_value(session)
                     .await
                     .unwrap()
-                    .additional_system_prompt,
-                raw
+                    .prompts,
+                layer
             );
         }
     }

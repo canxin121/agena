@@ -59,7 +59,7 @@ pub struct SessionExecutionContext {
     pub relation_kind: SessionRelationKind,
     pub conversation: Option<SessionConversation>,
     #[serde(default)]
-    pub additional_system_prompt: Option<String>,
+    pub prompts: agena_prompt_layers::PromptLayer,
     pub selection: ExecutionSelection,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,

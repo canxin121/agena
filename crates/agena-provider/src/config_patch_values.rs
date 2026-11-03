@@ -485,13 +485,9 @@ fn model_map_extend(
     base: &mut BTreeMap<String, ResolvedProviderModelConfig>,
     overlay: BTreeMap<String, ResolvedProviderModelConfig>,
 ) {
-    for (model_id, mut configured) in overlay {
-        // Model entries replace metadata; an omitted prompt still inherits.
-        if configured.additional_system_prompt.is_none() {
-            configured.additional_system_prompt = base
-                .get(&model_id)
-                .and_then(|previous| previous.additional_system_prompt.clone());
-        }
+    for (model_id, configured) in overlay {
+        // Model entries replace metadata wholesale; prompt layers live in
+        // configuration scopes, not on the route.
         base.insert(model_id, configured);
     }
 }
@@ -519,7 +515,6 @@ pub fn provider_model_overlay_from_definition(
     ResolvedProviderModelConfig {
         enabled: true,
         native_compaction: true,
-        additional_system_prompt: None,
         agena_tools,
         definition,
     }

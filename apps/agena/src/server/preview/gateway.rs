@@ -112,11 +112,15 @@ pub(crate) async fn dispatch(
     }
     // This also protects password-disabled local workbenches from scripts in a
     // preview. Main APIs remain header-authenticated; no cookie auth is added.
+    // The MCP authorization route separately validates the one opaque-origin
+    // form submission its browser consent flow needs.
     if let Some(origin) = request
         .headers()
         .get(header::ORIGIN)
         .and_then(|v| v.to_str().ok())
-        && (state.workspace_preview_access.is_preview_origin(origin) || origin == "null")
+        && (state.workspace_preview_access.is_preview_origin(origin)
+            || (origin == "null"
+                && !crate::server::mcp::accepts_opaque_oauth_form_origin(&request)))
     {
         return AppError::forbidden("preview documents cannot access the Agena control origin")
             .into_response();

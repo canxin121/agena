@@ -174,7 +174,7 @@ fn refresh_token_fingerprint(token: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
 }
 
-fn accepts_opaque_oauth_form_origin(request: &axum::http::Request<Body>) -> bool {
+pub(crate) fn accepts_opaque_oauth_form_origin(request: &axum::http::Request<Body>) -> bool {
     if request.method().as_str() != "POST" || request.uri().path() != "/oauth/authorize" {
         return false;
     }

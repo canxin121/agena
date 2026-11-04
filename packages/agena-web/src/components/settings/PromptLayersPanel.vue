@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
-import { RiAddLine, RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiRefreshLine } from '@remixicon/vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { RiArrowDownLine, RiArrowUpLine, RiDeleteBinLine, RiRefreshLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
@@ -13,11 +13,9 @@ import {
   clonePromptLayer,
   emptyPromptLayer,
   emptyPromptScopeConfig,
-  nextPromptFragmentId,
   normalizePromptScopeConfig,
   promptFragmentBodyBytes,
   promptLayerFromScopeConfig,
-  promptLayerAddFragment,
   promptLayerAddOrder,
   promptLayerHasErrors,
   promptLayerMoveOrder,
@@ -35,6 +33,7 @@ import {
   type PromptResolution,
   type PromptScopeConfig,
 } from '@/lib/promptLayers'
+import { availableSavedPrompts, savedPromptDisplayName } from '@/lib/promptLibrary'
 import { deleteRuntimeSetting, getRuntimeSettingLayer, setRuntimeSetting } from '@/lib/runtimeSettings'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -55,6 +54,8 @@ type CachedDraft = LoadedLayer & {
 
 const SETTING_PATH = 'prompts'
 const props = defineProps<{ scope: string }>()
+const route = useRoute()
+const router = useRouter()
 const chat = useChatStore()
 const directory = useDirectoryStore()
 const toasts = useToastsStore()
@@ -80,6 +81,8 @@ const layer = ref<PromptLayer>(emptyPromptLayer())
 const baseline = ref<PromptLayer>(emptyPromptLayer())
 const config = ref<PromptScopeConfig>(emptyPromptScopeConfig())
 const savedConfig = ref<PromptScopeConfig>(emptyPromptScopeConfig())
+const globalSaved = ref<PromptScopeConfig>(emptyPromptScopeConfig())
+const workspaceSaved = ref<PromptScopeConfig>(emptyPromptScopeConfig())
 const preview = ref<PromptResolution | null>(null)
 const loaded = ref(false)
 const loading = ref(false)
@@ -98,12 +101,29 @@ const dirty = computed(
 const issues = computed(() => (scope.value === 'effective' ? [] : validatePromptLayer(layer.value, true)))
 const valid = computed(() => !promptLayerHasErrors(issues.value))
 const inlineById = computed(() => new Map(layer.value.inline.map((fragment) => [fragment.id, fragment])))
+const available = computed(() => availableSavedPrompts(globalSaved.value, workspaceSaved.value, scope.value))
+const availableById = computed(() => new Map(available.value.map((item) => [item.id, item])))
+const addable = computed(() =>
+  available.value.filter((item) =>
+    !layer.value.order.includes(item.id) && !layer.value.disabled.includes(item.id) && !inlineById.value.has(item.id),
+  ),
+)
+const hideable = computed(() =>
+  available.value.filter((item) =>
+    scope.value !== 'global' &&
+    (scope.value !== 'workspace' || item.scope === 'global') &&
+    !layer.value.disabled.includes(item.id) &&
+    !layer.value.order.includes(item.id) &&
+    !inlineById.value.has(item.id),
+  ),
+)
 const orderedEntries = computed(() =>
   layer.value.order.map((id, index) => ({
     id,
     index,
     inlineIndex: layer.value.inline.findIndex((fragment) => fragment.id === id),
     fragment: inlineById.value.get(id),
+    saved: availableById.value.get(id),
   })),
 )
 const unorderedInline = computed(() =>
@@ -189,8 +209,14 @@ async function load() {
       loaded.value = true
       return
     }
-    const fetched = await readLayer(source, id)
+    const [fetched, globalResponse, workspaceResponse] = await Promise.all([
+      readLayer(source, id),
+      getRuntimeSettingLayer('global', SETTING_PATH),
+      getRuntimeSettingLayer('workspace', SETTING_PATH),
+    ])
     if (generation !== loadGeneration || key !== contextKey.value) return
+    globalSaved.value = normalizePromptScopeConfig(globalResponse.value)
+    workspaceSaved.value = normalizePromptScopeConfig(workspaceResponse.value)
     const cached = drafts.get(key)
     layer.value = clonePromptLayer(cached?.layer || fetched?.layer || emptyPromptLayer())
     config.value = normalizePromptScopeConfig(cached?.config || fetched?.config || emptyPromptScopeConfig())
@@ -219,13 +245,10 @@ function setMode(value: string) {
   layer.value = { ...clonePromptLayer(layer.value), mode: value }
 }
 
-function addFragment() {
-  const id = nextPromptFragmentId(layer.value)
-  layer.value = promptLayerAddFragment(layer.value, {
-    id,
-    title: '',
-    body: '',
-    when: { models: [], requires_tools: null },
+function openSavedLibrary() {
+  void router.push({
+    path: route.path,
+    query: { ...route.query, view: 'prompt-library', scope: scope.value === 'global' ? 'global' : 'workspace' },
   })
 }
 
@@ -315,7 +338,15 @@ async function save() {
       await setSessionPrompts(id, clonePromptLayer(layer.value))
     } else {
       if (source !== 'global' && source !== 'workspace') return
-      const nextConfig = promptScopeConfigWithLayer(config.value, layer.value)
+      // The saved library may have changed in another settings view while
+      // this layer was being edited. Rebase layer changes on the latest
+      // catalog instead of overwriting reusable saved prompts.
+      const latest = normalizePromptScopeConfig((await getRuntimeSettingLayer(source, SETTING_PATH)).value)
+      const modelsEdited = JSON.stringify(config.value.models) !== JSON.stringify(savedConfig.value.models)
+      const nextConfig = promptScopeConfigWithLayer(
+        { ...latest, models: modelsEdited ? config.value.models : latest.models },
+        layer.value,
+      )
       if (promptScopeConfigIsEmpty(nextConfig)) {
         await deleteRuntimeSetting(SETTING_PATH, undefined, source)
       } else {
@@ -513,28 +544,33 @@ onBeforeUnmount(() => {
         <div class="grid min-w-0 gap-2">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <h3 class="text-sm font-medium">{{ $st('Ordered fragments') }}</h3>
-            <Button variant="outline" size="sm" :disabled="editingDisabled" @click="addFragment">
-              <RiAddLine class="mr-1.5 h-4 w-4" />
-              {{ $st('Add fragment') }}
+            <Button variant="outline" size="sm" @click="openSavedLibrary">
+              {{ $st('Manage saved prompts') }}
             </Button>
           </div>
           <p v-if="!layer.order.length" class="text-sm text-muted-foreground">
             {{ $st('No prompt fragments in this layer.') }}
           </p>
+          <p v-if="!available.length" class="text-xs text-muted-foreground">
+            {{ $st('Create prompts in the saved library first, then select them here.') }}
+          </p>
           <div
             v-for="entry in orderedEntries"
-            :key="entry.index + ':' + entry.id"
+            :key="entry.index"
             class="grid min-w-0 gap-3 rounded-lg border border-border/60 p-3"
           >
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex min-w-0 items-center gap-2">
                 <span class="text-xs text-muted-foreground">{{ entry.index + 1 }}</span>
-                <span class="truncate font-mono text-sm">{{ entry.id }}</span>
+                <span class="truncate text-sm font-medium">{{ entry.fragment?.title || entry.saved?.fragment.title || entry.id }}</span>
                 <span
-                  v-if="!entry.fragment"
+                  v-if="!entry.fragment && !entry.saved"
                   class="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground"
                 >
                   {{ $st('Library fragment') }}
+                </span>
+                <span v-else-if="entry.saved" class="text-xs text-muted-foreground">
+                  {{ entry.saved.fragment.category || entry.saved.scope }}
                 </span>
               </div>
               <div class="flex items-center gap-1">
@@ -562,6 +598,10 @@ onBeforeUnmount(() => {
                 </Button>
               </div>
             </div>
+            <details v-if="!entry.fragment && entry.saved" class="text-xs text-muted-foreground">
+              <summary class="cursor-pointer">{{ $st('Preview instructions') }}</summary>
+              <pre class="mt-2 whitespace-pre-wrap break-words font-sans">{{ entry.saved.fragment.body }}</pre>
+            </details>
 
             <div v-if="entry.fragment" class="grid min-w-0 gap-3 md:grid-cols-2">
               <label class="grid min-w-0 gap-1 text-xs text-muted-foreground">
@@ -571,7 +611,7 @@ onBeforeUnmount(() => {
                   :disabled="editingDisabled"
                   spellcheck="false"
                   class="rounded-md border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs text-foreground outline-none focus:border-ring"
-                  @input="updateFragmentField(entry.inlineIndex, 'id', ($event.target as HTMLInputElement).value)"
+                  @change="updateFragmentField(entry.inlineIndex, 'id', ($event.target as HTMLInputElement).value)"
                 />
               </label>
               <label class="grid min-w-0 gap-1 text-xs text-muted-foreground">
@@ -631,21 +671,23 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <input
+            <select
               v-model="orderedFragmentInput"
               :disabled="editingDisabled"
-              :placeholder="$st('Fragment ID')"
-              spellcheck="false"
-              class="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs outline-none focus:border-ring"
-              @keydown.enter.prevent="addOrderedFragment"
-            />
+              class="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring"
+            >
+              <option value="">{{ $st('Choose a saved prompt') }}</option>
+              <option v-for="item in addable" :key="item.id" :value="item.id">
+                {{ savedPromptDisplayName(item.fragment) }} · {{ item.fragment.category || item.scope }}
+              </option>
+            </select>
             <Button
               variant="outline"
               size="sm"
               :disabled="editingDisabled || !orderedFragmentInput.trim()"
               @click="addOrderedFragment"
             >
-              {{ $st('Add ordered fragment') }}
+              {{ $st('Attach prompt') }}
             </Button>
           </div>
         </div>
@@ -689,7 +731,7 @@ onBeforeUnmount(() => {
               :key="id"
               class="inline-flex items-center gap-2 rounded-full border border-border/70 px-2.5 py-1 text-xs"
             >
-              <span class="font-mono">{{ id }}</span>
+              <span>{{ availableById.get(id)?.fragment.title || id }}</span>
               <button
                 type="button"
                 class="text-muted-foreground hover:text-foreground"
@@ -701,21 +743,23 @@ onBeforeUnmount(() => {
             </span>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <input
+            <select
               v-model="disabledFragmentInput"
               :disabled="editingDisabled"
-              :placeholder="$st('Fragment ID')"
-              spellcheck="false"
-              class="min-w-0 flex-1 rounded-md border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs outline-none focus:border-ring"
-              @keydown.enter.prevent="addDisabledFragment"
-            />
+              class="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm outline-none focus:border-ring"
+            >
+              <option value="">{{ $st('Choose an inherited prompt') }}</option>
+              <option v-for="item in hideable" :key="item.id" :value="item.id">
+                {{ savedPromptDisplayName(item.fragment) }} · {{ item.scope }}
+              </option>
+            </select>
             <Button
               variant="outline"
               size="sm"
               :disabled="editingDisabled || !disabledFragmentInput.trim()"
               @click="addDisabledFragment"
             >
-              {{ $st('Add disabled fragment') }}
+              {{ $st('Hide inherited prompt') }}
             </Button>
           </div>
         </div>

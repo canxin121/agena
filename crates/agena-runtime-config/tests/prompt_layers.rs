@@ -178,3 +178,58 @@ fn retired_session_prompt_field_is_rejected() {
         "{error}"
     );
 }
+
+#[test]
+fn saved_prompts_are_inactive_until_referenced_and_can_be_used_by_workspace() {
+    let (_dir, request) = fixture(
+        json!({
+            "prompts": {
+                "library": [{
+                    "id": "shared-instruction",
+                    "title": "Shared instruction",
+                    "category": "research",
+                    "body": "Verify claims before answering."
+                }]
+            }
+        }),
+        json!({"prompts": {"order": ["shared-instruction"]}}),
+    );
+    let resolved = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap();
+    let prompts = &resolved.config.prompts;
+    let saved = prompts
+        .library(agena_prompt_layers::PromptScope::Global)
+        .unwrap();
+    let fragment = saved
+        .get(&FragmentId::parse("shared-instruction").unwrap())
+        .unwrap();
+    assert_eq!(fragment.category, "research");
+    assert_eq!(fragment.body, "Verify claims before answering.");
+    assert!(
+        prompts.global.order.is_empty(),
+        "saving must not activate a prompt"
+    );
+    assert_eq!(prompts.workspace.order.len(), 1);
+}
+
+#[test]
+fn saved_prompt_ids_cannot_shadow_local_inline_ids() {
+    let (_dir, request) = fixture(
+        json!({
+            "prompts": {
+                "library": [{"id": "same", "body": "saved"}],
+                "inline": [{"id": "same", "body": "inline"}]
+            }
+        }),
+        json!({}),
+    );
+    let error = ConfigLoader::new(ProcessEnvironment)
+        .load(&request)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("conflicts with an inline fragment")
+    );
+}

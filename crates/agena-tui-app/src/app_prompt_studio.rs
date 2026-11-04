@@ -10,7 +10,7 @@ use agena_tui_components::editor_state::{
 
 use crate::{
     App, Editor, KeyEvent, Overlay, PromptStudioDraft, PromptStudioEditorAction,
-    PromptStudioOverlay, PromptStudioScope,
+    PromptStudioOverlay, PromptStudioPickerAction, PromptStudioScope,
 };
 
 const PROMPTS_SETTING_PATH: &str = "prompts";
@@ -22,6 +22,7 @@ struct PromptScopeSetting {
     order: Vec<FragmentId>,
     disabled: Vec<FragmentId>,
     inline: Vec<PromptFragment>,
+    library: Vec<PromptFragment>,
     models: Vec<serde_json::Value>,
 }
 
@@ -34,6 +35,7 @@ impl PromptScopeSetting {
                 disabled: self.disabled,
                 inline: self.inline,
             },
+            library: self.library,
             models: self.models,
         }
     }
@@ -44,6 +46,102 @@ struct PromptStudioEntry {
     id: FragmentId,
     inline_index: Option<usize>,
     order_index: Option<usize>,
+}
+
+/// Present reusable prompts by title instead of making users enter fragment IDs.
+/// Workspace definitions take precedence over global ones, just as they do in
+/// the runtime resolver. Legacy inline prompts stay selectable for migration.
+fn saved_prompt_choices(
+    dialog: &PromptStudioOverlay,
+    action: PromptStudioPickerAction,
+) -> Vec<PromptFragment> {
+    let mut available = std::collections::BTreeMap::<FragmentId, PromptFragment>::new();
+    let global = &dialog.global;
+    let workspace = &dialog.workspace;
+    let add_scope = |available: &mut std::collections::BTreeMap<FragmentId, PromptFragment>,
+                     scope: &PromptStudioDraft| {
+        for fragment in scope.library.iter().chain(&scope.layer.inline) {
+            available.insert(fragment.id.clone(), fragment.clone());
+        }
+    };
+    if action != PromptStudioPickerAction::Hide || dialog.scope != PromptStudioScope::Global {
+        add_scope(&mut available, global);
+    }
+    if dialog.scope == PromptStudioScope::Session
+        || (action == PromptStudioPickerAction::Order
+            && dialog.scope == PromptStudioScope::Workspace)
+    {
+        add_scope(&mut available, workspace);
+    }
+    let layer = &dialog.draft().layer;
+    let mut candidates: Vec<_> = if action == PromptStudioPickerAction::Unhide {
+        layer
+            .disabled
+            .iter()
+            .map(|id| {
+                available
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| PromptFragment::new(id.clone(), ""))
+            })
+            .collect()
+    } else {
+        available
+            .into_values()
+            .filter(|fragment| {
+                !layer.order.contains(&fragment.id)
+                    && !layer.disabled.contains(&fragment.id)
+                    && !layer.inline.iter().any(|inline| inline.id == fragment.id)
+            })
+            .collect()
+    };
+    candidates.sort_by(|left, right| {
+        left.title
+            .to_lowercase()
+            .cmp(&right.title.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    candidates
+}
+
+fn apply_saved_prompt_choice(
+    dialog: &mut PromptStudioOverlay,
+    action: PromptStudioPickerAction,
+    fragment: &PromptFragment,
+) {
+    let id = &fragment.id;
+    let draft = dialog.draft_mut();
+    let layer = &mut draft.layer;
+    match action {
+        PromptStudioPickerAction::Order => {
+            if layer.order.contains(id) || layer.inline.iter().any(|item| &item.id == id) {
+                return;
+            }
+            layer.disabled.retain(|item| item != id);
+            layer.order.push(id.clone());
+            dialog.selected = layer.order.len() - 1;
+        }
+        PromptStudioPickerAction::Hide => {
+            if layer.order.contains(id) || layer.inline.iter().any(|item| &item.id == id) {
+                return;
+            }
+            if !layer.disabled.contains(id) {
+                layer.disabled.push(id.clone());
+            }
+        }
+        PromptStudioPickerAction::Unhide => {
+            layer.disabled.retain(|item| item != id);
+        }
+    }
+    dialog.status = format!(
+        "Updated the layer using saved prompt `{}`.",
+        if fragment.title.is_empty() {
+            id.as_str()
+        } else {
+            &fragment.title
+        }
+    );
+    dialog.preview = None;
 }
 
 impl App {
@@ -64,31 +162,93 @@ impl App {
             "Scope: {}  (Tab switches scope)\nMode: {mode}\n\n",
             dialog.scope.as_str()
         );
+        if let Some(action) = dialog.picker {
+            let choices = saved_prompt_choices(dialog, action);
+            body.push_str(
+                "Choose a saved prompt with Up/Down, Enter to confirm, Esc to cancel.\n\n",
+            );
+            for (index, fragment) in choices.iter().enumerate() {
+                let marker = if index == dialog.picker_selected {
+                    ">"
+                } else {
+                    " "
+                };
+                let name = if fragment.title.trim().is_empty() {
+                    fragment.id.to_string()
+                } else {
+                    fragment.title.clone()
+                };
+                body.push_str(&format!("{marker} {name}"));
+                if !fragment.category.is_empty() {
+                    body.push_str(&format!(" · {}", fragment.category));
+                }
+                body.push('\n');
+            }
+            if choices.is_empty() {
+                body.push_str("No matching saved prompts.\n");
+            }
+            agena_tui_components::render_workbench_editor_dialog(
+                frame,
+                area,
+                agena_tui_components::SurfaceMode::Overlay,
+                "Saved prompt library".to_owned().into(),
+                body.into(),
+                "Up/Down choose · Enter confirm · Esc cancel".into(),
+                true,
+                &Editor::from_text(String::new()),
+            );
+            return;
+        }
         if entries.is_empty() {
             body.push_str(
-                "No ordered fragments yet. Press `a` to add one or `o` to order an existing id.\n",
+                "No ordered prompts yet. Press `o` to choose a saved prompt or `a` to add an inline fragment.\n",
             );
+        }
+        let mut named = std::collections::BTreeMap::<FragmentId, &PromptFragment>::new();
+        for prompt in dialog
+            .global
+            .library
+            .iter()
+            .chain(&dialog.global.layer.inline)
+        {
+            named.insert(prompt.id.clone(), prompt);
+        }
+        if dialog.scope != PromptStudioScope::Global {
+            for prompt in dialog
+                .workspace
+                .library
+                .iter()
+                .chain(&dialog.workspace.layer.inline)
+            {
+                named.insert(prompt.id.clone(), prompt);
+            }
         }
         for (index, entry) in entries.iter().enumerate() {
             let marker = if index == dialog.selected { ">" } else { " " };
-            let source = match entry.inline_index {
-                Some(inline_index) => {
-                    let fragment = &draft.layer.inline[inline_index];
-                    let title = if fragment.title.trim().is_empty() {
-                        String::new()
-                    } else {
-                        format!(" · {}", fragment.title.trim())
-                    };
-                    format!("inline{title} · {} bytes", fragment.body.len())
-                }
-                None => "library".to_owned(),
+            let definition = entry
+                .inline_index
+                .map(|index| &draft.layer.inline[index])
+                .or_else(|| named.get(&entry.id).copied());
+            let label = definition
+                .filter(|fragment| !fragment.title.trim().is_empty())
+                .map(|fragment| fragment.title.trim().to_owned())
+                .unwrap_or_else(|| entry.id.to_string());
+            let source = match (entry.inline_index, definition) {
+                (Some(_), Some(fragment)) => format!("inline · {} bytes", fragment.body.len()),
+                (_, Some(fragment)) => format!("saved · {} bytes", fragment.body.len()),
+                _ => "file or unavailable".to_owned(),
             };
-            body.push_str(&format!("{marker} {}  {source}\n", entry.id));
+            body.push_str(&format!("{marker} {label}  {source}\n"));
         }
         if !draft.layer.disabled.is_empty() {
             body.push_str("\nHidden inherited fragments:\n");
             for id in &draft.layer.disabled {
-                body.push_str(&format!("- {id}\n"));
+                let label = named
+                    .get(id)
+                    .map(|fragment| fragment.title.as_str())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| id.as_str());
+                body.push_str(&format!("- {label}\n"));
             }
         }
         if !draft.models.is_empty() {
@@ -123,7 +283,7 @@ impl App {
             agena_tui_components::SurfaceMode::Overlay,
             "Prompt layers".to_owned().into(),
             body.into(),
-            "Tab scope · a add · e body · t title · d delete · Ctrl+Up/Down order · o order id · h hide id · u unhide · i rename · m mode · p preview(saved) · x clear · Ctrl+S save · Esc close".into(),
+            "Tab scope · o choose saved prompt · h hide inherited · u unhide · a add inline · e body · t title · d delete · Ctrl+Up/Down order · i rename · m mode · p preview(saved) · x clear · Ctrl+S save · Esc close".into(),
             true,
             &Editor::from_text(String::new()),
         );
@@ -162,9 +322,12 @@ impl App {
                         workspace,
                         session: PromptStudioDraft {
                             layer: state.execution.prompts,
+                            library: Vec::new(),
                             models: Vec::new(),
                         },
                         selected: 0,
+                        picker: None,
+                        picker_selected: 0,
                         editor: None,
                         status: String::new(),
                         preview: None,
@@ -194,6 +357,29 @@ impl App {
                     apply_prompt_editor_submission(dialog, action, text);
                 }
                 EditorDialogKeyResult::Continue => {}
+            }
+            return false;
+        }
+        if let Some(action) = dialog.picker {
+            let choices = saved_prompt_choices(dialog, action);
+            match key.code {
+                crossterm::event::KeyCode::Esc => {
+                    dialog.picker = None;
+                }
+                crossterm::event::KeyCode::Up => {
+                    dialog.picker_selected = dialog.picker_selected.saturating_sub(1);
+                }
+                crossterm::event::KeyCode::Down => {
+                    dialog.picker_selected =
+                        (dialog.picker_selected + 1).min(choices.len().saturating_sub(1));
+                }
+                crossterm::event::KeyCode::Enter => {
+                    if let Some(fragment) = choices.get(dialog.picker_selected) {
+                        apply_saved_prompt_choice(dialog, action, fragment);
+                    }
+                    dialog.picker = None;
+                }
+                _ => {}
             }
             return false;
         }
@@ -311,30 +497,18 @@ impl App {
                 false
             }
             crossterm::event::KeyCode::Char('o') => {
-                dialog.editor = Some(prompt_line_editor(
-                    "Order a fragment".to_owned(),
-                    "Fragment id to append to this layer's order.".to_owned(),
-                    String::new(),
-                    PromptStudioEditorAction::AddOrder,
-                ));
+                dialog.picker = Some(PromptStudioPickerAction::Order);
+                dialog.picker_selected = 0;
                 false
             }
             crossterm::event::KeyCode::Char('h') => {
-                dialog.editor = Some(prompt_line_editor(
-                    "Hide inherited fragment".to_owned(),
-                    "Fragment id inherited from a broader scope.".to_owned(),
-                    String::new(),
-                    PromptStudioEditorAction::AddDisabled,
-                ));
+                dialog.picker = Some(PromptStudioPickerAction::Hide);
+                dialog.picker_selected = 0;
                 false
             }
             crossterm::event::KeyCode::Char('u') => {
-                dialog.editor = Some(prompt_line_editor(
-                    "Unhide inherited fragment".to_owned(),
-                    "Fragment id currently listed as hidden.".to_owned(),
-                    String::new(),
-                    PromptStudioEditorAction::EnableDisabled,
-                ));
+                dialog.picker = Some(PromptStudioPickerAction::Unhide);
+                dialog.picker_selected = 0;
                 false
             }
             crossterm::event::KeyCode::Char('p') => {
@@ -548,57 +722,6 @@ fn apply_prompt_editor_submission(
                 Err(error) => dialog.status = error,
             }
         }
-        PromptStudioEditorAction::AddOrder => match FragmentId::parse(text.trim()) {
-            Ok(id) => {
-                let draft = dialog.draft_mut();
-                if draft.layer.order.contains(&id) {
-                    dialog.status = format!("`{id}` is already in the order.");
-                    return;
-                }
-                draft
-                    .layer
-                    .disabled
-                    .retain(|fragment_id| fragment_id != &id);
-                draft.layer.order.push(id.clone());
-                dialog.selected = draft.layer.order.len() - 1;
-                mark_prompt_edited(dialog, &format!("Added `{id}` to the order."));
-            }
-            Err(error) => dialog.status = error.to_string(),
-        },
-        PromptStudioEditorAction::AddDisabled => match FragmentId::parse(text.trim()) {
-            Ok(id) => {
-                let draft = dialog.draft_mut();
-                if draft.layer.order.contains(&id)
-                    || draft.layer.inline.iter().any(|fragment| fragment.id == id)
-                {
-                    dialog.status = format!(
-                        "`{id}` is defined in this layer; remove or edit it instead of hiding it."
-                    );
-                    return;
-                }
-                if !draft.layer.disabled.contains(&id) {
-                    draft.layer.disabled.push(id.clone());
-                }
-                mark_prompt_edited(dialog, &format!("Hid inherited fragment `{id}`."));
-            }
-            Err(error) => dialog.status = error.to_string(),
-        },
-        PromptStudioEditorAction::EnableDisabled => match FragmentId::parse(text.trim()) {
-            Ok(id) => {
-                let draft = dialog.draft_mut();
-                let before = draft.layer.disabled.len();
-                draft
-                    .layer
-                    .disabled
-                    .retain(|fragment_id| fragment_id != &id);
-                if draft.layer.disabled.len() == before {
-                    dialog.status = format!("`{id}` is not currently hidden.");
-                } else {
-                    mark_prompt_edited(dialog, &format!("Unhid `{id}`."));
-                }
-            }
-            Err(error) => dialog.status = error.to_string(),
-        },
     }
 }
 
@@ -646,10 +769,15 @@ fn rename_prompt_fragment(
 }
 
 fn remove_prompt_fragment(draft: &mut PromptStudioDraft, id: &FragmentId) {
+    let removed_inline = draft.layer.inline.iter().any(|fragment| &fragment.id == id);
     draft.layer.inline.retain(|fragment| &fragment.id != id);
     draft.layer.order.retain(|fragment_id| fragment_id != id);
     draft.layer.disabled.retain(|fragment_id| fragment_id != id);
-    transform_model_references(&mut draft.models, id, None);
+    // Removing a reference to a saved library prompt must not silently edit
+    // a model overlay that also references the same reusable prompt.
+    if removed_inline {
+        transform_model_references(&mut draft.models, id, None);
+    }
 }
 
 fn transform_model_references(
@@ -728,6 +856,7 @@ fn prompt_setting_value(draft: &PromptStudioDraft) -> serde_json::Value {
         order: draft.layer.order.clone(),
         disabled: draft.layer.disabled.clone(),
         inline: draft.layer.inline.clone(),
+        library: draft.library.clone(),
         models: draft.models.clone(),
     };
     serde_json::to_value(setting).expect("prompt scope settings always serialize")
@@ -826,6 +955,7 @@ mod tests {
                 disabled: disabled.iter().map(|value| id(value)).collect(),
                 inline,
             },
+            library: Vec::new(),
             models,
         }
     }
@@ -838,6 +968,8 @@ mod tests {
             workspace: PromptStudioDraft::default(),
             session: prompt_draft,
             selected: 0,
+            picker: None,
+            picker_selected: 0,
             editor: None,
             status: String::new(),
             preview: None,
@@ -989,28 +1121,33 @@ mod tests {
         );
         let mut dialog = overlay(PromptStudioScope::Session, prompt_draft);
 
-        apply_prompt_editor_submission(
+        apply_saved_prompt_choice(
             &mut dialog,
-            PromptStudioEditorAction::AddDisabled,
-            "local".to_owned(),
+            PromptStudioPickerAction::Hide,
+            &fragment("local", "Local", ""),
         );
-        assert!(dialog.status.contains("defined in this layer"));
         assert!(!dialog.draft().layer.disabled.contains(&id("local")));
 
-        apply_prompt_editor_submission(
+        apply_saved_prompt_choice(
             &mut dialog,
-            PromptStudioEditorAction::AddOrder,
-            "inherited".to_owned(),
+            PromptStudioPickerAction::Order,
+            &fragment("inherited", "Inherited", ""),
         );
         assert!(dialog.draft().layer.order.contains(&id("inherited")));
         assert!(!dialog.draft().layer.disabled.contains(&id("inherited")));
 
-        apply_prompt_editor_submission(
+        apply_saved_prompt_choice(
             &mut dialog,
-            PromptStudioEditorAction::AddDisabled,
-            "hidden".to_owned(),
+            PromptStudioPickerAction::Hide,
+            &fragment("hidden", "Hidden", ""),
         );
         assert!(dialog.draft().layer.disabled.contains(&id("hidden")));
+        apply_saved_prompt_choice(
+            &mut dialog,
+            PromptStudioPickerAction::Unhide,
+            &fragment("hidden", "Hidden", ""),
+        );
+        assert!(!dialog.draft().layer.disabled.contains(&id("hidden")));
         assert!(dialog.draft().layer.validate().is_ok());
     }
 
@@ -1066,6 +1203,9 @@ mod tests {
         })];
         let mut prompt_draft = draft(Vec::new(), &[], &[], models.clone());
         prompt_draft.layer.mode = LayerMode::Replace;
+        prompt_draft
+            .library
+            .push(fragment("saved", "Saved", "Instructions"));
 
         let value = prompt_setting_value(&prompt_draft);
         assert_eq!(value["mode"], serde_json::json!("replace"));
@@ -1076,6 +1216,45 @@ mod tests {
         let round_trip = setting.into_draft();
         assert_eq!(round_trip.layer.mode, LayerMode::Replace);
         assert_eq!(round_trip.models, models);
+        assert_eq!(round_trip.library[0].title, "Saved");
         assert!(!round_trip.is_empty());
+    }
+
+    #[test]
+    fn saved_prompt_picker_inherits_and_shadows_by_scope() {
+        let mut dialog = overlay(PromptStudioScope::Session, PromptStudioDraft::default());
+        dialog
+            .global
+            .library
+            .push(fragment("shared", "Global prompt", "global"));
+        dialog
+            .global
+            .library
+            .push(fragment("global", "Global only", "global"));
+        dialog
+            .workspace
+            .library
+            .push(fragment("shared", "Workspace prompt", "workspace"));
+        dialog
+            .workspace
+            .library
+            .push(fragment("workspace", "Workspace only", "workspace"));
+        let items = saved_prompt_choices(&dialog, PromptStudioPickerAction::Order);
+        assert_eq!(items.len(), 3);
+        assert_eq!(
+            items
+                .iter()
+                .find(|item| item.id == id("shared"))
+                .unwrap()
+                .title,
+            "Workspace prompt"
+        );
+        dialog.session.layer.order.push(id("shared"));
+        let remaining = saved_prompt_choices(&dialog, PromptStudioPickerAction::Order);
+        assert!(!remaining.iter().any(|item| item.id == id("shared")));
+        dialog.session.layer.disabled.push(id("global"));
+        let hidden = saved_prompt_choices(&dialog, PromptStudioPickerAction::Unhide);
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].title, "Global only");
     }
 }

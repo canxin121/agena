@@ -98,19 +98,30 @@ fn resolve_prompt_layers(
         session_id: inputs.session_id,
         tools_enabled: inputs.tools_enabled,
     };
-    let global_library = config
+    let mut global_library = config
         .library(PromptScope::Global)
         .unwrap_or_else(|_| BTreeMap::new());
-    let workspace_library = config
+    let mut workspace_library = config
         .library(PromptScope::Workspace)
         .unwrap_or_else(|_| BTreeMap::new());
+    // Saved prompts (and legacy inline definitions) are shared by reference.
+    // A narrower workspace definition shadows a global definition with the
+    // same id, while an inline fragment in the current layer wins locally.
+    for fragment in &config.global.inline {
+        global_library.insert(fragment.id.clone(), fragment.clone());
+    }
+    for fragment in &config.workspace.inline {
+        workspace_library.insert(fragment.id.clone(), fragment.clone());
+    }
+    let mut shared_library = global_library.clone();
+    shared_library.extend(workspace_library.clone());
     let empty = BTreeMap::new();
     let global_layer = config.global.layer();
     let workspace_layer = config.workspace.layer();
     let empty_layer = PromptLayer::default();
     let mut sources = vec![
         LayerSource::new(PromptScope::Global, &global_layer, &global_library),
-        LayerSource::new(PromptScope::Workspace, &workspace_layer, &workspace_library),
+        LayerSource::new(PromptScope::Workspace, &workspace_layer, &shared_library),
     ];
     // A model layer keeps its own scope's library so it can reference
     // fragments declared beside it.
@@ -120,16 +131,12 @@ fn resolve_prompt_layers(
         sources.push(LayerSource::new(PromptScope::Model, layer, &global_library));
     }
     for layer in &workspace_model_layers {
-        sources.push(LayerSource::new(
-            PromptScope::Model,
-            layer,
-            &workspace_library,
-        ));
+        sources.push(LayerSource::new(PromptScope::Model, layer, &shared_library));
     }
     sources.push(LayerSource::new(
         PromptScope::Session,
         inputs.session,
-        &empty,
+        &shared_library,
     ));
     sources.push(LayerSource::new(
         PromptScope::Request,

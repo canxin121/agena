@@ -5,6 +5,7 @@ import { RiRefreshLine, RiRefreshFill, RiCpuLine, RiStackLine } from '@remixicon
 
 import SettingsCard from './SettingsCard.vue'
 import PromptLayersPanel from './PromptLayersPanel.vue'
+import PromptLibraryPanel from './PromptLibraryPanel.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
@@ -21,6 +22,7 @@ const autoCompactionField = ref<InstanceType<typeof ServerSettingField> | null>(
 const tokensField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const promptPanel = ref<InstanceType<typeof PromptLayersPanel> | null>(null)
+const promptLibraryPanel = ref<InstanceType<typeof PromptLibraryPanel> | null>(null)
 const titleOptions = computed(() => [
   {
     path: 'session.auto_title.enabled',
@@ -74,6 +76,7 @@ async function refresh() {
       autoCompactionField.value,
       tokensField.value,
       promptPanel.value,
+      promptLibraryPanel.value,
     ].map((field) => field?.refresh()),
   )
 }
@@ -148,6 +151,7 @@ defineProps<{ activePage: string; scope: string }>()
         />
       </SettingsCard>
     </div>
+    <PromptLibraryPanel v-else-if="activePage === 'prompt-library'" ref="promptLibraryPanel" :scope="scope" />
     <PromptLayersPanel v-else-if="activePage === 'prompt-layers'" ref="promptPanel" :scope="scope" />
     <div v-else class="space-y-4">
       <SettingsCard :title="$st('Automatic session titles')" :icon="RiCpuLine">

@@ -22,6 +22,7 @@ struct PromptScopeFile {
     order: Vec<FragmentId>,
     disabled: Vec<FragmentId>,
     inline: Vec<PromptFragment>,
+    library: Vec<PromptFragment>,
     models: Vec<serde_json::Value>,
 }
 
@@ -122,6 +123,14 @@ impl PromptScopeState {
                 serde_json::to_value(&file.models).expect("model overlays always serialize"),
             );
         }
+        if let Some(file) = &self.file
+            && !file.library.is_empty()
+        {
+            output.insert(
+                "library".to_owned(),
+                serde_json::to_value(&file.library).expect("saved prompts always serialize"),
+            );
+        }
         serde_json::Value::Object(output)
     }
 
@@ -129,6 +138,14 @@ impl PromptScopeState {
         self.layer
             .validate()
             .map_err(|error| AppError::Config(format!("invalid prompt layer: {error}")))
+    }
+
+    fn clear_attached_prompts(&mut self) {
+        self.layer = PromptLayer::default();
+        if let Some(file) = self.file.as_mut() {
+            file.models.clear();
+        }
+        // The independent saved library is intentionally left untouched.
     }
 }
 
@@ -217,6 +234,7 @@ async fn add(
     state.layer.inline.push(PromptFragment {
         id: id.clone(),
         title: args.title.unwrap_or_default(),
+        category: String::new(),
         body: body.unwrap_or_default(),
         when: PromptCondition {
             models: args.models,
@@ -393,6 +411,18 @@ async fn clear_scope(
 ) -> Result<(OutputFormat, serde_json::Value), AppError> {
     match clear_action(&args.target)? {
         PromptClearAction::DeleteSetting { scope } => {
+            // Clearing active layers must not destroy reusable saved prompts.
+            // The old command deleted the entire prompts key before a saved
+            // library existed. Keep that behavior only for empty catalogs.
+            let mut saved = load_scope(client, &args.target).await?;
+            if saved
+                .file
+                .as_ref()
+                .is_some_and(|file| !file.library.is_empty())
+            {
+                saved.clear_attached_prompts();
+                return save_scope(client, saved, args.format).await;
+            }
             client
                 .delete_settings_layer_value(layer_name(scope), PROMPTS_SETTING_PATH, false, true)
                 .await
@@ -695,6 +725,32 @@ mod tests {
                 layer: PromptLayer::default()
             }
         );
+    }
+
+    #[test]
+    fn clearing_attached_prompts_preserves_saved_library() {
+        let saved = fragment(id("research"), "Verify factual claims.");
+        let mut state = PromptScopeState {
+            scope: PromptScopeArg::Global,
+            session_id: None,
+            layer: PromptLayer {
+                mode: LayerMode::Replace,
+                order: vec![id("research")],
+                ..PromptLayer::default()
+            },
+            file: Some(PromptScopeFile {
+                library: vec![saved.clone()],
+                models: vec![json!({"match": "openai/*", "order": ["research"]})],
+                ..PromptScopeFile::default()
+            }),
+            revision: None,
+        };
+        state.clear_attached_prompts();
+        assert_eq!(state.layer, PromptLayer::default());
+        let file = state.file.as_ref().unwrap();
+        assert!(file.models.is_empty());
+        assert_eq!(file.library, vec![saved]);
+        assert_eq!(state.output()["library"][0]["id"], "research");
     }
 
     #[test]

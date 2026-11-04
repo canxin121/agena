@@ -114,10 +114,16 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   'runtime-session': [
     {
+      id: 'prompt-library',
+      label: () => st('Saved prompt library'),
+      description: () => st('Create, organize, and reuse prompts without managing fragment IDs.'),
+      keywords: ['prompt', 'library', 'saved', 'templates', 'create', 'edit', 'delete', 'category'],
+    },
+    {
       id: 'prompt-layers',
       label: () => st('Prompt layers'),
       description: () =>
-        st('Compose reusable instruction fragments globally, for a workspace, or for the current session.'),
+        st('Attach saved prompts to global, workspace, or session system instructions.'),
       keywords: ['system', 'prompt', 'instructions', 'fragments', 'layers', 'global', 'workspace', 'session'],
     },
     {

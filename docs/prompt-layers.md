@@ -6,6 +6,48 @@ add ordered fragments after that built-in text. A layer can append fragments,
 discard broader configured fragments, hide inherited fragment ids, and define
 inline fragments, but it does not replace the built-in prompt itself.
 
+## Saved prompt library (Web settings)
+
+**Settings → Runtime & Session → Saved prompt library** is the reusable prompt
+catalog. Global and workspace catalogs have independent CRUD editors; entries
+have a title, free-form category, body, optional model-route and tool conditions,
+and a generated internal id. A saved prompt is **not** automatically included in
+any system prompt. Editing its body updates all future resolutions that
+reference it rather than copying instructions into each session.
+
+**Settings → Runtime & Session → Prompt layers** is the attachment editor. Select
+a saved prompt by title to append its id to the chosen global, workspace, or
+session layer. It supports ordering, hiding inherited entries, append/replace,
+and resolved previews. The TUI `o`, `h`, and `u` shortcuts also present
+saved prompts by name. The global layer can select global saved prompts;
+workspace and session layers can select global and workspace prompts. A
+workspace entry with the same id takes precedence where both scopes are
+available. Existing inline fragments remain editable for compatibility.
+
+Saved entries live in the `library` array of the existing `prompts`
+configuration, separate from `order` and `inline`:
+
+```json
+{
+  "prompts": {
+    "library": [
+      {
+        "id": "saved-global-1",
+        "title": "Research",
+        "category": "research",
+        "body": "Verify important claims before answering."
+      }
+    ],
+    "order": ["saved-global-1"]
+  }
+}
+```
+
+Legacy `prompts/<id>.md` fragments and the older inline fragments are still
+resolved and editable through their existing mechanisms. The Web library page
+manages JSON-backed entries; file-backed Markdown fragments remain managed as
+files. The picker does not currently enumerate those Markdown files.
+
 The previous `additional_system_prompt` setting has been retired. Configuration
 files and the session API have no compatibility alias for it, and session
 updates reject it as an unknown field. On startup, SQLite initialization does
@@ -28,6 +70,11 @@ must be removed manually.
 | `disabled` | Inherited fragment ids hidden by this layer. |
 | `inline` | Fragments defined directly in this layer. |
 
+Global and workspace `PromptScopeConfig` also include an independent
+`library` array of saved `PromptFragment` entries. The entries are available
+for referencing from narrower layers, but do not execute until selected in
+`order`. Session layers contain references in `order`, not a copied body.
+
 A layer rejects duplicate ids in `order`, duplicate ids in `inline`, and an id
 that appears in both `disabled` and `order` or `inline`.
 
@@ -37,6 +84,7 @@ that appears in both `disabled` and `order` or `inline`.
 | --- | --- |
 | `id` | 1–64 ASCII characters from `a-z`, `0-9`, `.`, `_`, and `-`; the first character cannot be `.`. |
 | `title` | Human-facing preview/editor metadata. It is not inserted into the prompt text. |
+| `category` | Optional organizational label in the saved prompt library. Not inserted into prompt text. |
 | `body` | Instruction text. Supports variable substitution and has a 16 KiB limit. |
 | `when` | Optional model-route and tool-availability condition. |
 
@@ -55,13 +103,13 @@ the fragment is found and before its body is rendered.
 The resolver starts with the broadest layer and appends toward the narrowest:
 
 1. Global layer, using the global fragment library.
-2. Workspace layer, using the workspace fragment library.
+2. Workspace layer, using the workspace and inherited global libraries.
 3. Matching global `prompts.models` overlays, in configuration order, using the
    global fragment library.
 4. Matching workspace `prompts.models` overlays, in configuration order, using
-   the workspace fragment library.
-5. Session layer. This layer has no fragment directory, so its ordered fragments
-   must be inline.
+   the workspace and inherited global libraries.
+5. Session layer. Its ordered entries may refer to saved global or workspace
+   fragments, or to legacy session-local inline fragments.
 6. Request layer. This is an internal resolver scope; the current runtime always
    resolves it as empty.
 
@@ -93,10 +141,11 @@ bodies are joined with one blank line between fragments.
   it; remove the `disabled` entry from the layer that added it.
 - A `replace` layer only discards fragments resolved so far. It does not clear
   the suppression set, and later layers can still append their own fragments.
-- A layer resolves ids only from its own inline fragments and its own scope's
-  file library. Global and workspace libraries do not fall back to each other.
-- A model overlay resolves ids from its own inline fragments and the `.md`
-  library belonging to the same configuration scope.
+- A layer resolves ids from its own inline fragments first, then its available
+  saved prompts and file library. Workspace and session layers can reference
+  broader saved prompts, with workspace ids taking precedence where shared.
+- A model overlay resolves ids from its own inline fragments and the libraries
+  available to its configuration scope.
 
 Conditions that do not match and unknown variables produce warnings. Warnings
 are visible in previews and logged by the server, but do not prevent assembly.
@@ -198,8 +247,9 @@ fails configuration loading with the expected path or scope in the error.
 Unreadable fragment files and invalid front matter also fail loading.
 
 The session layer is stored in the session database rather than in a fragment
-directory. It can contain inline fragments and references to those inline ids;
-it cannot read global or workspace files.
+directory. It can reference saved prompts and Markdown fragments in the global
+or workspace library without copying their bodies, as well as legacy inline
+session fragments.
 
 ## Size budgets
 
@@ -311,7 +361,7 @@ id as a positional argument and has no `--scope`.
 | `disable --id <id>` / `enable --id <id>` | Add or remove an inherited fragment id from `disabled`. |
 | `mode append\|replace` | Set this layer's combination mode. |
 | `set --file <path>` | Replace the layer with a JSON `PromptLayer` object. Use `-` to read stdin. Global and workspace `models` overlays are preserved. |
-| `clear` | Delete the whole `prompts` key, including `models` overlays, from a global/workspace configuration file; or replace a session layer with an empty layer. |
+| `clear` | Clear the active layer and model overlays. A global/workspace setting with no saved entries is deleted; saved library entries are retained. For sessions, use an empty layer. |
 
 `add`, `edit`, and `set` accept `--file -` to read UTF-8 text from standard
 input. `--file` passes raw body text for `add` and `edit`; it does not parse
@@ -332,8 +382,8 @@ scopes.
 | `t` | Edit the selected inline title. |
 | `d` | Remove the selected fragment from this layer. |
 | `Ctrl+Up` / `Ctrl+Down` | Reorder the selected fragment. |
-| `o` | Add an existing fragment id to `order`. |
-| `h` / `u` | Hide or unhide an inherited fragment id. |
+| `o` | Choose a saved prompt by title and add it to `order`. |
+| `h` / `u` | Choose an inherited prompt to hide or restore. |
 | `i` | Rename an inline fragment and update layer references. |
 | `m` | Toggle `append` / `replace`. |
 | `p` | Load the saved-state preview. |

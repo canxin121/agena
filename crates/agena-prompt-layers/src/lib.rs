@@ -152,6 +152,9 @@ pub struct PromptFragment {
     pub id: FragmentId,
     #[serde(default)]
     pub title: String,
+    /// Optional library category; presentation metadata, not prompt text.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub category: String,
     #[serde(default)]
     pub body: String,
     #[serde(default)]
@@ -163,6 +166,7 @@ impl PromptFragment {
         Self {
             id,
             title: String::new(),
+            category: String::new(),
             body: body.into(),
             when: PromptCondition::default(),
         }
@@ -209,7 +213,10 @@ pub struct PromptLayer {
 
 impl PromptLayer {
     pub fn is_empty(&self) -> bool {
-        self.order.is_empty() && self.disabled.is_empty() && self.inline.is_empty()
+        self.mode == LayerMode::Append
+            && self.order.is_empty()
+            && self.disabled.is_empty()
+            && self.inline.is_empty()
     }
 
     pub fn validate(&self) -> Result<(), PromptError> {
@@ -608,6 +615,19 @@ mod tests {
         }
         let json = serde_json::to_value(fragment("style", "Body")).unwrap();
         assert_eq!(json["id"], "style");
+    }
+
+    #[test]
+    fn empty_replace_layer_is_semantically_nonempty() {
+        let replacing = PromptLayer {
+            mode: LayerMode::Replace,
+            ..PromptLayer::default()
+        };
+        assert!(
+            !replacing.is_empty(),
+            "the session API must retain the replace mode"
+        );
+        assert!(PromptLayer::default().is_empty());
     }
 
     #[test]

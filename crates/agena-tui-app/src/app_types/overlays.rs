@@ -126,6 +126,8 @@ impl PromptStudioScope {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PromptStudioDraft {
     pub layer: agena_prompt_layers::PromptLayer,
+    /// Shared saved prompts are managed separately; preserve them on layer edits.
+    pub library: Vec<agena_prompt_layers::PromptFragment>,
     /// Model-scoped overlays are configuration-only and are preserved while
     /// this editor changes the top-level layer.
     pub models: Vec<serde_json::Value>,
@@ -138,6 +140,7 @@ impl PromptStudioDraft {
         // be deleted without changing behavior.
         self.layer.is_empty()
             && self.layer.mode == agena_prompt_layers::LayerMode::Append
+            && self.library.is_empty()
             && self.models.is_empty()
     }
 }
@@ -147,9 +150,13 @@ pub(crate) enum PromptStudioEditorAction {
     Body(String),
     Title(String),
     Rename(String),
-    AddOrder,
-    AddDisabled,
-    EnableDisabled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptStudioPickerAction {
+    Order,
+    Hide,
+    Unhide,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +167,8 @@ pub(crate) struct PromptStudioOverlay {
     pub workspace: PromptStudioDraft,
     pub session: PromptStudioDraft,
     pub selected: usize,
+    pub picker: Option<PromptStudioPickerAction>,
+    pub picker_selected: usize,
     pub editor: Option<EditorDialogState<PromptStudioEditorAction>>,
     pub status: String,
     pub preview: Option<agena_prompt_layers::PromptResolution>,

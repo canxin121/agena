@@ -117,6 +117,7 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
     'model-settings': MODEL_SCOPE_SOURCES,
   },
   'runtime-session': {
+    'prompt-library': LAYER_SCOPE_SOURCES,
     'prompt-layers': PROMPT_SCOPE_SOURCES,
   },
   diagnostics: {

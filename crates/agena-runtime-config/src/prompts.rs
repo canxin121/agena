@@ -22,15 +22,19 @@ pub struct PromptScopeConfig {
     pub order: Vec<FragmentId>,
     pub disabled: Vec<FragmentId>,
     pub inline: Vec<PromptFragment>,
+    /// Reusable saved prompts; these are NOT applied until an order references them.
+    pub library: Vec<PromptFragment>,
     /// Layers that participate only when the request route matches `match`.
     pub models: Vec<ModelPromptConfig>,
 }
 
 impl PromptScopeConfig {
     pub fn is_empty(&self) -> bool {
-        self.order.is_empty()
+        self.mode == LayerMode::Append
+            && self.order.is_empty()
             && self.disabled.is_empty()
             && self.inline.is_empty()
+            && self.library.is_empty()
             && self.models.is_empty()
     }
 
@@ -45,6 +49,21 @@ impl PromptScopeConfig {
 
     pub fn validate(&self) -> Result<(), String> {
         self.layer().validate().map_err(|error| error.to_string())?;
+        let library_layer = PromptLayer {
+            inline: self.library.clone(),
+            ..PromptLayer::default()
+        };
+        library_layer
+            .validate()
+            .map_err(|error| error.to_string())?;
+        for fragment in &self.library {
+            if self.inline.iter().any(|inline| inline.id == fragment.id) {
+                return Err(format!(
+                    "saved prompt `{}` conflicts with an inline fragment in the same scope",
+                    fragment.id
+                ));
+            }
+        }
         for model in &self.models {
             model.validate()?;
         }
@@ -97,14 +116,19 @@ pub struct PromptLayersConfig {
 impl PromptLayersConfig {
     /// Load fragment bodies for one scope; missing directories are empty.
     pub fn library(&self, scope: PromptScope) -> Result<FragmentLibrary, ConfigError> {
-        let dir = match scope {
-            PromptScope::Global => &self.global_dir,
-            PromptScope::Workspace => &self.workspace_dir,
+        let (dir, saved) = match scope {
+            PromptScope::Global => (&self.global_dir, &self.global.library),
+            PromptScope::Workspace => (&self.workspace_dir, &self.workspace.library),
             PromptScope::Model | PromptScope::Session | PromptScope::Request => {
                 return Ok(FragmentLibrary::default());
             }
         };
-        load_library(dir)
+        let mut library = load_library(dir)?;
+        // Explicitly saved entries take precedence over legacy Markdown files.
+        for fragment in saved {
+            library.insert(fragment.id.clone(), fragment.clone());
+        }
+        Ok(library)
     }
 
     pub fn scope(&self, scope: PromptScope) -> Option<&PromptScopeConfig> {
@@ -129,11 +153,22 @@ impl PromptLayersConfig {
 
     /// Fail when a layer references an id that no file or inline fragment provides.
     pub fn check_libraries(&self) -> Result<(), ConfigError> {
+        let mut inherited = self.library(PromptScope::Global)?;
+        for fragment in &self.global.inline {
+            inherited.insert(fragment.id.clone(), fragment.clone());
+        }
         for (scope, config) in [
             (PromptScope::Global, &self.global),
             (PromptScope::Workspace, &self.workspace),
         ] {
-            let library = self.library(scope)?;
+            let mut library = self.library(scope)?;
+            if scope == PromptScope::Workspace {
+                for (id, fragment) in &inherited {
+                    library
+                        .entry(id.clone())
+                        .or_insert_with(|| fragment.clone());
+                }
+            }
             let dir = if scope == PromptScope::Global {
                 &self.global_dir
             } else {
@@ -161,6 +196,9 @@ impl PromptLayersConfig {
                         )));
                     }
                 }
+            }
+            if scope == PromptScope::Workspace {
+                inherited = library;
             }
         }
         Ok(())
@@ -218,6 +256,7 @@ pub fn load_library(dir: &Path) -> Result<FragmentLibrary, ConfigError> {
 #[serde(default, deny_unknown_fields)]
 struct FragmentFrontMatter {
     title: Option<String>,
+    category: Option<String>,
     when: Option<agena_prompt_layers::PromptCondition>,
 }
 
@@ -258,6 +297,7 @@ pub fn parse_fragment(
     Ok(PromptFragment {
         id,
         title: meta.title.unwrap_or_default(),
+        category: meta.category.unwrap_or_default(),
         body: body.to_owned(),
         when: meta.when.unwrap_or_default(),
     })
@@ -265,11 +305,12 @@ pub fn parse_fragment(
 
 /// Render a fragment file, preserving front matter for title and conditions.
 pub fn render_fragment(fragment: &PromptFragment) -> String {
-    if fragment.title.is_empty() && fragment.when.is_empty() {
+    if fragment.title.is_empty() && fragment.category.is_empty() && fragment.when.is_empty() {
         return fragment.body.clone();
     }
     let front = serde_yaml::to_string(&FragmentFrontMatter {
         title: (!fragment.title.is_empty()).then(|| fragment.title.clone()),
+        category: (!fragment.category.is_empty()).then(|| fragment.category.clone()),
         when: (!fragment.when.is_empty()).then(|| fragment.when.clone()),
     })
     .unwrap_or_default();
@@ -341,6 +382,7 @@ mod tests {
         let fragment = PromptFragment {
             id: id("round"),
             title: "Round trip".to_owned(),
+            category: "writing".to_owned(),
             body: "Body\n".to_owned(),
             when: agena_prompt_layers::PromptCondition {
                 models: vec!["local/*".to_owned()],
@@ -350,6 +392,7 @@ mod tests {
         let text = render_fragment(&fragment);
         let parsed = parse_fragment(id("round"), &text, Path::new("round.md")).unwrap();
         assert_eq!(parsed.title, fragment.title);
+        assert_eq!(parsed.category, fragment.category);
         assert_eq!(parsed.body, fragment.body);
         assert_eq!(parsed.when.models, fragment.when.models);
     }

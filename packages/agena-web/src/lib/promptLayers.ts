@@ -8,6 +8,7 @@ export type PromptCondition = {
 export type PromptFragment = {
   id: string
   title: string
+  category?: string
   body: string
   when: PromptCondition
 }
@@ -21,8 +22,8 @@ export type PromptLayer = {
 
 export type ModelPromptLayer = PromptLayer & { match: string }
 
-/** The global/workspace config value. `models` route overlays must survive edits. */
-export type PromptScopeConfig = PromptLayer & { models: ModelPromptLayer[] }
+/** The global/workspace config value. Saved library entries are independent of active order. */
+export type PromptScopeConfig = PromptLayer & { library: PromptFragment[]; models: ModelPromptLayer[] }
 
 export type PromptLayerScope = 'effective' | 'global' | 'workspace' | 'session'
 
@@ -110,6 +111,7 @@ export function normalizePromptFragment(value: unknown): PromptFragment {
   return {
     id: text(item.id),
     title: text(item.title),
+    ...(text(item.category).trim() ? { category: text(item.category) } : {}),
     body: text(item.body),
     when: normalizePromptCondition(item.when),
   }
@@ -138,12 +140,13 @@ export function normalizePromptScopeConfig(value: unknown): PromptScopeConfig {
   const item = record(value)
   return {
     ...normalizePromptLayer(item),
+    library: Array.isArray(item.library) ? item.library.map(normalizePromptFragment) : [],
     models: Array.isArray(item.models) ? item.models.map(normalizeModelPromptLayer) : [],
   }
 }
 
 export function emptyPromptScopeConfig(): PromptScopeConfig {
-  return { ...emptyPromptLayer(), models: [] }
+  return { ...emptyPromptLayer(), library: [], models: [] }
 }
 
 export function clonePromptLayer(value: PromptLayer): PromptLayer {
@@ -159,7 +162,11 @@ export function promptLayerFromScopeConfig(value: PromptScopeConfig): PromptLaye
 }
 
 export function promptScopeConfigWithLayer(value: PromptScopeConfig, layer: PromptLayer): PromptScopeConfig {
-  return { ...normalizePromptLayer(layer), models: value.models.map(normalizeModelPromptLayer) }
+  return {
+    ...normalizePromptLayer(layer),
+    library: value.library.map(normalizePromptFragment),
+    models: value.models.map(normalizeModelPromptLayer),
+  }
 }
 
 export function promptLayerIsEmpty(value: PromptLayer): boolean {
@@ -167,7 +174,7 @@ export function promptLayerIsEmpty(value: PromptLayer): boolean {
 }
 
 export function promptScopeConfigIsEmpty(value: PromptScopeConfig): boolean {
-  return promptLayerIsEmpty(value) && !value.models.length
+  return promptLayerIsEmpty(value) && !value.models.length && !value.library.length
 }
 
 export function promptLayersEqual(left: PromptLayer, right: PromptLayer): boolean {

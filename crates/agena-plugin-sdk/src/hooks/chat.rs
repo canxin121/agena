@@ -19,6 +19,10 @@ pub enum ChatDirection {
 pub struct ChatMessage {
     pub role: String,
     pub content: serde_json::Value,
+    /// Provider replay state must survive a model-input hook roundtrip.
+    /// This is kept opaque to hooks that only need to inspect text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_state: Option<serde_json::Value>,
 }
 
 impl ChatMessage {
@@ -26,6 +30,7 @@ impl ChatMessage {
         Self {
             role: "user".into(),
             content: serde_json::Value::String(content.into()),
+            provider_state: None,
         }
     }
 
@@ -33,6 +38,7 @@ impl ChatMessage {
         Self {
             role: "assistant".into(),
             content: serde_json::Value::String(content.into()),
+            provider_state: None,
         }
     }
 
@@ -40,6 +46,7 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: serde_json::Value::String(content.into()),
+            provider_state: None,
         }
     }
 
@@ -96,6 +103,8 @@ pub struct ChatParamsPatch {
 pub struct ChatHeadersInput {
     pub provider: String,
     pub headers: BTreeMap<String, String>,
+    /// Owner of the active model request, for scoped plugin authority.
+    pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -107,7 +116,7 @@ pub struct ChatHeadersPatch {
     pub remove: Vec<String>,
 }
 
-// ── chat.system.transform ──────────────────────────────────────────────────
+// ── chat.system ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of a chat system transform hook.
@@ -130,7 +139,7 @@ pub struct ChatSystemTransformPatch {
     pub prepend: Option<String>,
 }
 
-// ── chat.messages.transform ────────────────────────────────────────────────
+// ── chat.messages ────────────────────────────────────────────────
 
 /// Fired before the full message history is sent to the provider. Unlike
 /// `chat.message` (which intercepts one message at a time), this hook

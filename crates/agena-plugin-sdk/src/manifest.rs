@@ -8,7 +8,7 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use super::manifest_support::normalize_tool_tag_name;
-use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
+use super::manifest_support::{normalize_schema_json, normalize_tags};
 pub use agena_domain::{AccessKind, ActivityKind, PathKind};
 pub use agena_plugin_contracts::{
     CommandDefinition, CommandDiagnostic, CommandDocs, CommandHostEffect, CommandInvokeInput,
@@ -50,6 +50,9 @@ pub struct PluginManifest {
     pub transports: Vec<TransportKind>,
     #[serde(default)]
     pub hooks: HookSubscription,
+    /// Each declared handler is preserved independently of its subscription.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hook_handlers: Vec<HookHandlerDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -135,6 +138,80 @@ pub struct ToolDocsTranslation {
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
+}
+
+/// Author-owned translations for one hook handler.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookHandlerTranslation {
+    #[serde(deserialize_with = "deserialize_required_hook_text")]
+    pub summary: String,
+    #[serde(deserialize_with = "deserialize_required_hook_text")]
+    pub help: String,
+}
+
+/// Matcher metadata, not an additional policy or execution authority.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HookHandlerFilters {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// One authored function associated with an event. UI descriptions come from
+/// the plugin, while runtime state belongs to the Host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HookHandlerDefinition {
+    /// Stable within the plugin, generated from the Rust method name.
+    pub id: String,
+    pub event: String,
+    #[serde(deserialize_with = "deserialize_required_hook_text")]
+    pub summary: String,
+    #[serde(deserialize_with = "deserialize_required_hook_text")]
+    pub help: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, HookHandlerTranslation>,
+    #[serde(default)]
+    pub priority: i32,
+    #[serde(default)]
+    pub filters: HookHandlerFilters,
+    #[serde(default)]
+    pub is_async: bool,
+}
+
+impl HookHandlerDefinition {
+    pub fn summary_for_locale(&self, locale: &str) -> &str {
+        translated_field(&self.translations, locale, |translation| {
+            Some(translation.summary.as_str())
+        })
+        .unwrap_or(&self.summary)
+    }
+
+    pub fn help_for_locale(&self, locale: &str) -> &str {
+        translated_field(&self.translations, locale, |translation| {
+            Some(translation.help.as_str())
+        })
+        .unwrap_or(&self.help)
+    }
+}
+
+fn deserialize_required_hook_text<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+    let text = String::deserialize(deserializer)?;
+    if text.trim().is_empty() {
+        return Err(D::Error::custom("hook summary and help must be non-empty"));
+    }
+    Ok(text)
 }
 
 /// The tag vocabulary a tool declares for discovery, search, UI badges,
@@ -804,31 +881,36 @@ bitflags::bitflags! {
         const SHUTDOWN                  = 1 << 1;
         const TOOL_BEFORE               = 1 << 2;
         const TOOL_AFTER                = 1 << 3;
-        const TOOL_INVOKE               = 1 << 4;
-        const TOOL_INVOKE_STREAM        = 1 << 17;
-        const EVENT                     = 1 << 5;
-        const CHAT_MESSAGE              = 1 << 6;
-        const CHAT_PARAMS               = 1 << 7;
-        const CHAT_HEADERS              = 1 << 8;
-        const CHAT_SYSTEM_TRANSFORM     = 1 << 9;
-        const AUTH                      = 1 << 10;
-        const PROVIDER_LIST             = 1 << 11;
-        const COMMAND_BEFORE            = 1 << 13;
-        const SHELL_ENV                 = 1 << 14;
-        const CONFIG                    = 1 << 15;
-        // new hooks
-        const SESSION_START             = 1 << 18;
-        const SESSION_END               = 1 << 19;
+        const TOOL_FAILURE              = 1 << 4;
+        const TOOL_INVOKE               = 1 << 5;
+        const TOOL_INVOKE_STREAM        = 1 << 6;
+        const TOOL_DEFINITION           = 1 << 7;
+        const CHAT_MESSAGE              = 1 << 8;
+        const CHAT_MESSAGES_TRANSFORM   = 1 << 9;
+        const CHAT_PARAMS               = 1 << 10;
+        const CHAT_HEADERS              = 1 << 11;
+        const CHAT_SYSTEM_TRANSFORM     = 1 << 12;
+        const PROVIDER_LIST             = 1 << 13;
+        const NOTIFICATION              = 1 << 14;
+        const COMMAND_BEFORE            = 1 << 15;
+        const COMMAND_AFTER             = 1 << 16;
+        const SHELL_ENV                 = 1 << 17;
+        const CONFIG                    = 1 << 18;
+        const SESSION_START             = 1 << 19;
+        const SESSION_END               = 1 << 20;
         const USER_PROMPT_SUBMIT        = 1 << 21;
-        const TOOL_FAILURE              = 1 << 22;
-        const AGENT_STOP                = 1 << 23;
-        const TOOL_DEFINITION           = 1 << 24;
-        const COMMAND_AFTER             = 1 << 25;
-        const CHAT_MESSAGES_TRANSFORM   = 1 << 26;
-        const PRE_RUN                  = 1 << 27;
-        const POST_RUN                 = 1 << 28;
-        const NOTIFICATION              = 1 << 29;
-        const AGENT_CANCEL              = 1 << 30;
+        const AGENT_STOP                = 1 << 22;
+        const AGENT_CANCEL              = 1 << 23;
+        const PRE_RUN                   = 1 << 24;
+        const POST_RUN                  = 1 << 25;
+        const MODEL_REQUEST_BEFORE      = 1 << 26;
+        const MODEL_REQUEST_AFTER       = 1 << 27;
+        const MODEL_REQUEST_ERROR       = 1 << 28;
+        const COMPACTION_BEFORE         = 1 << 29;
+        const COMPACTION_AFTER          = 1 << 30;
+        const SUBAGENT_START            = 1 << 31;
+        const SUBAGENT_STOP             = 1 << 32;
+        const PERMISSION_REQUEST        = 1 << 33;
     }
 }
 
@@ -885,39 +967,48 @@ impl<'de> Deserialize<'de> for HookSubscription {
 const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("init", HookSubscription::INIT),
     ("shutdown", HookSubscription::SHUTDOWN),
-    ("tool.execute.before", HookSubscription::TOOL_BEFORE),
-    ("tool.execute.after", HookSubscription::TOOL_AFTER),
-    ("tool.execute.failure", HookSubscription::TOOL_FAILURE),
+    ("tool.before", HookSubscription::TOOL_BEFORE),
+    ("tool.after", HookSubscription::TOOL_AFTER),
+    ("tool.failure", HookSubscription::TOOL_FAILURE),
     ("tool.invoke", HookSubscription::TOOL_INVOKE),
     ("tool.invoke.stream", HookSubscription::TOOL_INVOKE_STREAM),
     ("tool.definition", HookSubscription::TOOL_DEFINITION),
-    ("event", HookSubscription::EVENT),
     ("chat.message", HookSubscription::CHAT_MESSAGE),
-    (
-        "chat.messages.transform",
-        HookSubscription::CHAT_MESSAGES_TRANSFORM,
-    ),
+    ("chat.messages", HookSubscription::CHAT_MESSAGES_TRANSFORM),
     ("chat.params", HookSubscription::CHAT_PARAMS),
     ("chat.headers", HookSubscription::CHAT_HEADERS),
-    (
-        "chat.system.transform",
-        HookSubscription::CHAT_SYSTEM_TRANSFORM,
-    ),
-    ("auth", HookSubscription::AUTH),
+    ("chat.system", HookSubscription::CHAT_SYSTEM_TRANSFORM),
     ("provider.list", HookSubscription::PROVIDER_LIST),
     ("notification", HookSubscription::NOTIFICATION),
-    ("command.execute.before", HookSubscription::COMMAND_BEFORE),
-    ("command.execute.after", HookSubscription::COMMAND_AFTER),
+    ("shell.before", HookSubscription::COMMAND_BEFORE),
+    ("shell.after", HookSubscription::COMMAND_AFTER),
     ("shell.env", HookSubscription::SHELL_ENV),
-    ("config", HookSubscription::CONFIG),
+    ("config.resolved", HookSubscription::CONFIG),
     ("session.start", HookSubscription::SESSION_START),
     ("session.end", HookSubscription::SESSION_END),
-    ("user.prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
+    ("prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
     ("agent.stop", HookSubscription::AGENT_STOP),
     ("agent.cancel", HookSubscription::AGENT_CANCEL),
-    ("pre_run", HookSubscription::PRE_RUN),
-    ("post_run", HookSubscription::POST_RUN),
+    ("run.pre", HookSubscription::PRE_RUN),
+    ("run.post", HookSubscription::POST_RUN),
+    (
+        "model.request.before",
+        HookSubscription::MODEL_REQUEST_BEFORE,
+    ),
+    ("model.request.after", HookSubscription::MODEL_REQUEST_AFTER),
+    ("model.request.error", HookSubscription::MODEL_REQUEST_ERROR),
+    ("compaction.before", HookSubscription::COMPACTION_BEFORE),
+    ("compaction.after", HookSubscription::COMPACTION_AFTER),
+    ("subagent.start", HookSubscription::SUBAGENT_START),
+    ("subagent.stop", HookSubscription::SUBAGENT_STOP),
+    ("permission.request", HookSubscription::PERMISSION_REQUEST),
 ];
+
+fn hook_subscription_for_name(name: &str) -> Option<HookSubscription> {
+    HOOK_NAMES
+        .iter()
+        .find_map(|(known, flag)| (*known == name).then_some(*flag))
+}
 
 impl PluginManifest {
     pub fn new(
@@ -936,6 +1027,7 @@ impl PluginManifest {
             authors: Vec::new(),
             transports: Vec::new(),
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
+            hook_handlers: Vec::new(),
             tools: Vec::new(),
             commands: Vec::new(),
             services: PluginServiceDeclarations::default(),
@@ -992,3 +1084,73 @@ impl PluginManifest {
 
 /// Free-form metadata attached to manifests, tools, and UI definitions.
 pub type Metadata = BTreeMap<String, String>;
+
+#[cfg(test)]
+mod hook_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn every_named_hook_has_a_unique_serializable_subscription() {
+        let mut seen = std::collections::HashSet::new();
+        let mut all = HookSubscription::empty();
+        for (name, flag) in HookSubscription::all_named() {
+            assert!(seen.insert(name), "duplicate hook name: {name}");
+            assert_eq!(HookSubscription::for_name(name), Some(*flag));
+            assert_eq!(flag.names(), vec![*name]);
+            let encoded = serde_json::to_string(flag).unwrap();
+            let decoded: HookSubscription = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(&decoded, flag, "roundtrip failed for {name}");
+            assert!(!all.contains(*flag), "duplicate hook subscription: {name}");
+            all |= *flag;
+        }
+        assert_eq!(all, HookSubscription::all());
+    }
+
+    #[test]
+    fn hook_handler_documents_cannot_omit_or_empty_required_fields() {
+        let good = serde_json::json!({
+            "id": "guard_shell",
+            "event": "tool.before",
+            "summary": "Guard shell commands",
+            "help": "Checks commands before shell execution.",
+            "translations": {
+                "zh-CN": {
+                    "summary": "检查 Shell 命令",
+                    "help": "在执行前检查 Shell 命令。"
+                }
+            }
+        });
+        let parsed: HookHandlerDefinition = serde_json::from_value(good.clone()).unwrap();
+        assert_eq!(parsed.summary_for_locale("zh-CN"), "检查 Shell 命令");
+        assert_eq!(
+            parsed.help_for_locale("fr-FR"),
+            "Checks commands before shell execution."
+        );
+
+        for missing in ["summary", "help"] {
+            let mut value = good.clone();
+            value.as_object_mut().unwrap().remove(missing);
+            assert!(
+                serde_json::from_value::<HookHandlerDefinition>(value).is_err(),
+                "{missing} must be present"
+            );
+        }
+        for field in ["summary", "help"] {
+            let mut value = good.clone();
+            value[field] = serde_json::json!(" ");
+            assert!(
+                serde_json::from_value::<HookHandlerDefinition>(value).is_err(),
+                "{field} must be nonempty"
+            );
+            let mut translated = good.clone();
+            translated["translations"]["zh-CN"]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+            assert!(
+                serde_json::from_value::<HookHandlerDefinition>(translated).is_err(),
+                "translation must include {field}"
+            );
+        }
+    }
+}

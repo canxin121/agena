@@ -337,7 +337,12 @@ impl App {
             }
         }
 
-        match handle_plugin_workbench_navigation_key(&mut dialog.navigation, key, false) {
+        let previous_tab = dialog.navigation.detail_tab;
+        let effect = handle_plugin_workbench_navigation_key(&mut dialog.navigation, key, false);
+        if dialog.navigation.detail_tab != previous_tab {
+            dialog.config_scroll = 0;
+        }
+        match effect {
             PluginWorkbenchNavigationEffect::ScrollDetail(delta) => {
                 move_detail_scroll(dialog, delta);
                 false

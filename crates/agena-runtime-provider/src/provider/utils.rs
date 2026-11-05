@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::pin::Pin;
+use std::sync::Arc;
 
 use futures_core::Stream;
 use futures_util::StreamExt as _;
@@ -24,7 +25,6 @@ pub const ADAPTER_LOG_TARGET: &str = "agena::adapter";
 const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
 static REQUEST_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static RESPONSE_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
-static HEADER_HOOKS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
 const MAX_PROVIDER_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const MAX_PROVIDER_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -48,45 +48,35 @@ fn pretty_adapter_log_json(value: &serde_json::Value, context: &str) -> String {
 
 tokio::task_local! {
     static REQUEST_CANCELLATION: Option<tokio_util::sync::CancellationToken>;
+    static REQUEST_HEADER_HOOK: Arc<dyn ProviderRequestHeaderHook>;
 }
 
-/// Composition-owned hook for provider request-header enrichment.
-///
-/// Provider adapters must not reach back into the runtime plugin singleton.
-/// The composition layer installs this port once during bootstrap; provider
-/// code only knows the neutral header/cancellation boundary.
+/// Request-scoped provider header policy. A single request captures one plugin
+/// generation; concurrent sessions and reloads cannot replace each other's
+/// header policy.
 pub trait ProviderRequestHeaderHook: Send + Sync {
     fn resolve(
         &self,
         provider_id: &str,
         headers: BTreeMap<String, String>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> BTreeMap<String, String>;
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<BTreeMap<String, String>, ProviderError>>
+                + Send
+                + '_,
+        >,
+    >;
 }
 
-static REQUEST_HEADER_HOOK: OnceLock<RwLock<Option<Arc<dyn ProviderRequestHeaderHook>>>> =
-    OnceLock::new();
-
-pub fn install_request_header_hook(hook: Option<Arc<dyn ProviderRequestHeaderHook>>) {
-    let slot = REQUEST_HEADER_HOOK.get_or_init(|| RwLock::new(None));
-    let mut installed = match slot.write() {
-        Ok(installed) => installed,
-        Err(error) => {
-            tracing::error!(
-                operation = "install provider request-header hook",
-                error = %error,
-                "recovering poisoned provider request-header hook lock"
-            );
-            error.into_inner()
-        }
-    };
-    *installed = hook;
+pub async fn with_request_header_hook<F: std::future::Future>(
+    hook: Arc<dyn ProviderRequestHeaderHook>,
+    future: F,
+) -> F::Output {
+    REQUEST_HEADER_HOOK.scope(hook, future).await
 }
 
-/// Make the execution cancellation token visible to synchronous provider
-/// request builders. Those builders may run a blocking `chat.headers` plugin
-/// hook before their first network await; without this scope, cancelling the
-/// outer provider future cannot be observed until the hook timeout expires.
+/// Propagate cancellation to a scoped header policy for one provider call.
 pub async fn with_request_cancellation<F>(
     cancellation: Option<tokio_util::sync::CancellationToken>,
     future: F,
@@ -104,20 +94,6 @@ fn current_request_cancellation() -> Option<tokio_util::sync::CancellationToken>
         .flatten()
 }
 
-/// Apply provider-configured `extra_headers` and consult the plugin host's
-/// `chat.headers` hook chain.
-pub fn resolved_request_headers(
-    provider_id: &str,
-    extra_headers: &HashMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut combined = configured_request_headers(extra_headers);
-
-    if let Some(hook) = request_header_hook() {
-        combined = hook.resolve(provider_id, combined, current_request_cancellation());
-    }
-    combined
-}
-
 /// Pure header projection. Async transports resolve the potentially blocking
 /// plugin hook separately, after the request has been prepared.
 pub fn configured_request_headers(
@@ -129,43 +105,41 @@ pub fn configured_request_headers(
         .collect()
 }
 
-fn request_header_hook() -> Option<Arc<dyn ProviderRequestHeaderHook>> {
-    REQUEST_HEADER_HOOK
-        .get()
-        .and_then(|slot| match slot.read() {
-            Ok(guard) => guard.clone(),
-            Err(error) => {
-                tracing::error!(
-                    operation = "resolve provider request headers",
-                    error = %error,
-                    "recovering poisoned provider request-header hook lock"
-                );
-                error.into_inner().clone()
-            }
-        })
-}
-
 pub async fn resolved_request_headers_async(
     provider_id: &str,
     headers: BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, ProviderError> {
-    let Some(hook) = request_header_hook() else {
+    let Ok(hook) = REQUEST_HEADER_HOOK.try_with(Arc::clone) else {
         return Ok(headers);
     };
-    let provider_id = provider_id.to_owned();
-    // Tokio task-local authority must be captured before entering a worker.
-    let cancellation = current_request_cancellation();
-    HEADER_HOOKS
-        .run(move || hook.resolve(&provider_id, headers, cancellation))
-        .await
-        .map_err(|error| ProviderError::Internal(format!("provider header worker failed: {error}")))
+    // Authentication headers belong to the provider, not to presentation
+    // plugins. Preserve them independently of the mutable request view.
+    let mut credentials = BTreeMap::new();
+    let mut visible = BTreeMap::new();
+    for (name, value) in headers {
+        if is_sensitive_key(&name) {
+            credentials.insert(name, value);
+        } else {
+            visible.insert(name, value);
+        }
+    }
+    let mut resolved = hook
+        .resolve(provider_id, visible, current_request_cancellation())
+        .await?;
+    if resolved.keys().any(|key| is_sensitive_key(key)) {
+        return Err(ProviderError::Config(
+            "chat.headers hooks cannot set authentication or credential headers".into(),
+        ));
+    }
+    resolved.extend(credentials);
+    Ok(resolved)
 }
 
 pub async fn send_request_builder(
     provider_id: &str,
     builder: reqwest::RequestBuilder,
 ) -> Result<reqwest::Response, ProviderError> {
-    if request_header_hook().is_none() {
+    if REQUEST_HEADER_HOOK.try_with(|_| ()).is_err() {
         return Ok(builder.send().await?);
     }
     let (client, request) = builder.build_split();
@@ -1855,3 +1829,6 @@ struct ProviderErrorBody {
     #[serde(default)]
     code: Option<serde_json::Value>,
 }
+
+#[cfg(test)]
+mod header_hook_tests;

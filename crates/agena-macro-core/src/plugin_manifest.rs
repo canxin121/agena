@@ -4,6 +4,7 @@ use quote::quote;
 use syn::{Result, Type};
 
 use crate::plugin_hooks::plugin_layer_hooks_expr;
+use crate::plugin_hooks_support::plugin_hook_name;
 use crate::plugin_impl_config::expr_is_ident;
 use crate::plugin_tooling::{expand_plugin_command_definition, expand_plugin_tool_definition};
 
@@ -90,6 +91,71 @@ pub fn expand_plugin_layer_manifest(
         ));
     };
     let hooks_expr = plugin_layer_hooks_expr(tools, hooks);
+    let handler_definitions = hooks
+        .iter()
+        .map(|hook| {
+            let id = hook.method.to_string();
+            let event = plugin_hook_name(hook.hook);
+            let summary = &hook.summary;
+            let help = &hook.help;
+            let priority = hook.priority;
+            let is_async = hook.is_async;
+            let tools = &hook.filters.tools;
+            let commands = &hook.filters.commands;
+            let tags = &hook.filters.tags;
+            let plugins = hook
+                .filters
+                .plugins
+                .iter()
+                .map(|filter| &filter.value)
+                .collect::<Vec<_>>();
+            let translations = hook
+                .translations
+                .iter()
+                .map(|translation| {
+                    let locale = &translation.locale;
+                    let translated_summary = translation
+                        .summary
+                        .as_ref()
+                        .expect("validated hook translation summary");
+                    let translated_help = translation
+                        .help
+                        .as_ref()
+                        .expect("validated hook translation help");
+                    quote! {
+                        __agena_hook_translations.insert(
+                            #locale.to_string(),
+                            ::agena_plugin_sdk::HookHandlerTranslation {
+                                summary: #translated_summary.to_string(),
+                                help: #translated_help.to_string(),
+                            },
+                        );
+                    }
+                })
+                .collect::<Vec<_>>();
+            quote! {
+                {
+                    let mut __agena_hook_translations = ::std::collections::BTreeMap::new();
+                    #(#translations)*
+                    manifest.hook_handlers.push(::agena_plugin_sdk::HookHandlerDefinition {
+                        id: #id.to_string(),
+                        event: #event.to_string(),
+                        summary: #summary.to_string(),
+                        help: #help.to_string(),
+                        translations: __agena_hook_translations,
+                        priority: #priority,
+                        filters: ::agena_plugin_sdk::HookHandlerFilters {
+                            tools: vec![#(#tools.to_string()),*],
+                            commands: vec![#(#commands.to_string()),*],
+                            plugins: vec![#(#plugins.to_string()),*],
+                            tags: vec![#(#tags.to_string()),*],
+                        },
+                        is_async: #is_async,
+                    });
+                }
+            }
+        })
+        .collect::<Vec<_>>();
 
     let settings_assignment = expand_plugin_layer_settings_assignment(config)?;
     let help_assignment = if let Some(help) = config.help.as_ref() {
@@ -228,6 +294,7 @@ pub fn expand_plugin_layer_manifest(
             let mut manifest = ::agena_plugin_sdk::PluginManifest::new(#namespace, #name, #version);
             manifest.summary = Some(#summary.to_string());
             manifest.hooks = #hooks_expr;
+            #(#handler_definitions)*
             #authors_assignment
             #transports_assignment
             #surface_assignment

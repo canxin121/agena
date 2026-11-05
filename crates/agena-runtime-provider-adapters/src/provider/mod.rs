@@ -9,7 +9,7 @@ pub use agena_runtime_provider::provider::{
 };
 pub use agena_runtime_provider::provider::{
     ModelRuntime, ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook,
-    catalog_decoration_source, install_request_header_hook, with_request_cancellation,
+    catalog_decoration_source, with_request_cancellation, with_request_header_hook,
 };
 
 pub(crate) use agena_provider::{

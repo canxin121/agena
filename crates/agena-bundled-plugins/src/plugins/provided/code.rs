@@ -71,7 +71,63 @@ struct CodeSyntaxTreeInput {
     ),
 )]
 impl CodePlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize code permissions",
+        help = "Prepares the permission-aware host for code inspection and editing.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化代码权限",
+                help = "准备代码权限功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化程式碼權限",
+                help = "準備程式碼權限功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les autorisations de code",
+                help = "Prépare les autorisations de code et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar los permisos de código",
+                help = "Prepara los permisos de código y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as permissões de código",
+                help = "Prepara as permissões de código e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Codeberechtigungen initialisieren",
+                help = "Bereitet die Codeberechtigungen vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "コードの権限制御を初期化",
+                help = "必要なホストサービスに接続し、コードの権限制御を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "코드 권한 초기화",
+                help = "필요한 호스트 서비스에 연결하고 코드 권한 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "कोड अनुमतियाँ प्रारंभ करें",
+                help = "“कोड अनुमतियाँ” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة أذونات الشيفرة",
+                help = "يُعِدّ أذونات الشيفرة ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,

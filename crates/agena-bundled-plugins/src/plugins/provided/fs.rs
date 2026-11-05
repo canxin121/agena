@@ -131,7 +131,63 @@ pub(crate) fn new_plugin() -> FsPlugin {
     ),
 )]
 impl FsPlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize filesystem permissions",
+        help = "Binds the permission-aware host for filesystem reads, writes and inspection.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化文件系统权限",
+                help = "准备文件系统权限功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化檔案系統權限",
+                help = "準備檔案系統權限功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les autorisations du système de fichiers",
+                help = "Prépare les autorisations du système de fichiers et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar los permisos del sistema de archivos",
+                help = "Prepara los permisos del sistema de archivos y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as permissões do sistema de arquivos",
+                help = "Prepara as permissões do sistema de arquivos e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Dateisystemberechtigungen initialisieren",
+                help = "Bereitet die Dateisystemberechtigungen vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "ファイルシステムの権限制御を初期化",
+                help = "必要なホストサービスに接続し、ファイルシステムの権限制御を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "파일 시스템 권한 초기화",
+                help = "필요한 호스트 서비스에 연결하고 파일 시스템 권한 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "फ़ाइल सिस्टम अनुमतियाँ प्रारंभ करें",
+                help = "“फ़ाइल सिस्टम अनुमतियाँ” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة أذونات نظام الملفات",
+                help = "يُعِدّ أذونات نظام الملفات ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,

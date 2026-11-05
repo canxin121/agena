@@ -32,7 +32,63 @@ impl AgentPlugin {
             host: OnceLock::new(),
         }
     }
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize agent coordination",
+        help = "Binds the host APIs used for agent delegation and coordination.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化Agent 协作",
+                help = "准备Agent 协作功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化Agent 協作",
+                help = "準備Agent 協作功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser la coordination des agents",
+                help = "Prépare la coordination des agents et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la coordinación de agentes",
+                help = "Prepara la coordinación de agentes y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a coordenação de agentes",
+                help = "Prepara a coordenação de agentes e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Agentenkoordination initialisieren",
+                help = "Bereitet die Agentenkoordination vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "エージェント連携を初期化",
+                help = "必要なホストサービスに接続し、エージェント連携を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "에이전트 협업 초기화",
+                help = "필요한 호스트 서비스에 연결하고 에이전트 협업 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "एजेंट समन्वय प्रारंभ करें",
+                help = "“एजेंट समन्वय” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة تنسيق الوكلاء",
+                help = "يُعِدّ تنسيق الوكلاء ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> Result<InitOutcome> {
         self.host
             .set(host)

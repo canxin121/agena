@@ -10,6 +10,47 @@ use agena_runtime_provider::{
 // parallel would incorrectly charge their independent sessions to one owner.
 static PROVIDER_FIXTURES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[derive(Clone)]
+struct SubagentProbe {
+    events: Arc<StdMutex<Vec<String>>>,
+    deny: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "test",
+    name = "subagent-lifecycle",
+    version = "test",
+    summary = "Observes real delegated Agent lifecycle boundaries."
+)]
+impl SubagentProbe {
+    #[hook(subagent.start, summary = "Check child agent admission", help = "Verifies that delegation can be denied before model execution.")]
+    async fn before(
+        &self,
+        input: agena_plugin_host::SubagentStartInput,
+    ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::SubagentStartPatch>> {
+        assert!(input.child_session_id > 0);
+        self.events.lock().unwrap().push("subagent.start".into());
+        Ok(self
+            .deny
+            .load(std::sync::atomic::Ordering::Acquire)
+            .then(|| agena_plugin_host::SubagentStartPatch {
+                deny_reason: Some("subagent launch denied by plugin".into()),
+            }))
+    }
+
+    #[hook(subagent.stop, summary = "Observe child agent settlement", help = "Records successful and rejected delegated agent executions.")]
+    async fn after(
+        &self,
+        input: agena_plugin_host::SubagentStopInput,
+    ) -> agena_plugin_host::sdk::Result<()> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("subagent.stop:{}", input.status));
+        Ok(())
+    }
+}
+
 struct ProbeProvider {
     model: ModelId,
     requests: tokio::sync::mpsc::UnboundedSender<Option<u32>>,
@@ -66,6 +107,8 @@ impl ModelRuntime for ProbeProvider {
 }
 
 struct Fixture {
+    subagent_events: Arc<StdMutex<Vec<String>>>,
+    subagent_deny: Arc<std::sync::atomic::AtomicBool>,
     _provider_admission: tokio::sync::MutexGuard<'static, ()>,
     manager: SessionManager,
     parent: SessionId,
@@ -128,10 +171,23 @@ impl Fixture {
             .unwrap()
             .value
             .id;
+        let subagent_events = Arc::new(StdMutex::new(Vec::new()));
+        let subagent_deny = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut plugin_config = agena_plugin_host::PluginsConfig::default();
+        plugin_config.list.insert(
+            "test.subagent-lifecycle".into(),
+            agena_plugin_host::ConfiguredPlugin::static_default(),
+        );
         let plugins =
             agena_plugin_host::PluginHost::new(agena_plugin_host::PluginHostBuildConfig {
-                static_plugins: vec![],
-                config: Default::default(),
+                static_plugins: vec![agena_plugin_host::StaticPluginRegistration::new(
+                    "test.subagent-lifecycle".parse().unwrap(),
+                    SubagentProbe {
+                        events: subagent_events.clone(),
+                        deny: subagent_deny.clone(),
+                    },
+                )],
+                config: plugin_config,
                 workspace_root: "/agent-lifecycle-tests".into(),
                 agena_version: "test".into(),
                 callback_base_url: None,
@@ -184,6 +240,8 @@ impl Fixture {
             max_output_tokens: None,
         };
         Self {
+            subagent_events,
+            subagent_deny,
             _provider_admission: provider_admission,
             manager,
             parent,
@@ -591,6 +649,14 @@ async fn a_direct_turn_queued_after_delegation_waits_for_exactly_one_previous_se
     fixture.idle().await;
     assert_eq!(fixture.agent().await.status, AgentStatus::Completed);
     assert_eq!(fixture.deliveries().await.len(), 2);
+    let events = fixture.subagent_events.lock().unwrap().clone();
+    assert!(events.contains(&"subagent.start".into()), "{events:?}");
+    assert!(
+        events
+            .iter()
+            .any(|event| event == "subagent.stop:completed"),
+        "{events:?}"
+    );
     assert!(
         fixture
             .manager
@@ -598,6 +664,55 @@ async fn a_direct_turn_queued_after_delegation_waits_for_exactly_one_previous_se
             .lock()
             .unwrap()
             .is_empty()
+    );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn denied_subagent_launch_settles_failed_without_running_a_model() {
+    let mut fixture = Fixture::new(Default::default()).await;
+    fixture
+        .subagent_deny
+        .store(true, std::sync::atomic::Ordering::Release);
+    let outcome = fixture
+        .manager
+        .launch_agent(AgentLaunch {
+            parent_session_id: fixture.parent.get(),
+            launch_call_id: None,
+            name: "worker".into(),
+            prompt: "This work must not execute".into(),
+            commands: Vec::new(),
+            selection: agena_domain::ModelSelectionConfig {
+                provider: Some("agent-lifecycle-test".into()),
+                model: Some("probe".into()),
+                ..Default::default()
+            },
+            timeout_ms: None,
+            max_tokens: None,
+            max_cost_microusd: None,
+            existing: Some(fixture.child),
+        })
+        .await;
+    assert!(matches!(outcome, Err(AppError::Config(_))), "{outcome:?}");
+    assert_eq!(fixture.agent().await.status, AgentStatus::Failed);
+    assert!(
+        matches!(
+            fixture.requests.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ),
+        "a rejected launch must not reach the provider"
+    );
+    let events = fixture.subagent_events.lock().unwrap().clone();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| *event == "subagent.start")
+            .count(),
+        1
+    );
+    assert!(
+        events.iter().any(|event| event == "subagent.stop:failed"),
+        "rejected launch must produce a terminal observation: {events:?}"
     );
     fixture.close().await;
 }

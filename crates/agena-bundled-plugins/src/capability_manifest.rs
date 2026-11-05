@@ -340,3 +340,160 @@ mod inline_ui_contract_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod hook_description_tests {
+    use agena_plugin_host::sdk::Plugin;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    // Read both product locale catalogs so this coverage test automatically
+    // expands whenever the Web or TUI adds a supported language.
+    fn supported_hook_locales() -> BTreeSet<String> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates directory")
+            .parent()
+            .expect("workspace root");
+        let mut locales = BTreeSet::new();
+        for entry in
+            std::fs::read_dir(root.join("crates/agena-tui/locales")).expect("TUI locale catalog")
+        {
+            let entry = entry.expect("TUI locale directory");
+            if entry.path().is_dir() {
+                locales.insert(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+        for entry in std::fs::read_dir(root.join("packages/agena-web/src/i18n/settings-text"))
+            .expect("Web Settings locale catalog")
+        {
+            let entry = entry.expect("Web locale file");
+            if entry.path().extension().is_some_and(|ext| ext == "json") {
+                locales.insert(
+                    entry
+                        .path()
+                        .file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+        locales.remove("en-US"); // Required English summary/help live on the Hook itself.
+        locales
+    }
+
+    fn declared_hook_count(root: &Path) -> usize {
+        std::fs::read_dir(root)
+            .expect("bundled source directory")
+            .map(|entry| {
+                let path = entry.expect("bundled source file").path();
+                if path.is_dir() {
+                    return declared_hook_count(&path);
+                }
+                if path.extension().is_some_and(|ext| ext == "rs") {
+                    return std::fs::read_to_string(&path)
+                        .expect("bundled Hook source")
+                        .lines()
+                        .filter(|line| line.trim_start().starts_with("#[hook("))
+                        .count();
+                }
+                0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn every_bundled_hook_translates_summary_and_help_for_all_product_locales() {
+        let locales = supported_hook_locales();
+        assert!(
+            locales.len() >= 10,
+            "product locale catalogs unexpectedly incomplete: {locales:?}"
+        );
+
+        let mut manifests = super::bundled_plugin_manifests()
+            .into_iter()
+            .map(|(manifest, _)| manifest)
+            .collect::<Vec<_>>();
+        // Notifications is runtime-provided, not part of the tool catalog.
+        manifests
+            .push(crate::plugins::provided::notifications::NotificationsPlugin::new().manifest());
+
+        let mut inspected = 0;
+        for manifest in &manifests {
+            for hook in &manifest.hook_handlers {
+                inspected += 1;
+                let id = format!("{}.{}::{}", manifest.namespace, manifest.name, hook.id);
+                assert!(
+                    !hook.summary.trim().is_empty(),
+                    "{id} has no English summary"
+                );
+                assert!(!hook.help.trim().is_empty(), "{id} has no English help");
+                for locale in &locales {
+                    let translation = hook
+                        .translations
+                        .get(locale)
+                        .unwrap_or_else(|| panic!("{id} is missing the {locale} translation"));
+                    assert!(
+                        !translation.summary.trim().is_empty(),
+                        "{id} has an empty {locale} summary"
+                    );
+                    assert!(
+                        !translation.help.trim().is_empty(),
+                        "{id} has an empty {locale} help"
+                    );
+                    assert_ne!(
+                        translation.summary, hook.summary,
+                        "{id} has an untranslated {locale} summary"
+                    );
+                    assert_ne!(
+                        translation.help, hook.help,
+                        "{id} has untranslated {locale} help"
+                    );
+                }
+            }
+        }
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        assert_eq!(
+            inspected,
+            declared_hook_count(&source_root),
+            "Every #[hook(...)] declaration must be represented by a bundled or runtime-provided manifest",
+        );
+    }
+
+    #[test]
+    fn bundled_plugins_publish_their_own_localized_hook_introductions() {
+        let manifests = super::bundled_plugin_manifests();
+        let memory = manifests
+            .iter()
+            .find(|(manifest, _)| manifest.namespace == "agena" && manifest.name == "memory")
+            .map(|(manifest, _)| manifest)
+            .expect("bundled memory plugin");
+        let handler = memory
+            .hook_handlers
+            .iter()
+            .find(|handler| handler.event == "chat.messages")
+            .expect("memory retrieval hook metadata");
+        assert_eq!(handler.id, "chat_messages_transform");
+        assert_eq!(handler.summary, "Recall relevant memories");
+        assert_eq!(handler.summary_for_locale("zh-CN"), "回忆相关记忆");
+        assert_eq!(handler.summary_for_locale("zh-TW"), "回想相關記憶");
+        assert_eq!(
+            handler.summary_for_locale("es-ES"),
+            "Recuperar recuerdos relevantes"
+        );
+
+        let notifications =
+            crate::plugins::provided::notifications::NotificationsPlugin::new().manifest();
+        let handler = notifications
+            .hook_handlers
+            .iter()
+            .find(|handler| handler.event == "run.pre")
+            .expect("running indicator hook metadata");
+        assert_eq!(handler.summary_for_locale("zh-CN"), "显示运行状态");
+        assert_eq!(
+            handler.summary_for_locale("de-DE"),
+            "Aktiven Ausführungsstatus anzeigen"
+        );
+    }
+}

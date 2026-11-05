@@ -163,9 +163,9 @@ impl WorkflowPlugin {
         &self,
         input: agena_plugin_host::AgentStopInput,
     ) -> SdkResult<Option<agena_plugin_host::AgentStopPatch>> {
-        if input.stop_hook_active {
-            return Ok(None);
-        }
+        // A plan may legitimately continue through multiple model turns.
+        // The session's model-turn budget bounds plan autorun independently
+        // of the general stop-hook reentry guard.
         let Some(plan) = self.load_active_plan().await? else {
             if let Err(error) = self.sync_plan_display(None).await {
                 tracing::warn!(

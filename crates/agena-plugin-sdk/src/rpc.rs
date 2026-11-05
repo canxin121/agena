@@ -147,9 +147,8 @@ pub mod method {
     pub const META_HOST_REBIND: &str = "meta/host.rebind";
     pub const META_HTTP_STATE: &str = "meta/http.state";
 
-    pub const HOOK_EVENT: &str = "hooks/event";
-    pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.execute.before";
-    pub const HOOK_TOOL_AFTER: &str = "hooks/tool.execute.after";
+    pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.before";
+    pub const HOOK_TOOL_AFTER: &str = "hooks/tool.after";
     pub const HOOK_TOOL_RENDER: &str = "hooks/tool.render";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
     pub const HOOK_TOOL_INVOKE_STREAM: &str = "hooks/tool.invoke.stream";
@@ -164,24 +163,31 @@ pub mod method {
     pub const HOOK_CHAT_MESSAGE: &str = "hooks/chat.message";
     pub const HOOK_CHAT_PARAMS: &str = "hooks/chat.params";
     pub const HOOK_CHAT_HEADERS: &str = "hooks/chat.headers";
-    pub const HOOK_CHAT_SYSTEM_TRANSFORM: &str = "hooks/chat.system.transform";
-    pub const HOOK_AUTH: &str = "hooks/auth";
+    pub const HOOK_CHAT_SYSTEM_TRANSFORM: &str = "hooks/chat.system";
     pub const HOOK_PROVIDER_LIST: &str = "hooks/provider.list";
     pub const HOOK_NOTIFICATION: &str = "hooks/notification";
-    pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
+    pub const HOOK_COMMAND_BEFORE: &str = "hooks/shell.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
-    pub const HOOK_CONFIG: &str = "hooks/config";
+    pub const HOOK_CONFIG: &str = "hooks/config.resolved";
     pub const HOOK_SESSION_START: &str = "hooks/session.start";
     pub const HOOK_SESSION_END: &str = "hooks/session.end";
-    pub const HOOK_USER_PROMPT_SUBMIT: &str = "hooks/user.prompt.submit";
-    pub const HOOK_TOOL_FAILURE: &str = "hooks/tool.execute.failure";
+    pub const HOOK_USER_PROMPT_SUBMIT: &str = "hooks/prompt.submit";
+    pub const HOOK_TOOL_FAILURE: &str = "hooks/tool.failure";
     pub const HOOK_TOOL_DEFINITION: &str = "hooks/tool.definition";
     pub const HOOK_AGENT_STOP: &str = "hooks/agent.stop";
     pub const HOOK_AGENT_CANCEL: &str = "hooks/agent.cancel";
-    pub const HOOK_COMMAND_AFTER: &str = "hooks/command.execute.after";
-    pub const HOOK_CHAT_MESSAGES_TRANSFORM: &str = "hooks/chat.messages.transform";
-    pub const HOOK_PRE_RUN: &str = "hooks/pre_run";
-    pub const HOOK_POST_RUN: &str = "hooks/post_run";
+    pub const HOOK_COMMAND_AFTER: &str = "hooks/shell.after";
+    pub const HOOK_CHAT_MESSAGES_TRANSFORM: &str = "hooks/chat.messages";
+    pub const HOOK_PRE_RUN: &str = "hooks/run.pre";
+    pub const HOOK_POST_RUN: &str = "hooks/run.post";
+    pub const HOOK_MODEL_REQUEST_BEFORE: &str = "hooks/model.request.before";
+    pub const HOOK_MODEL_REQUEST_AFTER: &str = "hooks/model.request.after";
+    pub const HOOK_MODEL_REQUEST_ERROR: &str = "hooks/model.request.error";
+    pub const HOOK_COMPACTION_BEFORE: &str = "hooks/compaction.before";
+    pub const HOOK_COMPACTION_AFTER: &str = "hooks/compaction.after";
+    pub const HOOK_SUBAGENT_START: &str = "hooks/subagent.start";
+    pub const HOOK_SUBAGENT_STOP: &str = "hooks/subagent.stop";
+    pub const HOOK_PERMISSION_REQUEST: &str = "hooks/permission.request";
 
     // plugin -> host
     pub const HOST_LOG: &str = "host/log";

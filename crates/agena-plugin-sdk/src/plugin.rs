@@ -196,16 +196,7 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
-    // -------- events --------
-    async fn event(&self, _ev: EventEnvelope) -> Result<()> {
-        Ok(())
-    }
-
-    // -------- auth & providers --------
-    async fn auth(&self, _input: AuthInput) -> Result<Option<AuthOutput>> {
-        Ok(None)
-    }
-
+    // -------- providers --------
     async fn provider_list(&self, _input: ProviderListInput) -> Result<Option<ProviderListPatch>> {
         Ok(None)
     }
@@ -293,6 +284,53 @@ pub trait Plugin: Send + Sync + 'static {
 
     // -------- config & session --------
     async fn config_resolved(&self, _input: ConfigInput) -> Result<Option<ConfigPatch>> {
+        Ok(None)
+    }
+
+    async fn model_request_before(
+        &self,
+        _input: ModelRequestBeforeInput,
+    ) -> Result<Option<ModelRequestBeforePatch>> {
+        Ok(None)
+    }
+
+    async fn model_request_after(&self, _input: ModelRequestAfterInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn model_request_error(
+        &self,
+        _input: ModelRequestErrorInput,
+    ) -> Result<Option<ModelRequestErrorPatch>> {
+        Ok(None)
+    }
+
+    async fn compaction_before(
+        &self,
+        _input: CompactionBeforeInput,
+    ) -> Result<Option<CompactionBeforePatch>> {
+        Ok(None)
+    }
+
+    async fn compaction_after(&self, _input: CompactionAfterInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn subagent_start(
+        &self,
+        _input: SubagentStartInput,
+    ) -> Result<Option<SubagentStartPatch>> {
+        Ok(None)
+    }
+
+    async fn subagent_stop(&self, _input: SubagentStopInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn permission_request(
+        &self,
+        _input: PermissionRequestInput,
+    ) -> Result<Option<PermissionRequestPatch>> {
         Ok(None)
     }
 }

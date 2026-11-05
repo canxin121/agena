@@ -10,6 +10,7 @@ pub struct SessionProcessor {
 }
 
 mod helpers;
+mod model_hooks;
 mod tool_call_helpers;
 pub(crate) use helpers::*;
 pub(crate) use tool_call_helpers::*;

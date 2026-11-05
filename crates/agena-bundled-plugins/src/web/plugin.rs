@@ -1356,7 +1356,63 @@ impl WebPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize web tools",
+        help = "Loads browser configuration and initializes the network-authorized web tools.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化网页工具",
+                help = "准备网页工具功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化網頁工具",
+                help = "準備網頁工具功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les outils web",
+                help = "Prépare les outils web et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar las herramientas web",
+                help = "Prepara las herramientas web y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as ferramentas web",
+                help = "Prepara as ferramentas web e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Webwerkzeuge initialisieren",
+                help = "Bereitet die Webwerkzeuge vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "Web ツールを初期化",
+                help = "必要なホストサービスに接続し、Web ツールを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "웹 도구 초기화",
+                help = "필요한 호스트 서비스에 연결하고 웹 도구 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "वेब टूल प्रारंभ करें",
+                help = "“वेब टूल” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة أدوات الويب",
+                help = "يُعِدّ أدوات الويب ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,
@@ -1376,7 +1432,63 @@ impl WebPlugin {
         Ok(agena_plugin_host::sdk::InitOutcome::ack(manifest))
     }
 
-    #[hook(shutdown)]
+    #[hook(
+        shutdown,
+        summary = "Close browser resources",
+        help = "Closes browser sessions, previews and associated browser processes during shutdown.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "关闭浏览器资源",
+                help = "插件停止时关闭浏览器会话、预览及相关进程。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "關閉瀏覽器資源",
+                help = "外掛停止時關閉瀏覽器工作階段、預覽及相關程序。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Fermer les ressources du navigateur",
+                help = "Ferme les sessions, les aperçus et les processus associés au navigateur à l’arrêt du plugin."
+            ),
+            locale(
+                "es-ES",
+                summary = "Cerrar los recursos del navegador",
+                help = "Cierra las sesiones, vistas previas y procesos asociados al navegador cuando se detiene el plugin."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Fechar recursos do navegador",
+                help = "Fecha sessões, visualizações e processos associados ao navegador quando o plugin é encerrado."
+            ),
+            locale(
+                "de-DE",
+                summary = "Browserressourcen schließen",
+                help = "Schließt beim Beenden des Plugins Browsersitzungen, Vorschauen und zugehörige Prozesse."
+            ),
+            locale(
+                "ja-JP",
+                summary = "ブラウザーのリソースを終了",
+                help = "プラグイン停止時にブラウザーセッション、プレビュー、関連プロセスを終了します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "브라우저 리소스 종료",
+                help = "플러그인 중지 시 브라우저 세션, 미리보기 및 관련 프로세스를 종료합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "ब्राउज़र संसाधन बंद करें",
+                help = "प्लगइन बंद होने पर ब्राउज़र सत्र, पूर्वावलोकन और संबंधित प्रक्रियाएँ बंद करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "إغلاق موارد المتصفح",
+                help = "يغلق جلسات المتصفح والمعاينات والعمليات المرتبطة بها عند إيقاف الإضافة."
+            )
+        )
+    )]
     async fn shutdown(&self) -> SdkResult<()> {
         // Drop CDP sockets before killing the underlying browser process.
         self.browser_state.clients.lock().await.clear();

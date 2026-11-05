@@ -45,7 +45,63 @@ impl CronPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize scheduled jobs",
+        help = "Binds the host APIs used to inspect and manage scheduled tasks.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化定时任务",
+                help = "准备定时任务功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化排程工作",
+                help = "準備排程工作功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les tâches planifiées",
+                help = "Prépare les tâches planifiées et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar las tareas programadas",
+                help = "Prepara las tareas programadas y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as tarefas agendadas",
+                help = "Prepara as tarefas agendadas e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die geplanten Aufgaben initialisieren",
+                help = "Bereitet die geplanten Aufgaben vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "スケジュール済みタスクを初期化",
+                help = "必要なホストサービスに接続し、スケジュール済みタスクを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "예약 작업 초기화",
+                help = "필요한 호스트 서비스에 연결하고 예약 작업 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "निर्धारित कार्य प्रारंभ करें",
+                help = "“निर्धारित कार्य” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة المهام المجدولة",
+                help = "يُعِدّ المهام المجدولة ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,

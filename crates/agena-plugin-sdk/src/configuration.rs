@@ -169,13 +169,13 @@ impl PluginActivationConfig {
 pub struct TimeoutsConfig {
     /// `meta/init` timeout (default 10s).
     pub init: Option<DurationSpec>,
-    /// `tool.execute.before/after` timeout (default 30s).
+    /// `tool.before` / `tool.after` timeout (default 30s).
     pub tool_hook: Option<DurationSpec>,
     /// `tool.invoke` timeout (default 5min).
     pub tool_invoke: Option<DurationSpec>,
     /// `chat.*` timeout (default 5s).
     pub chat: Option<DurationSpec>,
-    /// `shell.env` / `command.execute.before` / `config` (default 2s).
+    /// `shell.env` / `shell.before` / `config.resolved` (default 2s).
     pub fast: Option<DurationSpec>,
 }
 

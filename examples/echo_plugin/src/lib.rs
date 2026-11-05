@@ -56,7 +56,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook(tool.before, tool = "echo")]
+    #[hook(tool.before, tool = "echo", summary = "Prepare echo input", help = "Adds a preparation marker to echo tool inputs before execution.")]
     async fn tool_execute_before(&self, input: ToolBeforeInput) -> Option<ToolBeforePatch> {
         if input.tool_name() != "echo" {
             return None;
@@ -74,7 +74,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook(tool.after, tool = "echo")]
+    #[hook(tool.after, tool = "echo", summary = "Annotate echo output", help = "Appends an after-hook marker and diagnostic metadata to echo results.")]
     async fn tool_execute_after(&self, input: ToolAfterInput) -> Option<ToolAfterPatch> {
         if input.tool_name() != "echo" {
             return None;
@@ -86,7 +86,7 @@ impl EchoPlugin {
         })
     }
 
-    #[hook(shell.env)]
+    #[hook(shell.env, summary = "Expose echo shell context", help = "Sets example environment variables for the echo plugin and its working directory.")]
     async fn shell_env(&self, input: ShellEnvInput) -> ShellEnvPatch {
         let mut p = ShellEnvPatch::default();
         p.set.insert("AGENA_ECHO".into(), "1".into());
@@ -97,16 +97,13 @@ impl EchoPlugin {
         p
     }
 
-    #[hook(event)]
-    async fn event(&self, _ev: EventEnvelope) {}
-
-    #[hook(run.pre)]
+    #[hook(run.pre, summary = "Observe echo execution start", help = "Observes when an example session execution starts.")]
     async fn pre_run(&self, _input: PreRunInput) {}
 
-    #[hook(run.post)]
+    #[hook(run.post, summary = "Observe echo execution settlement", help = "Observes when an example session execution settles.")]
     async fn post_run(&self, _input: PostRunInput) {}
 
-    #[hook(session.start)]
+    #[hook(session.start, summary = "Introduce the echo plugin", help = "Adds a brief echo plugin context note at session startup.")]
     async fn session_start(&self, input: SessionStartInput) -> SessionStartPatch {
         SessionStartPatch {
             additional_context: Some(format!(
@@ -117,10 +114,10 @@ impl EchoPlugin {
         }
     }
 
-    #[hook(session.end)]
+    #[hook(session.end, summary = "Observe echo session ending", help = "Receives the session-end lifecycle notification for the echo plugin.")]
     async fn session_end(&self, _input: SessionEndInput) {}
 
-    #[hook(provider.list)]
+    #[hook(provider.list, summary = "Advertise the mock echo provider", help = "Adds the example echo provider to the catalog when it is missing.")]
     async fn provider_list(&self, input: ProviderListInput) -> Option<ProviderListPatch> {
         let already_registered = input
             .current

@@ -312,7 +312,63 @@ impl GeminiToolsPlugin {
     settings_default = default
 )]
 impl GeminiToolsPlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Configure Gemini integrations",
+        help = "Loads Gemini integration settings and initializes workspace-aware tools.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化Gemini 集成",
+                help = "准备Gemini 集成功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化Gemini 整合",
+                help = "準備Gemini 整合功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser l’intégration Gemini",
+                help = "Prépare l’intégration Gemini et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la integración de Gemini",
+                help = "Prepara la integración de Gemini y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a integração com o Gemini",
+                help = "Prepara a integração com o Gemini e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Gemini-Integration initialisieren",
+                help = "Bereitet die Gemini-Integration vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "Gemini 連携を初期化",
+                help = "必要なホストサービスに接続し、Gemini 連携を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "Gemini 연동 초기화",
+                help = "필요한 호스트 서비스에 연결하고 Gemini 연동 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "Gemini एकीकरण प्रारंभ करें",
+                help = "“Gemini एकीकरण” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة تكامل Gemini",
+                help = "يُعِدّ تكامل Gemini ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: GeminiToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(

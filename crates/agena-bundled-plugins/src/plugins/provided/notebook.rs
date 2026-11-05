@@ -87,7 +87,63 @@ struct NotebookEditInput {
     ),
 )]
 impl NotebookPlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize notebook permissions",
+        help = "Binds permission services for notebook operations and workspace files.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化笔记本权限",
+                help = "准备笔记本权限功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化筆記本權限",
+                help = "準備筆記本權限功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les autorisations des notebooks",
+                help = "Prépare les autorisations des notebooks et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar los permisos de cuadernos",
+                help = "Prepara los permisos de cuadernos y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as permissões de notebooks",
+                help = "Prepara as permissões de notebooks e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Notebook-Berechtigungen initialisieren",
+                help = "Bereitet die Notebook-Berechtigungen vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "ノートブックの権限制御を初期化",
+                help = "必要なホストサービスに接続し、ノートブックの権限制御を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "노트북 권한 초기화",
+                help = "필요한 호스트 서비스에 연결하고 노트북 권한 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "नोटबुक अनुमतियाँ प्रारंभ करें",
+                help = "“नोटबुक अनुमतियाँ” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة أذونات دفاتر الملاحظات",
+                help = "يُعِدّ أذونات دفاتر الملاحظات ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,

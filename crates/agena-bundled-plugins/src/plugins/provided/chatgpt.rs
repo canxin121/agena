@@ -373,7 +373,63 @@ impl ChatGptToolsPlugin {
     settings_default = default,
 )]
 impl ChatGptToolsPlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Configure ChatGPT integrations",
+        help = "Loads ChatGPT integration settings and initializes workspace-aware tools.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化ChatGPT 集成",
+                help = "准备ChatGPT 集成功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化ChatGPT 整合",
+                help = "準備ChatGPT 整合功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser l’intégration ChatGPT",
+                help = "Prépare l’intégration ChatGPT et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la integración de ChatGPT",
+                help = "Prepara la integración de ChatGPT y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a integração com o ChatGPT",
+                help = "Prepara a integração com o ChatGPT e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die ChatGPT-Integration initialisieren",
+                help = "Bereitet die ChatGPT-Integration vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "ChatGPT 連携を初期化",
+                help = "必要なホストサービスに接続し、ChatGPT 連携を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "ChatGPT 연동 초기화",
+                help = "필요한 호스트 서비스에 연결하고 ChatGPT 연동 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "ChatGPT एकीकरण प्रारंभ करें",
+                help = "“ChatGPT एकीकरण” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة تكامل ChatGPT",
+                help = "يُعِدّ تكامل ChatGPT ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: ChatGptToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(

@@ -35,6 +35,7 @@ pub enum PluginWorkbenchMode {
 pub enum PluginDetailTab {
     Config,
     Tools,
+    Hooks,
     Commands,
     Capabilities,
     Logs,
@@ -531,9 +532,10 @@ impl PluginWorkbenchState {
 }
 
 impl PluginDetailTab {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Config,
         Self::Tools,
+        Self::Hooks,
         Self::Commands,
         Self::Capabilities,
         Self::Logs,
@@ -544,6 +546,7 @@ impl PluginDetailTab {
         match self {
             Self::Config => i18n.text("plugin-workbench-tab-config"),
             Self::Tools => i18n.text("plugin-workbench-tab-tools"),
+            Self::Hooks => i18n.text("plugin-workbench-tab-hooks"),
             Self::Commands => i18n.text("plugin-workbench-tab-commands"),
             Self::Capabilities => i18n.text("plugin-workbench-tab-capabilities"),
             Self::Logs => i18n.text("plugin-workbench-tab-logs"),
@@ -564,6 +567,7 @@ impl PluginDetailTab {
         match value.trim().to_ascii_lowercase().as_str() {
             "config" => Some(Self::Config),
             "tools" => Some(Self::Tools),
+            "hooks" => Some(Self::Hooks),
             "commands" => Some(Self::Commands),
             "capabilities" => Some(Self::Capabilities),
             "logs" => Some(Self::Logs),

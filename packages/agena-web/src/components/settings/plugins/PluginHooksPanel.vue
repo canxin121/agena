@@ -5,23 +5,17 @@ import PluginEmptyState from './PluginEmptyState.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import {
   filterPluginHookEntries,
-  PLUGIN_HOOK_GROUPS,
+  groupPluginHookEntries,
   pluginHookGroupLabel,
   pluginHookStateLabel,
   pluginHookTrustStatusLabel,
   type PluginHookEntry,
-  type PluginHookGroup,
 } from './pluginHooks'
 
 const props = defineProps<{ hooks: PluginHookEntry[] }>()
 const query = ref('')
 const filteredHooks = computed(() => filterPluginHookEntries(props.hooks, query.value))
-const groupedHooks = computed<Array<{ group: PluginHookGroup; hooks: PluginHookEntry[] }>>(() =>
-  PLUGIN_HOOK_GROUPS.flatMap((group) => {
-    const hooks = filteredHooks.value.filter((hook) => hook.group === group)
-    return hooks.length ? [{ group, hooks }] : []
-  }),
-)
+const groupedHooks = computed(() => groupPluginHookEntries(filteredHooks.value))
 const activeCount = computed(() => props.hooks.filter((hook) => hook.state === 'active').length)
 </script>
 
@@ -29,7 +23,7 @@ const activeCount = computed(() => props.hooks.filter((hook) => hook.state === '
   <section class="space-y-4" data-plugin-hooks>
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div class="space-y-1">
-        <h3 class="text-sm font-semibold">{{ $st('Hook subscriptions') }}</h3>
+        <h3 class="text-sm font-semibold">{{ $st('Hooks') }}</h3>
         <p class="text-xs leading-relaxed text-muted-foreground">
           {{ $st('Declared hooks are listed separately from active runtime registrations.') }}
         </p>
@@ -60,19 +54,24 @@ const activeCount = computed(() => props.hooks.filter((hook) => hook.state === '
         :description="$st('Try another search term.')"
         :icon="RiSearchLine"
       />
-      <div v-for="section in groupedHooks" :key="section.group" class="space-y-2">
-        <h4 class="pt-2 text-xs font-semibold text-muted-foreground">
-          {{ pluginHookGroupLabel(section.group) }}
-        </h4>
+      <div v-for="section in groupedHooks" :key="section.event" class="space-y-2">
+        <div class="flex items-center justify-between gap-3 pt-2">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span class="text-xs text-muted-foreground">{{ pluginHookGroupLabel(section.group) }}</span>
+            <span class="text-xs text-muted-foreground/60" aria-hidden="true">/</span>
+            <h4 class="min-w-0 break-all font-mono text-xs font-medium">{{ section.event }}</h4>
+          </div>
+          <span class="shrink-0 text-xs tabular-nums text-muted-foreground">{{ section.hooks.length }}</span>
+        </div>
         <div class="divide-y divide-border/50 overflow-hidden rounded-lg border border-border/60">
-          <article v-for="hook in section.hooks" :key="hook.name" class="space-y-2 p-3 sm:p-4" data-plugin-hook>
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <div class="min-w-0">
-                <h5 class="text-sm font-medium">{{ hook.title }}</h5>
-                <code class="break-all text-xs text-muted-foreground" dir="ltr">{{ hook.name }}</code>
+          <article v-for="hook in section.hooks" :key="hook.key" class="space-y-2 px-3 py-3.5 sm:px-4" data-plugin-hook>
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0 space-y-1">
+                <h5 class="text-sm font-medium leading-snug">{{ hook.title }}</h5>
+                <p class="text-xs leading-relaxed text-muted-foreground">{{ hook.description }}</p>
               </div>
               <span
-                class="shrink-0 rounded-md border px-2 py-1 text-[11px] font-medium"
+                class="shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium"
                 :class="
                   hook.state === 'active'
                     ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
@@ -83,7 +82,18 @@ const activeCount = computed(() => props.hooks.filter((hook) => hook.state === '
                 >{{ pluginHookStateLabel(hook.state) }}</span
               >
             </div>
-            <p class="text-xs leading-relaxed text-muted-foreground">{{ hook.description }}</p>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+              <code class="break-all">{{ hook.handlerId }}</code>
+              <template v-if="hook.priority !== 0">
+                <span aria-hidden="true">·</span>
+                <code>P{{ hook.priority }}</code>
+              </template>
+              <span aria-hidden="true">·</span>
+              <code>{{ hook.isAsync ? $st('Asynchronous') : $st('Synchronous') }}</code>
+              <template v-for="(values, filter) in hook.filters" :key="filter">
+                <code v-for="value in values" :key="`${filter}:${value}`" class="rounded bg-muted/60 px-1.5 py-0.5">{{ filter }}: {{ value }}</code>
+              </template>
+            </div>
             <details v-if="hook.registered" class="rounded-md bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
               <summary class="cursor-pointer select-none font-medium text-foreground">
                 {{ $st('Registration details') }}

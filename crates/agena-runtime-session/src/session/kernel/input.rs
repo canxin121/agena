@@ -52,6 +52,10 @@ impl KernelPrompt {
     pub fn turns(&self) -> &[CompletionInputRun] {
         &self.turns
     }
+    /// Mutable request projection; the persisted prompt facts remain immutable.
+    pub(crate) fn turns_mut(&mut self) -> &mut Vec<CompletionInputRun> {
+        &mut self.turns
+    }
     pub fn compaction(&self) -> Option<&ProviderCompactionContext> {
         self.compaction.as_ref()
     }

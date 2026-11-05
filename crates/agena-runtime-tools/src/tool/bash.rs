@@ -95,7 +95,7 @@ pub(super) async fn prepare_command_async(
         Err(err) => {
             tracing::warn!(
                 target: "agena_plugin_host::command_before",
-                "command.execute.before hook failed (continuing): {err}"
+                "shell.before hook failed (continuing): {err}"
             );
             Ok(Some(PreparedShellCommand {
                 command: input.command.clone(),
@@ -191,7 +191,7 @@ pub(super) async fn execute_async(
         Err(err) => {
             tracing::warn!(
                 target: "agena_plugin_host::command_after",
-                "command.execute.after hook failed (continuing): {err}"
+                "shell.after hook failed (continuing): {err}"
             );
             execution.aggregated_output.clone()
         }

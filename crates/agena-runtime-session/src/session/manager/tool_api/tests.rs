@@ -3,7 +3,37 @@ use agena_domain::{PermissionDecision, StructuredObject, ToolApiCall, ToolApiFun
 use agena_provider::CompletionInputPart;
 use serde_json::Value;
 
+#[derive(Clone)]
+struct PermissionHookProbe {
+    deny: Arc<std::sync::atomic::AtomicBool>,
+    observed: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "test",
+    name = "permission-probe",
+    version = "test",
+    summary = "Verify that policy hooks run before user interaction."
+)]
+impl PermissionHookProbe {
+    #[hook(permission.request, summary = "Deny unauthorized approvals", help = "Verifies that a plugin can deny tool approval before a user interaction is created.")]
+    async fn permission_request(
+        &self,
+        input: agena_plugin_host::PermissionRequestInput,
+    ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::PermissionRequestPatch>> {
+        assert!(input.session_id > 0);
+        self.observed.lock().unwrap().push(input.action);
+        Ok(Some(agena_plugin_host::PermissionRequestPatch {
+            deny_reason: self
+                .deny
+                .load(std::sync::atomic::Ordering::Acquire)
+                .then(|| "plugin permission policy denied".into()),
+        }))
+    }
+}
+
 struct Fixture {
+    permission_hook: PermissionHookProbe,
     manager: SessionManager,
     session: SessionId,
     attempt: AttemptHandle,
@@ -127,6 +157,14 @@ impl Fixture {
     }
 
     async fn new() -> Self {
+        Self::with_permission_plugin(false).await
+    }
+
+    async fn with_permission_plugin(enabled: bool) -> Self {
+        let permission_hook = PermissionHookProbe {
+            deny: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            observed: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
         let workspace_root =
             std::env::temp_dir().join(format!("agena-tool-api-tests-{}", uuid::Uuid::new_v4()));
         tokio::fs::create_dir_all(&workspace_root).await.unwrap();
@@ -173,10 +211,23 @@ impl Fixture {
             .await
             .unwrap()
             .value;
+        let mut plugin_config = agena_plugin_host::PluginsConfig::default();
+        let static_plugins = if enabled {
+            plugin_config.list.insert(
+                "test.permission-probe".into(),
+                agena_plugin_host::ConfiguredPlugin::static_default(),
+            );
+            vec![agena_plugin_host::StaticPluginRegistration::new(
+                "test.permission-probe".parse().unwrap(),
+                permission_hook.clone(),
+            )]
+        } else {
+            Vec::new()
+        };
         let plugins =
             agena_plugin_host::PluginHost::new(agena_plugin_host::PluginHostBuildConfig {
-                static_plugins: vec![],
-                config: Default::default(),
+                static_plugins,
+                config: plugin_config,
                 workspace_root: workspace_root.clone(),
                 agena_version: "test".into(),
                 callback_base_url: None,
@@ -206,6 +257,7 @@ impl Fixture {
         );
         Self {
             manager,
+            permission_hook,
             session,
             attempt,
             model: ModelRef::new("fixture", "model"),
@@ -309,6 +361,42 @@ impl Fixture {
             .await
             .unwrap();
     }
+}
+
+#[tokio::test]
+async fn permission_hook_denies_before_any_interactive_approval_is_committed() {
+    let fixture = Fixture::with_permission_plugin(true).await;
+    fixture
+        .permission_hook
+        .deny
+        .store(true, std::sync::atomic::Ordering::Release);
+    let tool = fixture.begin_call("fixture.run", json!({})).await;
+    let control = fixture.register_live_call(&tool);
+    let executor = fixture.scoped_executor().await;
+    let result = fixture
+        .manager
+        .authorize_checks(
+            &tool,
+            vec![permission_check(
+                "fixture.requires_approval",
+                PermissionDecision::Ask {
+                    reason: "human approval".into(),
+                },
+            )],
+            &executor,
+            &control,
+            &control.state,
+        )
+        .await;
+    match result {
+        Err(ToolError::PolicyDenied(denied)) => {
+            assert!(denied.reason.contains("plugin permission policy denied"));
+        }
+        other => panic!("expected plugin policy denial, got {other:?}"),
+    }
+    assert_eq!(fixture.permission_hook.observed.lock().unwrap().len(), 1);
+    fixture.assert_no_pending_interaction().await;
+    fixture.shutdown().await;
 }
 
 #[tokio::test]

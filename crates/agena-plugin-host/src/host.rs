@@ -49,19 +49,18 @@ use crate::sdk::host_api::{
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
-    AgentCancelInput, AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatHeadersInput,
-    ChatHeadersPatch, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
-    ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
-    ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
-    CommandBeforeOutcome, CommandBeforeResponse, CommandDefinition, CommandInvokeInput,
-    CommandResult, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    NotificationInput, PluginError, PluginErrorKind, PluginKey, PluginManifest,
-    PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput, PluginServiceInvokeOutput,
-    PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput,
-    SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput,
-    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch,
-    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    AgentCancelInput, AgentStopInput, AgentStopPatch, ChatHeadersInput, ChatHeadersPatch,
+    ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch,
+    ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
+    CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
+    CommandBeforeResponse, CommandDefinition, CommandInvokeInput, CommandResult, ConfigInput,
+    ConfigPatch, EventEnvelope, EventFilter, HookSubscription, NotificationInput, PluginError,
+    PluginErrorKind, PluginKey, PluginManifest, PluginServiceExport, PluginServiceImport,
+    PluginServiceInvokeInput, PluginServiceInvokeOutput, PostRunInput, PreRunInput,
+    ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
+    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolKey, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::services::{PluginServiceBinding, PluginServiceBindingKey};
 use crate::transport::PluginTransport;
@@ -78,6 +77,10 @@ mod cancellation_tests;
 mod contract_tests;
 mod host_handle;
 mod host_scoped_client;
+mod lifecycle_dispatch;
+mod lifecycle_hooks;
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod permission_tests;
 mod plugin_host_build;
@@ -532,6 +535,7 @@ pub struct PluginHost {
     tool_before_pipeline:
         Arc<crate::event_pipeline::PluginTransformBailPipeline<ToolBeforeDispatch, ToolBeforeBail>>,
     tool_after_pipeline: Arc<crate::event_pipeline::PluginTransformPipeline<ToolAfterDispatch>>,
+    lifecycle: lifecycle_hooks::LifecycleHooks,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
     configured_plugins: BTreeMap<String, ConfiguredPlugin>,
@@ -574,17 +578,57 @@ fn tool_hook_context(
     }
 }
 
-fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration {
+fn validate_hook_handler_catalog(manifest: &PluginManifest) -> Result<(), PluginError> {
+    let mut seen = std::collections::HashSet::new();
+    for handler in &manifest.hook_handlers {
+        let subscription = crate::sdk::HookSubscription::for_name(&handler.event);
+        if handler.id.trim().is_empty()
+            || handler.summary.trim().is_empty()
+            || handler.help.trim().is_empty()
+            || !subscription.is_some_and(|subscription| manifest.hooks.contains(subscription))
+            || !seen.insert((&handler.event, &handler.id))
+            || handler.translations.iter().any(|(locale, translated)| {
+                locale.trim().is_empty()
+                    || translated.summary.trim().is_empty()
+                    || translated.help.trim().is_empty()
+            })
+        {
+            return Err(PluginError::from_kind(
+                PluginErrorKind::InvalidParams,
+                format!(
+                    "invalid or duplicate documentation for hook {}:{}",
+                    handler.event, handler.id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn hook_registration_for_plugin(
+    plugin: &LoadedPlugin,
+) -> Result<HostHookRegistration, PluginError> {
+    validate_hook_handler_catalog(&plugin.manifest)?;
     let (source, source_path) = plugin_source_summary(&plugin.configured_plugin);
     let trust_status = trust_status_for_level(plugin.trust_level.as_str()).to_string();
     let manifest_hash = manifest_hash(&plugin.manifest);
     let hooks = plugin
         .manifest
-        .hooks
-        .names()
-        .into_iter()
-        .map(|name| HostHookDescriptor {
-            name: name.to_string(),
+        .hook_handlers
+        .iter()
+        .filter(|handler| {
+            crate::sdk::HookSubscription::for_name(&handler.event)
+                .is_some_and(|subscription| plugin.manifest.hooks.contains(subscription))
+        })
+        .map(|handler| HostHookDescriptor {
+            name: handler.event.clone(),
+            handler_id: handler.id.clone(),
+            summary: handler.summary.clone(),
+            help: handler.help.clone(),
+            translations: handler.translations.clone(),
+            priority: handler.priority,
+            filters: handler.filters.clone(),
+            is_async: handler.is_async,
             enabled: true,
             trust_level: plugin.trust_level.clone(),
             trust_status: trust_status.clone(),
@@ -592,9 +636,9 @@ fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration {
             source_path: source_path.clone(),
             current_hash: manifest_hash.clone(),
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    HostHookRegistration {
+    Ok(HostHookRegistration {
         plugin_id: plugin.key(),
         trust_level: plugin.trust_level.clone(),
         trust_status,
@@ -603,7 +647,7 @@ fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration {
         source_path,
         manifest_hash,
         hooks,
-    }
+    })
 }
 
 fn plugin_source_summary(configured_plugin: &ConfiguredPlugin) -> (String, Option<String>) {

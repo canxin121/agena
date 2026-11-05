@@ -27,7 +27,7 @@ struct StopHookProbe {
     summary = "Records stop-hook inputs and requests repeated plan autoruns."
 )]
 impl StopHookProbe {
-    #[hook(agent.stop)]
+    #[hook(agent.stop, summary = "Check stop reentrancy", help = "Exercises stop-hook continuation and reentrancy across model rounds.")]
     async fn agent_stop(
         &self,
         input: agena_plugin_host::sdk::AgentStopInput,
@@ -233,9 +233,10 @@ async fn plan_autorun_dispatches_fresh_stops_without_the_generic_continuation_ca
         7,
         "six plan autoruns are followed by the final normal stop"
     );
+    assert!(!flags[0], "initial stop must not be marked as reentrant");
     assert!(
-        flags.iter().all(|active| !active),
-        "every stop follows a model round, so stop_hook_active must stay false: {flags:?}"
+        flags[1..].iter().all(|active| *active),
+        "a stop-triggered continuation must carry the reentry marker: {flags:?}"
     );
     assert!(
         run_errors
@@ -340,7 +341,11 @@ async fn model_turn_budget_exhaustion_still_dispatches_the_stop_hook() {
         4,
         "two rounds, the exhausted budget, and the final round each dispatch a stop"
     );
-    assert!(flags.iter().all(|active| !active));
+    assert!(!flags[0]);
+    assert!(
+        flags[1..].iter().all(|active| *active),
+        "the model-turn-budget continuation retains stop reentry: {flags:?}"
+    );
     assert!(errors[..2].iter().all(Option::is_none));
     assert!(errors[3].is_none());
     assert!(

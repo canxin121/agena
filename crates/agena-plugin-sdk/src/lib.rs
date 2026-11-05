@@ -82,7 +82,8 @@ pub use macro_support::{schema_example_texts, schema_usage_text, service_method_
 pub use manifest::{
     CommandDefinition, CommandDiagnostic, CommandDocs, CommandHostEffect, CommandInvokeInput,
     CommandResult, CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings,
-    HookSubscription, MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathKind, PluginDisplayContent,
+    HookHandlerDefinition, HookHandlerFilters, HookHandlerTranslation, HookSubscription,
+    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathKind, PluginDisplayContent,
     PluginDisplayContribution, PluginManifest, PluginManifestTranslation,
     PluginServiceDeclarations, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
     PluginServiceInvokeOutput, PluginServiceMethod, PluginSkillDefinition,

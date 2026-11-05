@@ -6,7 +6,7 @@ use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::ToolTag;
 
-// ── tool.execute.before ────────────────────────────────────────────────────
+// ── tool.before ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of the tool-before hook.
@@ -53,7 +53,7 @@ pub struct ToolBeforePatch {
     pub metadata: BTreeMap<String, String>,
 }
 
-// ── tool.execute.after ─────────────────────────────────────────────────────
+// ── tool.after ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of the tool-after hook.
@@ -132,7 +132,7 @@ pub struct ToolRenderOutput {
     pub human: Option<ToolHumanPresentation>,
 }
 
-// ── tool.execute.failure ───────────────────────────────────────────────────
+// ── tool.failure ───────────────────────────────────────────────────
 
 /// Fired when a tool execution fails. Notification — no patch.
 #[derive(Debug, Clone, Serialize, Deserialize)]

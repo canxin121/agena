@@ -4,6 +4,7 @@ use quote::{format_ident, quote};
 use syn::{Attribute, Ident, ImplItemFn, Result, Type};
 
 use crate::plugin_runtime::plugin_layer_method_call;
+use crate::tool_spec_support::LocalizedToolDocs;
 
 use super::plugin_hooks_support::{
     PluginHookExpectedInput, PluginHookFilters, parse_plugin_hook_attr, plugin_hook_input_segment,
@@ -21,6 +22,9 @@ pub struct PluginHookPlan {
     pub is_async: bool,
     pub priority: i32,
     pub filters: PluginHookFilters,
+    pub summary: syn::LitStr,
+    pub help: syn::LitStr,
+    pub translations: Vec<LocalizedToolDocs>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,8 +41,6 @@ pub enum PluginHookKind {
     ChatHeaders,
     ChatSystemTransform,
     ChatMessagesTransform,
-    Event,
-    Auth,
     ProviderList,
     Notification,
     CommandExecuteBefore,
@@ -52,6 +54,14 @@ pub enum PluginHookKind {
     AgentStop,
     AgentCancel,
     ConfigResolved,
+    ModelRequestBefore,
+    ModelRequestAfter,
+    ModelRequestError,
+    CompactionBefore,
+    CompactionAfter,
+    SubagentStart,
+    SubagentStop,
+    PermissionRequest,
 }
 
 pub fn build_plugin_hook_plan(
@@ -131,6 +141,9 @@ pub fn build_plugin_hook_plan(
         is_async,
         priority: config.priority,
         filters: config.filters,
+        summary: config.summary,
+        help: config.help,
+        translations: config.translations,
     })
 }
 
@@ -234,8 +247,6 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
         PluginHookKind::ChatMessagesTransform => {
             quote! { ::agena_plugin_sdk::HookSubscription::CHAT_MESSAGES_TRANSFORM }
         }
-        PluginHookKind::Event => quote! { ::agena_plugin_sdk::HookSubscription::EVENT },
-        PluginHookKind::Auth => quote! { ::agena_plugin_sdk::HookSubscription::AUTH },
         PluginHookKind::ProviderList => {
             quote! { ::agena_plugin_sdk::HookSubscription::PROVIDER_LIST }
         }
@@ -263,6 +274,30 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
             quote! { ::agena_plugin_sdk::HookSubscription::AGENT_CANCEL }
         }
         PluginHookKind::ConfigResolved => quote! { ::agena_plugin_sdk::HookSubscription::CONFIG },
+        PluginHookKind::ModelRequestBefore => {
+            quote! { ::agena_plugin_sdk::HookSubscription::MODEL_REQUEST_BEFORE }
+        }
+        PluginHookKind::ModelRequestAfter => {
+            quote! { ::agena_plugin_sdk::HookSubscription::MODEL_REQUEST_AFTER }
+        }
+        PluginHookKind::ModelRequestError => {
+            quote! { ::agena_plugin_sdk::HookSubscription::MODEL_REQUEST_ERROR }
+        }
+        PluginHookKind::CompactionBefore => {
+            quote! { ::agena_plugin_sdk::HookSubscription::COMPACTION_BEFORE }
+        }
+        PluginHookKind::CompactionAfter => {
+            quote! { ::agena_plugin_sdk::HookSubscription::COMPACTION_AFTER }
+        }
+        PluginHookKind::SubagentStart => {
+            quote! { ::agena_plugin_sdk::HookSubscription::SUBAGENT_START }
+        }
+        PluginHookKind::SubagentStop => {
+            quote! { ::agena_plugin_sdk::HookSubscription::SUBAGENT_STOP }
+        }
+        PluginHookKind::PermissionRequest => {
+            quote! { ::agena_plugin_sdk::HookSubscription::PERMISSION_REQUEST }
+        }
     }
 }
 
@@ -279,8 +314,6 @@ fn plugin_hook_order() -> &'static [PluginHookKind] {
         PluginHookKind::ChatHeaders,
         PluginHookKind::ChatSystemTransform,
         PluginHookKind::ChatMessagesTransform,
-        PluginHookKind::Event,
-        PluginHookKind::Auth,
         PluginHookKind::ProviderList,
         PluginHookKind::Notification,
         PluginHookKind::CommandExecuteBefore,
@@ -294,6 +327,14 @@ fn plugin_hook_order() -> &'static [PluginHookKind] {
         PluginHookKind::AgentStop,
         PluginHookKind::AgentCancel,
         PluginHookKind::ConfigResolved,
+        PluginHookKind::ModelRequestBefore,
+        PluginHookKind::ModelRequestAfter,
+        PluginHookKind::ModelRequestError,
+        PluginHookKind::CompactionBefore,
+        PluginHookKind::CompactionAfter,
+        PluginHookKind::SubagentStart,
+        PluginHookKind::SubagentStop,
+        PluginHookKind::PermissionRequest,
     ]
 }
 
@@ -356,18 +397,6 @@ fn expand_plugin_layer_hook_method_group(
             "chat_messages_transform",
             quote! { ::agena_plugin_sdk::ChatMessagesTransformInput },
             quote! { Option<::agena_plugin_sdk::ChatMessagesTransformPatch> },
-            bindings,
-        ),
-        PluginHookKind::Event => expand_plugin_layer_single_arg_hook_group(
-            "event",
-            quote! { ::agena_plugin_sdk::EventEnvelope },
-            quote! { () },
-            bindings,
-        ),
-        PluginHookKind::Auth => expand_plugin_layer_single_arg_hook_group(
-            "auth",
-            quote! { ::agena_plugin_sdk::AuthInput },
-            quote! { Option<::agena_plugin_sdk::AuthOutput> },
             bindings,
         ),
         PluginHookKind::ProviderList => expand_plugin_layer_single_arg_hook_group(
@@ -446,6 +475,54 @@ fn expand_plugin_layer_hook_method_group(
             "config_resolved",
             quote! { ::agena_plugin_sdk::ConfigInput },
             quote! { Option<::agena_plugin_sdk::ConfigPatch> },
+            bindings,
+        ),
+        PluginHookKind::ModelRequestBefore => expand_plugin_layer_single_arg_hook_group(
+            "model_request_before",
+            quote! { ::agena_plugin_sdk::ModelRequestBeforeInput },
+            quote! { Option<::agena_plugin_sdk::ModelRequestBeforePatch> },
+            bindings,
+        ),
+        PluginHookKind::ModelRequestAfter => expand_plugin_layer_single_arg_hook_group(
+            "model_request_after",
+            quote! { ::agena_plugin_sdk::ModelRequestAfterInput },
+            quote! { () },
+            bindings,
+        ),
+        PluginHookKind::ModelRequestError => expand_plugin_layer_single_arg_hook_group(
+            "model_request_error",
+            quote! { ::agena_plugin_sdk::ModelRequestErrorInput },
+            quote! { Option<::agena_plugin_sdk::ModelRequestErrorPatch> },
+            bindings,
+        ),
+        PluginHookKind::CompactionBefore => expand_plugin_layer_single_arg_hook_group(
+            "compaction_before",
+            quote! { ::agena_plugin_sdk::CompactionBeforeInput },
+            quote! { Option<::agena_plugin_sdk::CompactionBeforePatch> },
+            bindings,
+        ),
+        PluginHookKind::CompactionAfter => expand_plugin_layer_single_arg_hook_group(
+            "compaction_after",
+            quote! { ::agena_plugin_sdk::CompactionAfterInput },
+            quote! { () },
+            bindings,
+        ),
+        PluginHookKind::SubagentStart => expand_plugin_layer_single_arg_hook_group(
+            "subagent_start",
+            quote! { ::agena_plugin_sdk::SubagentStartInput },
+            quote! { Option<::agena_plugin_sdk::SubagentStartPatch> },
+            bindings,
+        ),
+        PluginHookKind::SubagentStop => expand_plugin_layer_single_arg_hook_group(
+            "subagent_stop",
+            quote! { ::agena_plugin_sdk::SubagentStopInput },
+            quote! { () },
+            bindings,
+        ),
+        PluginHookKind::PermissionRequest => expand_plugin_layer_single_arg_hook_group(
+            "permission_request",
+            quote! { ::agena_plugin_sdk::PermissionRequestInput },
+            quote! { Option<::agena_plugin_sdk::PermissionRequestPatch> },
             bindings,
         ),
     };

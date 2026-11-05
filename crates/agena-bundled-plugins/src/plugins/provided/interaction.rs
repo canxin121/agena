@@ -36,7 +36,63 @@ impl InteractionPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize interaction tools",
+        help = "Prepares interactive questions and workflow services for agent requests.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化交互工具",
+                help = "准备交互工具功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化互動工具",
+                help = "準備互動工具功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les outils interactifs",
+                help = "Prépare les outils interactifs et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar las herramientas interactivas",
+                help = "Prepara las herramientas interactivas y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as ferramentas interativas",
+                help = "Prepara as ferramentas interativas e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Interaktionswerkzeuge initialisieren",
+                help = "Bereitet die Interaktionswerkzeuge vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "対話ツールを初期化",
+                help = "必要なホストサービスに接続し、対話ツールを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "대화형 도구 초기화",
+                help = "필요한 호스트 서비스에 연결하고 대화형 도구 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "इंटरैक्टिव टूल प्रारंभ करें",
+                help = "“इंटरैक्टिव टूल” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة الأدوات التفاعلية",
+                help = "يُعِدّ الأدوات التفاعلية ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.inner
             .initialize(ctx, WorkflowPluginConfig::default(), host)?;

@@ -200,7 +200,63 @@ impl MemoryPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize memory storage",
+        help = "Loads memory settings, initializes the repository and binds the permission-aware host.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化记忆存储",
+                help = "准备记忆存储功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化記憶儲存",
+                help = "準備記憶儲存功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser la mémoire",
+                help = "Prépare la mémoire et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la memoria",
+                help = "Prepara la memoria y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a memória",
+                help = "Prepara a memória e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Speicherverwaltung initialisieren",
+                help = "Bereitet die Speicherverwaltung vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "メモリー保存を初期化",
+                help = "必要なホストサービスに接続し、メモリー保存を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "메모리 저장소 초기화",
+                help = "필요한 호스트 서비스에 연결하고 메모리 저장소 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "स्मृति संग्रहण प्रारंभ करें",
+                help = "“स्मृति संग्रहण” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة تخزين الذاكرة",
+                help = "يُعِدّ تخزين الذاكرة ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,
@@ -645,7 +701,23 @@ impl MemoryPlugin {
         Ok((latest_user.len() >= min_chars).then_some(latest_user))
     }
 
-    #[hook(chat.messages)]
+    #[hook(
+        chat.messages,
+        summary = "Recall relevant memories",
+        help = "Searches saved memories for the current user request and includes relevant context in the next model input.",
+        translations(
+        locale("zh-CN", summary = "回忆相关记忆", help = "针对当前用户请求检索已保存的记忆，并将相关内容加入下一次模型输入。"),
+        locale("zh-TW", summary = "回想相關記憶", help = "針對目前使用者請求檢索已儲存的記憶，並將相關內容加入下一次模型輸入。"),
+        locale("fr-FR", summary = "Rappeler les souvenirs pertinents", help = "Recherche les souvenirs enregistrés liés à la demande et les ajoute au prochain contexte du modèle."),
+        locale("es-ES", summary = "Recuperar recuerdos relevantes", help = "Busca recuerdos guardados relacionados con la solicitud y los añade al próximo contexto del modelo."),
+        locale("pt-BR", summary = "Recuperar memórias relevantes", help = "Pesquisa memórias salvas relacionadas à solicitação e as inclui no próximo contexto do modelo."),
+        locale("de-DE", summary = "Relevante Erinnerungen abrufen", help = "Sucht gespeicherte Erinnerungen zur aktuellen Anfrage und ergänzt den nächsten Modellkontext."),
+        locale("ja-JP", summary = "関連するメモリーを呼び出す", help = "現在のユーザー要求に関連する保存済みメモリーを検索し、次のモデル入力に追加します。"),
+        locale("ko-KR", summary = "관련 메모리 불러오기", help = "현재 사용자 요청과 관련된 저장된 메모리를 찾아 다음 모델 입력에 추가합니다."),
+        locale("hi-IN", summary = "प्रासंगिक स्मृतियाँ पुनः प्राप्त करें", help = "मौजूदा उपयोगकर्ता अनुरोध से संबंधित सहेजी गई स्मृतियाँ खोजकर अगले मॉडल इनपुट में जोड़ता है।"),
+        locale("ar-SA", summary = "استرجاع الذكريات ذات الصلة", help = "يبحث عن الذكريات المحفوظة المرتبطة بطلب المستخدم ويضيف المناسب منها إلى إدخال النموذج التالي.")
+    )
+    )]
     async fn chat_messages_transform(
         &self,
         input: ChatMessagesTransformInput,

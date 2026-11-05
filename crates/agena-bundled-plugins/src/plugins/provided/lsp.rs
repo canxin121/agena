@@ -174,7 +174,63 @@ struct LspServerSummary {
     settings_metadata = lsp_settings_metadata(),
 )]
 impl LspPlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize language services",
+        help = "Connects the host APIs used to inspect language server diagnostics.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化语言服务",
+                help = "准备语言服务功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化語言服務",
+                help = "準備語言服務功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les services de langage",
+                help = "Prépare les services de langage et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar los servicios de lenguaje",
+                help = "Prepara los servicios de lenguaje y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar os serviços de linguagem",
+                help = "Prepara os serviços de linguagem e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Sprachdienste initialisieren",
+                help = "Bereitet die Sprachdienste vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "言語サービスを初期化",
+                help = "必要なホストサービスに接続し、言語サービスを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "언어 서비스 초기화",
+                help = "필요한 호스트 서비스에 연결하고 언어 서비스 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "भाषा सेवाएँ प्रारंभ करें",
+                help = "“भाषा सेवाएँ” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة خدمات اللغة",
+                help = "يُعِدّ خدمات اللغة ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,

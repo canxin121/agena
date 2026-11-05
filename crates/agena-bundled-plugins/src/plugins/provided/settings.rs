@@ -314,7 +314,63 @@ impl SettingsPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Load settings management",
+        help = "Validates plugin settings and initializes the host-backed settings service.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化设置管理",
+                help = "准备设置管理功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化設定管理",
+                help = "準備設定管理功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser la gestion des paramètres",
+                help = "Prépare la gestion des paramètres et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la gestión de ajustes",
+                help = "Prepara la gestión de ajustes y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a gestão de configurações",
+                help = "Prepara a gestão de configurações e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Einstellungsverwaltung initialisieren",
+                help = "Bereitet die Einstellungsverwaltung vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "設定管理を初期化",
+                help = "必要なホストサービスに接続し、設定管理を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "설정 관리 초기화",
+                help = "필요한 호스트 서비스에 연결하고 설정 관리 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "सेटिंग प्रबंधन प्रारंभ करें",
+                help = "“सेटिंग प्रबंधन” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة إدارة الإعدادات",
+                help = "يُعِدّ إدارة الإعدادات ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,

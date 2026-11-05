@@ -286,7 +286,63 @@ impl ClaudeToolsPlugin {
     settings_default = default
 )]
 impl ClaudeToolsPlugin {
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Configure Claude integrations",
+        help = "Loads Claude integration settings and initializes workspace-aware tools.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化Claude 集成",
+                help = "准备Claude 集成功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化Claude 整合",
+                help = "準備Claude 整合功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser l’intégration Claude",
+                help = "Prépare l’intégration Claude et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la integración de Claude",
+                help = "Prepara la integración de Claude y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a integração com o Claude",
+                help = "Prepara a integração com o Claude e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Claude-Integration initialisieren",
+                help = "Bereitet die Claude-Integration vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "Claude 連携を初期化",
+                help = "必要なホストサービスに接続し、Claude 連携を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "Claude 연동 초기화",
+                help = "필요한 호스트 서비스에 연결하고 Claude 연동 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "Claude एकीकरण प्रारंभ करें",
+                help = "“Claude एकीकरण” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة تكامل Claude",
+                help = "يُعِدّ تكامل Claude ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: ClaudeToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_settings(

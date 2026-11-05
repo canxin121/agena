@@ -38,8 +38,9 @@ pub use crate::host_api::{
 pub use crate::macro_support::{schema_example_texts, schema_usage_text, service_method_for};
 pub use crate::manifest::{
     CommandDefinition, CommandDiagnostic, CommandHostEffect, CommandInvokeInput, CommandResult,
-    CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings, HookSubscription,
-    MAX_JSON_ESCAPE_BYTES, MAX_JSON_ESCAPE_DEPTH, PathInputKind, PathKind, PluginDisplayContent,
+    CommandStatus, CommandTarget, ContributionKind, EmptyPluginSettings, HookHandlerDefinition,
+    HookHandlerFilters, HookHandlerTranslation, HookSubscription, MAX_JSON_ESCAPE_BYTES,
+    MAX_JSON_ESCAPE_DEPTH, PathInputKind, PathKind, PluginDisplayContent,
     PluginDisplayContribution, PluginManifest, PluginManifestTranslation,
     PluginServiceDeclarations, PluginServiceExport, PluginServiceImport, PluginServiceInvokeInput,
     PluginServiceInvokeOutput, PluginServiceMethod, PluginSkillDefinition,

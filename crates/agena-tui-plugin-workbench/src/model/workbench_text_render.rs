@@ -2,9 +2,10 @@
 
 mod config;
 mod editor;
+mod hooks;
 mod plugin;
 
-pub(crate) use self::{config::*, editor::*, plugin::*};
+pub(crate) use self::{config::*, editor::*, hooks::*, plugin::*};
 
 pub mod api {
     pub use super::config::{pair_editor_labels, plugin_all_diagnostics};

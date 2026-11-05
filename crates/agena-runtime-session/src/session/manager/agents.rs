@@ -409,6 +409,16 @@ impl SessionManager {
             origin,
             activity: None,
         });
+        state
+            .executor
+            .plugin_manager()
+            .dispatch_subagent_start(agena_plugin_host::SubagentStartInput {
+                session_id: request.parent_session_id,
+                child_session_id: child.get(),
+                name: name.clone(),
+            })
+            .await
+            .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
         self.update_session_selection(child.get(), options.clone())
             .await?;
         self.prepare_options(child, &mut options).await?;
@@ -781,12 +791,14 @@ impl SessionManager {
             failure = Some(timeout);
         }
         let finished = Utc::now().timestamp_millis().max(started);
-        let limits = self
+        let configuration = self
             .kernel()
             .reader
             .configuration(child)
             .await
-            .map_err(kernel_error)?
+            .map_err(kernel_error)?;
+        let parent_session_id = configuration.parent_session_id.map(SessionId::get);
+        let limits = configuration
             .agent
             .as_ref()
             .map(|a| a.limits.clone())
@@ -841,6 +853,19 @@ impl SessionManager {
         })
         .await
         .map_err(kernel_error)?;
+        if let Some(parent) = parent_session_id {
+            self.state
+                .load()
+                .executor
+                .plugin_manager()
+                .broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {
+                    session_id: parent,
+                    child_session_id: child.get(),
+                    name: name.clone(),
+                    status: status.as_ref().to_owned(),
+                })
+                .await;
+        }
         Ok(())
     }
     async fn fail_agent_preparation(
@@ -898,6 +923,26 @@ impl SessionManager {
             })
             .await
             .map_err(kernel_error)?;
+        }
+        if let Some(parent) = self
+            .kernel()
+            .reader
+            .configuration(pending.child)
+            .await
+            .map_err(kernel_error)?
+            .parent_session_id
+        {
+            self.state
+                .load()
+                .executor
+                .plugin_manager()
+                .broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {
+                    session_id: parent.get(),
+                    child_session_id: pending.child.get(),
+                    name: pending.name,
+                    status: "failed".into(),
+                })
+                .await;
         }
         Ok(())
     }

@@ -96,7 +96,7 @@ where
     }
 }
 
-// ── command.execute.before ─────────────────────────────────────────────────
+// ── shell.before ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of a command-before hook.
@@ -114,7 +114,7 @@ pub struct CommandBeforeInput {
     pub env: BTreeMap<String, String>,
 }
 
-/// What a plugin returns from `command.execute.before`.
+/// What a plugin returns from `shell.before`.
 ///
 /// - Return `None` (or omit the field) to pass through unchanged.
 /// - Return `CommandBeforeResponse::Patch(…)` to mutate the command.
@@ -139,7 +139,7 @@ pub struct CommandBeforePatch {
     pub env: Option<BTreeMap<String, String>>,
 }
 
-/// Outcome of the `command.execute.before` dispatch, returned by
+/// Outcome of the `shell.before` dispatch, returned by
 /// `PluginHost::dispatch_command_before_blocking`.
 #[derive(Debug, Clone)]
 pub enum CommandBeforeOutcome {
@@ -147,7 +147,7 @@ pub enum CommandBeforeOutcome {
     Abort(String),
 }
 
-// ── command.execute.after ──────────────────────────────────────────────────
+// ── shell.after ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of a command-after hook.

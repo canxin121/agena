@@ -128,6 +128,7 @@ impl PluginHost {
             tool_after_pipeline: Arc::new(crate::event_pipeline::PluginTransformPipeline::new(
                 crate::event_pipeline::PluginPipelineFailurePolicy::Abort,
             )),
+            lifecycle: super::lifecycle_hooks::LifecycleHooks::empty(),
             statuses,
             logs,
             configured_plugins: BTreeMap::new(),
@@ -146,6 +147,10 @@ impl PluginHost {
 
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()
+    }
+
+    pub fn has_subscription(&self, hook: HookSubscription) -> bool {
+        self.plugins.iter().any(|plugin| plugin.subscribes(hook))
     }
 
     pub fn plugins(&self) -> &[Arc<LoadedPlugin>] {
@@ -421,7 +426,7 @@ impl PluginHost {
                 .cmp(&right.plugin_id)
                 .then(left.effect.id.cmp(&right.effect.id))
         });
-        let pipelines = vec![
+        let mut pipelines = vec![
             PluginArchitecturePipeline {
                 definition: crate::event_pipeline::PluginEventDefinition {
                     id: "tool.before".to_string(),
@@ -453,6 +458,88 @@ impl PluginHost {
                 handlers: self.command_pipeline.inventory(),
             },
         ];
+        pipelines.extend([
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "model.request.before".into(),
+                    mode: crate::event_pipeline::PluginEventMode::Guard,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.model_before.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "model.request.after".into(),
+                    mode: crate::event_pipeline::PluginEventMode::ParallelObserve,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.model_after.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "model.request.error".into(),
+                    mode: crate::event_pipeline::PluginEventMode::Bail,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.model_error.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "compaction.before".into(),
+                    mode: crate::event_pipeline::PluginEventMode::Guard,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.compaction_before.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "compaction.after".into(),
+                    mode: crate::event_pipeline::PluginEventMode::ParallelObserve,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.compaction_after.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "subagent.start".into(),
+                    mode: crate::event_pipeline::PluginEventMode::Guard,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.subagent_start.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "subagent.stop".into(),
+                    mode: crate::event_pipeline::PluginEventMode::ParallelObserve,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.subagent_stop.inventory(),
+            },
+            PluginArchitecturePipeline {
+                definition: crate::event_pipeline::PluginEventDefinition {
+                    id: "permission.request".into(),
+                    mode: crate::event_pipeline::PluginEventMode::Guard,
+                    durable: false,
+                    scoped: true,
+                },
+                failure_policy: None,
+                handlers: self.lifecycle.permission_request.inventory(),
+            },
+        ]);
         PluginArchitectureCatalog {
             profiles: self.profile_resolution.clone(),
             reload: self.reload_plan.clone(),
@@ -481,7 +568,17 @@ impl PluginHost {
         });
         let hooks = plugin
             .as_ref()
-            .map(|plugin| vec![hook_registration_for_plugin(plugin)])
+            .map(|plugin| match hook_registration_for_plugin(plugin) {
+                Ok(registration) => vec![registration],
+                Err(error) => {
+                    tracing::error!(
+                        plugin = %plugin.key(),
+                        diagnostic = %error.diagnostic_message(),
+                        "loaded plugin has invalid hook documentation",
+                    );
+                    Vec::new()
+                }
+            })
             .unwrap_or_default();
         let activation = configured_plugin.as_ref().map(|configured| {
             let blocked =
@@ -1052,9 +1149,7 @@ impl PluginHost {
                 &mut runs,
             )
             .await;
-        // chat.message activity is intentionally not recorded (not part of
-        // the transcript hook-run scope); the runs are discarded.
-        let _ = runs;
+        self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
     }
 
@@ -1107,10 +1202,12 @@ impl PluginHost {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ChatHeadersInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
+        let session_id = Some(input.session_id);
         let mut runs = Vec::new();
         let result = await_transport_with_cancellation(
             cancellation,
-            self.chain_patch_with_default_context::<ChatHeadersInput, ChatHeadersPatch, _>(
+            dispatcher::chain_patch_in_context::<ChatHeadersInput, ChatHeadersPatch, _, _>(
+                &self.plugins,
                 method::HOOK_CHAT_HEADERS,
                 HookSubscription::CHAT_HEADERS,
                 timeout,
@@ -1123,14 +1220,20 @@ impl PluginHost {
                         inp.headers.remove(&k);
                     }
                 },
-                None,
+                |plugin, input| {
+                    Some(HostCallbackContext {
+                        plugin_id: Some(plugin.key().to_string()),
+                        session_id: Some(input.session_id),
+                        ..Default::default()
+                    })
+                },
+                Some(&self._host_handle),
+                session_id,
                 &mut runs,
             ),
         )
         .await;
-        // chat.headers activity is intentionally not recorded (not part of
-        // the transcript hook-run scope); the runs are discarded.
-        let _ = runs;
+        self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
     }
 
@@ -1175,9 +1278,7 @@ impl PluginHost {
             &mut runs,
         )
         .await;
-        // chat.system.transform activity is intentionally not recorded (not
-        // part of the transcript hook-run scope); the runs are discarded.
-        let _ = runs;
+        self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
     }
 
@@ -1324,48 +1425,6 @@ impl PluginHost {
             }
         }
         Ok(CommandBeforeOutcome::Continue(current))
-    }
-
-    pub async fn dispatch_auth(&self, input: AuthInput) -> Result<Option<AuthOutput>, PluginError> {
-        let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::AUTH) {
-                continue;
-            }
-            let plugin_id = plugin.key().to_string();
-            let params =
-                serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
-            let v = match self
-                .call_hook_with_default_context(plugin, method::HOOK_AUTH, params, timeout)
-                .await
-            {
-                Ok(v) => v,
-                Err(err) => {
-                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
-                        "auth", &plugin_id, None, &err,
-                    )]);
-                    return Err(transport_to_plugin_error(err));
-                }
-            };
-            if matches!(&v, serde_json::Value::Null) {
-                // No-op run (no credentials supplied); not recorded.
-                continue;
-            }
-            let out: Option<AuthOutput> =
-                serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
-            if out.is_some() {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "auth",
-                    &plugin_id,
-                    None,
-                    HookRunStatus::Applied,
-                    "auth hook provided credentials",
-                    None,
-                )]);
-                return Ok(out);
-            }
-        }
-        Ok(None)
     }
 
     pub async fn dispatch_provider_list(
@@ -1646,7 +1705,7 @@ impl PluginHost {
         self.command_registry.clear_scope_tree(&scope);
     }
 
-    // ── user.prompt.submit ─────────────────────────────────────────────────
+    // ── prompt.submit ─────────────────────────────────────────────────
 
     pub async fn dispatch_user_prompt_submit(
         &self,
@@ -1685,7 +1744,7 @@ impl PluginHost {
                 Ok(v) => v,
                 Err(err) => {
                     self.push_hook_runs(vec![dispatcher::transport_failure_record(
-                        "user.prompt.submit",
+                        "prompt.submit",
                         &plugin_id,
                         session_id,
                         &err,
@@ -1703,21 +1762,21 @@ impl PluginHost {
             if let Some(p) = patch {
                 if let Some(r) = p.block_reason {
                     self.push_hook_runs(vec![HookRunRecord::new(
-                        "user.prompt.submit",
+                        "prompt.submit",
                         &plugin_id,
                         session_id,
                         HookRunStatus::Applied,
-                        format!("user.prompt.submit hook blocked prompt: {r}"),
+                        format!("prompt.submit hook blocked prompt: {r}"),
                         Some(r.clone()),
                     )]);
                     return Err(PluginError::internal(format!("prompt blocked: {r}")));
                 }
                 self.push_hook_runs(vec![HookRunRecord::new(
-                    "user.prompt.submit",
+                    "prompt.submit",
                     &plugin_id,
                     session_id,
                     HookRunStatus::Applied,
-                    "user.prompt.submit hook ran",
+                    "prompt.submit hook ran",
                     None,
                 )]);
                 if let Some(text) = p.prompt {
@@ -1732,7 +1791,7 @@ impl PluginHost {
         Ok(current)
     }
 
-    // ── tool.execute.failure ───────────────────────────────────────────────
+    // ── tool.failure ───────────────────────────────────────────────
 
     pub async fn broadcast_tool_failure(&self, input: ToolFailureInput) {
         let timeout = Duration::from_secs(5);
@@ -2076,7 +2135,7 @@ impl PluginHost {
         }
     }
 
-    // ── command.execute.after ──────────────────────────────────────────────
+    // ── shell.after ──────────────────────────────────────────────
 
     pub async fn dispatch_command_after(
         &self,
@@ -2119,7 +2178,7 @@ impl PluginHost {
         result.map_err(transport_to_plugin_error)
     }
 
-    // ── chat.messages.transform ────────────────────────────────────────────
+    // ── chat.messages ────────────────────────────────────────────
 
     pub async fn dispatch_chat_messages_transform(
         &self,
@@ -2143,69 +2202,8 @@ impl PluginHost {
                 &mut runs,
             )
             .await;
-        // chat.messages.transform activity is intentionally not recorded (not
-        // part of the transcript hook-run scope); the runs are discarded.
-        let _ = runs;
+        self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
-    }
-
-    /// Push an `EventEnvelope` to every subscribed plugin (best-effort, no
-    /// error propagation — events are notifications).
-    pub async fn broadcast_event(&self, env: EventEnvelope) {
-        let timeout = Duration::from_secs(2);
-        let mut notifications = Vec::new();
-        for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::EVENT) {
-                continue;
-            }
-            let env = env.clone();
-            let plugin = plugin.clone();
-            notifications.push(async move {
-                let plugin_id = plugin.key();
-                let params = match serde_json::to_value(&env) {
-                    Ok(v) => v,
-                    Err(error) => {
-                        tracing::error!(
-                            plugin_id = %plugin_id,
-                            hook = method::HOOK_EVENT,
-                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                "failed to serialize plugin event hook payload",
-                                &error,
-                            ),
-                            "plugin event hook payload serialization failed"
-                        );
-                        return;
-                    }
-                };
-                match tokio::time::timeout(
-                    timeout,
-                    plugin.transport.notify(method::HOOK_EVENT, params),
-                )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tracing::warn!(
-                        plugin_id = %plugin_id,
-                        hook = method::HOOK_EVENT,
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "plugin event hook delivery failed",
-                            &error,
-                        ),
-                        "best-effort plugin event notification was not delivered"
-                    ),
-                    Err(error) => tracing::warn!(
-                        plugin_id = %plugin_id,
-                        hook = method::HOOK_EVENT,
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "plugin event hook timed out after 2 seconds",
-                            &error,
-                        ),
-                        "best-effort plugin event notification timed out"
-                    ),
-                }
-            });
-        }
-        futures_util::future::join_all(notifications).await;
     }
 
     /// Async shutdown — sends `meta/shutdown` and closes every transport.
@@ -2499,14 +2497,14 @@ where
 }
 use super::{
     AgentCancelInput, AgentStopDispatch, AgentStopHookRun, AgentStopInput, AgentStopPatch, Arc,
-    AuthInput, AuthOutput, BTreeMap, ChatHeadersInput, ChatHeadersPatch, ChatMessageInput,
-    ChatMessagePatch, ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput,
-    ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput,
-    CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse,
-    CommandCatalogItem, CommandDefinition, CommandDispatch, CommandInvokeInput, CommandResult,
-    ConfigInput, ConfigPatch, Duration, EventEnvelope, HashMap, HookRunRecord, HookRunStatus,
-    HookSubscription, HostCallbackContext, HostDisplayContribution, HostHandle, HostNotification,
-    HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput, PluginActivationDiagnostic,
+    BTreeMap, ChatHeadersInput, ChatHeadersPatch, ChatMessageInput, ChatMessagePatch,
+    ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch,
+    ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
+    CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, CommandCatalogItem,
+    CommandDefinition, CommandDispatch, CommandInvokeInput, CommandResult, ConfigInput,
+    ConfigPatch, Duration, HashMap, HookRunRecord, HookRunStatus, HookSubscription,
+    HostCallbackContext, HostDisplayContribution, HostHandle, HostNotification, HostThemePalette,
+    LoadedPlugin, NoopHostClient, NotificationInput, PluginActivationDiagnostic,
     PluginActivationInspect, PluginArchitectureCatalog, PluginArchitectureEffect,
     PluginArchitectureNode, PluginArchitecturePipeline, PluginDependencyEdge, PluginDependencyKind,
     PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,

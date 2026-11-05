@@ -220,13 +220,14 @@ impl ModelRuntime for OllamaAdapter {
             [(reqwest::header::CONTENT_TYPE.as_str(), "application/json")],
             Some(&body_json),
         );
-        let response = self
-            .client
-            .post(endpoint.as_str())
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body_json.bytes())
-            .send()
-            .await?;
+        let response = utils::send_request_builder(
+            self.id.as_str(),
+            self.client
+                .post(endpoint.as_str())
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body_json.bytes()),
+        )
+        .await?;
         let payload: OllamaChatResponse = utils::parse_json_response_logged(
             self.id.as_str(),
             ADAPTER_KIND,
@@ -261,13 +262,14 @@ impl ModelRuntime for OllamaAdapter {
             [(reqwest::header::CONTENT_TYPE.as_str(), "application/json")],
             Some(&body_json),
         );
-        let response = self
-            .client
-            .post(endpoint.as_str())
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(body_json.bytes())
-            .send()
-            .await?;
+        let response = utils::send_request_builder(
+            self.id.as_str(),
+            self.client
+                .post(endpoint.as_str())
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body_json.bytes()),
+        )
+        .await?;
         if !response.status().is_success() {
             return Err(utils::http_status_error_from_response_logged(
                 self.id.as_str(),

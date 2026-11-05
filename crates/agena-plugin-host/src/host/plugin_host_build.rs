@@ -635,8 +635,9 @@ impl PluginHost {
                 continue;
             };
             let registration = async {
+                let hook_catalog = hook_registration_for_plugin(&plugin)?;
                 host_handle.own_manifest_resources(&plugin.key(), &plugin.manifest)?;
-                host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin))?;
+                host_handle.set_plugin_hook_catalog(hook_catalog)?;
                 host_handle
                     .register_plugin_transport(plugin.key(), plugin.transport())
                     .await
@@ -917,6 +918,14 @@ impl PluginHost {
                     HostError::Config(agena_failure::diagnostic::format_error_chain(&error))
                 })?;
         }
+        let lifecycle = super::lifecycle_hooks::LifecycleHooks::build(
+            &loaded,
+            &host_handle,
+            config
+                .host
+                .timeouts
+                .chat_or(std::time::Duration::from_secs(10)),
+        )?;
         let host = Arc::new(PluginHost {
             plugins: loaded,
             plugins_by_id: by_id,
@@ -925,6 +934,7 @@ impl PluginHost {
             command_pipeline: Arc::new(crate::event_pipeline::PluginAroundPipeline::new()),
             tool_before_pipeline,
             tool_after_pipeline,
+            lifecycle,
             statuses: statuses_shared,
             logs: logs_shared,
             configured_plugins: configured_plugins_for_inspect,

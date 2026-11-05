@@ -21,7 +21,7 @@ use agena_plugin_host::sdk::host_api::{
 use agena_plugin_host::sdk::{
     AgentStopInput, AgentStopPatch, ContributionKind, InitContext, InitOutcome,
     PluginDisplayContent, PluginDisplayContribution, PostRunInput, PreRunInput,
-    Result as SdkResult, SessionEndInput, SessionStartInput, SessionStartPatch,
+    Result as SdkResult, RunStatus, SessionEndInput, SessionStartInput, SessionStartPatch,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 
@@ -191,7 +191,63 @@ impl NotificationsPlugin {
         .map(|_| ())
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Start notification services",
+        help = "Initializes terminal activity and notification tracking through the host.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化通知服务",
+                help = "准备通知服务功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化通知服務",
+                help = "準備通知服務功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les services de notification",
+                help = "Prépare les services de notification et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar los servicios de notificación",
+                help = "Prepara los servicios de notificación y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar os serviços de notificação",
+                help = "Prepara os serviços de notificação e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Benachrichtigungsdienste initialisieren",
+                help = "Bereitet die Benachrichtigungsdienste vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "通知サービスを初期化",
+                help = "必要なホストサービスに接続し、通知サービスを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "알림 서비스 초기화",
+                help = "필요한 호스트 서비스에 연결하고 알림 서비스 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "सूचना सेवाएँ प्रारंभ करें",
+                help = "“सूचना सेवाएँ” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة خدمات الإشعارات",
+                help = "يُعِدّ خدمات الإشعارات ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         *recover_write(&self.host, "initialize notifications plugin host") = Some(host.clone());
         if let Some(source) = self.notification_source.clone() {
@@ -208,31 +264,128 @@ impl NotificationsPlugin {
         )))
     }
 
-    #[hook(shutdown)]
+    #[hook(
+        shutdown,
+        summary = "Stop notification services",
+        help = "Stops notification tracking and clears terminal activity displays.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "停止通知服务",
+                help = "停止通知追踪，并清除终端中的活动状态显示。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "停止通知服務",
+                help = "停止通知追蹤，並清除終端機中的活動狀態顯示。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Arrêter les services de notification",
+                help = "Arrête le suivi des notifications et efface l’indicateur d’activité du terminal."
+            ),
+            locale(
+                "es-ES",
+                summary = "Detener los servicios de notificación",
+                help = "Detiene el seguimiento de notificaciones y limpia el indicador de actividad del terminal."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Encerrar serviços de notificação",
+                help = "Interrompe o acompanhamento de notificações e limpa o indicador de atividade do terminal."
+            ),
+            locale(
+                "de-DE",
+                summary = "Benachrichtigungsdienste beenden",
+                help = "Beendet die Benachrichtigungsverfolgung und setzt die Aktivitätsanzeige im Terminal zurück."
+            ),
+            locale(
+                "ja-JP",
+                summary = "通知サービスを停止",
+                help = "通知の追跡を停止し、ターミナルのアクティビティ表示を消去します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "알림 서비스 중지",
+                help = "알림 추적을 중지하고 터미널의 활동 표시를 지웁니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "सूचना सेवाएँ बंद करें",
+                help = "सूचनाओं की निगरानी रोकता है और टर्मिनल से गतिविधि संकेतक हटाता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "إيقاف خدمات الإشعارات",
+                help = "يوقف تتبّع الإشعارات ويمسح مؤشر النشاط من الطرفية."
+            )
+        )
+    )]
     async fn shutdown(&self) -> SdkResult<()> {
         self.stop_notifications();
         self.clear_display().await
     }
 
-    #[hook(run.pre)]
+    #[hook(
+        run.pre,
+        summary = "Show running status",
+        help = "Updates the activity indicator when an Agent execution begins.",
+        translations(
+        locale("zh-CN", summary = "显示运行状态", help = "当 Agent 开始执行任务时更新活动状态指示器。"),
+        locale("zh-TW", summary = "顯示執行狀態", help = "Agent 開始執行工作時更新活動狀態指示器。"),
+        locale("fr-FR", summary = "Afficher l’activité", help = "Met à jour l’indicateur d’activité au début de l’exécution."),
+        locale("es-ES", summary = "Mostrar la actividad en curso", help = "Actualiza el indicador de actividad al comenzar la ejecución del agente."),
+        locale("pt-BR", summary = "Exibir atividade em execução", help = "Atualiza o indicador de atividade quando o agente começa a executar."),
+        locale("de-DE", summary = "Aktiven Ausführungsstatus anzeigen", help = "Aktualisiert die Aktivitätsanzeige, sobald die Ausführung des Agenten beginnt."),
+        locale("ja-JP", summary = "実行中の状態を表示", help = "エージェントの実行開始時にアクティビティ表示を更新します。"),
+        locale("ko-KR", summary = "실행 중 상태 표시", help = "에이전트 실행이 시작되면 활동 표시를 업데이트합니다."),
+        locale("hi-IN", summary = "चल रही गतिविधि दिखाएँ", help = "एजेंट का निष्पादन शुरू होने पर गतिविधि संकेतक अपडेट करता है।"),
+        locale("ar-SA", summary = "عرض حالة التنفيذ الجارية", help = "يحدّث مؤشر النشاط عند بدء تنفيذ الوكيل.")
+    )
+    )]
     async fn pre_run(&self, _input: PreRunInput) -> SdkResult<()> {
         self.set_and_publish(TerminalActivity::Running).await;
         Ok(())
     }
 
-    #[hook(run.post)]
+    #[hook(run.post, summary = "Update execution status", help = "Updates terminal activity when a session execution succeeds, fails or is cancelled.",
+    translations(
+        locale("zh-CN", summary = "更新执行状态", help = "根据会话执行成功、失败或取消的结果更新终端活动状态。"),
+        locale("zh-TW", summary = "更新執行狀態", help = "依照工作階段執行成功、失敗或取消的結果更新終端機活動狀態。"),
+        locale("fr-FR", summary = "Actualiser l’état d’exécution", help = "Met à jour l’activité du terminal lorsque l’exécution réussit, échoue ou est annulée."),
+        locale("es-ES", summary = "Actualizar el estado de ejecución", help = "Actualiza la actividad del terminal cuando la ejecución termina, falla o se cancela."),
+        locale("pt-BR", summary = "Atualizar o status da execução", help = "Atualiza a atividade do terminal quando a execução é concluída, falha ou é cancelada."),
+        locale("de-DE", summary = "Ausführungsstatus aktualisieren", help = "Aktualisiert die Terminalaktivität, wenn eine Ausführung erfolgreich, fehlerhaft oder abgebrochen endet."),
+        locale("ja-JP", summary = "実行状態を更新", help = "セッションの実行が成功、失敗、またはキャンセルされた際に表示を更新します。"),
+        locale("ko-KR", summary = "실행 상태 업데이트", help = "세션 실행이 성공하거나 실패 또는 취소되면 터미널 활동 상태를 업데이트합니다."),
+        locale("hi-IN", summary = "निष्पादन की स्थिति अपडेट करें", help = "सत्र का निष्पादन सफल, विफल या रद्द होने पर टर्मिनल की स्थिति अपडेट करता है।"),
+        locale("ar-SA", summary = "تحديث حالة التنفيذ", help = "يحدّث نشاط الطرفية عند نجاح التنفيذ أو فشله أو إلغائه.")
+    )
+)]
     async fn post_run(&self, input: PostRunInput) -> SdkResult<()> {
-        if input.status.trim().starts_with("error") {
+        if input.status == RunStatus::Failed {
             self.set_and_publish(TerminalActivity::Blocked).await;
         } else {
-            // run.post is a provider round boundary, not agent completion.
             // Attention is emitted from committed kernel facts, not hooks.
             self.set_and_publish(TerminalActivity::Idle).await;
         }
         Ok(())
     }
 
-    #[hook(session.start)]
+    #[hook(session.start, summary = "Reset session activity", help = "Clears stale terminal activity when a session starts or resumes.",
+    translations(
+        locale("zh-CN", summary = "重置会话活动状态", help = "会话启动或恢复时清除过期的终端活动状态。"),
+        locale("zh-TW", summary = "重設工作階段活動狀態", help = "工作階段啟動或恢復時清除過期的終端機活動狀態。"),
+        locale("fr-FR", summary = "Réinitialiser l’activité de la session", help = "Efface l’état d’activité obsolète à l’ouverture ou à la reprise d’une session."),
+        locale("es-ES", summary = "Restablecer la actividad de la sesión", help = "Elimina estados de actividad obsoletos cuando comienza o se reanuda una sesión."),
+        locale("pt-BR", summary = "Redefinir a atividade da sessão", help = "Limpa estados de atividade antigos quando uma sessão começa ou é retomada."),
+        locale("de-DE", summary = "Sitzungsaktivität zurücksetzen", help = "Entfernt veraltete Aktivitätsanzeigen, wenn eine Sitzung startet oder fortgesetzt wird."),
+        locale("ja-JP", summary = "セッションの活動状態をリセット", help = "セッションの開始または再開時に古い活動状態を消去します。"),
+        locale("ko-KR", summary = "세션 활동 상태 초기화", help = "세션이 시작되거나 재개될 때 이전 활동 상태를 지웁니다."),
+        locale("hi-IN", summary = "सत्र की गतिविधि रीसेट करें", help = "सत्र शुरू या पुनः चालू होने पर पुरानी गतिविधि स्थिति साफ़ करता है।"),
+        locale("ar-SA", summary = "إعادة ضبط نشاط الجلسة", help = "يمسح حالة النشاط القديمة عند بدء الجلسة أو استئنافها.")
+    )
+)]
     async fn session_start(
         &self,
         _input: SessionStartInput,
@@ -241,13 +394,39 @@ impl NotificationsPlugin {
         Ok(None)
     }
 
-    #[hook(session.end)]
+    #[hook(session.end, summary = "Clear finished session activity", help = "Returns the activity indicator to idle when the session ends.",
+    translations(
+        locale("zh-CN", summary = "清理已结束会话的状态", help = "会话结束时将终端活动指示器恢复为空闲。"),
+        locale("zh-TW", summary = "清理已結束工作階段的狀態", help = "工作階段結束時將終端機活動指示器恢復為閒置。"),
+        locale("fr-FR", summary = "Effacer l’activité des sessions terminées", help = "Remet l’indicateur d’activité du terminal en veille à la fin de la session."),
+        locale("es-ES", summary = "Limpiar la actividad de sesiones finalizadas", help = "Restablece el indicador de actividad del terminal cuando termina una sesión."),
+        locale("pt-BR", summary = "Limpar a atividade de sessões encerradas", help = "Retorna o indicador de atividade do terminal ao estado ocioso quando a sessão termina."),
+        locale("de-DE", summary = "Aktivität beendeter Sitzungen löschen", help = "Setzt die Aktivitätsanzeige nach dem Sitzungsende auf inaktiv zurück."),
+        locale("ja-JP", summary = "終了したセッションの状態を消去", help = "セッション終了時にターミナルの活動表示をアイドル状態に戻します。"),
+        locale("ko-KR", summary = "종료된 세션 활동 정리", help = "세션 종료 시 터미널 활동 표시를 유휴 상태로 되돌립니다."),
+        locale("hi-IN", summary = "समाप्त सत्र की गतिविधि साफ़ करें", help = "सत्र समाप्त होने पर टर्मिनल संकेतक को निष्क्रिय स्थिति में लौटाता है।"),
+        locale("ar-SA", summary = "مسح نشاط الجلسات المنتهية", help = "يعيد مؤشر نشاط الطرفية إلى حالة الخمول عند انتهاء الجلسة.")
+    )
+)]
     async fn session_end(&self, _input: SessionEndInput) -> SdkResult<()> {
         self.set_and_publish(TerminalActivity::Idle).await;
         Ok(())
     }
 
-    #[hook(prompt.submit)]
+    #[hook(prompt.submit, summary = "Show prompt activity", help = "Marks the terminal as busy when a user prompt is submitted.",
+    translations(
+        locale("zh-CN", summary = "显示提示词处理状态", help = "用户提交提示词时将终端活动指示器设为忙碌。"),
+        locale("zh-TW", summary = "顯示提示詞處理狀態", help = "使用者提交提示詞時將終端機活動指示器設為忙碌。"),
+        locale("fr-FR", summary = "Signaler le traitement du message", help = "Indique une activité en cours dès qu’un utilisateur envoie un message."),
+        locale("es-ES", summary = "Mostrar el procesamiento del mensaje", help = "Marca el terminal como ocupado cuando el usuario envía una solicitud."),
+        locale("pt-BR", summary = "Mostrar o processamento da solicitação", help = "Marca o terminal como ocupado quando o usuário envia uma solicitação."),
+        locale("de-DE", summary = "Nachrichtenverarbeitung anzeigen", help = "Markiert das Terminal als beschäftigt, sobald der Benutzer eine Anfrage sendet."),
+        locale("ja-JP", summary = "入力処理中の状態を表示", help = "ユーザーが入力を送信するとターミナルを処理中として表示します。"),
+        locale("ko-KR", summary = "요청 처리 상태 표시", help = "사용자가 요청을 제출하면 터미널을 처리 중 상태로 표시합니다."),
+        locale("hi-IN", summary = "अनुरोध का प्रसंस्करण दिखाएँ", help = "उपयोगकर्ता के अनुरोध भेजते ही टर्मिनल को व्यस्त दिखाता है।"),
+        locale("ar-SA", summary = "عرض حالة معالجة الطلب", help = "يشير إلى انشغال الطرفية بمجرد إرسال المستخدم طلبًا.")
+    )
+)]
     async fn user_prompt_submit(
         &self,
         _input: UserPromptSubmitInput,
@@ -258,7 +437,20 @@ impl NotificationsPlugin {
         Ok(None)
     }
 
-    #[hook(agent.stop)]
+    #[hook(agent.stop, summary = "Reflect agent stop outcome", help = "Updates terminal activity according to whether the agent stopped successfully or with an error.",
+    translations(
+        locale("zh-CN", summary = "反映 Agent 停止结果", help = "根据 Agent 正常停止或发生错误的结果更新终端状态。"),
+        locale("zh-TW", summary = "反映 Agent 停止結果", help = "根據 Agent 正常停止或發生錯誤的結果更新終端機狀態。"),
+        locale("fr-FR", summary = "Afficher le résultat d’arrêt de l’agent", help = "Actualise l’état du terminal selon que l’agent s’arrête normalement ou avec une erreur."),
+        locale("es-ES", summary = "Reflejar el resultado de detención del agente", help = "Actualiza el terminal según si el agente se detuvo correctamente o con un error."),
+        locale("pt-BR", summary = "Refletir o resultado da parada do agente", help = "Atualiza o terminal conforme o agente pare normalmente ou com erro."),
+        locale("de-DE", summary = "Ergebnis des Agentenstopps anzeigen", help = "Aktualisiert die Terminalanzeige je nachdem, ob der Agent erfolgreich oder mit Fehler stoppt."),
+        locale("ja-JP", summary = "エージェントの停止結果を反映", help = "正常停止かエラーによる停止かに応じてターミナルの状態を更新します。"),
+        locale("ko-KR", summary = "에이전트 중지 결과 반영", help = "에이전트가 정상 종료되었는지 오류로 중지되었는지에 따라 터미널 상태를 변경합니다."),
+        locale("hi-IN", summary = "एजेंट रुकने का परिणाम दिखाएँ", help = "एजेंट सामान्य रूप से रुका या त्रुटि के साथ, उसके अनुसार टर्मिनल स्थिति बदलता है।"),
+        locale("ar-SA", summary = "إظهار نتيجة توقف الوكيل", help = "يحدّث حالة الطرفية وفقًا لتوقف الوكيل طبيعيًا أو بسبب خطأ.")
+    )
+)]
     async fn agent_stop(&self, input: AgentStopInput) -> SdkResult<Option<AgentStopPatch>> {
         if input.run_error.is_some() {
             self.set_and_publish(TerminalActivity::Blocked).await;

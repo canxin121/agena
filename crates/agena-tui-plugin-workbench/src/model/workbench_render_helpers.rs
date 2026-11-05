@@ -251,6 +251,7 @@ pub fn render_plugin_detail_page(frame: &mut Frame, area: Rect, dialog: &PluginW
         PluginDetailTab::Tools => {
             plugin_tools_text(dialog, plugin, rows[2].width.saturating_sub(2))
         }
+        PluginDetailTab::Hooks => plugin_hooks_text(dialog, plugin),
         PluginDetailTab::Commands => plugin_commands_text(dialog, plugin),
         PluginDetailTab::Capabilities => plugin_capabilities_text(dialog, plugin),
         PluginDetailTab::Logs => plugin_logs_text(dialog, plugin),
@@ -747,8 +748,8 @@ use super::{
     compact_config_sections_content, compact_config_toolbar_text, compact_config_view_line,
     config_diff_text, config_editor_content, drilldown_footer_text, drilldown_selected_row_cell,
     fixed_columns, group_has_action_column, path_display, plugin_capabilities_text,
-    plugin_commands_text, plugin_diagnostics_text, plugin_header_text, plugin_logs_text,
-    plugin_tools_text, plugin_uses_compact_config_layout,
+    plugin_commands_text, plugin_diagnostics_text, plugin_header_text, plugin_hooks_text,
+    plugin_logs_text, plugin_tools_text, plugin_uses_compact_config_layout,
     plugin_workbench_selection_highlight_style, render_editor_dialog, render_framed_surface,
     row_visible, standard_config_row_line, standard_config_row_line_with_action,
     standard_config_row_line_with_focus, transport_display,

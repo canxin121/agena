@@ -266,6 +266,7 @@ impl SessionProcessor {
         let definitions = completion.tool_api_functions.clone();
         let route = model.clone();
         let cancellation = cancel.clone();
+        let request_id = round.id().get().to_string();
         let provider = Box::pin(async move {
             processor
                 .apply_chat_params_hook(
@@ -282,6 +283,9 @@ impl SessionProcessor {
             {
                 return Err(AppError::Cancelled);
             }
+            processor
+                .before_model_request(session.get(), &route, request_id)
+                .await?;
             let request = crate::provider::with_request_cancellation(
                 cancellation.clone(),
                 providers.complete_stream_with_tool_drafts(&route, completion),
@@ -336,6 +340,16 @@ impl SessionProcessor {
 impl KernelRoundRun {
     pub fn round_id(&self) -> RoundId {
         self.round.id()
+    }
+    /// A failed round may be retried only when no assistant content or tool
+    /// operation has been observed. A retry must never duplicate effects.
+    pub fn retry_is_safe(&self) -> bool {
+        !self.visible_text
+            && !self.substantive_reasoning
+            && self.calls.is_empty()
+            && self.drafts.is_empty()
+            && self.native.is_empty()
+            && self.hosted.is_empty()
     }
     pub fn outcome(&self) -> Option<&KernelRoundOutcome> {
         self.outcome.as_ref()

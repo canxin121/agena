@@ -404,6 +404,22 @@ impl SessionManager {
         .await
         .map_err(kernel_error)?;
         let message = execution.message_id;
+        let run_kind = if compact {
+            agena_plugin_host::RunKind::Compaction
+        } else {
+            agena_plugin_host::RunKind::Conversation
+        };
+        let execution_id = control.execution.to_string();
+        state
+            .executor
+            .plugin_manager()
+            .broadcast_pre_run(agena_plugin_host::PreRunInput {
+                session_id: control.session.get(),
+                model: options.model.model_id.to_string(),
+                execution_id: execution_id.clone(),
+                kind: run_kind,
+            })
+            .await;
         let mut completed = false;
         // Provider failures already carry a structured failure on their round.
         // Other stops must persist their own notice below, because the round
@@ -412,7 +428,7 @@ impl SessionManager {
         let mut independent_agent = None;
         let mut timed_out = false;
         let result=async {
-            if compact {self.perform_compaction(&attempt,&control,&options,&state,None).await?;return Ok(());}
+            if compact {self.perform_compaction(&attempt,&control,&options,&state,None,false).await?;return Ok(());}
             if control.budget.is_none() {
                 independent_agent = self.begin_independent_agent_run(&control, execution.generation).await?;
             }
@@ -423,7 +439,9 @@ impl SessionManager {
             let timeout_ms = independent_agent.as_ref().and_then(|agent| agent.limits.timeout_ms);
             let work = async {
             let mut usage=agena_provider::CompletionUsage::default();
+            let mut model_error_retries = 0u32;
             let mut follow_ups=0usize;let mut stop_follow_ups=0usize;let mut compactions=0usize;let mut proactive_suppressed=false;
+            let mut stop_hook_active = false;
             let mut recent_tools=std::collections::VecDeque::<String>::new();
             let max_turns=match state.config.max_turns{Some(0)=>usize::MAX,Some(max)=>max,None=>DEFAULT_MAX_MODEL_TURNS};let mut provider_calls=0usize;
             'turns: loop {
@@ -443,19 +461,24 @@ impl SessionManager {
                 let round=match persist(||attempt.begin_current_round(round_id)).await{
                     Ok(receipt)=>receipt.value,
                     Err(KernelError::Invalid(message)) if state.config.auto_compaction.enabled&&compactions<4&&(message.contains("prompt exceeds input identity budget")||message.contains("current prompt scan exceeds"))=>{
-                        compactions+=1;if self.perform_compaction(&attempt,&control,&options,&state,None).await?{continue;}return Err(AppError::Config(message));
+                        compactions+=1;if self.perform_compaction(&attempt,&control,&options,&state,None,true).await?{continue;}return Err(AppError::Config(message));
                     },Err(error)=>return Err(kernel_error(error)),
                 };
                 let facts=round.prompt().await.map_err(kernel_error)?;
                 let context=self.execution_context_with_state(control.session,&state).await?;
                 let executor=state.executor.for_session_context_async(&context).await.with_cancellation_token(Some(control.cancel.clone()));
                 let native=state.providers.native_compaction_enabled(&options.model)?;
-                let prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
+                let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:None,model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),tools_enabled:!bindings.is_empty()};
                 let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
                 let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
+                state.processor.transform_model_input(
+                    control.session.get(),
+                    &mut system_text,
+                    prompt.turns_mut(),
+                ).await?;
                 let system=Some(system_text);
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
                 let metadata=state.providers.model_metadata(&options.model).unwrap_or_default();
@@ -479,7 +502,7 @@ impl SessionManager {
                     // move its input boundary.
                     let finish=RequestId::new();persist(||round.finish(finish,None,false)).await.map_err(kernel_error)?;
                     if state.config.auto_compaction.enabled&&!disabled&&compactions<4 {
-                        compactions+=1;match self.perform_compaction(&attempt,&control,&options,&state,Some(token_estimate)).await{
+                        compactions+=1;match self.perform_compaction(&attempt,&control,&options,&state,Some(token_estimate),true).await{
                             Ok(true)=>continue,Ok(false)=>{},Err(AppError::Cancelled)=>return Err(AppError::Cancelled),Err(error)=>tracing::warn!(%error,"automatic compaction did not produce a usable checkpoint"),
                         }
                     }
@@ -495,16 +518,52 @@ impl SessionManager {
                 let mut run=state.processor.kernel_round(request,self.kernel().reader.clone(),state.providers.clone(),workspace_root).map_err(kernel_error)?;
                 provider_calls+=1;
                 control.phase(agena_domain::ExecutionPhase::StreamingModel);
-                let outcome=self.drive_round(&mut run).await.map_err(kernel_error)?;
+                let model_started = std::time::Instant::now();
+                let outcome=self.drive_round(
+                    &mut run,
+                    state.processor.request_header_hook(control.session.get()),
+                    control.cancel.clone(),
+                ).await;
+                let retry_is_safe = run.retry_is_safe();
+                let model_status = match &outcome {
+                    Ok(round) if round.cancelled => "cancelled",
+                    Ok(round) if round.failure.is_some() => "error",
+                    Ok(_) => "completed",
+                    Err(_) => "error",
+                };
+                state.processor.after_model_request(
+                    control.session.get(),
+                    &options.model,
+                    round_id.to_string(),
+                    model_status.to_owned(),
+                    model_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                    outcome.as_ref().ok()
+                        .and_then(|round| round.usage.as_ref())
+                        .and_then(|usage| serde_json::to_value(usage).ok()),
+                ).await;
+                let outcome=outcome.map_err(kernel_error)?;
                 // The owned outcome survives the runner. Release its modeled
                 // prompt/stream allocations before tools can wait on agents.
                 drop(run);
                 if outcome.cancelled || control.cancel.is_cancelled(){return Err(AppError::Cancelled);}
                 if let Some(failure)=outcome.failure {
-                    if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,Some(failure.user.fallback.clone())).await?{continue;}
+                    if retry_is_safe && model_error_retries < 2
+                        && state.processor.recover_model_request(
+                            control.session.get(),
+                            &options.model,
+                            round_id.to_string(),
+                            failure.user.fallback.clone(),
+                            model_error_retries + 1,
+                        ).await
+                    {
+                        model_error_retries += 1;
+                        continue;
+                    }
+                    if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,Some(failure.user.fallback.clone())).await?{continue;}
                     structured_round_failure=true;
                     return Err(AppError::Internal(failure.user.fallback));
                 }
+                model_error_retries = 0;
                 if let Some(observed)=&outcome.usage {usage.add_assign(observed);}
                 if let Some(budget)=&agent_budget
                     && (budget.max_tokens.is_some_and(|max|usage.total_tokens()>=max)||budget.max_cost_microusd.is_some_and(|max|usage.effective_cost_usd()*1_000_000.0>=max as f64)){
@@ -533,7 +592,7 @@ impl SessionManager {
                         agena_storage::kernel::StopDecision::Continue=>continue,
                         agena_storage::kernel::StopDecision::AwaitingBackground=>{},
                         agena_storage::kernel::StopDecision::Ready=>{
-                            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,None).await?{continue;}
+                            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,None).await?{continue;}
                             self.flush_hook_runs(&attempt,control.session,&state).await?;
                         },
                     }
@@ -547,7 +606,7 @@ impl SessionManager {
                 follow_ups+=1;if follow_ups>=4{return Err(AppError::Config("the model reached the continuation limit".into()));}
             }
             let budget_error=AppError::ModelTurnBudgetExhausted{max_turns};
-            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,Some(budget_error.public_message().to_owned())).await?{
+            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,Some(budget_error.public_message().to_owned())).await?{
                 provider_calls=0;
                 continue 'turns;
             }
@@ -582,85 +641,114 @@ impl SessionManager {
                 }
             }
         }.await;
-        if completed {
-            self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
-                .await?;
-            return result.map(|()| DriveExit::Settled);
-        }
-        let phase = if control.cancel.is_cancelled() || matches!(result, Err(AppError::Cancelled)) {
-            ExecutionPhase::Cancelled
-        } else if result.is_ok() {
-            ExecutionPhase::Succeeded
-        } else {
-            ExecutionPhase::Failed
-        };
-        // Keep manager-level failure reasons durable and user-visible. The
-        // notice is written while the attempt is still running, then projected
-        // as an `error` part on read. Provider-round failures already have a
-        // structured failure and are projected from that round instead.
-        if phase == ExecutionPhase::Failed
-            && !structured_round_failure
-            && let Err(error) = &result
-        {
-            match agena_runtime_contracts::part_content::failure_notice_text(&error.failure()) {
-                Ok(text) => {
-                    if let Err(error) =
-                        persist(|| attempt.notice(RequestId::new(), text.clone())).await
-                    {
-                        tracing::warn!(
-                            session_id = control.session.get(),
-                            execution_id = %control.execution,
-                            %error,
-                            "could not persist the execution failure notice"
-                        );
+        let settlement = async {
+            if completed {
+                self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
+                    .await?;
+                return result.map(|()| DriveExit::Settled);
+            }
+            let phase =
+                if control.cancel.is_cancelled() || matches!(result, Err(AppError::Cancelled)) {
+                    ExecutionPhase::Cancelled
+                } else if result.is_ok() {
+                    ExecutionPhase::Succeeded
+                } else {
+                    ExecutionPhase::Failed
+                };
+            // Keep manager-level failure reasons durable and user-visible. The
+            // notice is written while the attempt is still running, then projected
+            // as an `error` part on read. Provider-round failures already have a
+            // structured failure and are projected from that round instead.
+            if phase == ExecutionPhase::Failed
+                && !structured_round_failure
+                && let Err(error) = &result
+            {
+                match agena_runtime_contracts::part_content::failure_notice_text(&error.failure()) {
+                    Ok(text) => {
+                        if let Err(error) =
+                            persist(|| attempt.notice(RequestId::new(), text.clone())).await
+                        {
+                            tracing::warn!(
+                                session_id = control.session.get(),
+                                execution_id = %control.execution,
+                                %error,
+                                "could not persist the execution failure notice"
+                            );
+                        }
+                    }
+                    Err(error) => tracing::warn!(
+                        session_id = control.session.get(),
+                        execution_id = %control.execution,
+                        %error,
+                        "could not encode the execution failure notice"
+                    ),
+                }
+            }
+            let finish = RequestId::new();
+            match persist(|| attempt.finish(finish, phase)).await {
+                Ok(_) => {}
+                Err(KernelError::StaleAttempt | KernelError::Conflict(_)) => {
+                    let stored = self
+                        .kernel()
+                        .reader
+                        .execution(control.session, control.execution)
+                        .await
+                        .map_err(kernel_error)?;
+                    if !stored.phase.is_terminal() {
+                        return Err(AppError::Internal(
+                            "attempt was fenced without a terminal execution decision".into(),
+                        ));
                     }
                 }
-                Err(error) => tracing::warn!(
-                    session_id = control.session.get(),
-                    execution_id = %control.execution,
-                    %error,
-                    "could not encode the execution failure notice"
-                ),
+                Err(error) => return Err(kernel_error(error)),
             }
+            self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
+                .await?;
+            result.map(|()| DriveExit::Settled)
         }
-        let finish = RequestId::new();
-        match persist(|| attempt.finish(finish, phase)).await {
-            Ok(_) => {}
-            Err(KernelError::StaleAttempt | KernelError::Conflict(_)) => {
-                let stored = self
-                    .kernel()
-                    .reader
-                    .execution(control.session, control.execution)
-                    .await
-                    .map_err(kernel_error)?;
-                if !stored.phase.is_terminal() {
-                    return Err(AppError::Internal(
-                        "attempt was fenced without a terminal execution decision".into(),
-                    ));
-                }
-            }
-            Err(error) => return Err(kernel_error(error)),
-        }
-        self.finish_independent_agent_run(&control, independent_agent, timed_out, &result)
-            .await?;
-        result.map(|()| DriveExit::Settled)
+        .await;
+        let status = match &settlement {
+            Ok(_) => agena_plugin_host::RunStatus::Succeeded,
+            Err(AppError::Cancelled) => agena_plugin_host::RunStatus::Cancelled,
+            Err(_) if control.cancel.is_cancelled() => agena_plugin_host::RunStatus::Cancelled,
+            Err(_) => agena_plugin_host::RunStatus::Failed,
+        };
+        state
+            .executor
+            .plugin_manager()
+            .broadcast_post_run(agena_plugin_host::PostRunInput {
+                session_id: control.session.get(),
+                model: options.model.model_id.to_string(),
+                execution_id,
+                kind: run_kind,
+                status,
+            })
+            .await;
+        settlement
     }
     async fn drive_round(
         &self,
         run: &mut KernelRoundRun,
+        header_hook: Arc<dyn crate::provider::ProviderRequestHeaderHook>,
+        cancellation: tokio_util::sync::CancellationToken,
     ) -> agena_storage::kernel::Result<KernelRoundOutcome> {
-        let mut delay = Duration::from_millis(25);
-        loop {
-            match run.drive().await {
-                Ok(value) => return Ok(value.clone()),
-                Err(error) if transient(&error) => {
-                    tracing::warn!(%error,"provider round awaits persistence; retaining its pending operation");
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(Duration::from_secs(1));
+        crate::provider::with_request_header_hook(
+            header_hook,
+            crate::provider::with_request_cancellation(Some(cancellation), async {
+                let mut delay = Duration::from_millis(25);
+                loop {
+                    match run.drive().await {
+                        Ok(value) => return Ok(value.clone()),
+                        Err(error) if transient(&error) => {
+                            tracing::warn!(%error,"provider round awaits persistence; retaining its pending operation");
+                            tokio::time::sleep(delay).await;
+                            delay = (delay * 2).min(Duration::from_secs(1));
+                        }
+                        Err(error) => return Err(error),
+                    }
                 }
-                Err(error) => return Err(error),
-            }
-        }
+            }),
+        ).await
     }
     pub(super) async fn execute_tool(
         &self,
@@ -951,6 +1039,38 @@ impl SessionManager {
                             super::host::parent_interaction_required(&reason),
                         ));
                     }
+                    let tool_name = match &check.action {
+                        PermissionAction::Tool { tool_name, .. } => tool_name.clone(),
+                        _ => "resource".to_owned(),
+                    };
+                    if let Err(error) = state
+                        .executor
+                        .plugin_manager()
+                        .dispatch_permission_request(agena_plugin_host::PermissionRequestInput {
+                            session_id: control.session.get(),
+                            tool_name,
+                            action: action_key.clone(),
+                            description: reason.clone(),
+                        })
+                        .await
+                    {
+                        return Err(ToolError::PolicyDenied(Box::new(
+                            agena_domain::PolicyDeniedResult {
+                                action: check.action.clone(),
+                                related_actions: Vec::new(),
+                                denied_actions: vec![check.action.clone()],
+                                reason: error.diagnostic_message().to_owned(),
+                                explanation: resolution.explanation.clone(),
+                                source: Some("plugin_hook".into()),
+                                scope: None,
+                                operator: None,
+                                authority: agena_domain::PermissionAuthorityKind::StaticPolicy,
+                                rule_id: None,
+                                rule_revision_ms: None,
+                                trace: resolution.trace.clone(),
+                            },
+                        )));
+                    }
                     let command = RequestId::new();
                     let request = InteractionRequest::Permission {
                         action_key: action_key.clone(),
@@ -1012,6 +1132,7 @@ impl SessionManager {
         control: &RunControl,
         state: &ExecutionState,
         count: &mut usize,
+        stop_hook_active: &mut bool,
         error: Option<String>,
     ) -> Result<bool, AppError> {
         if control.cancel.is_cancelled() {
@@ -1026,11 +1147,9 @@ impl SessionManager {
             .dispatch_agent_stop_cancellable(
                 agena_plugin_host::AgentStopInput {
                     session_id: control.session.get(),
-                    // Every dispatch follows a completed or failed model round;
-                    // the continuation counter below is the loop guard. Reusing
-                    // that counter here makes the workflow plugin drop every
-                    // plan autorun after its first continuation.
-                    stop_hook_active: false,
+                    // A previous stop hook already forced this execution to
+                    // continue. Plugins can prevent accidental recursive vetoes.
+                    stop_hook_active: *stop_hook_active,
                     last_assistant_message: last,
                     run_error: error,
                 },
@@ -1064,6 +1183,7 @@ impl SessionManager {
         if !plan_autorun {
             *count += 1;
         }
+        *stop_hook_active = true;
         // The hook run recorded by `flush_hook_runs` already carries the
         // continuation in its `message` field. The next prompt projects that
         // message from the hook part, so writing a second plain-text notice
@@ -1425,6 +1545,45 @@ impl SessionManager {
         Ok(status)
     }
     async fn perform_compaction(
+        &self,
+        attempt: &AttemptHandle,
+        control: &RunControl,
+        options: &SessionRunOptions,
+        state: &ExecutionState,
+        before_tokens: Option<u64>,
+        automatic: bool,
+    ) -> Result<bool, AppError> {
+        let hooks = state.executor.plugin_manager();
+        hooks
+            .dispatch_compaction_before(agena_plugin_host::CompactionBeforeInput {
+                session_id: control.session.get(),
+                model: options.model.model_id.to_string(),
+                automatic,
+                estimated_tokens: before_tokens,
+            })
+            .await
+            .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
+        let outcome = self
+            .perform_compaction_inner(attempt, control, options, state, before_tokens)
+            .await;
+        hooks
+            .broadcast_compaction_after(agena_plugin_host::CompactionAfterInput {
+                session_id: control.session.get(),
+                model: options.model.model_id.to_string(),
+                automatic,
+                status: match &outcome {
+                    Ok(true) => "committed",
+                    Ok(false) => "unchanged",
+                    Err(AppError::Cancelled) => "cancelled",
+                    Err(_) => "error",
+                }
+                .to_owned(),
+            })
+            .await;
+        outcome
+    }
+
+    async fn perform_compaction_inner(
         &self,
         attempt: &AttemptHandle,
         control: &RunControl,
@@ -1931,5 +2090,7 @@ fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &st
 
 #[cfg(test)]
 mod compaction_tests;
+#[cfg(test)]
+mod model_hooks_tests;
 #[cfg(test)]
 mod stop_hook_tests;

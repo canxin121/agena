@@ -168,7 +168,63 @@ impl SessionPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize session tools",
+        help = "Binds the host and prepares session workflow operations.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化会话工具",
+                help = "准备会话工具功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化工作階段工具",
+                help = "準備工作階段工具功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les outils de session",
+                help = "Prépare les outils de session et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar las herramientas de sesión",
+                help = "Prepara las herramientas de sesión y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as ferramentas de sessão",
+                help = "Prepara as ferramentas de sessão e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Sitzungswerkzeuge initialisieren",
+                help = "Bereitet die Sitzungswerkzeuge vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "セッションツールを初期化",
+                help = "必要なホストサービスに接続し、セッションツールを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "세션 도구 초기화",
+                help = "필요한 호스트 서비스에 연결하고 세션 도구 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "सत्र टूल प्रारंभ करें",
+                help = "“सत्र टूल” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة أدوات الجلسات",
+                help = "يُعِدّ أدوات الجلسات ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.host
             .set(Arc::clone(&host))

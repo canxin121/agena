@@ -105,11 +105,6 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::META_MANIFEST => ok_json(&plugin.manifest()),
             method::META_PING => Ok(serde_json::json!({"ok": true})),
 
-            method::HOOK_EVENT => {
-                let env: EventEnvelope = serde_json::from_value(params)?;
-                plugin.event(env).await?;
-                Ok(Value::Object(Default::default()))
-            }
             method::HOOK_TOOL_BEFORE => {
                 let i: ToolBeforeInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
@@ -208,10 +203,6 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_CHAT_SYSTEM_TRANSFORM => {
                 let i: ChatSystemTransformInput = serde_json::from_value(params)?;
                 ok_json(&plugin.chat_system_transform(i).await?)
-            }
-            method::HOOK_AUTH => {
-                let i: AuthInput = serde_json::from_value(params)?;
-                ok_json(&plugin.auth(i).await?)
             }
             method::HOOK_PROVIDER_LIST => {
                 let i: ProviderListInput = serde_json::from_value(params)?;
@@ -320,6 +311,112 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_CHAT_MESSAGES_TRANSFORM => {
                 let i: ChatMessagesTransformInput = serde_json::from_value(params)?;
                 ok_json(&plugin.chat_messages_transform(i).await?)
+            }
+            method::HOOK_MODEL_REQUEST_BEFORE => {
+                let input: ModelRequestBeforeInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(
+                        context,
+                        plugin.model_request_before(input),
+                    )
+                    .await?,
+                )
+            }
+            method::HOOK_MODEL_REQUEST_AFTER => {
+                let input: ModelRequestAfterInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                crate::host_api::run_in_host_callback_context(
+                    context,
+                    plugin.model_request_after(input),
+                )
+                .await?;
+                Ok(Value::Object(Default::default()))
+            }
+            method::HOOK_MODEL_REQUEST_ERROR => {
+                let input: ModelRequestErrorInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(
+                        context,
+                        plugin.model_request_error(input),
+                    )
+                    .await?,
+                )
+            }
+            method::HOOK_COMPACTION_BEFORE => {
+                let input: CompactionBeforeInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(
+                        context,
+                        plugin.compaction_before(input),
+                    )
+                    .await?,
+                )
+            }
+            method::HOOK_COMPACTION_AFTER => {
+                let input: CompactionAfterInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                crate::host_api::run_in_host_callback_context(
+                    context,
+                    plugin.compaction_after(input),
+                )
+                .await?;
+                Ok(Value::Object(Default::default()))
+            }
+            method::HOOK_SUBAGENT_START => {
+                let input: SubagentStartInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(
+                        context,
+                        plugin.subagent_start(input),
+                    )
+                    .await?,
+                )
+            }
+            method::HOOK_SUBAGENT_STOP => {
+                let input: SubagentStopInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                crate::host_api::run_in_host_callback_context(context, plugin.subagent_stop(input))
+                    .await?;
+                Ok(Value::Object(Default::default()))
+            }
+            method::HOOK_PERMISSION_REQUEST => {
+                let input: PermissionRequestInput = serde_json::from_value(params)?;
+                let context = crate::host_api::HostCallbackContext {
+                    session_id: Some(input.session_id),
+                    ..Default::default()
+                };
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(
+                        context,
+                        plugin.permission_request(input),
+                    )
+                    .await?,
+                )
             }
             other => Err(PluginError::not_implemented(other)),
         }

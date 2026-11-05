@@ -5,13 +5,30 @@ import { settingsTextForLocale } from '../src/i18n/settingsTextCatalog'
 import {
   buildPluginHookEntries,
   filterPluginHookEntries,
+  groupPluginHookEntries,
   pluginHookGroupLabel,
   pluginHookStateLabel,
   pluginHookTrustStatusLabel,
+  type PluginHookDescriptor,
   type PluginHookRegistration,
 } from '../src/components/settings/plugins/pluginHooks'
 import { pluginTabForSettingsView } from '../src/components/settings/pluginSettingsNavigation'
 import { settingsQueryForDestination } from '../src/components/settings/settingsDestination'
+
+function descriptor(
+  name: string,
+  handler_id: string,
+  summary: string,
+  help: string,
+  enabled = true,
+): PluginHookDescriptor {
+  return {
+    name, handler_id, summary, help, enabled,
+    translations: {}, priority: 0, filters: {}, is_async: true,
+    source: 'cdylib', trust_level: 'verified', trust_status: 'trusted',
+    current_hash: 'hash-2',
+  }
+}
 
 const registration: PluginHookRegistration = {
   plugin_id: 'fixture',
@@ -22,16 +39,9 @@ const registration: PluginHookRegistration = {
   source_path: '/plugins/fixture.so',
   manifest_hash: 'hash-1',
   hooks: [
-    {
-      name: 'tool.execute.before',
-      enabled: true,
-      source: 'cdylib',
-      trust_level: 'verified',
-      trust_status: 'trusted',
-      current_hash: 'hash-2',
-    },
-    { name: 'event', enabled: false, source: 'cdylib' },
-    { name: 'future.hook', enabled: true, source: 'cdylib' },
+    descriptor('tool.before', 'check_tool', 'Inspect tool input', 'Checks tool arguments before execution.'),
+    descriptor('notification', 'notify', 'Publish notifications', 'Sends notification events to observers.', false),
+    descriptor('future.hook', 'future_handler', 'A future custom Hook', 'Runs when a future event is dispatched.'),
   ],
 }
 
@@ -45,14 +55,26 @@ describe('plugin Hook registration inspector', () => {
   })
 
   test('combines declared and runtime Hook entries without duplicates', () => {
+    const declaredHandlers = [
+      {
+        id: 'inspect_chat',
+        event: 'chat.message',
+        summary: 'Inspect chat messages',
+        help: 'Checks each provider-bound chat message before sending.',
+        priority: 0,
+        filters: {},
+        is_async: true,
+      },
+    ]
     const hooks = buildPluginHookEntries(
-      ['tool.execute.before', 'event', 'chat.message', 'tool.execute.before'],
+      ['tool.before', 'notification', 'chat.message', 'tool.before'],
       [registration],
       'running',
+      declaredHandlers,
     )
     expect(hooks).toHaveLength(4)
     expect(new Set(hooks.map((hook) => hook.name)).size).toBe(4)
-    expect(hooks.find((hook) => hook.name === 'tool.execute.before')).toMatchObject({
+    expect(hooks.find((hook) => hook.name === 'tool.before')).toMatchObject({
       state: 'active',
       declared: true,
       registered: true,
@@ -62,7 +84,7 @@ describe('plugin Hook registration inspector', () => {
       trustStatus: 'trusted',
       currentHash: 'hash-2',
     })
-    expect(hooks.find((hook) => hook.name === 'event')).toMatchObject({
+    expect(hooks.find((hook) => hook.name === 'notification')).toMatchObject({
       state: 'disabled',
       declared: true,
       registered: true,
@@ -76,33 +98,93 @@ describe('plugin Hook registration inspector', () => {
       state: 'active',
       declared: false,
       registered: true,
-      title: 'future.hook',
+      title: 'A future custom Hook',
     })
+  })
+
+  test('each handler has its own introduction, priority, filters and author translations', () => {
+    const declarations = [
+      {
+        id: 'check_shell', event: 'tool.before',
+        summary: 'Check shell commands', help: 'Reviews shell commands before execution.',
+        translations: {
+          'zh-CN': { summary: '检查 Shell 命令', help: '在执行前检查 Shell 命令。' },
+          'fr-FR': { summary: 'Vérifier les commandes shell', help: 'Vérifie les commandes shell avant leur exécution.' },
+        },
+        priority: 100, filters: { tools: ['bash'] }, is_async: true,
+      },
+      {
+        id: 'protect_files', event: 'tool.before',
+        summary: 'Protect file writes', help: 'Checks paths before writing.',
+        priority: 80, filters: { tools: ['fs.write'] }, is_async: true,
+      },
+    ]
+    const live = [{
+      ...registration,
+      hooks: declarations.map((handler) => ({
+        ...descriptor(handler.event, handler.id, handler.summary, handler.help),
+        priority: handler.priority,
+        filters: handler.filters,
+        translations: handler.translations || {},
+        is_async: handler.is_async,
+      })),
+    }]
+    const chinese = buildPluginHookEntries(['tool.before'], live, 'running', declarations, 'zh-CN')
+    expect(chinese).toHaveLength(2)
+    expect(chinese.map((entry) => entry.handlerId)).toEqual(['check_shell', 'protect_files'])
+    expect(chinese.map((entry) => entry.title)).toEqual(['检查 Shell 命令', 'Protect file writes'])
+    expect(chinese[0]).toMatchObject({
+      description: '在执行前检查 Shell 命令。',
+      filters: { tools: ['bash'] }, priority: 100, isAsync: true, state: 'active',
+    })
+    expect(new Set(chinese.map((entry) => entry.key)).size).toBe(2)
+    const groups = groupPluginHookEntries(chinese)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({
+      group: 'tools',
+      event: 'tool.before',
+    })
+    expect(groups[0].hooks.map((entry) => entry.handlerId)).toEqual(['check_shell', 'protect_files'])
+    expect(filterPluginHookEntries(chinese, 'check_shell')).toHaveLength(1)
+    expect(filterPluginHookEntries(chinese, 'fs.write')).toHaveLength(1)
+
+    const french = buildPluginHookEntries(['tool.before'], live, 'running', declarations, 'fr-FR')
+    expect(french[0].title).toBe('Vérifier les commandes shell')
+    expect(french[0].description).toBe('Vérifie les commandes shell avant leur exécution.')
+    const spanish = buildPluginHookEntries(['tool.before'], live, 'running', declarations, 'es-ES')
+    expect(spanish[0].title).toBe('Check shell commands')
+
+    const stopped = buildPluginHookEntries(['tool.before'], [], 'stopped', declarations, 'zh-CN')
+    expect(stopped).toHaveLength(2)
+    expect(stopped.every((entry) => entry.state === 'declared')).toBe(true)
+    expect(stopped[0].title).toBe('检查 Shell 命令')
+    expect(groupPluginHookEntries(stopped)[0].hooks).toHaveLength(2)
+
+    // A bare subscription is not itself a registered, self-documented Handler.
+    expect(buildPluginHookEntries(['tool.before'], [], 'stopped')).toEqual([])
   })
 
   test('a stopped or failed plugin does not claim registrations are active', () => {
     for (const state of ['stopped', 'failed', 'restarting', undefined]) {
       const hooks = buildPluginHookEntries([], [registration], state)
-      expect(hooks.find((hook) => hook.name === 'tool.execute.before')?.state).toBe('inactive')
-      expect(hooks.find((hook) => hook.name === 'event')?.state).toBe('disabled')
+      expect(hooks.find((hook) => hook.name === 'tool.before')?.state).toBe('inactive')
+      expect(hooks.find((hook) => hook.name === 'notification')?.state).toBe('disabled')
     }
   })
 
   test('empty or malformed data is handled without inventing registrations', () => {
     expect(buildPluginHookEntries(null, undefined, 'running')).toEqual([])
-    expect(buildPluginHookEntries(['', null, 'init'], [], 'running')).toMatchObject([
-      { name: 'init', state: 'declared' },
-    ])
+    expect(buildPluginHookEntries(['', null, 'init'], [], 'running')).toEqual([])
   })
 
   test('search matches identifiers, translated names, descriptions and states', () => {
     const previous = i18n.global.locale.value
     try {
       i18n.global.locale.value = 'zh-CN'
-      const hooks = buildPluginHookEntries(['tool.execute.before', 'session.start'], [registration], 'running')
-      expect(filterPluginHookEntries(hooks, 'tool.execute.before')).toHaveLength(1)
-      expect(filterPluginHookEntries(hooks, '工具执行前').map((hook) => hook.name)).toEqual(['tool.execute.before'])
-      expect(filterPluginHookEntries(hooks, '生效').some((hook) => hook.name === 'tool.execute.before')).toBe(true)
+      const hooks = buildPluginHookEntries(['tool.before', 'session.start'], [registration], 'running')
+      expect(filterPluginHookEntries(hooks, 'tool.before')).toHaveLength(1)
+      expect(filterPluginHookEntries(hooks, 'Inspect tool input').map((hook) => hook.name)).toEqual(['tool.before'])
+      expect(filterPluginHookEntries(hooks, '生效').some((hook) => hook.name === 'tool.before')).toBe(true)
       expect(filterPluginHookEntries(hooks, 'not-a-hook')).toEqual([])
       expect(pluginHookGroupLabel('tools')).toBe('工具钩子')
       expect(pluginHookStateLabel('declared')).toBe('仅声明，未注册')
@@ -118,7 +200,16 @@ describe('plugin Hook registration inspector', () => {
     const ids = [...section.matchAll(/"([a-z][a-z_.]+)"/g)].map((match) => match[1])
     expect(ids.length).toBeGreaterThan(20)
     expect(new Set(ids).size).toBe(ids.length)
-    const hooks = buildPluginHookEntries(ids, undefined, 'running')
+    const declarations = ids.map((event) => ({
+      id: `handler_${event}`,
+      event,
+      summary: `Documented ${event}`,
+      help: `Handles the ${event} event with plugin-authored metadata.`,
+      priority: 0,
+      filters: {},
+      is_async: true,
+    }))
+    const hooks = buildPluginHookEntries(ids, undefined, 'running', declarations)
     expect(hooks).toHaveLength(ids.length)
     expect(
       hooks.every(
@@ -131,6 +222,37 @@ describe('plugin Hook registration inspector', () => {
     const locales = ['zh-CN', 'es-ES', 'fr-FR', 'pt-BR', 'hi-IN', 'ar-SA'] as const
     for (const locale of locales) {
       for (const key of ['Hooks', 'Search hooks', 'Registered and active', 'Declared only', 'Lifecycle hooks']) {
+        expect(settingsTextForLocale(locale, key)).not.toBe(key)
+      }
+    }
+  })
+
+  test('all supported locales translate each new Hook lifecycle label and execution mode', () => {
+    const locales = ['zh-CN', 'es-ES', 'fr-FR', 'pt-BR', 'hi-IN', 'ar-SA'] as const
+    const keys = [
+      'Runs once when a session execution begins.',
+      'Runs once after session execution settles.',
+      'Before compaction',
+      'Guards the start of a context compaction operation.',
+      'After compaction',
+      'Observes the committed outcome of a compaction attempt.',
+      'Before subagent launch',
+      'Guards a delegated agent before its initial execution.',
+      'Subagent settled',
+      'Observes a delegated agent after terminal settlement.',
+      'Permission request',
+      'Applies additional policy before interactive tool approval.',
+      'Before model request',
+      'Guards the model request before provider I/O.',
+      'After model request',
+      'Observes the settled model request status and usage.',
+      'Model request failure',
+      'May request a bounded retry of a failed, side-effect-free round.',
+      'Asynchronous',
+      'Synchronous',
+    ]
+    for (const locale of locales) {
+      for (const key of keys) {
         expect(settingsTextForLocale(locale, key)).not.toBe(key)
       }
     }

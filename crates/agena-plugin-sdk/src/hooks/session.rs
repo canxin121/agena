@@ -2,21 +2,38 @@ use serde::{Deserialize, Serialize};
 
 // ── run lifecycle ─────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Input of the pre-run hook.
-pub struct PreRunInput {
-    pub session_id: i64,
-    pub model: String,
-    pub message_count: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunKind {
+    Conversation,
+    Compaction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunStatus {
+    Succeeded,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// Input of the post-run hook.
+/// Emitted once after an execution is claimed and before its first effect.
+pub struct PreRunInput {
+    pub session_id: i64,
+    pub model: String,
+    pub execution_id: String,
+    pub kind: RunKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Emitted once when an execution attempt settles, including failure/cancel.
 pub struct PostRunInput {
     pub session_id: i64,
     pub model: String,
-    pub status: String,
-    pub message_count: usize,
+    pub execution_id: String,
+    pub kind: RunKind,
+    pub status: RunStatus,
 }
 
 // ── session.start ──────────────────────────────────────────────────────────

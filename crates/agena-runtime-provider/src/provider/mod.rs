@@ -19,9 +19,7 @@ pub use agena_provider::CompletionResponse;
 pub use agena_provider::{
     self as copilot_models, self as prompt_cache, self as protocol_ids, self as tool_stream,
 };
-pub use utils::{
-    ProviderRequestHeaderHook, install_request_header_hook, with_request_cancellation,
-};
+pub use utils::{ProviderRequestHeaderHook, with_request_cancellation, with_request_header_hook};
 
 pub use agena_domain::{Model, ModelId, ModelSpeedMode, ModelThinkingMode};
 pub use catalog_decoration::catalog_decoration_source;

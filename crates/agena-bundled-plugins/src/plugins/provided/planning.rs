@@ -43,7 +43,63 @@ impl PlanPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize planning policy",
+        help = "Loads planning settings and connects workflow state to the host.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化规划策略",
+                help = "准备规划策略功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化規劃策略",
+                help = "準備規劃策略功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les règles de planification",
+                help = "Prépare les règles de planification et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar las reglas de planificación",
+                help = "Prepara las reglas de planificación y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as regras de planejamento",
+                help = "Prepara as regras de planejamento e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Planungsregeln initialisieren",
+                help = "Bereitet die Planungsregeln vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "計画ポリシーを初期化",
+                help = "必要なホストサービスに接続し、計画ポリシーを利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "계획 정책 초기화",
+                help = "필요한 호스트 서비스에 연결하고 계획 정책 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "योजना नीतियाँ प्रारंभ करें",
+                help = "“योजना नीतियाँ” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة سياسات التخطيط",
+                help = "يُعِدّ سياسات التخطيط ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let plan = agena_plugin_host::sdk::macro_support::parse_defaulted_settings(
             ctx.settings.clone(),
@@ -340,7 +396,20 @@ impl PlanPlugin {
         self.inner.invoke_plan_clear().await
     }
 
-    #[hook(tool.before)]
+    #[hook(tool.before, summary = "Check planned tool actions", help = "Checks proposed tool operations against the active plan before execution.",
+    translations(
+        locale("zh-CN", summary = "检查规划中的工具操作", help = "执行工具前检查拟执行操作是否符合当前计划。"),
+        locale("zh-TW", summary = "檢查計畫中的工具操作", help = "執行工具前檢查預定操作是否符合目前計畫。"),
+        locale("fr-FR", summary = "Contrôler les actions du plan", help = "Vérifie que les actions proposées respectent le plan actif avant tout appel d’outil."),
+        locale("es-ES", summary = "Comprobar las acciones previstas", help = "Comprueba que las operaciones de herramientas cumplen el plan activo antes de ejecutarlas."),
+        locale("pt-BR", summary = "Verificar ações planejadas", help = "Confere se as operações de ferramentas respeitam o plano ativo antes de executá-las."),
+        locale("de-DE", summary = "Geplante Werkzeugaktionen prüfen", help = "Prüft vor der Ausführung, ob vorgeschlagene Werkzeugaktionen dem aktiven Plan entsprechen."),
+        locale("ja-JP", summary = "計画中のツール操作を検査", help = "ツール実行前に操作が現在の計画に沿っているか確認します。"),
+        locale("ko-KR", summary = "계획된 도구 작업 검사", help = "도구 실행 전에 제안된 작업이 현재 계획에 부합하는지 확인합니다."),
+        locale("hi-IN", summary = "योजनाबद्ध टूल कार्य जाँचें", help = "टूल चलाने से पहले जाँचता है कि प्रस्तावित कार्य सक्रिय योजना के अनुरूप हैं।"),
+        locale("ar-SA", summary = "فحص إجراءات الأدوات المخططة", help = "يتحقق قبل التنفيذ من توافق إجراءات الأدوات المقترحة مع الخطة النشطة.")
+    )
+)]
     async fn tool_execute_before(
         &self,
         input: ToolBeforeInput,
@@ -348,7 +417,20 @@ impl PlanPlugin {
         self.inner.tool_execute_before_hook(input).await
     }
 
-    #[hook(shell.before)]
+    #[hook(shell.before, summary = "Check planned shell commands", help = "Checks shell commands against the active planning policy before execution.",
+    translations(
+        locale("zh-CN", summary = "检查规划中的 Shell 命令", help = "运行 Shell 命令前检查是否符合当前规划策略。"),
+        locale("zh-TW", summary = "檢查計畫中的 Shell 命令", help = "執行 Shell 命令前檢查是否符合目前規劃策略。"),
+        locale("fr-FR", summary = "Contrôler les commandes Shell du plan", help = "Vérifie les commandes Shell au regard de la politique de planification avant leur exécution."),
+        locale("es-ES", summary = "Comprobar los comandos Shell previstos", help = "Comprueba los comandos Shell frente a la política de planificación activa antes de ejecutarlos."),
+        locale("pt-BR", summary = "Verificar comandos Shell planejados", help = "Valida os comandos Shell pela política de planejamento ativa antes da execução."),
+        locale("de-DE", summary = "Geplante Shell-Befehle prüfen", help = "Prüft Shell-Befehle vor der Ausführung anhand der aktiven Planungsrichtlinie."),
+        locale("ja-JP", summary = "計画中の Shell コマンドを検査", help = "Shell コマンド実行前に現在の計画ポリシーとの整合性を確認します。"),
+        locale("ko-KR", summary = "계획된 Shell 명령 검사", help = "Shell 명령 실행 전에 현재 계획 정책에 부합하는지 확인합니다."),
+        locale("hi-IN", summary = "योजनाबद्ध Shell कमांड जाँचें", help = "Shell कमांड चलाने से पहले सक्रिय योजना नीति से उनका मिलान करता है।"),
+        locale("ar-SA", summary = "فحص أوامر Shell المخططة", help = "يتحقق من توافق أوامر Shell مع سياسة التخطيط النشطة قبل تنفيذها.")
+    )
+)]
     async fn command_execute_before(
         &self,
         input: CommandBeforeInput,
@@ -356,7 +438,20 @@ impl PlanPlugin {
         self.inner.command_execute_before_hook(input).await
     }
 
-    #[hook(agent.stop)]
+    #[hook(agent.stop, summary = "Continue active plans", help = "Requests another agent turn when an unfinished plan requires continuation.",
+    translations(
+        locale("zh-CN", summary = "继续未完成的计划", help = "计划尚未完成时请求 Agent 继续执行下一轮。"),
+        locale("zh-TW", summary = "繼續未完成的計畫", help = "計畫尚未完成時要求 Agent 繼續下一輪執行。"),
+        locale("fr-FR", summary = "Poursuivre les plans inachevés", help = "Demande à l’agent de continuer lorsque le plan actif nécessite une nouvelle étape."),
+        locale("es-ES", summary = "Continuar planes pendientes", help = "Solicita otra ejecución del agente cuando el plan activo todavía no ha terminado."),
+        locale("pt-BR", summary = "Continuar planos inacabados", help = "Solicita que o agente prossiga quando o plano ativo exige outra etapa."),
+        locale("de-DE", summary = "Unvollständige Pläne fortsetzen", help = "Fordert einen weiteren Agentenschritt an, solange der aktive Plan nicht abgeschlossen ist."),
+        locale("ja-JP", summary = "未完了の計画を継続", help = "計画が完了していない場合、エージェントに次の実行を要求します。"),
+        locale("ko-KR", summary = "미완료 계획 이어서 실행", help = "활성 계획이 완료되지 않았다면 에이전트의 다음 실행을 요청합니다."),
+        locale("hi-IN", summary = "अधूरी योजनाएँ जारी रखें", help = "सक्रिय योजना अधूरी होने पर एजेंट से अगला निष्पादन शुरू करने को कहता है।"),
+        locale("ar-SA", summary = "متابعة الخطط غير المكتملة", help = "يطلب من الوكيل تنفيذ جولة أخرى إذا كانت الخطة النشطة غير مكتملة.")
+    )
+)]
     async fn agent_stop(
         &self,
         input: agena_plugin_host::AgentStopInput,
@@ -364,7 +459,20 @@ impl PlanPlugin {
         self.inner.agent_stop_hook(input).await
     }
 
-    #[hook(agent.cancel)]
+    #[hook(agent.cancel, summary = "Handle interrupted plans", help = "Updates active plan state when the user cancels agent execution.",
+    translations(
+        locale("zh-CN", summary = "处理中断的计划", help = "用户取消 Agent 执行时更新当前计划的状态。"),
+        locale("zh-TW", summary = "處理中斷的計畫", help = "使用者取消 Agent 執行時更新目前計畫的狀態。"),
+        locale("fr-FR", summary = "Gérer les plans interrompus", help = "Met à jour l’état du plan actif lorsque l’utilisateur annule l’exécution de l’agent."),
+        locale("es-ES", summary = "Gestionar planes interrumpidos", help = "Actualiza el estado del plan activo cuando el usuario cancela la ejecución del agente."),
+        locale("pt-BR", summary = "Tratar planos interrompidos", help = "Atualiza o estado do plano ativo quando o usuário cancela a execução do agente."),
+        locale("de-DE", summary = "Unterbrochene Pläne behandeln", help = "Aktualisiert den aktiven Plan, wenn der Benutzer die Agentenausführung abbricht."),
+        locale("ja-JP", summary = "中断された計画を処理", help = "ユーザーがエージェントの実行をキャンセルした際に計画の状態を更新します。"),
+        locale("ko-KR", summary = "중단된 계획 처리", help = "사용자가 에이전트 실행을 취소하면 활성 계획의 상태를 업데이트합니다."),
+        locale("hi-IN", summary = "बाधित योजनाओं को सँभालें", help = "उपयोगकर्ता द्वारा एजेंट निष्पादन रद्द करने पर सक्रिय योजना की स्थिति अपडेट करता है।"),
+        locale("ar-SA", summary = "معالجة الخطط المتوقفة", help = "يحدّث حالة الخطة النشطة عندما يلغي المستخدم تنفيذ الوكيل.")
+    )
+)]
     async fn agent_cancel(&self, input: agena_plugin_host::AgentCancelInput) -> SdkResult<()> {
         self.inner.agent_cancel_hook(input).await
     }

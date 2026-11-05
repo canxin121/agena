@@ -9,6 +9,7 @@ use syn::{
 };
 
 use crate::plugin_hooks::PluginHookKind;
+use crate::tool_spec_support::{LocalizedToolDocs, parse_localized_tool_docs};
 
 use super::{
     expr_lit_i32, plugin_attr_has_explicit_args, plugin_method_return_type,
@@ -38,12 +39,18 @@ pub struct PluginHookAttrConfig {
     pub hook: PluginHookKind,
     pub priority: i32,
     pub filters: PluginHookFilters,
+    pub summary: LitStr,
+    pub help: LitStr,
+    pub translations: Vec<LocalizedToolDocs>,
 }
 
 struct PluginHookAttrArgs {
     key: String,
     priority: i32,
     filters: PluginHookFilters,
+    summary: LitStr,
+    help: LitStr,
+    translations: Vec<LocalizedToolDocs>,
 }
 
 impl Parse for PluginHookAttrArgs {
@@ -57,6 +64,9 @@ impl Parse for PluginHookAttrArgs {
 
         let mut priority = 0;
         let mut filters = PluginHookFilters::default();
+        let mut summary = None;
+        let mut help = None;
+        let mut translations = Vec::new();
         while input.peek(Token![,]) {
             input.parse::<Token![,]>()?;
             if input.is_empty() {
@@ -67,6 +77,62 @@ impl Parse for PluginHookAttrArgs {
                 "priority" => {
                     input.parse::<Token![=]>()?;
                     priority = expr_lit_i32(&input.parse::<Expr>()?, "priority")?;
+                }
+                "summary" | "help" => {
+                    input.parse::<Token![=]>()?;
+                    let text: LitStr = input.parse()?;
+                    if text.value().trim().is_empty() {
+                        return Err(syn::Error::new_spanned(
+                            text,
+                            "hook documentation must not be empty",
+                        ));
+                    }
+                    let slot = if option == "summary" {
+                        &mut summary
+                    } else {
+                        &mut help
+                    };
+                    if slot.replace(text).is_some() {
+                        return Err(syn::Error::new_spanned(
+                            option,
+                            "duplicate hook documentation field",
+                        ));
+                    }
+                }
+                "translations" => {
+                    if !translations.is_empty() {
+                        return Err(syn::Error::new_spanned(
+                            option,
+                            "duplicate hook translations",
+                        ));
+                    }
+                    let content;
+                    syn::parenthesized!(content in input);
+                    translations = parse_localized_tool_docs(content.parse()?)?;
+                    for translation in &translations {
+                        if translation.before_help.is_some() || translation.after_help.is_some() {
+                            return Err(syn::Error::new_spanned(
+                                &translation.locale,
+                                "hook translations only support summary and help",
+                            ));
+                        }
+                        if translation.summary.is_none() || translation.help.is_none() {
+                            return Err(syn::Error::new_spanned(
+                                &translation.locale,
+                                "each hook translation must provide both summary and help",
+                            ));
+                        }
+                        if [translation.summary.as_ref(), translation.help.as_ref()]
+                            .into_iter()
+                            .flatten()
+                            .any(|text| text.value().trim().is_empty())
+                        {
+                            return Err(syn::Error::new_spanned(
+                                &translation.locale,
+                                "hook translation summary and help must not be empty",
+                            ));
+                        }
+                    }
                 }
                 "tool" => {
                     input.parse::<Token![=]>()?;
@@ -129,10 +195,19 @@ impl Parse for PluginHookAttrArgs {
             }
         }
 
+        let summary = summary.ok_or_else(|| {
+            syn::Error::new_spanned(&key, "each #[hook(...)] must declare summary = \"...\"")
+        })?;
+        let help = help.ok_or_else(|| {
+            syn::Error::new_spanned(&key, "each #[hook(...)] must declare help = \"...\"")
+        })?;
         Ok(Self {
             key,
             priority,
             filters,
+            summary,
+            help,
+            translations,
         })
     }
 }
@@ -154,6 +229,9 @@ pub fn parse_plugin_hook_attr(
             hook: plugin_hook_kind_from_key(&key, attr)?,
             priority: args.priority,
             filters: args.filters,
+            summary: args.summary,
+            help: args.help,
+            translations: args.translations,
         })
     } else {
         Err(syn::Error::new_spanned(
@@ -176,8 +254,6 @@ fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<Pl
         "chat.headers" => Ok(PluginHookKind::ChatHeaders),
         "chat.system" => Ok(PluginHookKind::ChatSystemTransform),
         "chat.messages" => Ok(PluginHookKind::ChatMessagesTransform),
-        "event" => Ok(PluginHookKind::Event),
-        "auth" => Ok(PluginHookKind::Auth),
         "provider.list" => Ok(PluginHookKind::ProviderList),
         "notification" => Ok(PluginHookKind::Notification),
         "shell.before" => Ok(PluginHookKind::CommandExecuteBefore),
@@ -191,6 +267,14 @@ fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<Pl
         "agent.stop" => Ok(PluginHookKind::AgentStop),
         "agent.cancel" => Ok(PluginHookKind::AgentCancel),
         "config.resolved" => Ok(PluginHookKind::ConfigResolved),
+        "model.request.before" => Ok(PluginHookKind::ModelRequestBefore),
+        "model.request.after" => Ok(PluginHookKind::ModelRequestAfter),
+        "model.request.error" => Ok(PluginHookKind::ModelRequestError),
+        "compaction.before" => Ok(PluginHookKind::CompactionBefore),
+        "compaction.after" => Ok(PluginHookKind::CompactionAfter),
+        "subagent.start" => Ok(PluginHookKind::SubagentStart),
+        "subagent.stop" => Ok(PluginHookKind::SubagentStop),
+        "permission.request" => Ok(PluginHookKind::PermissionRequest),
         other => Err(syn::Error::new_spanned(
             span,
             format!("unsupported plugin hook '{other}'"),
@@ -352,8 +436,6 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
         PluginHookKind::ChatMessagesTransform => {
             PluginHookExpectedInput::Single("ChatMessagesTransformInput")
         }
-        PluginHookKind::Event => PluginHookExpectedInput::Single("EventEnvelope"),
-        PluginHookKind::Auth => PluginHookExpectedInput::Single("AuthInput"),
         PluginHookKind::ProviderList => PluginHookExpectedInput::Single("ProviderListInput"),
         PluginHookKind::Notification => PluginHookExpectedInput::Single("NotificationInput"),
         PluginHookKind::CommandExecuteBefore => {
@@ -371,6 +453,24 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
         PluginHookKind::AgentStop => PluginHookExpectedInput::Single("AgentStopInput"),
         PluginHookKind::AgentCancel => PluginHookExpectedInput::Single("AgentCancelInput"),
         PluginHookKind::ConfigResolved => PluginHookExpectedInput::Single("ConfigInput"),
+        PluginHookKind::ModelRequestBefore => {
+            PluginHookExpectedInput::Single("ModelRequestBeforeInput")
+        }
+        PluginHookKind::ModelRequestAfter => {
+            PluginHookExpectedInput::Single("ModelRequestAfterInput")
+        }
+        PluginHookKind::ModelRequestError => {
+            PluginHookExpectedInput::Single("ModelRequestErrorInput")
+        }
+        PluginHookKind::CompactionBefore => {
+            PluginHookExpectedInput::Single("CompactionBeforeInput")
+        }
+        PluginHookKind::CompactionAfter => PluginHookExpectedInput::Single("CompactionAfterInput"),
+        PluginHookKind::SubagentStart => PluginHookExpectedInput::Single("SubagentStartInput"),
+        PluginHookKind::SubagentStop => PluginHookExpectedInput::Single("SubagentStopInput"),
+        PluginHookKind::PermissionRequest => {
+            PluginHookExpectedInput::Single("PermissionRequestInput")
+        }
     }
 }
 
@@ -379,7 +479,6 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
         PluginHookKind::Init => PluginHookExpectedOutput::Init,
         PluginHookKind::Shutdown
         | PluginHookKind::ToolExecuteFailure
-        | PluginHookKind::Event
         | PluginHookKind::Notification
         | PluginHookKind::PreRun
         | PluginHookKind::PostRun
@@ -396,7 +495,6 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
         PluginHookKind::ChatMessagesTransform => {
             PluginHookExpectedOutput::Option("ChatMessagesTransformPatch")
         }
-        PluginHookKind::Auth => PluginHookExpectedOutput::Option("AuthOutput"),
         PluginHookKind::ProviderList => PluginHookExpectedOutput::Option("ProviderListPatch"),
         PluginHookKind::CommandExecuteBefore => {
             PluginHookExpectedOutput::Option("CommandBeforeResponse")
@@ -412,6 +510,22 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
         PluginHookKind::AgentStop => PluginHookExpectedOutput::Option("AgentStopPatch"),
         PluginHookKind::AgentCancel => PluginHookExpectedOutput::Unit,
         PluginHookKind::ConfigResolved => PluginHookExpectedOutput::Option("ConfigPatch"),
+        PluginHookKind::ModelRequestBefore => {
+            PluginHookExpectedOutput::Option("ModelRequestBeforePatch")
+        }
+        PluginHookKind::ModelRequestAfter => PluginHookExpectedOutput::Unit,
+        PluginHookKind::ModelRequestError => {
+            PluginHookExpectedOutput::Option("ModelRequestErrorPatch")
+        }
+        PluginHookKind::CompactionBefore => {
+            PluginHookExpectedOutput::Option("CompactionBeforePatch")
+        }
+        PluginHookKind::CompactionAfter => PluginHookExpectedOutput::Unit,
+        PluginHookKind::SubagentStart => PluginHookExpectedOutput::Option("SubagentStartPatch"),
+        PluginHookKind::SubagentStop => PluginHookExpectedOutput::Unit,
+        PluginHookKind::PermissionRequest => {
+            PluginHookExpectedOutput::Option("PermissionRequestPatch")
+        }
     }
 }
 
@@ -503,8 +617,6 @@ pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
         PluginHookKind::ChatHeaders => "chat.headers",
         PluginHookKind::ChatSystemTransform => "chat.system",
         PluginHookKind::ChatMessagesTransform => "chat.messages",
-        PluginHookKind::Event => "event",
-        PluginHookKind::Auth => "auth",
         PluginHookKind::ProviderList => "provider.list",
         PluginHookKind::Notification => "notification",
         PluginHookKind::CommandExecuteBefore => "shell.before",
@@ -518,5 +630,80 @@ pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
         PluginHookKind::AgentStop => "agent.stop",
         PluginHookKind::AgentCancel => "agent.cancel",
         PluginHookKind::ConfigResolved => "config.resolved",
+        PluginHookKind::ModelRequestBefore => "model.request.before",
+        PluginHookKind::ModelRequestAfter => "model.request.after",
+        PluginHookKind::ModelRequestError => "model.request.error",
+        PluginHookKind::CompactionBefore => "compaction.before",
+        PluginHookKind::CompactionAfter => "compaction.after",
+        PluginHookKind::SubagentStart => "subagent.start",
+        PluginHookKind::SubagentStop => "subagent.stop",
+        PluginHookKind::PermissionRequest => "permission.request",
+    }
+}
+
+#[cfg(test)]
+mod documentation_contract_tests {
+    use super::*;
+
+    fn parse(attr: Attribute) -> Result<PluginHookAttrConfig> {
+        parse_plugin_hook_attr(&attr, &syn::parse_quote!(check_tool))
+    }
+
+    #[test]
+    fn every_hook_requires_explicit_nonempty_summary_and_help() {
+        let missing_both = parse(syn::parse_quote!(#[hook(tool.before)]))
+            .err()
+            .expect("undocumented hook must fail");
+        assert!(missing_both.to_string().contains("summary"));
+
+        let missing_help = parse(syn::parse_quote!(#[hook(tool.before, summary = "Guard tools")]))
+            .err()
+            .expect("missing help must fail");
+        assert!(missing_help.to_string().contains("help"));
+
+        let missing_summary = parse(syn::parse_quote!(#[hook(tool.before, help = "Checks tools")]))
+            .err()
+            .expect("missing summary must fail");
+        assert!(missing_summary.to_string().contains("summary"));
+
+        let blank =
+            parse(syn::parse_quote!(#[hook(tool.before, summary = " ", help = "Checks tools")]))
+                .err()
+                .expect("blank summary must fail");
+        assert!(blank.to_string().contains("empty"));
+
+        let configured = parse(syn::parse_quote!(
+            #[hook(tool.before, summary = "Guard tools", help = "Checks tool input before execution.")]
+        )).expect("explicit documentation must compile");
+        assert_eq!(configured.summary.value(), "Guard tools");
+        assert_eq!(
+            configured.help.value(),
+            "Checks tool input before execution."
+        );
+    }
+
+    #[test]
+    fn each_translated_locale_requires_both_fields() {
+        let missing_help = parse(syn::parse_quote!(
+            #[hook(tool.before, summary = "Guard tools", help = "Checks tools.",
+                translations(locale("fr-FR", summary = "Vérifier les outils")))]
+        ))
+        .err()
+        .expect("incomplete translation must fail");
+        assert!(missing_help.to_string().contains("both summary and help"));
+
+        let blank_help = parse(syn::parse_quote!(
+            #[hook(tool.before, summary = "Guard tools", help = "Checks tools.",
+                translations(locale("fr-FR", summary = "Vérifier les outils", help = "   ")))]
+        ))
+        .err()
+        .expect("empty translated help must fail");
+        assert!(blank_help.to_string().contains("must not be empty"));
+
+        let complete = parse(syn::parse_quote!(
+            #[hook(tool.before, summary = "Guard tools", help = "Checks tools.",
+                translations(locale("fr-FR", summary = "Vérifier les outils", help = "Vérifie les outils.")))]
+        )).expect("complete translation must parse");
+        assert_eq!(complete.translations.len(), 1);
     }
 }

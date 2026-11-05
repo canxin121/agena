@@ -76,7 +76,63 @@ impl ProviderPlugin {
         }
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize provider management",
+        help = "Binds the host APIs used to discover and manage model providers.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化模型提供方管理",
+                help = "准备模型提供方管理功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化模型供應商管理",
+                help = "準備模型供應商管理功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser la gestion des fournisseurs de modèles",
+                help = "Prépare la gestion des fournisseurs de modèles et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar la gestión de proveedores de modelos",
+                help = "Prepara la gestión de proveedores de modelos y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar a gestão de provedores de modelos",
+                help = "Prepara a gestão de provedores de modelos e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die Modellanbieterverwaltung initialisieren",
+                help = "Bereitet die Modellanbieterverwaltung vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "モデルプロバイダー管理を初期化",
+                help = "必要なホストサービスに接続し、モデルプロバイダー管理を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "모델 제공업체 관리 초기화",
+                help = "필요한 호스트 서비스에 연결하고 모델 제공업체 관리 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "मॉडल प्रदाता प्रबंधन प्रारंभ करें",
+                help = "“मॉडल प्रदाता प्रबंधन” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة إدارة مزوّدي النماذج",
+                help = "يُعِدّ إدارة مزوّدي النماذج ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.host
             .set(host)

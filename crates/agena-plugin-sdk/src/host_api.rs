@@ -1653,6 +1653,15 @@ pub struct HostHookRegistration {
 /// Descriptor of a registered hook.
 pub struct HostHookDescriptor {
     pub name: String,
+    /// Every registered handler must be self-documenting.
+    pub handler_id: String,
+    pub summary: String,
+    pub help: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub translations: BTreeMap<String, crate::HookHandlerTranslation>,
+    pub priority: i32,
+    pub filters: crate::HookHandlerFilters,
+    pub is_async: bool,
     #[serde(default)]
     pub enabled: bool,
     pub trust_level: String,

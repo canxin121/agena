@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── user.prompt.submit ─────────────────────────────────────────────────────
+// ── prompt.submit ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of the user prompt submit hook.

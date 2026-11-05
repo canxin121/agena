@@ -1,5 +1,8 @@
 use super::*;
 use agena_domain::{Model, ModelId, ModelMetadata};
+use agena_plugin_host::{
+    ConfiguredPlugin, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
+};
 use agena_runtime_provider::{
     ProviderError,
     provider::{CompletionResponse, ModelRuntime},
@@ -7,6 +10,61 @@ use agena_runtime_provider::{
 
 struct BudgetProvider {
     model: ModelId,
+}
+
+#[derive(Clone)]
+struct CompactionProbe {
+    events: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "test",
+    name = "compaction-hooks",
+    version = "test",
+    summary = "Observe real compaction lifecycle events."
+)]
+impl CompactionProbe {
+    #[hook(run.pre, summary = "Observe compaction execution start", help = "Checks that a manual compaction enters the execution lifecycle.")]
+    async fn run_before(
+        &self,
+        input: agena_plugin_host::PreRunInput,
+    ) -> agena_plugin_host::sdk::Result<()> {
+        assert_eq!(input.kind, agena_plugin_host::RunKind::Compaction);
+        self.events.lock().unwrap().push("run.pre".into());
+        Ok(())
+    }
+
+    #[hook(run.post, summary = "Observe compaction execution settlement", help = "Checks that a manual compaction produces one terminal Run event.")]
+    async fn run_after(
+        &self,
+        input: agena_plugin_host::PostRunInput,
+    ) -> agena_plugin_host::sdk::Result<()> {
+        assert_eq!(input.kind, agena_plugin_host::RunKind::Compaction);
+        self.events.lock().unwrap().push("run.post".into());
+        Ok(())
+    }
+
+    #[hook(compaction.before, summary = "Inspect compaction admission", help = "Checks the real compaction boundary before history is modified.")]
+    async fn before(
+        &self,
+        input: agena_plugin_host::CompactionBeforeInput,
+    ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::CompactionBeforePatch>> {
+        assert_eq!(input.model, "tiny");
+        self.events.lock().unwrap().push("compaction.before".into());
+        Ok(None)
+    }
+
+    #[hook(compaction.after, summary = "Inspect compaction settlement", help = "Records whether compaction committed, failed or was cancelled.")]
+    async fn after(
+        &self,
+        input: agena_plugin_host::CompactionAfterInput,
+    ) -> agena_plugin_host::sdk::Result<()> {
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("compaction.after:{}", input.status));
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -44,7 +102,12 @@ impl ModelRuntime for BudgetProvider {
     }
 }
 
-async fn fixture() -> (SessionManager, SessionId) {
+async fn fixture() -> (
+    SessionManager,
+    SessionId,
+    Arc<std::sync::Mutex<Vec<String>>>,
+) {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
     let kernel = Arc::new(
         agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
             .await
@@ -68,9 +131,19 @@ async fn fixture() -> (SessionManager, SessionId) {
         .unwrap()
         .value
         .id;
-    let plugins = agena_plugin_host::PluginHost::new(agena_plugin_host::PluginHostBuildConfig {
-        static_plugins: vec![],
-        config: Default::default(),
+    let mut config = PluginsConfig::default();
+    config.list.insert(
+        "test.compaction-hooks".into(),
+        ConfiguredPlugin::static_default(),
+    );
+    let plugins = agena_plugin_host::PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "test.compaction-hooks".parse().unwrap(),
+            CompactionProbe {
+                events: events.clone(),
+            },
+        )],
+        config,
         workspace_root: "/compaction-tests".into(),
         agena_version: "test".into(),
         callback_base_url: None,
@@ -102,12 +175,12 @@ async fn fixture() -> (SessionManager, SessionId) {
         executor,
         Default::default(),
     );
-    (manager, session)
+    (manager, session, events)
 }
 
 #[tokio::test]
 async fn oversized_compaction_prefix_fails_with_budget_error_without_changing_context() {
-    let (manager, session) = fixture().await;
+    let (manager, session, events) = fixture().await;
     let execution = manager
         .kernel()
         .sessions
@@ -155,8 +228,13 @@ async fn oversized_compaction_prefix_fails_with_budget_error_without_changing_co
         settled: std::sync::atomic::AtomicBool::new(false),
     };
     let result = manager
-        .perform_compaction(&attempt, &control, &options, &state, None)
+        .perform_compaction(&attempt, &control, &options, &state, None, false)
         .await;
+    assert_eq!(
+        *events.lock().unwrap(),
+        ["compaction.before", "compaction.after:error"],
+        "compaction callbacks must bracket the actual failed operation",
+    );
     assert!(
         matches!(
             result,
@@ -200,7 +278,7 @@ async fn oversized_compaction_prefix_fails_with_budget_error_without_changing_co
 
 #[tokio::test]
 async fn control_anchors_are_local_boundaries_without_ancestor_authority() {
-    let (manager, root) = fixture().await;
+    let (manager, root, _events) = fixture().await;
     for text in ["first owned request", "latest owned request"] {
         let execution = manager
             .kernel()
@@ -307,7 +385,7 @@ async fn control_anchors_are_local_boundaries_without_ancestor_authority() {
 
 #[tokio::test]
 async fn continuing_after_compaction_keeps_new_context_and_reports_the_latest_failure() {
-    let (manager, session) = fixture().await;
+    let (manager, session, _events) = fixture().await;
     let seed = manager
         .kernel()
         .sessions
@@ -488,4 +566,79 @@ async fn continuing_after_compaction_keeps_new_context_and_reports_the_latest_fa
         .shutdown()
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn manual_compaction_has_one_run_lifecycle_and_its_own_compaction_hooks() {
+    let (manager, session, events) = fixture().await;
+    let original = manager
+        .kernel()
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "An input that the compact model cannot fit".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    manager
+        .kernel()
+        .executor
+        .claim_next(RequestId::new(), session, original.id)
+        .await
+        .unwrap()
+        .value
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    let execution = manager
+        .kernel()
+        .sessions
+        .start_control_execution(
+            RequestId::new(),
+            session,
+            ControlExecutionPurpose::Compaction,
+        )
+        .await
+        .unwrap()
+        .value;
+    let run = manager.supervise(
+        execution,
+        SessionRunOptions {
+            model: ModelRef::new("compaction-budget-test", "tiny"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            model_supports_parallel_tool_calls: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        },
+        true,
+        manager.reserve_execution().unwrap(),
+    );
+    tokio::time::timeout(Duration::from_secs(10), run.wait_settled())
+        .await
+        .expect("the compaction run should settle");
+    let events = events.lock().unwrap().clone();
+    assert_eq!(events.iter().filter(|event| *event == "run.pre").count(), 1);
+    assert_eq!(
+        events.iter().filter(|event| *event == "run.post").count(),
+        1
+    );
+    assert!(
+        events.contains(&"compaction.before".to_owned()),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.starts_with("compaction.after:")),
+        "{events:?}"
+    );
 }

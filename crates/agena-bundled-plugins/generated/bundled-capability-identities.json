@@ -107,8 +107,8 @@
         {
           "canonical_name": "agena.agent.cancel",
           "conditional": null,
-          "definition_identity": "16d749c89ea9b209f14bf0f2feb2d5d907fdd7ad0520639742c8f9b04b39ba59",
-          "input_schema_sha256": "313b15dabdbc84bcc2d04f24ec4936e73cd4c77196207d69ef080e2143a88187",
+          "definition_identity": "074a0702af16a1ba926d268f661b2b65c132c2e3329f4e65a273db26ec37bc2f",
+          "input_schema_sha256": "409e2821e5f89ba4f3542d23e3993bb7723c3bdcd44a64a62e84d5db117ba19c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "agent"
@@ -117,8 +117,8 @@
         {
           "canonical_name": "agena.agent.followup",
           "conditional": null,
-          "definition_identity": "32c3e72104ccbb6eee6a9e3d32139d8574b90d1a05c208d1b8dc8c6ea66cd637",
-          "input_schema_sha256": "1fba21c2ba9641f3e70b769d7f41a08ea7027afa4b56060bca12d00a9c1fcdfd",
+          "definition_identity": "615d66f926448606f63e28621f437de2e9b366179fdbd81eaf07e9b49f664278",
+          "input_schema_sha256": "1f7a8a051f2e109b1e9b8fdce8d1b6b9fd14a9dae27a1a2e08dd9fdf92f463fa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "agent"
@@ -127,8 +127,8 @@
         {
           "canonical_name": "agena.agent.message",
           "conditional": null,
-          "definition_identity": "ec62865018301bfd00865620bd0917bfe318f27583ed001f1563701dc3cd5d66",
-          "input_schema_sha256": "1fba21c2ba9641f3e70b769d7f41a08ea7027afa4b56060bca12d00a9c1fcdfd",
+          "definition_identity": "bf2abd66e5f64c1e48d1d7be910419e972b1de2127e13593efd4f34b6f08728b",
+          "input_schema_sha256": "1f7a8a051f2e109b1e9b8fdce8d1b6b9fd14a9dae27a1a2e08dd9fdf92f463fa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "agent"
@@ -137,8 +137,8 @@
         {
           "canonical_name": "agena.agent.spawn",
           "conditional": null,
-          "definition_identity": "e2fd1057a2107d4981820ca0fe0415fb80282c5dc504e926f4ae8c4871c2eef3",
-          "input_schema_sha256": "fe890a2fef190bc1e9c8f8eed9482ceb20949e2000fdffd5868437acd7d7190a",
+          "definition_identity": "67fc794fb992eb2d2adc95d787aff76769f7fb511eef7c4762289eabc5a28143",
+          "input_schema_sha256": "669359507e1979d4b6be628d7579266afeb2e8adfec5eee17e159e3b2463d2f3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "agent"
@@ -180,8 +180,8 @@
         {
           "canonical_name": "agena.chatgpt.audio_understanding",
           "conditional": null,
-          "definition_identity": "1901e0f7f5c43395c361c23ed4d41f734808c318158a39ff70087eca3dd35943",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "aa99197d28085866e1a12d0fb88c92ac311c2de9cbdf0986004bcd121f9517a8",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network"
@@ -235,8 +235,8 @@
         {
           "canonical_name": "agena.chatgpt.document_understanding",
           "conditional": null,
-          "definition_identity": "00488ddda40a0b74743190c7b2862d4ce83b6bf1a066351dbbaf564c708b0a6d",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "8ace5fa0fc80ed0b5af97f49fd3bbd2bf21a9cd4f60af379179a5a44eeb2ef4e",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -258,8 +258,8 @@
         {
           "canonical_name": "agena.chatgpt.file_delete",
           "conditional": null,
-          "definition_identity": "2bc1175cc0ec4cbc83dbe5e1a94d13b62b3238da20dc775059decfb1e7e944ff",
-          "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
+          "definition_identity": "527dda82b163c1382ad23a41f5e105aee93d999016e471367b52ade3c4d59957",
+          "input_schema_sha256": "08d070c37d12b133004269f412dff4f298950108d1179054b9a1eaa705edc3ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -282,8 +282,8 @@
         {
           "canonical_name": "agena.chatgpt.file_status",
           "conditional": null,
-          "definition_identity": "e3ba3b7b4781b66dcdeb92df0986c0f72844d54199b3d7f637852503191b9cbe",
-          "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
+          "definition_identity": "6ed7595845f16d4eb92a369553bdc7adb1b2840925b40c2320feb6157a596499",
+          "input_schema_sha256": "08d070c37d12b133004269f412dff4f298950108d1179054b9a1eaa705edc3ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -294,8 +294,8 @@
         {
           "canonical_name": "agena.chatgpt.file_upload",
           "conditional": null,
-          "definition_identity": "da8f7f777606914d71b71be140672330e7577c7cd25c9ae6e72b587259001a4c",
-          "input_schema_sha256": "048049e8926b3d6683dab1bad64027fbd7e476f066b8c4e3c970fade89ce1f74",
+          "definition_identity": "363f24d93b6dd01d33f295252a5f5f7be139c8b0396249fe2df705e6e688ff17",
+          "input_schema_sha256": "448a7146c39116ad710c06bedb1060d9448f7974cc0f9e5a3b4d0cc17b2341f4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -316,8 +316,8 @@
         {
           "canonical_name": "agena.chatgpt.image_edit",
           "conditional": null,
-          "definition_identity": "d9c723fdca1e11052312c248cb900d40d6afc6eb2a6fdfa5543dfce31cc846b1",
-          "input_schema_sha256": "5fa5b032e92d1d5764c608041509733b80bca6a0834d67aee7716ceebea21875",
+          "definition_identity": "ad0df96e5b4497f2ec4b094d9246a8465a4fb5f8aabeaab6b03fa26772e33b42",
+          "input_schema_sha256": "bb2d24fe8f2684c5fe4852ebf9dabb55695c2ebab1f67fc307d6edddf4fe8960",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate"
@@ -337,8 +337,8 @@
         {
           "canonical_name": "agena.chatgpt.image_understanding",
           "conditional": null,
-          "definition_identity": "68c63c53111f1e11deff58628ad3a36a4013119620dd34c80263dd05c5869901",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "e75bb07085078d92a102455e90ffb3c8875362d4de70415c303e379f8ce8bd8f",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -543,8 +543,8 @@
         {
           "canonical_name": "agena.claude.document_understanding",
           "conditional": null,
-          "definition_identity": "756a8d7d537bf38968f25db56b4ce636474f16542c9b5deb1deac68edc2eb191",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "e8972917059629bd8fac10e243ac9ee4139e24ba34cad68c99598da986615ede",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -555,8 +555,8 @@
         {
           "canonical_name": "agena.claude.file_delete",
           "conditional": null,
-          "definition_identity": "104949a382eded5fc0cfefd8e90844eb65e316bf6e2621ec386e2e814b2d9b8c",
-          "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
+          "definition_identity": "5e8099ef38a4b049488084cc82b6c10693892cce1aa643d0fdcab428420231b7",
+          "input_schema_sha256": "08d070c37d12b133004269f412dff4f298950108d1179054b9a1eaa705edc3ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -566,8 +566,8 @@
         {
           "canonical_name": "agena.claude.file_status",
           "conditional": null,
-          "definition_identity": "1710cde3ad7621f2af3f0c566174ce3a47bca7cf8cd73361394179e0f7f015f3",
-          "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
+          "definition_identity": "1f05e45808eb6a3ff81bb8882fa08b56113c119cf77ed86ac261de07aa0fd807",
+          "input_schema_sha256": "08d070c37d12b133004269f412dff4f298950108d1179054b9a1eaa705edc3ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -578,8 +578,8 @@
         {
           "canonical_name": "agena.claude.file_upload",
           "conditional": null,
-          "definition_identity": "84dc54c26f412607ba0056c724d456bbb7cb9e003d46d02ce8c46df19378a1e3",
-          "input_schema_sha256": "048049e8926b3d6683dab1bad64027fbd7e476f066b8c4e3c970fade89ce1f74",
+          "definition_identity": "e0d2fd72c29703665a61448a163fc5c9d4a43a35009e40982ef12c8ea83cdc29",
+          "input_schema_sha256": "448a7146c39116ad710c06bedb1060d9448f7974cc0f9e5a3b4d0cc17b2341f4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -600,8 +600,8 @@
         {
           "canonical_name": "agena.claude.image_understanding",
           "conditional": null,
-          "definition_identity": "854abf16ab3e85f4207a9ef3d97800207a58fd14853ae27c93ef65fcb09da2e3",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "a1e8fda679a16502bf3b3eb990ea491426ce0142df4c83bed690342e7ffe7239",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -671,8 +671,8 @@
         {
           "canonical_name": "agena.code.rewrite_ast",
           "conditional": null,
-          "definition_identity": "4df31d2678e053de11b5b8b61adcfa69d5384c19bdae1ec47eee7198aad6de6d",
-          "input_schema_sha256": "081bbfc6170db49a07102c57bf8851f0bab8bdcf6381131ecf637ca4cebf1827",
+          "definition_identity": "2c735d06cb566c60f7ae86fba73b03942e57bf2fc44e6d99bf3811cdb02d7c7a",
+          "input_schema_sha256": "e28c5be7937a8a0d02e1d116b25a9d074a60ddd0c779f19afda892b01c3e5a92",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -682,8 +682,8 @@
         {
           "canonical_name": "agena.code.search_ast",
           "conditional": null,
-          "definition_identity": "a52ae8d832364e2432d17f50f9083b624e9583724591b5f42b7cd815ceea2348",
-          "input_schema_sha256": "87dceba173826933be74b5a52d27f8f08e314ad7337283a14b8d0d100ffe7641",
+          "definition_identity": "2bc06b894f61c7c1f7c9e2ba64d4dd94e88ccd524314e41e8b84c938abcea6f8",
+          "input_schema_sha256": "99562bb9136f1890503d5a7c10ece36df6913dcff91c99dfdd35aa07114a6e1c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -695,8 +695,8 @@
         {
           "canonical_name": "agena.code.syntax_tree",
           "conditional": null,
-          "definition_identity": "0e8826099ca1842fcfeb40fce3452d2adf63c2d4dab8d7a493e9a126882635c9",
-          "input_schema_sha256": "98433ca6ce9990981de1b992d009f30cdc017a10b7acd0b6a3bfc6f548e2fc6a",
+          "definition_identity": "f3af188f1b451b099636606f9bc9786bf7964f6ddf54c312a1bf36407775354f",
+          "input_schema_sha256": "1f6d839574d9c4693e0ccdb7c4d3c642b12380d5e9ab253affa578e9f4396281",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -801,8 +801,8 @@
         {
           "canonical_name": "agena.cron.create",
           "conditional": null,
-          "definition_identity": "662cf98dca0c8630ad540f3f9aef057298b94cacef19f576be01432b2dd3c3bd",
-          "input_schema_sha256": "e5cb8d59a99bc3bea64c5ef2f9cb03f0f74ee8416a7b20ef15d77e91f9fd9584",
+          "definition_identity": "2c773a9f2cdc65e85d79b206cb7076db71659798e1e5f2ced45fea574e3f192d",
+          "input_schema_sha256": "3e3d8f608a0ecaefef2e2b60bf406c619185a6c5404b75b87f6b3ec2d61ba7b3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -812,8 +812,8 @@
         {
           "canonical_name": "agena.cron.delete",
           "conditional": null,
-          "definition_identity": "f69f18d7fe80f36f290f3035859b919d0d0a267190087b0b949838a52119b9bd",
-          "input_schema_sha256": "50d0d92df0eb676fb8cde44448cb3106fcf9ffd25c7a4cf4de3056832230baa9",
+          "definition_identity": "0a110d2d9f6f76ee16c8c7cb099ab7479108ff3d904092b42b19fea9f37df5c0",
+          "input_schema_sha256": "e1386b5aef76c80649ded22fb654611144e328dda89ec503098ccfe6ff774c9b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -848,8 +848,8 @@
         {
           "canonical_name": "agena.cron.pause",
           "conditional": null,
-          "definition_identity": "f547ff995f4230a7cc0ad053bf4d4391880b49d457e12afec9f8bc2f3b448200",
-          "input_schema_sha256": "188cb7430de66f3298e997f118342d69d8e4dfe7e6f09dbbdee71a193617ecb5",
+          "definition_identity": "731f1b6c3031ad8135efbc90ba500ba32de8d532b78591a2dd7f204adf59bb05",
+          "input_schema_sha256": "ff856cd34f89378cc7c98b1168d544b39ab76469aa9663b6acc086e09d793ea7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -859,8 +859,8 @@
         {
           "canonical_name": "agena.cron.resume",
           "conditional": null,
-          "definition_identity": "9bd9fdd466e8fb01e43c9bdc415e1702c2b8e0b5c8ca3b36a1f983c2a800428b",
-          "input_schema_sha256": "188cb7430de66f3298e997f118342d69d8e4dfe7e6f09dbbdee71a193617ecb5",
+          "definition_identity": "cd4f837d7653afccb4c4928c36ed35daf1d7e563ef2df8be4012982403489735",
+          "input_schema_sha256": "ff856cd34f89378cc7c98b1168d544b39ab76469aa9663b6acc086e09d793ea7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -870,8 +870,8 @@
         {
           "canonical_name": "agena.cron.update",
           "conditional": null,
-          "definition_identity": "29b25817efb180e03d22e4a915c46e433b6e2bccd7864ed5d5b910dc9e822613",
-          "input_schema_sha256": "e3a36cd91696a64411ba4dc20c37b2ae07366ca537d605946fb11de84f5694a4",
+          "definition_identity": "6da993d25c29132881e78885d4c2bca3604bf761de6d13fbdd3de926837ce552",
+          "input_schema_sha256": "2471abe92d901a9c752cf4fbf9ac3e57e55d559145a5dc2ec4c123f43a96919b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -904,8 +904,8 @@
         {
           "canonical_name": "agena.fs.document",
           "conditional": null,
-          "definition_identity": "a63c94d8fb591957365f7a885d8514f603f7419dc21966bcbcdc467499c34462",
-          "input_schema_sha256": "1c2ce672d8209f1e336ade31d21c649f3dae2e4431bfba2332087335d87b15a0",
+          "definition_identity": "cf00eba21cbffc380c883ca4ec5fb1431f2ee35027a629e3b0006a8026cd45cb",
+          "input_schema_sha256": "c8f1402192a65d6a4b6136b7be67ee005b8bc04df51de25dfed36c96558af864",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -916,8 +916,8 @@
         {
           "canonical_name": "agena.fs.glob",
           "conditional": null,
-          "definition_identity": "12993729edc1563422b9095d8ff09d13c7e12aa95b197af8f72a000c70f23453",
-          "input_schema_sha256": "5eb5425ef1c6fbe536d57999fea0271aa74d1750353e65cc16b87ff9169c2f05",
+          "definition_identity": "d2edf2faba3d5d56608ea5cc41499862a782ebf2c7b78520cec1271b9d575d03",
+          "input_schema_sha256": "b482e17922d784f4371d20d65ca1850020503bed215ff15ae5ce3cd6c9f8b970",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -929,8 +929,8 @@
         {
           "canonical_name": "agena.fs.grep",
           "conditional": null,
-          "definition_identity": "77217f01c4cdccb463f902724860a0f1c9f67c29302b37be030b2c425c7928e6",
-          "input_schema_sha256": "a15b1506ccee8090dde538ff2fc0ffac198f132941623988973526b92afafdb0",
+          "definition_identity": "51c1a8a955689bed9bcb0dc82bbb62844652eacbbb22ef3d1c7c7fed4922dd92",
+          "input_schema_sha256": "cb22a8961c2cb433f277abf9481fc934394c44b3c9fa3a175d4af4b69fc65ef5",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -942,8 +942,8 @@
         {
           "canonical_name": "agena.fs.read",
           "conditional": null,
-          "definition_identity": "1cf8b9ce6dd89197bdaa80fa08b16bf5b772557b4f656bd3adc964b5f48b12da",
-          "input_schema_sha256": "281d7d5fc3dc4c1a36ddc514ef0a075e7915aaab579b4a4e1a2850c04a300f53",
+          "definition_identity": "2251a5aaa0ef75a46190e23b9e5d4c43e60d44565319fce8b836ae97082c60e4",
+          "input_schema_sha256": "b20f6313079fe8e9c300169e6ebec3608696d4c23698e3de28c67793e36d8873",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -954,8 +954,8 @@
         {
           "canonical_name": "agena.fs.read_many",
           "conditional": null,
-          "definition_identity": "a6d769aa318dc61f50c12e43a7d0c35e894c3ef6a059be0c54cd64e444dc02f0",
-          "input_schema_sha256": "0175a15e309568465ce137c3937620ced7ffecabe5821537fc3901b38a326b14",
+          "definition_identity": "1236540b8d8e6e9e466afcf9e5360bd3f0b67d6da0fb692618e75907e65e6e46",
+          "input_schema_sha256": "5a6d892b5bb08cc5df048af8a058b9142ea436eb793e4a7c69e2cc2a75c6cbf0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -966,8 +966,8 @@
         {
           "canonical_name": "agena.fs.read_media",
           "conditional": null,
-          "definition_identity": "02b4794b6ceee08a002fc035fe8b203678aaddfa1b3ddac392610a31bec8db99",
-          "input_schema_sha256": "392b15c5378b0869b9f2f81375ce6c39ea3052b627da89201b98be15de2d2cd9",
+          "definition_identity": "e0041947c1996a55eba00592d538992f42ef03ac9e85f805d04c22977a1324bd",
+          "input_schema_sha256": "a97e216658cbd4ccce34809428d32575fb054c9de01881d7e69ca81ac2fdce46",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -978,8 +978,8 @@
         {
           "canonical_name": "agena.fs.replace",
           "conditional": null,
-          "definition_identity": "c9fc65c601e208114519014ebf5a54370ef31ef817f562200d47f680a219d6ef",
-          "input_schema_sha256": "22953e941462bbca74f206965b03375375ee311cf24e2cfa17e6a4fcd0d191fe",
+          "definition_identity": "34af7e1c18646ed8824d468017cec197ae80c00ebc80d00ef50db82e965ebfe8",
+          "input_schema_sha256": "105737b94fcecb4841df594d88d0b00edcfd5d1a18809720d05017f51cefd0b0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -989,8 +989,8 @@
         {
           "canonical_name": "agena.fs.stat",
           "conditional": null,
-          "definition_identity": "e04eadbe2e0d122683d4b5f6d0381b615602297e540a14cc5047b0e7eeb57edb",
-          "input_schema_sha256": "e05e14eb17bcba9f8816b7235ead177c0620c47f20cc1206cc569d263bdad52a",
+          "definition_identity": "f3c7ec9bb6de1d570c6f0312be011ce6ac78cfc156c5d1aee3a7a41edd49041f",
+          "input_schema_sha256": "9bdc59b78b3dfba2285d8203cd2f910d84ef2e4e8b2af3c01e3b84a40e2d7b4d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1001,8 +1001,8 @@
         {
           "canonical_name": "agena.fs.write",
           "conditional": null,
-          "definition_identity": "2e73ac7858c83f96b8dd09046e0ee5fc5a34a073fe4a4a586ef2a8b51588a6a4",
-          "input_schema_sha256": "454dcd8cfb923822ee3e6f1a23ccf85dca623ab6df8dfe2f421d149f06018e46",
+          "definition_identity": "7b8f039e8a9334b327ab775e782ac7317a7c677cadffa984f3c30663be136bae",
+          "input_schema_sha256": "26c10fc609d8580989af090c7548a390c2e39d4f0f44f243b7a04fba6f63aaa7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1035,8 +1035,8 @@
         {
           "canonical_name": "agena.gemini.audio_understanding",
           "conditional": null,
-          "definition_identity": "7afc0ea730f93ef113f2fff271a0ac2d7b09bd89ee606b0f5390d445b03a2893",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "0b6766d3795aa5c8969f66b8f96a195863fe9e7620a66762edd5efa9e16466b8",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network"
@@ -1090,8 +1090,8 @@
         {
           "canonical_name": "agena.gemini.document_understanding",
           "conditional": null,
-          "definition_identity": "551cba884f0274f86018770b50103a0c7962d5c206cc7308eb4c25748747a644",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "6852db06b93d9c92f0af64099bfc43a5bb155a5d3c5f5c441fa59dbe998cc17d",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1113,8 +1113,8 @@
         {
           "canonical_name": "agena.gemini.file_delete",
           "conditional": null,
-          "definition_identity": "38ebe1376e761483d66100cb77755fdf69de47353c248cfd627785d385e0344c",
-          "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
+          "definition_identity": "2e3f24e689bd9967e33b910a679d90a1fcdfb72416b78ed27dc921e714bd9544",
+          "input_schema_sha256": "08d070c37d12b133004269f412dff4f298950108d1179054b9a1eaa705edc3ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1137,8 +1137,8 @@
         {
           "canonical_name": "agena.gemini.file_status",
           "conditional": null,
-          "definition_identity": "7087bc76f2dc4f324c3919a886474ec8b0454e9582f0ec5b826458d372bb7059",
-          "input_schema_sha256": "80fa0ec88064bdf20a55e1aec634d6ca48c8998411fcc7ef52d7964c1b8e6d11",
+          "definition_identity": "9dfa10cefe9f536de30f249c9a7bbb36cddeb6ea135a6a2f31331d5fd56bc0bf",
+          "input_schema_sha256": "08d070c37d12b133004269f412dff4f298950108d1179054b9a1eaa705edc3ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1149,8 +1149,8 @@
         {
           "canonical_name": "agena.gemini.file_upload",
           "conditional": null,
-          "definition_identity": "357ccf10c429fa65881ba11666c765ff1596cd89873d03802958460349b7e530",
-          "input_schema_sha256": "048049e8926b3d6683dab1bad64027fbd7e476f066b8c4e3c970fade89ce1f74",
+          "definition_identity": "bed3cf5cde2233bf14f1d95edc0e60b9d7de25034fbbd1728566240c496dbd4a",
+          "input_schema_sha256": "448a7146c39116ad710c06bedb1060d9448f7974cc0f9e5a3b4d0cc17b2341f4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1197,8 +1197,8 @@
         {
           "canonical_name": "agena.gemini.image_edit",
           "conditional": null,
-          "definition_identity": "c6ae0fcb88a0637f7ec03687d3b6e6c543114b73a485f4a068009ab9689c31ca",
-          "input_schema_sha256": "36073a4919500c03c3f8fc42a671ff011babb70fe2e8feb5afd783d23517902e",
+          "definition_identity": "fae40934b88afc8c83b44c4c82c03f8c275e049b88503c535f0b0d9f1f3df0ff",
+          "input_schema_sha256": "7809f8505745a2cf9ab5ca0094b7703c9a4332efb934f8606335e7309f187dcd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate"
@@ -1207,8 +1207,8 @@
         {
           "canonical_name": "agena.gemini.image_generation",
           "conditional": null,
-          "definition_identity": "9c664e26c98dd1690730b395a98e4734cf71a07ff84c41c4b07061fecf536f16",
-          "input_schema_sha256": "c26cb9649543c0114365d6c4f7e752a06364fe51bb536f569555bb49402355a1",
+          "definition_identity": "3d31ac80b411d1840a674d6cd720b2bae252a4862f2fc0d07038aebb3cbc6abe",
+          "input_schema_sha256": "0f1e22784f2208b099fadccdef635588b4cd0b432b6cb6532a1aecbac97fe314",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -1219,8 +1219,8 @@
         {
           "canonical_name": "agena.gemini.image_understanding",
           "conditional": null,
-          "definition_identity": "ba39a85905485425de3839bdd74cec8f0ac2b804c1b53fec09920e54ee671bab",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "44b91b44ee3ff8bb6ff91730bd7764e31c7fa994cb2aa3009f96bd8a3fa6e3c9",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1343,8 +1343,8 @@
         {
           "canonical_name": "agena.gemini.video_understanding",
           "conditional": null,
-          "definition_identity": "843c7f17347516e797fe99c43d3f89ee4a3df7a78b45d6d3f73572efd5e0035e",
-          "input_schema_sha256": "691c7bcee51ec443088c93ebde777674688b0ca8fdada6f738fdd80a2d4826b0",
+          "definition_identity": "acf6356ec7e8c73722cec6e96c7456b270e7836b91a276cb8b4607073949b575",
+          "input_schema_sha256": "d69b70a30e90478ff048eee935ebdef03712eb9dc66f153ad295f394dcf3fda6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network"
@@ -1415,8 +1415,8 @@
         {
           "canonical_name": "agena.interaction.ask",
           "conditional": null,
-          "definition_identity": "8cf2724d1a2b1c63817785c32b67425cd4230c66a6ddf66022cb66da28faf87e",
-          "input_schema_sha256": "bb0d221ef886e5f002e9d907a04f73cdb06f763b2e88e5fc97e1f7617030963d",
+          "definition_identity": "68f01a0f46a04e2d6e404591d2754018b1cefb699a3624338d419d01fb99f84e",
+          "input_schema_sha256": "1881ade4e0d76c4718ef3a0d92751aa2d655943a5405cc4f0afa752fb70ca34a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "interactive"
@@ -1425,8 +1425,8 @@
         {
           "canonical_name": "agena.interaction.notify",
           "conditional": null,
-          "definition_identity": "ef283372881f4154a1f3a607a9dc571e5b4c8274c9ca50b338bb2cdaaaaf52bc",
-          "input_schema_sha256": "9340026790d51a0194ef8bab94ae38250b3de133d80fd1151908c928008d0c54",
+          "definition_identity": "cccacadbbc448b6f09e399e5e98ef0bb4fa334dbee48367c5a4c45ce52018040",
+          "input_schema_sha256": "6067d33a068080b0f40fd93e3d0d62c85fe02e0a06235c5dfcc804e2ab08ac22",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "interactive"
@@ -1446,8 +1446,8 @@
         {
           "canonical_name": "agena.lsp.definition",
           "conditional": null,
-          "definition_identity": "8ed52f6ffd7541040cb8e4880e67c20776c26f63662e59dda32729cd3b63c99e",
-          "input_schema_sha256": "bf790bd4c29dbd67f5f820e948fbd5b79ec5d76a51edcaa9ca4d4b4dd019b24b",
+          "definition_identity": "259cc920d250bbc50ad095ace67efd9a41a63c846251235a5c1f466dc51f584a",
+          "input_schema_sha256": "0b7a28839c0cc9b0599cb839251e8e2c09b2024e6b7b024846e1169807de96ba",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1459,8 +1459,8 @@
         {
           "canonical_name": "agena.lsp.diagnostics",
           "conditional": null,
-          "definition_identity": "fb01df8a36beee8b57224a878008cba4cf43425bd67cde0f260ad8aab533dc91",
-          "input_schema_sha256": "b24a2e2cfbb6be0f8c031ac808fc859a1d1ff688d7905ae0fcff67a3de201ab7",
+          "definition_identity": "32c400f82d91da0a0b933037a9c0998c8593a1664450c4e20e22471f1acaa207",
+          "input_schema_sha256": "8fcb94d9ddb59239ddc57b2933034fdedef466ad30b02a322200c9a4ba2ee492",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1472,8 +1472,8 @@
         {
           "canonical_name": "agena.lsp.hover",
           "conditional": null,
-          "definition_identity": "9638f51aa66b5672d58eca00af9b63019d93242dc2cfcaec4d9fb85cb5c3f769",
-          "input_schema_sha256": "d350f1729168ad13af041701ae4b5125a80544e7abe40d22c0b3e22b82526857",
+          "definition_identity": "d23c41f4567ff643402a197437058c1fcbd87cc0e966c6349ba6d6a412938cc6",
+          "input_schema_sha256": "769174478f4034d6595593b06b8c5fdff358e10be47101159cc39f2be6c97161",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1485,8 +1485,8 @@
         {
           "canonical_name": "agena.lsp.references",
           "conditional": null,
-          "definition_identity": "914ab2d9e1740468b3560abdadfa36690c96f3ec499f468cfdfd54c695dc0976",
-          "input_schema_sha256": "0bc42fddbae53700824c6db8f1ea8b889a37caa062de8ebbf2db2ec19220cfc4",
+          "definition_identity": "186cdd2e766c737deb5c5c0a55245228cb604b6c4d6de6798e2ebef2308ed002",
+          "input_schema_sha256": "03983832024d449806b47219ee24e32377bcf2478d6810338ae709dd8aaf567f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1713,8 +1713,8 @@
         {
           "canonical_name": "agena.mcp.prompts.get",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "ffa2711ccd85b83b9fb199f4f4d6b2d3aa6267471191917a21cd05b5379dd7a1",
-          "input_schema_sha256": "b86156a17e739bf3e34de4e26e0f8bc65683a106cf2766056f8f8f5e438cb63e",
+          "definition_identity": "af0914827eaad8d519cdf7e7660d4000a0fc77a72cf4f9b8cfc08ab7a96af0fd",
+          "input_schema_sha256": "012b0073ea35539c124d55631104d38e116182c169c44e802c105ed4b7531e10",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1725,8 +1725,8 @@
         {
           "canonical_name": "agena.mcp.prompts.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "c46636d2ea9cfdb48b07148cb333907c33258528b3f68fe5c709b536ceda2f14",
-          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "definition_identity": "ce7e4af6e52c9f57ef35e8f50cb6af63c084c259d227b51b22d72141127765e9",
+          "input_schema_sha256": "c3625e6ca43795d8068b6f18a66c40b671c2bec69fd1484d01dcea1b4c9ae71f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1738,8 +1738,8 @@
         {
           "canonical_name": "agena.mcp.resources.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "963a85803a7f26ec1e3c25bc366a660571df5de7b2ad95fbc1143e07dad793d8",
-          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "definition_identity": "cdff3fcf1d6d491c6536a35741a151db22231bb5b6b065117a95c1f8cea861d4",
+          "input_schema_sha256": "c3625e6ca43795d8068b6f18a66c40b671c2bec69fd1484d01dcea1b4c9ae71f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1751,8 +1751,8 @@
         {
           "canonical_name": "agena.mcp.resources.read",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "a80fd570cdae2263f94d6d414b42a8d176ca5dcaa76caa74b4524ae7a92d939e",
-          "input_schema_sha256": "a843fd3fdbe2e1fcf3ddc8eb92ef1e020980fa6a94a70a8f02957f76085c7266",
+          "definition_identity": "b50247435b30f2a7a7aadc4f312ab9209c0aa4f3e28a560714795c3f5e474c6f",
+          "input_schema_sha256": "46f1dc0c0fd0ca53a912b621a6b19a8667e8e43505938d4aa2967787014437ca",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1763,8 +1763,8 @@
         {
           "canonical_name": "agena.mcp.resources.templates.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "aea57d35700248f5f151c076ebcf44a34b400019807c8640ffc9c97e37b0ce65",
-          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "definition_identity": "777a29230dcd148291273f6714c442551e03d566e0d72a519825e8e6215109a6",
+          "input_schema_sha256": "c3625e6ca43795d8068b6f18a66c40b671c2bec69fd1484d01dcea1b4c9ae71f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1776,8 +1776,8 @@
         {
           "canonical_name": "agena.mcp.servers.reconnect",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "f52d584eeea64a0549241610c41bdc66d2e9a9588086edd7b4d99775ff6505cf",
-          "input_schema_sha256": "3c1f826a995a04dd4f2fd1263d35a8fa7fdfd3a21b84ff589231d11e89313303",
+          "definition_identity": "9008960c6ab50d6b80d1fb0ffa1e1dde0623432365d00f563b707eb63da83a52",
+          "input_schema_sha256": "ec414618efb89d61f4425a970834b6751aa7bb10945d76d0c62c7f6a791e1d29",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1800,8 +1800,8 @@
         {
           "canonical_name": "agena.mcp.tools.call",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "0546d5d00885992f4c366ec22f30d1b6482cbf98c950850f5d9e62990880e296",
-          "input_schema_sha256": "357f3d68484ffe42a59022a7a47c749847fc27810bd719a58483f44290d57701",
+          "definition_identity": "f67d672aa6ddc497a07f7bc3efe1a9aa2befc18e068b461403a6eefd347da129",
+          "input_schema_sha256": "ab5c4667808e1d11253bf2ed6216b12781a5a0e173a59ea61e2914b92b3b175e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
@@ -1830,15 +1830,15 @@
       "hooks": [
         "init",
         "tool.invoke",
-        "chat.messages.transform"
+        "chat.messages"
       ],
       "id": "agena.memory",
       "tools": [
         {
           "canonical_name": "agena.memory.delete",
           "conditional": null,
-          "definition_identity": "1b2d0f41f41c29e9250dfc9bffcd036f337f9d8d008a6f23f46e3368205c2a8c",
-          "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
+          "definition_identity": "2605509bac5d1790cfd21594742d64ddeceb54af76e84be28f5287dfa82c34bf",
+          "input_schema_sha256": "4271e2c984145b88ce5d67c74c81b98f438f8c100a76cea2ea40d1dc1aae3cfd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1848,8 +1848,8 @@
         {
           "canonical_name": "agena.memory.get",
           "conditional": null,
-          "definition_identity": "b2277a34f8415a99b51ba16e1c02ac4b0166760c04ad832edb45c33d12fd91b7",
-          "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
+          "definition_identity": "dd80735077564a2b7d33465412fb2b0f554187e79f3d1c509e09a96ba8f9d61c",
+          "input_schema_sha256": "4271e2c984145b88ce5d67c74c81b98f438f8c100a76cea2ea40d1dc1aae3cfd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1873,8 +1873,8 @@
         {
           "canonical_name": "agena.memory.search",
           "conditional": null,
-          "definition_identity": "e362cfb81ec0e7c1e5bba95168bd7de3d40d9e905f1147da2fd27e9ffbd7f8df",
-          "input_schema_sha256": "cd3f345548c959a0a30a7723f97a9a9d5ce3de5c797d5fc345a2c48854a401d6",
+          "definition_identity": "bcc3a21cb7f4fefcd3b3f72fc86de33bae16821418be6e4313296dd4f4b92eca",
+          "input_schema_sha256": "e1132514df2129bae5124f4a01f6649ac87f0f8b51571d6dce005bc01ea96029",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1886,8 +1886,8 @@
         {
           "canonical_name": "agena.memory.write",
           "conditional": null,
-          "definition_identity": "fc9c4dcaee8f5dbd4afad205a5246f7108b62bbef9dd91ad5f1fc8bc44fb1944",
-          "input_schema_sha256": "30e6eacbf493cf90aea8c8a0e82f10e1cd02d5e7ee4256bdec84c3bf2920f9b7",
+          "definition_identity": "94ad87f83fd892a9ee6fd7e8411fca88812e057b568407131f2bc7fc1f10c53b",
+          "input_schema_sha256": "74d8c7c8c38894e4b1a1bd2488db48d1c9763f71b81e483203b8757eaf7b7e6f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1907,8 +1907,8 @@
         {
           "canonical_name": "agena.monitor.start",
           "conditional": null,
-          "definition_identity": "f504ea17a5cce6c8c8e410ee4717d905fb3bff6b35864ee6554c7758af715294",
-          "input_schema_sha256": "3074ad1f2b21e286158145d8d874733bf26e6b96ea822a4b5fa9eabc5aec794f",
+          "definition_identity": "84263fd1681c747b36b175ee61cabfd165048083e27bd7b5497657f0164f7797",
+          "input_schema_sha256": "02a883519b90e0877f1955bc7fcf87903da86a2b4888a6ab0780622987021a15",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
@@ -1919,8 +1919,8 @@
         {
           "canonical_name": "agena.monitor.stop",
           "conditional": null,
-          "definition_identity": "5015672de6633f44eab78a4a697bf48228e89245debc61fa7ea1e0b2234fe3ff",
-          "input_schema_sha256": "45822b66ac80380fb6e2cfc3ee7b23ee250f09257564fd8094a65c66c3c1ea9b",
+          "definition_identity": "c73fc3d2c9fbf8e6e84add9dcadbe773103bafabc308d2985ae447d00dda18dd",
+          "input_schema_sha256": "499da5db7d7a4348791189074dc2afb7a6716e4620c664655322858677350781",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1941,8 +1941,8 @@
         {
           "canonical_name": "agena.notebook.edit_cell",
           "conditional": null,
-          "definition_identity": "a61e05d290fa048b9a8816ddc3202bf71d9ec429b09b03e767104e306e127c35",
-          "input_schema_sha256": "70afabb3bfce7ace66a576863ee82de68691c1007115ec03044591fc15851a04",
+          "definition_identity": "c84e32ee5e0851b5606dab4db0a815d8b53f494fa1e8e309a58bfd1d19616ae0",
+          "input_schema_sha256": "b5d30a37f6d363765a964fc2a04ba02df9ea75b73b2bca370eb0a60061f25ff6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1956,9 +1956,9 @@
       "conditional": null,
       "hooks": [
         "init",
-        "tool.execute.before",
+        "tool.before",
         "tool.invoke",
-        "command.execute.before",
+        "shell.before",
         "agent.stop",
         "agent.cancel"
       ],
@@ -2104,8 +2104,8 @@
         {
           "canonical_name": "agena.session.executables",
           "conditional": null,
-          "definition_identity": "a2755dd0d12d627de0dd10344a13d2d5eba0819892bb63087869eef1b561f364",
-          "input_schema_sha256": "b1923606dfba293f0386b05242e97ec8838e42ee0946ee4037c95c378e20b795",
+          "definition_identity": "309a2c43b55c21f15d52e8f126ea7d308fd7427704ef8ba4b6044aea17401e8d",
+          "input_schema_sha256": "46de65dd3babeafb3910b09b8ebde6780ee53f0ec1877277717c23d96d4871a8",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -2140,8 +2140,8 @@
         {
           "canonical_name": "agena.session.rename",
           "conditional": null,
-          "definition_identity": "8ee0238060fc424895f9d2a27b071c865abebd94eb94f0a9116602c70b6b70c8",
-          "input_schema_sha256": "e363a38abbad60413752d7875feed95636e6d5743b4e5b4aa20a1616a59b6fb0",
+          "definition_identity": "c165ff316bcc42914553152f333ce72c11b34d08345ffcd77093d52d633b023c",
+          "input_schema_sha256": "65c213104542710be3979338059bfea6ea6716bba9a497dd7b59a8fe9f66728a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate"
@@ -2173,8 +2173,8 @@
         {
           "canonical_name": "agena.settings.delete",
           "conditional": null,
-          "definition_identity": "b857970ff8671ead80f6358bc30bd26a46f7d2ed48b94cca673cb983a2398c73",
-          "input_schema_sha256": "4539023c129f0b6aea1074cb5dfb021a98c5833e0fa586bbb60fe90c7ffb6c29",
+          "definition_identity": "e813a9ef46c644cb1c1f89a3714d6c18e7ff4ed45d558bc92f280c7073b541cc",
+          "input_schema_sha256": "5a4e86b3c1cc8bb5bac30bfe45f64beced5f8d6015e6c89b1b7e03059543c1b1",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2241,8 +2241,8 @@
         {
           "canonical_name": "agena.settings.set",
           "conditional": null,
-          "definition_identity": "21dcefe02facdfdf0f4f499c7d7abf985c4375dc693c4200a3b2b327be9a8e85",
-          "input_schema_sha256": "0df68b49c818f69781c581826edaef48c9b17dd56636082161be58a65bd8bb59",
+          "definition_identity": "de9fd262da18eb141fb539db4cfa6417fce0f34c73099071a14538e7f41533cf",
+          "input_schema_sha256": "0c3af0e5d43118e3cfd9d2e6b4be16d4b33a0edcfe077d71c21004e183faeaba",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2277,8 +2277,8 @@
         {
           "canonical_name": "agena.shell.exec",
           "conditional": null,
-          "definition_identity": "68f05bd2558124ee96f65df64c3dfbd0379ccc7df557bd1819ba3168d80eeed1",
-          "input_schema_sha256": "2b532bc2ddd5253b27adaa4c2b4db3024ce6b132f120c9b99c741dc3c03bc594",
+          "definition_identity": "fd7b3c53b7fa305bc5bc743977a65d6eac0e710c2f1560d045eb9cfc4840d8c3",
+          "input_schema_sha256": "6cd3ba497fb4a26a3eff3da33a72d8ddfb4022a59ca2fc834b0c921b693d4f00",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
@@ -2302,8 +2302,8 @@
         {
           "canonical_name": "agena.shell.logs",
           "conditional": null,
-          "definition_identity": "895b9f3ed6a447265736360429e5d968054cde24d1936de2fb9a14e34cd5cbcf",
-          "input_schema_sha256": "da377623c8ac31aa5d909cb419c615ba7b3655c2c78023ed82a8dd5a3be63d6c",
+          "definition_identity": "58ab313f4ca873c487e6b8888d5f3e47c8a6f86ad5afd7572835aeb1b33305c1",
+          "input_schema_sha256": "6013291818e91d18f890c2bd5c97449ac0f6359b049a914182c425da4307ddb3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -2315,8 +2315,8 @@
         {
           "canonical_name": "agena.shell.open",
           "conditional": null,
-          "definition_identity": "da7a4b1e7969593fdf43da9534c6aa3115ebafa4b5f60f0e5cac4cc00ee9afe2",
-          "input_schema_sha256": "a18b24bcf8fc29d6e6273b18767f844e1310ca0db200c58ddffd92b6837c8a5d",
+          "definition_identity": "daf0767add2b88a0596e0cb5ebd06d6d1afe0591df9024a4dd2fa4a31d2a2ee2",
+          "input_schema_sha256": "19d760781c94bb3bbd7f4a987568f692737535ba4c1b93c47bb48a3415d4ed2d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
@@ -2331,8 +2331,8 @@
         {
           "canonical_name": "agena.shell.read",
           "conditional": null,
-          "definition_identity": "b947c10888f57851e4c7d8b45a4e1e7d071eddb5f44041ae44d804ee651cfeab",
-          "input_schema_sha256": "5c48fb91c1832701427c872b3cf2ff423d3d7eff360b0ac14e5f6ebc04d1d865",
+          "definition_identity": "9d416464ede2c5cf37ee87989580cbea545f201534e40f9eb40d3f8218815920",
+          "input_schema_sha256": "d9b6a236b86324ef5ad272622ceda0aec47f975149683b5a7e025756b3450499",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -2347,8 +2347,8 @@
         {
           "canonical_name": "agena.shell.resize",
           "conditional": null,
-          "definition_identity": "49e884fb1609f48c841a49c1d06ba9022e053768110ca6dc9b5397205912ddae",
-          "input_schema_sha256": "c554d95e29c8f350dfd6004d55329da410dcbd7be7343285b6ceb54f45545559",
+          "definition_identity": "702a1fde633bf7afbc6bc704b5fd85878310526edc9f33bac634beda9dfa3d11",
+          "input_schema_sha256": "0920d1d1e07e94a214f50a4ed540f5d07806ec87572858da91a9bdf658b6b21f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2361,8 +2361,8 @@
         {
           "canonical_name": "agena.shell.signal",
           "conditional": null,
-          "definition_identity": "4355f30a05ac9cefe59608be8bbf113d80b6efdb1a051bd5a168edf3bac5f248",
-          "input_schema_sha256": "bf0e663439569b839e0156899a7e5378ad56ff47f72870474c04c7fd7fdfde8f",
+          "definition_identity": "bec4ccad09257454b4e36eea54771d14912f3bab2fe77a5c351f7d99a9b4c5cd",
+          "input_schema_sha256": "2d3fef60394403876aeaa2695f98cea123e91bf2a79c67658e5fef31b1a982fd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2377,8 +2377,8 @@
         {
           "canonical_name": "agena.shell.spawn",
           "conditional": null,
-          "definition_identity": "4154bf97066bc72f04363ecc3aaf1588e30d1529048d0aedc0bf750dae55de2a",
-          "input_schema_sha256": "2b532bc2ddd5253b27adaa4c2b4db3024ce6b132f120c9b99c741dc3c03bc594",
+          "definition_identity": "82491c936b348bb83c0921bdb06943a77bc83e23c1d0cd77c6d04ef6e047de7f",
+          "input_schema_sha256": "6cd3ba497fb4a26a3eff3da33a72d8ddfb4022a59ca2fc834b0c921b693d4f00",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
@@ -2390,8 +2390,8 @@
         {
           "canonical_name": "agena.shell.stop",
           "conditional": null,
-          "definition_identity": "41f1a5278a6b69ede01ec1eb90bc62dfa90150fc41648380491d74231097c5e7",
-          "input_schema_sha256": "0b746767db7a0e15810a548b448efe51100c66972c397740ed4f45568831d06e",
+          "definition_identity": "f674a0a3cdaff2617092c05e8cb0dfe5121fd6e9a21c7882a07300eb0c0e9e2c",
+          "input_schema_sha256": "fe1382e32922617160af19116bd531cbdcf16bcfb78ffb99d93c30229fc43f0f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2402,8 +2402,8 @@
         {
           "canonical_name": "agena.shell.watch",
           "conditional": null,
-          "definition_identity": "bf27835be909f184905788180c4227a44dc40f3ae086dc629ba35ae691b737ce",
-          "input_schema_sha256": "fffbeb036012b39deb91a154385b22ba1340a0a313833d1e279b3171655fec99",
+          "definition_identity": "216581837443dad6724c684082dda5d974eb3c8702aa733826e63e363029d21e",
+          "input_schema_sha256": "9a27f0ff2a9040439972a1b89354948ce2e04acbb8fe3755d18320231ebf13a5",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute",
@@ -2417,8 +2417,8 @@
         {
           "canonical_name": "agena.shell.write",
           "conditional": null,
-          "definition_identity": "cf7c0f44510b567b2533a4270621ac25783f7b06d0cfe3831095b5caf8fba87e",
-          "input_schema_sha256": "002d04b5117f1a2d3682b2d2e2db80bbdbb2e080101b24a8d4e3142a72dd065a",
+          "definition_identity": "3d41f68ae580ff2d8921eba0e9da5867ddf407f1a32d4bc39852f3bd566ec799",
+          "input_schema_sha256": "9e90df3e76a24f374b141ff7d8da76bb766344dad0bbc230c8e4b41d7f3e4893",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2593,8 +2593,8 @@
         {
           "canonical_name": "agena.web.browser_click",
           "conditional": null,
-          "definition_identity": "751599b4d143b5b514cb2784ba93fb5318c229ec5e46bb3334fca8d6b4b07f1a",
-          "input_schema_sha256": "537f4c41d3189bb91a0ea5f9f72e4e8813d7ac62cc5134519bc83e6dcd9bba6a",
+          "definition_identity": "666eb8a8eedf20d1e9aa968310de100b5b5e1d9418eb565fa5579760aa7d58de",
+          "input_schema_sha256": "47a51f1a9955945259047ce84eb170f496cc7e1ce52b77b471112d4335182de3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2605,8 +2605,8 @@
         {
           "canonical_name": "agena.web.browser_close",
           "conditional": null,
-          "definition_identity": "6ef009a6156239f22ae42d707e4e438bebfd984f190a75aadaba047a557b1968",
-          "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
+          "definition_identity": "ae63fd13e9e80877c772fae923f77ff97bf30f71c61d397bb5778d10fa586100",
+          "input_schema_sha256": "57796808f570a05c713c13c39dae7d4bd51c607987ddd54e4e83289494a0196a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2617,8 +2617,8 @@
         {
           "canonical_name": "agena.web.browser_download",
           "conditional": null,
-          "definition_identity": "73591f54a36c56447b2609906f1cf474180162fbb6db8c233dac71202fd16ac4",
-          "input_schema_sha256": "e2117910872a860d315083b105c2f083562105212e2d412b837d63f5bc70f48c",
+          "definition_identity": "e0a545c4700f412a2a6e7c26772f2ca4fbd0a91867b902ec5e72e261ff251529",
+          "input_schema_sha256": "cdd9ab6cd69d5b92abd434f385b728fc2130f51a6cd77d07deb69db93327b9ec",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2644,8 +2644,8 @@
         {
           "canonical_name": "agena.web.browser_open",
           "conditional": null,
-          "definition_identity": "32c7c42e8eb0f8ca61c34528aa0dba420658f2f54c44ab60f93be296eb7c8532",
-          "input_schema_sha256": "64aaf0fa25b1764c4cb942c952256cd0e6e3cd4a090576acb8759806c7fe03a1",
+          "definition_identity": "5d29a5193beb05260f79822e893a0af79838719babb2e18cfd18d7aefc588d27",
+          "input_schema_sha256": "d47319a6afb589a330ee8e7b09029c9dc695950e3bf77a6b214af6663878303c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2657,8 +2657,8 @@
         {
           "canonical_name": "agena.web.browser_screenshot",
           "conditional": null,
-          "definition_identity": "c0c64cd87e6cb6eb3c492fddcf5aee667054cbbbd936ab511999567624b781f6",
-          "input_schema_sha256": "cacabdb8755c596b517d757444f9703468a40910b6aab47b87a366c632c40067",
+          "definition_identity": "041957d60d08c6a005a9d49a4443ac23d9590c02cb56e5b2bb2dde42ae7325c2",
+          "input_schema_sha256": "ec0b44468103b059780a56b9045697b9fdd2e65696a5e6ae7cf294a3709df91a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2682,8 +2682,8 @@
         {
           "canonical_name": "agena.web.browser_snapshot",
           "conditional": null,
-          "definition_identity": "382f2ddf520b9d3e042e69f3ea55dadcc9475f6ec4617090a63364972f8ce9cd",
-          "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
+          "definition_identity": "6fdb0b024323472404dbd749c3a1e19beb49fba121d20a95930eb2499b42c1b5",
+          "input_schema_sha256": "57796808f570a05c713c13c39dae7d4bd51c607987ddd54e4e83289494a0196a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2695,8 +2695,8 @@
         {
           "canonical_name": "agena.web.browser_type",
           "conditional": null,
-          "definition_identity": "f218a20b53e965678efac2d2d68710bd3c5ad7120b8d2a017d5ac7f279615690",
-          "input_schema_sha256": "1c795a6621e720e5dff5811f21d41819a50b15a3c583083d9aa51bc80ad8dcc7",
+          "definition_identity": "b329f31f052718b3b494f43a80abd9ce1dba1a4eae4e7c5813946dcd6745e68b",
+          "input_schema_sha256": "e3eb2eac081639de2d7d31d1eeab159cd3d64594134269afa4efe42d9b42fa45",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2707,8 +2707,8 @@
         {
           "canonical_name": "agena.web.browser_wait",
           "conditional": null,
-          "definition_identity": "d43ea334aff9a38419a966d69a519a980da78755d60c6a5f236c71b615fbb17f",
-          "input_schema_sha256": "d7a2d24582d50e3f7b23b9804e62ffa366a94e4b507a31e6c5ba75d559fac480",
+          "definition_identity": "c09024ade253e3c649858af41638805d52193ae0c45a5caa5a36312793d5e101",
+          "input_schema_sha256": "5a1b82035fc1ecb3410d106104dca4fad7d00480d13ae72b337872781482785a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2720,8 +2720,8 @@
         {
           "canonical_name": "agena.web.crawl",
           "conditional": null,
-          "definition_identity": "f4205a9cea65d2d6913c821e9acba7ac5fb2a70931a6bd8228f46244de6fd64a",
-          "input_schema_sha256": "ff4b767d3a11dca36205a6e447acf06f5200730ccf5fff3a1effa78ddc1742de",
+          "definition_identity": "cea99ce22403a9a42e8183cf94ba05903da5fa3231d06f2be509c565b71d5460",
+          "input_schema_sha256": "969dd3159f603df3248a8f685daa4d85dcc90a6611b38463de3b4f6c234a93a4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2732,8 +2732,8 @@
         {
           "canonical_name": "agena.web.fetch",
           "conditional": null,
-          "definition_identity": "a37ecd32a1ba1e813ebc621244ebc6919687105630b55885f4f5465d3844596c",
-          "input_schema_sha256": "529b35b45d6b5aa6727ce9e4da1ca6ef5d838b18baf28d665736541d6564d31e",
+          "definition_identity": "0d22dbff0ed008ef4367ac968a35d2d91c1f0742cd35c1e98c325f61a71b9895",
+          "input_schema_sha256": "4ea3d8413da8c703734df01028307b03545e9e1f988041ae0d71421ea9706042",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2754,8 +2754,8 @@
         {
           "canonical_name": "agena.web.query",
           "conditional": null,
-          "definition_identity": "e82bef8a7def9fd633a3a89e5ec901ec009a957f55a3e82bb5e4b2b67ba5edf2",
-          "input_schema_sha256": "d384234a2ab83c5db729ab55bce4113b60b9e3f5b3b8cf3b6a80c222b86e85cf",
+          "definition_identity": "7cbf292e30803e9802b32472747eb83a47fc442c777713f75fc9fe66c949fa01",
+          "input_schema_sha256": "6c9ad195a2574d5e91ac893c7ae2456ef7d91644d7bf9639277210b46f566459",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2765,8 +2765,8 @@
         {
           "canonical_name": "agena.web.read",
           "conditional": null,
-          "definition_identity": "bbee940c1cefabe9cdc2f35d51896d7c50b01fc4325a0f72f777217f8be38f97",
-          "input_schema_sha256": "5ebb5c85ac6e325989ff8b7bbc8c13d4dbfdece7a2d8e040e8cd2cb446f2eb37",
+          "definition_identity": "13b147ead4ebab976c5a5a2577d1d0dce52d9c9c402b7e9932e4434db54cda82",
+          "input_schema_sha256": "bd0ed656279c315137e521784fbacd85a02521e0694c739de606a6f1d9440686",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",
@@ -2776,8 +2776,8 @@
         {
           "canonical_name": "agena.web.search",
           "conditional": null,
-          "definition_identity": "cfd3fdc620b996371ea8213e89eb3fff2c7078bc3ff54374a42392c9872a2784",
-          "input_schema_sha256": "613cd4b7ceed9abf5394c33e69fa8d060a976dc04c5647ad6fc0cae807f5b514",
+          "definition_identity": "b9dabd109d4d9245502dd2ac9e2172a609704f585d5d552be460399e2863412a",
+          "input_schema_sha256": "23ad840b0d053984fbe5b4116dd9f15384ecb150b76dc89505294991ec52b74d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "network",

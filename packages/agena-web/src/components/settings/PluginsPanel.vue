@@ -23,7 +23,7 @@ import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
 import PluginEmptyState from '@/components/settings/plugins/PluginEmptyState.vue'
 import PluginHooksPanel from '@/components/settings/plugins/PluginHooksPanel.vue'
-import { buildPluginHookEntries, type PluginHookRegistration } from '@/components/settings/plugins/pluginHooks'
+import { buildPluginHookEntries, type PluginHookDeclaration, type PluginHookRegistration } from '@/components/settings/plugins/pluginHooks'
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import { pluginStateLabel } from '@/components/settings/pluginLabels'
 import Button from '@/components/ui/Button.vue'
@@ -91,6 +91,7 @@ type PluginManifest = {
   authors?: string[]
   transports?: string[]
   hooks?: string[]
+  hook_handlers?: PluginHookDeclaration[]
   tools?: PluginTool[]
   commands?: Array<{ id?: string; title?: string }>
   skills?: Array<{ name?: string; description?: string }>
@@ -395,6 +396,8 @@ const selectedHooks = computed(() => {
     selectedPlugin.value?.manifest?.hooks,
     selectedPlugin.value?.hooks,
     selectedStatus.value?.state || selectedPlugin.value?.status?.state,
+    selectedPlugin.value?.manifest?.hook_handlers,
+    String(locale.value || 'en-US'),
   )
 })
 const localizedSettings = computed(() =>

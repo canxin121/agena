@@ -31,17 +31,21 @@ impl EchoPlugin {
         output
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize stdio echo plugin",
+        help = "Acknowledges initialization of the example stdio plugin transport."
+    )]
     async fn init(&self, _ctx: InitContext, _host: Arc<dyn HostClient>) -> Result<InitOutcome> {
         Ok(InitOutcome::ack(Plugin::manifest(self)))
     }
 
-    #[hook(shell.env)]
+    #[hook(shell.env, summary = "Set stdio echo environment", help = "Sets an environment marker for commands launched by the stdio example plugin.")]
     async fn shell_env(&self, _input: ShellEnvInput) -> ShellEnvPatch {
         ShellEnvPatch::set("AGENA_STDIO_PLUGIN", "1")
     }
 
-    #[hook(chat.params)]
+    #[hook(chat.params, summary = "Adjust example chat parameters", help = "Demonstrates how to modify a model completion request through a chat parameter Hook.")]
     async fn chat_params(&self, _input: ChatParamsInput) -> ChatParamsPatch {
         ChatParamsPatch {
             params: Some(json!({ "stop": ["\nHuman:"] })),

@@ -160,7 +160,63 @@ impl McpPlugin {
         Ok(())
     }
 
-    #[hook(init)]
+    #[hook(
+        init,
+        summary = "Initialize MCP connections",
+        help = "Binds the permission-aware host used to discover and manage MCP connections.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化MCP 连接",
+                help = "准备MCP 连接功能并连接所需的 Host 服务。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化MCP 連線",
+                help = "準備MCP 連線功能並連接所需的 Host 服務。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser les connexions MCP",
+                help = "Prépare les connexions MCP et connecte les services hôtes nécessaires."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar las conexiones MCP",
+                help = "Prepara las conexiones MCP y conecta los servicios del host necesarios."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar as conexões MCP",
+                help = "Prepara as conexões MCP e conecta os serviços necessários do host."
+            ),
+            locale(
+                "de-DE",
+                summary = "Die MCP-Verbindungen initialisieren",
+                help = "Bereitet die MCP-Verbindungen vor und verbindet die erforderlichen Host-Dienste."
+            ),
+            locale(
+                "ja-JP",
+                summary = "MCP 接続を初期化",
+                help = "必要なホストサービスに接続し、MCP 接続を利用できるようにします。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "MCP 연결 초기화",
+                help = "필요한 호스트 서비스에 연결하고 MCP 연결 기능을 준비합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "MCP कनेक्शन प्रारंभ करें",
+                help = "“MCP कनेक्शन” के लिए ज़रूरी होस्ट सेवाओं से जुड़कर संबंधित कार्यक्षमता तैयार करता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة اتصالات MCP",
+                help = "يُعِدّ اتصالات MCP ويربط خدمات المضيف اللازمة."
+            )
+        )
+    )]
     async fn init(
         &self,
         _ctx: agena_plugin_host::sdk::InitContext,
@@ -927,7 +983,20 @@ impl McpPlugin {
         self.connection_bridge(input.request.clone()).await
     }
 
-    #[hook(tool.definition)]
+    #[hook(tool.definition, summary = "Clarify MCP tool documentation", help = "Overrides connection-management tool descriptions to explain their capabilities.",
+    translations(
+        locale("zh-CN", summary = "完善 MCP 工具说明", help = "调整 MCP 连接管理工具的描述，使其功能更清晰。"),
+        locale("zh-TW", summary = "完善 MCP 工具說明", help = "調整 MCP 連線管理工具的描述，讓功能更清楚。"),
+        locale("fr-FR", summary = "Clarifier la documentation des outils MCP", help = "Précise la description des outils de gestion des connexions MCP et de leurs fonctions."),
+        locale("es-ES", summary = "Aclarar la documentación de herramientas MCP", help = "Ajusta las descripciones de las herramientas de conexión MCP para explicar mejor sus funciones."),
+        locale("pt-BR", summary = "Esclarecer a documentação das ferramentas MCP", help = "Ajusta as descrições das ferramentas de conexão MCP para explicar melhor suas funções."),
+        locale("de-DE", summary = "MCP-Werkzeugbeschreibungen präzisieren", help = "Passt die Beschreibungen der MCP-Verbindungswerkzeuge an, damit ihre Funktionen klarer werden."),
+        locale("ja-JP", summary = "MCP ツールの説明を明確化", help = "MCP 接続管理ツールの説明を調整し、それぞれの機能を明確にします。"),
+        locale("ko-KR", summary = "MCP 도구 설명 명확화", help = "MCP 연결 관리 도구의 설명을 조정하여 각 기능을 명확히 합니다."),
+        locale("hi-IN", summary = "MCP टूल विवरण स्पष्ट करें", help = "MCP कनेक्शन प्रबंधन टूल के विवरण को उनके कार्यों के अनुरूप स्पष्ट करता है।"),
+        locale("ar-SA", summary = "توضيح وصف أدوات MCP", help = "يعدّل أوصاف أدوات إدارة اتصالات MCP لتوضيح وظائفها.")
+    )
+)]
     async fn tool_definition_patch(
         &self,
         input: ToolDefinitionInput,

@@ -3,6 +3,16 @@ import { computed, ref } from 'vue'
 import type { GitStatusFile, GitStatusResponse, GitStatusScopePage } from '@/types/git'
 import { limitBackgroundReads } from '../../lib/backgroundReads'
 
+type Scope = 'staged' | 'unstaged' | 'untracked' | 'merge'
+type PageCursor = { offset: number; hasMore: boolean }
+
+/** An immutable handoff between Git tabs, including already loaded pages. */
+export type GitStatusPagesSnapshot = {
+  lists: Record<Scope, GitStatusFile[]>
+  pages: Partial<Record<Scope, PageCursor>>
+  snapshots: Partial<Record<Scope, string>>
+}
+
 export function useGitStatusPaged(opts: {
   gitReady: { value: boolean }
   status: { value: GitStatusResponse | null }
@@ -31,8 +41,7 @@ export function useGitStatusPaged(opts: {
   const changesCount = computed(() => opts.status.value?.unstagedCount ?? changesList.value.length)
   const untrackedCount = computed(() => opts.status.value?.untrackedCount ?? untrackedList.value.length)
 
-  type Scope = 'staged' | 'unstaged' | 'untracked' | 'merge'
-  const pageByScope = ref<Partial<Record<Scope, { offset: number; hasMore: boolean }>>>({})
+  const pageByScope = ref<Partial<Record<Scope, PageCursor>>>({})
   const hasMoreMerge = computed(() => pageByScope.value.merge?.hasMore ?? mergeList.value.length < mergeCount.value)
   const hasMoreStaged = computed(() => pageByScope.value.staged?.hasMore ?? stagedList.value.length < stagedCount.value)
   const hasMoreUnstaged = computed(
@@ -296,6 +305,32 @@ export function useGitStatusPaged(opts: {
     failures.clear()
   }
 
+  function snapshotPages(): GitStatusPagesSnapshot {
+    return {
+      lists: {
+        merge: mergeList.value.map((file) => ({ ...file })),
+        staged: stagedList.value.map((file) => ({ ...file })),
+        unstaged: changesList.value.map((file) => ({ ...file })),
+        untracked: untrackedList.value.map((file) => ({ ...file })),
+      },
+      pages: Object.fromEntries(
+        Object.entries(pageByScope.value).map(([scope, page]) => [scope, { ...page }]),
+      ) as GitStatusPagesSnapshot['pages'],
+      snapshots: Object.fromEntries(snapshotByScope) as GitStatusPagesSnapshot['snapshots'],
+    }
+  }
+
+  function restorePages(snapshot: GitStatusPagesSnapshot) {
+    resetAll()
+    for (const scope of ['merge', 'staged', 'unstaged', 'untracked'] as const) {
+      listForScope(scope).value = snapshot.lists[scope].map((file) => ({ ...file }))
+      const page = snapshot.pages[scope]
+      if (page) pageByScope.value[scope] = { ...page }
+      const snapshotId = snapshot.snapshots[scope]
+      if (snapshotId) snapshotByScope.set(scope, snapshotId)
+    }
+  }
+
   return {
     mergeList,
     stagedList,
@@ -322,5 +357,7 @@ export function useGitStatusPaged(opts: {
     cancelRequests,
     clearScope,
     resetAll,
+    snapshotPages,
+    restorePages,
   }
 }

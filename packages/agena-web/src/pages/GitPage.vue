@@ -61,6 +61,7 @@ import { gitRepoScopedStorageKey, localStorageKeys } from '@/lib/persistence/sto
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { recentGitStatusForDiff, rememberGitStatusForDiff } from './git/gitStatusWarmCache'
 
 const props = withDefaults(
   defineProps<{
@@ -326,6 +327,8 @@ const {
   cancelRequests: cancelStatusRequests,
   clearScope: clearStatusScope,
   resetAll: resetStatusPages,
+  snapshotPages,
+  restorePages,
 } = useGitStatusPaged({
   gitReady,
   status,
@@ -340,6 +343,16 @@ const {
     )
   },
 })
+
+// A diff tab inherits its sidebar before first render. load() still checks
+// that the repository is valid before trusting this recent display snapshot.
+const initialDiffRepo = !props.embedded && queryText(route.query.gitFile) ? root.value : null
+const initialDiffStatus = initialDiffRepo ? recentGitStatusForDiff(initialDiffRepo) : null
+if (initialDiffStatus) {
+  status.value = { ...initialDiffStatus.status }
+  restorePages(initialDiffStatus.pages)
+  isGitRepository.value = true
+}
 
 async function loadMoreMerge(directory: string) {
   await loadMore(directory, 'merge')
@@ -375,6 +388,24 @@ const {
 function selectFile(path: string, source?: 'working' | 'staged') {
   const nextSource = source || diffSource.value
   if (!ui.isCompactLayout && !isEmbeddedWorkspacePane.value) {
+    // Opening a diff creates another Git workspace tab. Hand its sidebar the
+    // already loaded repository pages instead of making it start from empty.
+    if (repoRoot.value && status.value) {
+      // If a repository update is still being applied, keep its visible rows
+      // but force the destination tab to validate them rather than treating
+      // the newer stream baseline as proof that they are already current.
+      const pagesCurrent =
+        !dirtyWatchScopes.size &&
+        !mergeListLoading.value &&
+        !stagedListLoading.value &&
+        !changesListLoading.value &&
+        !untrackedListLoading.value
+      rememberGitStatusForDiff(repoRoot.value, {
+        status: status.value,
+        pages: snapshotPages(),
+        watchBaseline: pagesCurrent ? repoWatchBaseline : null,
+      })
+    }
     void workspaceNavigation.openWorkspaceLocation('git', {
       query: { directory: projectRoot.value, repoRoot: repoRoot.value, gitFile: path, gitSource: nextSource },
       matchKeys: ['repoRoot', 'gitFile', 'gitSource'],
@@ -840,7 +871,7 @@ type WatchScope = 'merge' | 'staged' | 'unstaged' | 'untracked'
 const dirtyWatchScopes = new Set<WatchScope>()
 // Selection changes restart the path stream, but do not discard the
 // repository baseline used to validate already displayed file lists.
-let repoWatchBaseline: GitWatchStatusPayload | null = null
+let repoWatchBaseline: GitWatchStatusPayload | null = initialDiffStatus?.watchBaseline ?? null
 const visibleWatchScopes = () =>
   [
     ['merge', isMergeExpanded.value, status.value?.mergeCount ?? 0, mergeList],
@@ -1205,6 +1236,7 @@ async function trustUnsafeRepo() {
   }
 }
 
+let allowInitialDiffHandoff = true
 async function load() {
   if (!isGitVisible() || resolvedProjectRoot.value !== projectRoot.value) return
   const seq = ++loadSeq
@@ -1232,12 +1264,25 @@ async function load() {
       return
     }
 
-    // Reset the cursor as well as the rows before loading this repository.
-    resetStatusPages()
+    // New diff tabs inherit the current sidebar snapshot (including the
+    // pagination cursor) from the tab that opened them. The SSE baseline
+    // validates this snapshot; other entries and explicit Refresh still read
+    // a fresh summary as usual.
+    const warm = allowInitialDiffHandoff && initialDiffRepo === dir ? initialDiffStatus : null
+    allowInitialDiffHandoff = false
+    if (!warm) resetStatusPages()
     const initialScopes = visibleWatchScopes()
       .filter(([, expanded]) => expanded)
       .map(([scope]) => scope)
-    await loadStatusSummary(dir, initialScopes)
+    const missingScopes = warm
+      ? visibleWatchScopes()
+          .filter(
+            ([scope, expanded, count, list]) => expanded && count > 0 && !warm.pages.pages[scope] && !list.value.length,
+          )
+          .map(([scope]) => scope)
+      : initialScopes
+    if (!warm || !warm.watchBaseline || missingScopes.length)
+      await loadStatusSummary(dir, missingScopes.length ? missingScopes : initialScopes)
     if (seq !== loadSeq || dir !== root.value) return
     // Render changed files immediately; secondary metadata can finish later.
     loading.value = false

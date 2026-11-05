@@ -8,6 +8,7 @@ import {
   RiCheckboxCircleLine,
   RiCommandLine,
   RiFileList2Line,
+  RiGitBranchLine,
   RiInformationLine,
   RiPlayLine,
   RiPlugLine,
@@ -21,6 +22,8 @@ import {
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
 import PluginEmptyState from '@/components/settings/plugins/PluginEmptyState.vue'
+import PluginHooksPanel from '@/components/settings/plugins/PluginHooksPanel.vue'
+import { buildPluginHookEntries, type PluginHookRegistration } from '@/components/settings/plugins/pluginHooks'
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import { pluginStateLabel } from '@/components/settings/pluginLabels'
 import Button from '@/components/ui/Button.vue'
@@ -87,6 +90,7 @@ type PluginManifest = {
   translations?: Record<string, PluginDocumentationTranslation | undefined>
   authors?: string[]
   transports?: string[]
+  hooks?: string[]
   tools?: PluginTool[]
   commands?: Array<{ id?: string; title?: string }>
   skills?: Array<{ name?: string; description?: string }>
@@ -159,6 +163,7 @@ type PluginInspectResponse = {
   plugin?: {
     status?: PluginStatus
     manifest?: PluginManifest | null
+    hooks?: PluginHookRegistration[]
     activation?: PluginActivation | null
     services?: PluginServiceInspect | null
     effects?: PluginEffectScopeInspect | null
@@ -324,6 +329,7 @@ const tabs = computed<Array<{ id: PanelTab; label: string; count?: number }>>(()
   { id: 'settings', label: st('Settings') },
   { id: 'tools', label: st('Tools'), count: selectedTools.value.length },
   { id: 'commands', label: st('Commands'), count: selectedCommands.value.length },
+  { id: 'hooks', label: st('Hooks'), count: selectedHooks.value.length },
   { id: 'logs', label: st('Logs') },
   { id: 'diagnostics', label: st('Diagnostics'), count: diagnosticCount.value || undefined },
 ])
@@ -380,6 +386,16 @@ const selectedPlugin = computed(() => selectedInspect.value?.plugin || null)
 const selectedManifest = computed(() => {
   const manifest = selectedPlugin.value?.manifest
   return manifest ? localizePluginManifest(manifest, String(locale.value || 'en-US')) : null
+})
+const selectedHooks = computed(() => {
+  // Hook documentation comes from the Settings locale catalog. Explicitly
+  // track the selected language so names/descriptions update without reload.
+  void locale.value
+  return buildPluginHookEntries(
+    selectedPlugin.value?.manifest?.hooks,
+    selectedPlugin.value?.hooks,
+    selectedStatus.value?.state || selectedPlugin.value?.status?.state,
+  )
 })
 const localizedSettings = computed(() =>
   settingsState.value
@@ -513,6 +529,12 @@ const overviewActions = computed(() => [
     label: st('Commands'),
     icon: RiCommandLine,
     hint: st('{count} commands available', { count: selectedCommands.value.length }),
+  },
+  {
+    tab: 'hooks' as const,
+    label: st('Hooks'),
+    icon: RiGitBranchLine,
+    hint: st('{count} hooks declared or registered', { count: selectedHooks.value.length }),
   },
 ])
 const activeSessionId = computed(() => {
@@ -1135,7 +1157,7 @@ defineExpose({ refresh })
                 }}</span
                 ><RiArrowRightLine class="h-4 w-4 shrink-0" />
               </button>
-              <div class="grid gap-2 sm:grid-cols-3">
+              <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                 <button
                   v-for="action in overviewActions"
                   :key="action.tab"
@@ -1381,6 +1403,8 @@ defineExpose({ refresh })
                 </details>
               </div>
             </section>
+
+            <PluginHooksPanel v-else-if="activeTab === 'hooks'" :key="selectedPluginId" :hooks="selectedHooks" />
 
             <section v-else-if="activeTab === 'logs'" class="space-y-3">
               <div class="flex flex-wrap items-center gap-2">

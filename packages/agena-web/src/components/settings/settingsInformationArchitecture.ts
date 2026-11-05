@@ -73,7 +73,7 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
         view: 'plugin-workbench',
         relatedViews: ['plugin-workbench', 'marketplace'],
         label: () => st('Plugins'),
-        keywords: ['plugin marketplace', 'install', 'commands', '插件', '市场'],
+        keywords: ['plugin marketplace', 'install', 'commands', 'hooks', 'hook', '插件', '市场', '钩子'],
       },
       {
         id: 'skills',

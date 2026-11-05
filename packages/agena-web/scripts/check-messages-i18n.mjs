@@ -10,6 +10,7 @@ import { join, relative } from 'node:path'
 
 import enUS from '../src/i18n/messages/en-US.ts'
 import zhCN from '../src/i18n/messages/zh-CN.ts'
+import { findChineseEnglishGloss } from './i18n-style.mjs'
 
 const ROOT = new URL('../src', import.meta.url).pathname
 const errors = []
@@ -23,6 +24,10 @@ function flatten(value, prefix = '', output = {}) {
 
 const en = flatten(enUS)
 const zh = flatten(zhCN)
+for (const [key, value] of Object.entries(zh)) {
+  const gloss = findChineseEnglishGloss(value)
+  if (gloss) errors.push(`zh-CN message uses a bilingual parenthetical gloss at ${key}: ${gloss}`)
+}
 const enKeys = new Set(Object.keys(en))
 const zhKeys = new Set(Object.keys(zh))
 

@@ -96,7 +96,7 @@ export default {
     resetShortcut: "恢复默认",
     resetAllShortcuts: "恢复全部应用快捷键",
     shortcutDisabled: "已停用",
-    shortcutRecording: "请按组合键（Esc 取消）",
+    shortcutRecording: "请按组合键，按 Esc 取消",
     shortcutSaved: "快捷键设置已保存。",
     shortcutStorageError: "无法在当前浏览器保存；原有快捷键仍然生效。",
     shortcutDuplicate: "该组合键已用于“{action}”，请改用其他组合键。",
@@ -652,7 +652,7 @@ export default {
         sessionsFetchFailed: '加载预览会话失败。详情：{detail}',
         sessionsFetchFailedNoDetail: '没有更多详情。',
         proxyHttpError:
-          '预览代理返回错误（HTTP {status}）。详情：{detail}',
+          '预览代理返回 HTTP {status} 错误。详情：{detail}',
         proxyHttpErrorNoDetail: '代理未返回更多信息。',
         proxyRequestFailed: '无法访问预览代理，请检查服务状态。',
       },
@@ -781,7 +781,7 @@ export default {
         description: '触发不同类型的 toast、动作回调与去重行为。',
         fields: {
           message: '消息内容',
-          timeoutMs: '持续时间 (ms)',
+          timeoutMs: '持续时间（毫秒）',
           actionLabel: '动作按钮文案',
         },
         placeholders: {
@@ -904,7 +904,7 @@ export default {
       },
       options: {
         logLevel: {
-          default: 'default (INFO)',
+          default: '默认（信息级）',
           DEBUG: 'DEBUG',
           INFO: 'INFO',
           WARN: 'WARN',
@@ -996,11 +996,11 @@ export default {
         options: {
           enUS: 'English',
           zhCN: '简体中文',
-          esES: 'Spanish (Spain)',
-          hiIN: 'Hindi (India)',
-          arSA: 'Arabic (Saudi Arabia)',
-          ptBR: 'Portuguese (Brazil)',
-          frFR: 'French (France)',
+          esES: '西班牙语（西班牙）',
+          hiIN: '印地语（印度）',
+          arSA: '阿拉伯语（沙特阿拉伯）',
+          ptBR: '葡萄牙语（巴西）',
+          frFR: '法语（法国）',
         },
       },
       theme: {
@@ -1031,8 +1031,8 @@ export default {
         label: '大小',
         fontSize: '字号 (%)',
         padding: '内边距 (%)',
-        cornerRadius: '圆角 (px)',
-        inputBarOffset: '输入栏偏移 (px)',
+        cornerRadius: '圆角（像素）',
+        inputBarOffset: '输入栏偏移（像素）',
       },
       chat: {
         label: '聊天',
@@ -2212,7 +2212,7 @@ export default {
 
       signing: {
         sshMayFailTitle: 'SSH 提交签名可能失败',
-        sshMayFailDescription: 'SSH agent 不可用或没有密钥。可使用终端加载密钥（ssh-agent/ssh-add）后重试。',
+        sshMayFailDescription: 'SSH agent 不可用或没有密钥。可在终端使用 ssh-agent/ssh-add 加载密钥后重试。',
       },
 
       sequencer: {
@@ -2311,7 +2311,7 @@ export default {
           },
           placeholders: {
             branchName: '分支名',
-            startPoint: '起点（HEAD）',
+            startPoint: '起点：HEAD',
           },
           createNewBranch: '创建新分支',
           detached: '（分离）',
@@ -2398,9 +2398,9 @@ export default {
             tag: '标签',
           },
           resetModes: {
-            soft: '重置（soft）',
-            mixed: '重置（mixed）',
-            hard: '重置（hard）',
+            soft: '软重置',
+            mixed: '混合重置',
+            hard: '硬重置',
           },
           actions: {
             copyHash: '复制哈希',
@@ -2496,7 +2496,7 @@ export default {
 
         lfs: {
           title: 'Git LFS',
-          description: '大文件存储（LFS）',
+          description: '管理大文件存储',
           sections: {
             status: '状态',
             trackPatterns: '跟踪模式',
@@ -2534,7 +2534,7 @@ export default {
           actions: {
             init: '初始化',
             update: '更新',
-            updateInitRecursive: '更新（init+recursive）',
+            updateInitRecursive: '初始化并递归更新',
           },
         },
 
@@ -2694,7 +2694,7 @@ export default {
       },
 
       commitBox: {
-        messagePlaceholder: '提交信息（Cmd+Enter 提交）',
+        messagePlaceholder: '提交信息，按 Cmd+Enter 提交',
         gitmojiTitle: 'Gitmoji',
         searchEmojis: '搜索表情',
         emojiEmptyLabel: '表情',
@@ -2751,7 +2751,7 @@ export default {
         },
         confirmDeleteTracked: {
           title: '删除文件？',
-          description: '已跟踪文件将被移除并暂存（git rm）。',
+          description: '将删除已跟踪文件，并把删除操作暂存。',
         },
         confirmDeleteUntracked: {
           title: '删除文件？',
@@ -2788,7 +2788,7 @@ export default {
         description: '保存本地更改以便稍后恢复',
         stagedOnly: '仅储藏',
         includeUntracked: '包含未跟踪',
-        keepIndex: '保留已暂存（keep index）',
+        keepIndex: '保留暂存区',
       },
     },
     authDialogs: {
@@ -2799,7 +2799,7 @@ export default {
         description: '输入凭据以继续',
         githubTokenOptionalTitle: 'GitHub token（可选）',
         githubTokenOptionalDescription: '在这里保存 token 后，Fetch/Pull/Push 可像 VS Code 一样自动认证。',
-        rememberForRepo: '为该仓库记住（localStorage）',
+        rememberForRepo: '为此仓库记住认证信息',
         username: '用户名',
         passwordOrToken: '密码 / Token',
       },
@@ -2915,11 +2915,11 @@ export default {
           description: '选择远端与分支进行获取',
         },
         fetchPrune: {
-          label: '获取（Prune）',
+          label: '获取并清理失效引用',
           description: '获取并清理已删除的 refs',
         },
         fetchAll: {
-          label: '获取（All）',
+          label: '从全部远端获取',
           description: '从所有远端获取',
         },
         pull: {
@@ -2927,7 +2927,7 @@ export default {
           description: '拉取远端更改',
         },
         pullRebase: {
-          label: '拉取（Rebase）',
+          label: '拉取并变基',
           description: '拉取并变基当前分支',
         },
         pullFrom: {
@@ -2939,16 +2939,16 @@ export default {
           description: '推送本地提交到远端',
         },
         pushForce: {
-          label: '推送（Force）',
+          label: '强制推送',
           description: '强制推送远端分支历史',
           confirmTitle: '强制推送？',
           confirmDescription: '这可能覆盖远端历史。',
           confirmText: '强制推送',
         },
         pushForceWithLease: {
-          label: '推送（Force with lease）',
+          label: '带租约强制推送',
           description: '强制推送并防止覆盖过期的远端 refs',
-          confirmTitle: '强制推送（with lease）？',
+          confirmTitle: '带租约强制推送？',
           confirmDescription: '这可能覆盖远端历史。',
           confirmText: '强制推送',
         },
@@ -2957,7 +2957,7 @@ export default {
           description: '推送本地标签到远端',
         },
         pushFollowTags: {
-          label: '推送（Follow tags）',
+          label: '推送并附带标签',
           description: '推送提交及可达标签',
         },
         pushTo: {
@@ -2969,7 +2969,7 @@ export default {
           description: '一次性完成获取与推送',
         },
         syncRebase: {
-          label: '同步（Rebase）',
+          label: '同步并变基',
           description: 'pull --rebase 后再 push',
         },
       },
@@ -3088,21 +3088,21 @@ export default {
       repositoryMarkedSafe: '仓库已标记为安全',
 
       fetched: '已获取',
-      fetchedPrune: '已获取（prune）',
-      fetchedAll: '已获取（all）',
+      fetchedPrune: '已获取并清理失效引用',
+      fetchedAll: '已从全部远端获取',
       pulled: '已拉取',
-      pulledRebase: '已拉取（rebase）',
+      pulledRebase: '已拉取并变基',
       pushed: '已推送',
       pushedTags: '已推送标签',
-      pushedFollowTags: '已推送（follow tags）',
-      pushedForce: '已推送（force）',
-      pushedForceWithLease: '已推送（force-with-lease）',
+      pushedFollowTags: '已推送并附带标签',
+      pushedForce: '已强制推送',
+      pushedForceWithLease: '已带租约强制推送',
       synced: '已同步',
-      syncedRebase: '已同步（rebase）',
+      syncedRebase: '已同步并变基',
 
       committed: '已提交',
-      committedAll: '已提交（all）',
-      committedEmpty: '已提交（empty）',
+      committedAll: '已提交全部更改',
+      committedEmpty: '已创建空提交',
       changesDiscarded: '更改已丢弃',
       alreadyIgnored: '已忽略',
       stashedChanges: '更改已存入储藏区',
@@ -3390,7 +3390,7 @@ export default {
         },
       },
       save: {
-        titleDirty: '保存（Ctrl/Cmd+S）',
+        titleDirty: '保存 · Ctrl/Cmd+S',
         titleSaved: '已保存',
       },
       actions: {

@@ -4,6 +4,7 @@ import { parse as parseSfc } from '@vue/compiler-sfc'
 import { baseParse, NodeTypes } from '@vue/compiler-dom'
 import { parse, parseExpression } from '@babel/parser'
 import enMessages from '../src/i18n/messages/en-US.ts'
+import { findChineseEnglishGloss } from './i18n-style.mjs'
 
 const rootFiles = [
   ...globSync('src/components/settings/**/*.{vue,ts}'),
@@ -235,6 +236,10 @@ for (const file of rootFiles) {
 const catalogs = Object.fromEntries(
   catalogFiles.map((file) => [file.split('/').at(-1).replace('.json', ''), JSON.parse(readFileSync(file, 'utf8'))]),
 )
+for (const [key, value] of Object.entries(catalogs['zh-CN'] || {})) {
+  const gloss = findChineseEnglishGloss(value)
+  if (gloss) errors.push(`zh-CN Settings uses a bilingual parenthetical gloss at ${key}: ${gloss}`)
+}
 const english = catalogs['en-US'] || {}
 if (JSON.stringify([...referenced].sort()) !== JSON.stringify(Object.keys(english).sort())) {
   const missing = [...referenced].filter((key) => !(key in english))

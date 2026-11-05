@@ -74,6 +74,19 @@ describe('task-based settings navigation', () => {
     expect(rows.some((row) => row.key === 'ai-session/instructions')).toBe(false)
   })
 
+  test('Hook searches find the plugin settings workbench', () => {
+    for (const query of ['hook', 'hooks', '钩子']) {
+      const groups = buildSettingsSidebarGroups({
+        query,
+        tabs: categories,
+        activeTab: 'interface',
+        activeView: 'tui',
+      })
+      const rows = groups.flatMap((group) => group.items)
+      expect(rows.some((row) => row.key === 'extensions/plugins')).toBe(true)
+    }
+  })
+
   test('old section URLs and renamed model views remain valid', () => {
     for (const section of SETTINGS_TAB_IDS) {
       expect(settingsTabFromRouteValue(`/settings/${section}?view=any`)).toBe(section)

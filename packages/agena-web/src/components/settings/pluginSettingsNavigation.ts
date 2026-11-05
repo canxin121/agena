@@ -1,4 +1,12 @@
-export const PLUGIN_SETTINGS_TABS = ['overview', 'settings', 'commands', 'tools', 'logs', 'diagnostics'] as const
+export const PLUGIN_SETTINGS_TABS = [
+  'overview',
+  'settings',
+  'commands',
+  'tools',
+  'hooks',
+  'logs',
+  'diagnostics',
+] as const
 
 export type PluginSettingsTab = (typeof PLUGIN_SETTINGS_TABS)[number]
 

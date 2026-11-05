@@ -34,6 +34,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   permissions: [
     {
+      id: 'overview',
+      label: () => st('Permission overview'),
+      description: () => st('Read-only merged policy.'),
+      keywords: ['effective', 'summary', 'permissions', 'read-only', '总览', '有效权限'],
+    },
+    {
       id: 'filesystem',
       label: () => st('Filesystem'),
       description: () => st('Configure file and path access for each permission scope.'),
@@ -122,8 +128,7 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     {
       id: 'prompt-layers',
       label: () => st('Prompt layers'),
-      description: () =>
-        st('Attach saved prompts to global, workspace, or session system instructions.'),
+      description: () => st('Attach saved prompts to global, workspace, or session system instructions.'),
       keywords: ['system', 'prompt', 'instructions', 'fragments', 'layers', 'global', 'workspace', 'session'],
     },
     {
@@ -152,6 +157,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       label: () => st('Web appearance'),
       description: () => st('Browser-only theme, fonts, density, spacing, and geometry preferences.'),
       keywords: ['web', 'appearance', 'font', 'padding', 'radius', 'language'],
+    },
+    {
+      id: 'notifications',
+      label: () => st('Browser notifications'),
+      description: () => st('Control browser notifications, delivery status, and test messages.'),
+      keywords: ['notification', 'push', 'browser', 'permissions', 'alerts'],
     },
     {
       id: 'conversation',

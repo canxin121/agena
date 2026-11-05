@@ -36,23 +36,33 @@ const emit = defineEmits<{
 }>()
 
 const query = ref('')
-const expandedNodeKeys = ref<Set<string>>(new Set([props.activeTab]))
+const expandedNodeKeys = ref<Set<string>>(new Set())
 const queryNorm = computed(() => normalizeSettingsSidebarQuery(query.value))
 
-// Opening a destination also opens its branch: the section, and the page when
-// the page carries scope rows that own the active state.
+// One visual category may contain pages from several legacy route sections.
+// Open the category that owns the current (section, view) destination.
 function activeBranchKeys(): string[] {
-  const keys = [props.activeTab]
   const activeView = normalizeSettingsSidebarQuery(props.activeView || '')
-  const page = (props.tabs.find((tab) => tab.id === props.activeTab)?.children || []).find(
-    (node) => normalizeSettingsSidebarQuery(node.id) === activeView,
+  const category = props.tabs.find((tab) =>
+    (tab.children || []).some(
+      (node) =>
+        node.section === props.activeTab &&
+        (normalizeSettingsSidebarQuery(node.view || '') === activeView || node.relatedViews?.includes(activeView)),
+    ),
   )
-  if (page?.children?.length) keys.push(`${props.activeTab}/${page.id}`)
+  if (!category) return []
+  const keys = [category.id]
+  const task = category.children?.find(
+    (node) =>
+      node.section === props.activeTab &&
+      (normalizeSettingsSidebarQuery(node.view || '') === activeView || node.relatedViews?.includes(activeView)),
+  )
+  if (task?.children?.length) keys.push(`${category.id}/${task.id}`)
   return keys
 }
 
 watch(
-  () => [props.activeTab, props.activeView] as const,
+  () => [props.activeTab, props.activeView, props.tabs] as const,
   () => {
     const next = new Set(expandedNodeKeys.value)
     for (const key of activeBranchKeys()) next.add(key)

@@ -35,7 +35,10 @@ const hasRows = computed(() => visibleGroups.value.length > 0)
       <div v-for="(group, groupIndex) in visibleGroups" :key="group.id">
         <div v-if="groupIndex > 0" class="mx-1 my-2 border-t border-sidebar-border/60" />
 
-        <div class="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+        <div
+          v-if="group.labelKey"
+          class="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70"
+        >
           {{ t(group.labelKey) }}
         </div>
 

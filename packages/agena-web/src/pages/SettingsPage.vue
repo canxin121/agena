@@ -36,11 +36,8 @@ import {
   resolveSettingsSubpage,
   settingsSubpageStorageKey,
 } from '@/components/settings/workbench/settingsSectionNavigation'
-import {
-  SETTINGS_DEFAULT_SUBPAGE,
-  buildSettingsSidebarNodes,
-  buildSettingsSubpages,
-} from '@/components/settings/settingsNavigationCatalog'
+import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
+import { buildSettingsNavigationCategories } from '@/components/settings/settingsInformationArchitecture'
 import {
   buildSettingsScopes,
   findSettingsScope,
@@ -48,7 +45,6 @@ import {
   settingsScopeStorageKey,
 } from '@/components/settings/settingsScopeCatalog'
 import {
-  buildSettingsSidebarTabs,
   normalizeRememberedSettingsRoute,
   settingsPathForTab,
   settingsTabFromRouteValue,
@@ -220,12 +216,7 @@ const showSidebar = computed(() => {
   return true
 })
 
-const tabs = computed(() =>
-  buildSettingsSidebarTabs(
-    (_id, labelKey) => String(t(labelKey)),
-    (section) => buildSettingsSidebarNodes(section),
-  ),
-)
+const tabs = computed(() => buildSettingsNavigationCategories())
 
 async function refreshSettingsSidebar() {
   // Configuration editors refresh in place so unsaved drafts survive.
@@ -306,7 +297,14 @@ function joinWindowTitle(parts: Array<string | null | undefined>) {
 
 const settingsWindowTitle = computed(() => {
   const base = String(t('settings.title'))
-  const activeTabLabel = tabs.value.find((tab) => tab.id === activeSection.value)?.label || base
+  const activeTabLabel =
+    tabs.value.find((tab) =>
+      tab.children?.some(
+        (task) =>
+          task.section === activeSection.value &&
+          (task.view === activeView.value || task.relatedViews?.includes(activeView.value)),
+      ),
+    )?.label || base
   const pageLabel = activePages.value.find((page) => page.id === activeView.value)?.label
   const scopeLabel = findSettingsScope(activeSection.value, activeView.value, activeScope.value)?.label
   return joinWindowTitle([base, activeTabLabel, pageLabel, scopeLabel])
@@ -631,7 +629,6 @@ const dirtyHint = computed(
           >
             <InterfaceSettingsPanel v-if="activePage === 'tui'" ref="interfacePanel" />
             <div v-else-if="activePage === 'web-appearance'" class="space-y-4">
-              <BrowserNotificationsPanel />
               <div class="grid gap-4 xl:grid-cols-2">
                 <SettingsCard
                   :title="t('settings.appearance.language.label')"
@@ -717,6 +714,7 @@ const dirtyHint = computed(
                 {{ $st('Saved automatically') }}
               </p>
             </div>
+            <BrowserNotificationsPanel v-else-if="activePage === 'notifications'" />
             <div v-else class="space-y-4">
               <SettingsCard :title="t('settings.appearance.chat.label')" :icon="RiChat3Line">
                 <SettingsRow :title="t('settings.appearance.chat.showTimestamps')" toggle>

@@ -1,4 +1,4 @@
-/** The web settings workbench follows the same top-level sections as the TUI Settings Studio. */
+/** Legacy route sections stay stable; the sidebar groups them by user task. */
 
 export const SETTINGS_TAB_IDS = [
   'models-providers',
@@ -13,7 +13,16 @@ export const SETTINGS_TAB_IDS = [
 ] as const
 
 export type SettingsTab = (typeof SETTINGS_TAB_IDS)[number]
-export type SettingsSidebarGroupId = 'core' | 'application' | 'system'
+export const SETTINGS_CATEGORY_IDS = [
+  'ai-session',
+  'extensions',
+  'security',
+  'appearance',
+  'operations',
+  'records',
+] as const
+export type SettingsCategoryId = (typeof SETTINGS_CATEGORY_IDS)[number]
+export type SettingsSidebarGroupId = 'all' | 'core' | 'application' | 'system'
 export type SettingsSidebarIconKey =
   | 'models-providers'
   | 'permissions'
@@ -30,7 +39,14 @@ export type SettingsSidebarNavigationNode = {
   label: string
   description?: string
   keywords?: string[]
+  // The displayed task may live in any legacy route section.
+  section?: SettingsTab
   view?: string
+  // One task may contain several legacy subpages shown as local page tabs.
+  relatedViews?: string[]
+  // Search can open the matching internal subpage instead of always opening
+  // the group's default (for example API key -> Provider Studio).
+  searchTargets?: Array<{ view: string; label: string; keywords: string[] }>
   // A scope row selects one configuration layer of its parent page: it carries
   // both the page view and the scope id, so the row is its own destination.
   scope?: string
@@ -38,7 +54,7 @@ export type SettingsSidebarNavigationNode = {
 }
 
 export type SettingsSidebarTab = {
-  id: SettingsTab
+  id: SettingsTab | SettingsCategoryId
   label: string
   icon: SettingsSidebarIconKey
   group: SettingsSidebarGroupId
@@ -146,6 +162,7 @@ const SETTINGS_TAB_CONFIG: Array<{
 ]
 
 const GROUP_LABEL_KEYS: Record<SettingsSidebarGroupId, string> = {
+  all: '',
   core: 'settings.groups.core',
   application: 'settings.groups.application',
   system: 'settings.groups.system',
@@ -224,8 +241,15 @@ function filterNavigationNode(
     .filter((child): child is SettingsSidebarNavigationNode => Boolean(child))
 
   if (!selfMatches && matchingChildren.length === 0) return null
+  const matchingTargets = node.searchTargets?.filter((target) =>
+    matchesSidebarQuery(query, [target.label, ...target.keywords]),
+  )
+  const matchedTarget =
+    matchingTargets?.find((target) => target.view === node.view) ||
+    (matchingTargets?.length === 1 ? matchingTargets[0] : undefined)
   return {
     ...node,
+    view: matchedTarget?.view || node.view,
     children: selfMatches ? node.children : matchingChildren,
   }
 }
@@ -234,13 +258,22 @@ function filterNavigationNode(
 // so a permission layer row never lights up for another layer of the same page.
 function nodeContainsDestination(
   node: SettingsSidebarNavigationNode,
+  activeSection: SettingsTab,
   activeView: string,
   activeScope: string,
+  inheritedSection: SettingsTab,
 ): boolean {
-  if (node.view && normalizeSettingsSidebarQuery(node.view) === activeView) {
-    if (!node.scope || normalizeSettingsSidebarQuery(node.scope) === activeScope) return true
-  }
-  return (node.children || []).some((child) => nodeContainsDestination(child, activeView, activeScope))
+  const section = node.section || inheritedSection
+  if (
+    section === activeSection &&
+    node.view &&
+    (normalizeSettingsSidebarQuery(node.view) === activeView || node.relatedViews?.includes(activeView)) &&
+    (!node.scope || normalizeSettingsSidebarQuery(node.scope) === activeScope)
+  )
+    return true
+  return (node.children || []).some((child) =>
+    nodeContainsDestination(child, activeSection, activeView, activeScope, section),
+  )
 }
 
 function flattenNavigationNode(args: {
@@ -257,12 +290,14 @@ function flattenNavigationNode(args: {
 }): SettingsSidebarTabRow[] {
   const children = args.node.children || []
   const hasChildren = children.length > 0
+  const section = args.node.section || args.section
   const scopeMatches = !args.node.scope || normalizeSettingsSidebarQuery(args.node.scope) === args.activeScope
-  const branchActive =
-    args.activeTab === args.section &&
-    (args.node.view
-      ? normalizeSettingsSidebarQuery(args.node.view) === args.activeView && scopeMatches
-      : nodeContainsDestination(args.node, args.activeView, args.activeScope))
+  const branchActive = args.node.view
+    ? section === args.activeTab &&
+      (normalizeSettingsSidebarQuery(args.node.view) === args.activeView ||
+        args.node.relatedViews?.includes(args.activeView) === true) &&
+      scopeMatches
+    : nodeContainsDestination(args.node, args.activeTab, args.activeView, args.activeScope, section)
   // A branch row is highlighted as an ancestor while its own scope child owns
   // the active state.
   const active = Boolean(args.node.view) && branchActive && !hasChildren
@@ -270,7 +305,7 @@ function flattenNavigationNode(args: {
   const row: SettingsSidebarTabRow = {
     kind: 'item',
     key: args.key,
-    section: args.section,
+    section,
     view: args.node.view,
     scope: args.node.scope,
     label: args.node.label,
@@ -310,6 +345,7 @@ export function buildSettingsSidebarGroups(args: {
   const activeScope = normalizeSettingsSidebarQuery(args.activeScope || '')
   const expandedNodeKeys = args.expandedNodeKeys || new Set<string>()
   const groups = new Map<SettingsSidebarGroupId, SettingsSidebarTabRow[]>([
+    ['all', []],
     ['core', []],
     ['application', []],
     ['system', []],
@@ -319,16 +355,19 @@ export function buildSettingsSidebarGroups(args: {
     const onlyChild = tab.children?.length === 1 ? tab.children[0] : undefined
     // A single page with the same name is the section's destination, not a
     // second navigation level. Keep the page view for routing and highlighting.
-    const directPage = onlyChild && onlyChild.label === tab.label && !onlyChild.scope && !onlyChild.children?.length
-      ? onlyChild
-      : undefined
+    const directPage =
+      onlyChild && onlyChild.label === tab.label && !onlyChild.scope && !onlyChild.children?.length
+        ? onlyChild
+        : undefined
     const filteredRoot = filterNavigationNode(
       {
         id: tab.id,
         label: tab.label,
         description: directPage?.description,
         keywords: [...(tab.keywords || []), ...(directPage?.keywords || [])],
+        section: directPage?.section,
         view: directPage?.view,
+        relatedViews: directPage?.relatedViews,
         children: directPage ? undefined : tab.children,
       },
       query,
@@ -338,7 +377,7 @@ export function buildSettingsSidebarGroups(args: {
     groups.get(tab.group)?.push(
       ...flattenNavigationNode({
         node: filteredRoot,
-        section: tab.id,
+        section: isSettingsTab(tab.id) ? tab.id : tab.children?.[0]?.section || 'interface',
         activeTab: args.activeTab,
         activeView,
         activeScope,

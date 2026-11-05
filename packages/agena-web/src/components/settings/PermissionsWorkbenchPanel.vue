@@ -4,6 +4,9 @@ import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSe
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
 const PermissionStudioPanel = defineAsyncComponent(() => import('@/components/settings/PermissionStudioPanel.vue'))
+const PermissionsOverviewPanel = defineAsyncComponent(
+  () => import('@/components/settings/PermissionsOverviewPanel.vue'),
+)
 
 const pages = computed(() => buildSettingsSubpages('permissions'))
 // The permission workbench owns the scope selector and forwards its route-backed value.
@@ -22,6 +25,7 @@ defineExpose({ refresh: () => studio.value?.refresh() })
     :default-page="SETTINGS_DEFAULT_SUBPAGE.permissions"
     v-slot="{ activePage }"
   >
-    <PermissionStudioPanel ref="studio" :scope="scope" :section="activePage" />
+    <PermissionsOverviewPanel v-if="activePage === 'overview'" ref="studio" />
+    <PermissionStudioPanel v-else ref="studio" :scope="scope" :section="activePage" />
   </SettingsSectionWorkbench>
 </template>

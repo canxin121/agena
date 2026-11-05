@@ -2,11 +2,13 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { cn } from '@/lib/utils'
+import { settingsQueryForDestination } from '../settingsDestination'
+import type { SettingsTab } from '../sidebar/settingsSidebarNavigation'
 import { buildSettingsScopes, findSettingsScope } from '../settingsScopeCatalog'
 import { resolveSettingsSubpage, type SettingsSubpageDefinition } from './settingsSectionNavigation'
 
 const props = defineProps<{
-  section: string
+  section: SettingsTab
   pages: SettingsSubpageDefinition[]
   defaultPage: string
   activePage: string
@@ -30,6 +32,28 @@ const activeScopeLabel = computed(
 // A viewport-filling page keeps its own scrolling panes, so the workbench must
 // stop contributing page scroll and hand it the remaining height instead.
 const fillsViewport = computed(() => activeDefinition.value?.fillsViewport === true)
+
+// Sidebar tasks that contain several legacy pages expose their secondary
+// destinations here rather than adding another sidebar navigation level.
+const LOCAL_PAGE_GROUPS: Partial<Record<SettingsTab, string[][]>> = {
+  'models-providers': [['model-settings', 'provider-studio', 'model-catalog']],
+  'runtime-session': [['prompt-library', 'prompt-layers']],
+  'plugins-tools': [['plugin-workbench', 'marketplace']],
+  skills: [['library', 'install']],
+}
+const localPages = computed(() => {
+  const ids = LOCAL_PAGE_GROUPS[props.section]?.find((group) => group.includes(activePage.value)) || []
+  return ids.flatMap((id) => {
+    const page = props.pages.find((candidate) => candidate.id === id)
+    return page ? [page] : []
+  })
+})
+
+function selectPage(view: string) {
+  if (view === activePage.value) return
+  const query = settingsQueryForDestination({ section: props.section, view }, props.section, route.query)
+  void router.push({ path: route.path, query, hash: route.hash })
+}
 
 function selectScope(scope: string) {
   if (!scopes.value.some((candidate) => candidate.id === scope) || props.activeScope === scope) return
@@ -93,6 +117,27 @@ function selectScope(scope: string) {
             {{ activeDefinition.description }}
           </p>
         </header>
+        <nav
+          v-if="localPages.length > 1"
+          class="mb-4 flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1"
+          :aria-label="$st('Related settings')"
+        >
+          <button
+            v-for="page in localPages"
+            :key="page.id"
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :class="
+              page.id === activePage
+                ? 'bg-background text-foreground shadow-sm ring-1 ring-border/60'
+                : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+            "
+            :aria-current="page.id === activePage ? 'page' : undefined"
+            @click="selectPage(page.id)"
+          >
+            {{ page.label }}
+          </button>
+        </nav>
         <nav
           v-if="scopes.length && scopeLayout === 'toolbar'"
           class="mb-4 grid gap-1 rounded-xl border border-border/60 bg-muted/20 p-1 sm:flex sm:flex-wrap"

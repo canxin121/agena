@@ -1,0 +1,55 @@
+use std::time::Duration;
+
+use agena_testkit::{ModelOptions, TestAgena, TestAgenaBuilder, UserSession};
+use anyhow::Result;
+use serde_json::json;
+
+mod clock;
+mod control;
+mod conversation;
+mod coverage;
+mod fault_lifecycle;
+mod git;
+mod interaction;
+mod lifecycle;
+mod marketplace;
+mod native;
+mod plugins;
+mod queue;
+mod settings;
+mod terminal;
+mod tools;
+mod workbench_fs;
+
+fn fixture() -> TestAgenaBuilder {
+    TestAgena::builder(env!("CARGO_BIN_EXE_agena"))
+        .startup_timeout(Duration::from_secs(60))
+        .case_timeout(Duration::from_secs(60))
+        .shutdown_timeout(Duration::from_secs(15))
+        .model_options(ModelOptions {
+            default_timeout: Duration::from_secs(20),
+            ..Default::default()
+        })
+}
+
+async fn workspace_permission(user: &UserSession, write: &str) -> Result<()> {
+    user.client()
+        .set_session_permission(
+            user.id(),
+            serde_json::from_value(json!({
+                "path": {"workspace": {"read": "allow", "write": write}}
+            }))?,
+        )
+        .await?;
+    Ok(())
+}
+
+async fn path_permission(user: &UserSession, path: &std::path::Path, write: &str) -> Result<()> {
+    // Fixture files live in temp storage. Product <tmp>/** allow rules would
+    // otherwise outrank the broad workspace mode. An exact rule exercises the
+    // requested policy through the real evaluator.
+    user.client().set_session_permission(user.id(), serde_json::from_value(json!({
+        "path": {"rules": {(path.to_string_lossy().as_ref()): {"read": "allow", "write": write}}}
+    }))?).await?;
+    Ok(())
+}

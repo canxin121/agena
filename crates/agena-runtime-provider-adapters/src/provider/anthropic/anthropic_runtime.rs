@@ -546,6 +546,7 @@ impl ModelRuntime for AnthropicAdapter {
             let mut stream_usage: Option<AnthropicUsage> = None;
             let mut stream_has_content = false;
             let mut stream_tool_call_seen = false;
+            let mut saw_message_stop = false;
 
             while let Some(event) = events.next().await {
                 let event = event
@@ -775,10 +776,17 @@ impl ModelRuntime for AnthropicAdapter {
                                 Some(merge_anthropic_usage(stream_usage.take(), usage));
                         }
 
+                        saw_message_stop = true;
                         break;
                     }
                     AnthropicSseEvent::Other => {}
                 }
+            }
+
+            if !saw_message_stop {
+                Err::<(), ProviderError>(ProviderError::Provider(
+                    "Anthropic stream ended before message_stop; partial output is not a completed reply".to_owned(),
+                ))?;
             }
 
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {

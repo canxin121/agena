@@ -132,18 +132,21 @@ dependencies = [
  "agena-api-server",
  "agena-application",
  "agena-async",
+ "agena-bundled-plugins",
  "agena-cli",
  "agena-client",
  "agena-domain",
  "agena-failure",
  "agena-git-http",
  "agena-mcp-server",
+ "agena-plugin-sdk",
  "agena-process",
  "agena-runtime",
  "agena-secret-store",
  "agena-storage",
  "agena-storage-layout",
  "agena-storage-sqlite",
+ "agena-testkit",
  "agena-tui",
  "agena-tui-app",
  "agena-tui-platform",
@@ -164,6 +167,7 @@ dependencies = [
  "getrandom 0.4.3",
  "http-body-util",
  "ignore",
+ "jsonschema",
  "jsonwebtoken",
  "libc",
  "mime",
@@ -175,6 +179,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rmcp",
  "rustls",
+ "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1265,6 +1270,7 @@ name = "agena-storage-layout"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "tempfile",
 ]
 
 [[package]]
@@ -1282,6 +1288,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hex",
+ "libsqlite3-sys",
  "log",
  "path-clean",
  "sea-orm",
@@ -1293,6 +1300,39 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-width 0.2.2",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-testkit"
+version = "0.1.0"
+dependencies = [
+ "agena-api",
+ "agena-client",
+ "agena-domain",
+ "agena-failure",
+ "agena-process",
+ "agena-provider-bedrock-streaming",
+ "anyhow",
+ "async-stream",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "futures-core",
+ "futures-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tokio-util",
+ "tower",
  "url",
  "uuid",
 ]

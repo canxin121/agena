@@ -125,7 +125,8 @@ mod ollama_wire;
 pub use ollama_wire::{
     OllamaChatMessage, OllamaChatMessageResponse, OllamaChatRequest, OllamaChatResponse,
     OllamaFunctionCall, OllamaFunctionDefinition, OllamaModelDetails, OllamaOptions,
-    OllamaTagModel, OllamaTagsResponse, OllamaToolCall, OllamaToolDefinition,
+    OllamaRequestFunctionCall, OllamaRequestToolCall, OllamaTagModel, OllamaTagsResponse,
+    OllamaToolCall, OllamaToolDefinition,
 };
 mod ollama_usage;
 pub use ollama_usage::ollama_usage_to_completion;

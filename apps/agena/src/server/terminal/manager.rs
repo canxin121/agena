@@ -236,11 +236,55 @@ fn tmux_kill_session(session_name: &str) -> anyhow::Result<()> {
     if output.status.success() {
         return Ok(());
     }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // A detached/terminated terminal can disappear between the PTY wait
+    // notification and an explicit restart/delete. This is already the
+    // desired postcondition, not a failure that should turn cleanup into HTTP
+    // 500. Keep unexpected tmux errors visible instead of ignoring all 1s.
+    if tmux_target_is_missing(&stderr) {
+        return Ok(());
+    }
     Err(anyhow::anyhow!(
         "tmux could not stop terminal session `{session_name}` (status {}): {}",
         output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
+        stderr.trim()
     ))
+}
+
+fn tmux_target_is_missing(stderr: &str) -> bool {
+    let message = stderr.trim();
+    message.starts_with("can't find session:")
+        || message.starts_with("no server running on ")
+        || (message.starts_with("error connecting to ")
+            && message.ends_with(" (No such file or directory)"))
+}
+
+#[cfg(test)]
+mod tmux_cleanup_contract_tests {
+    use super::tmux_target_is_missing;
+
+    #[test]
+    fn only_explicit_missing_session_diagnostics_are_idempotent() {
+        assert!(tmux_target_is_missing("can't find session: agena-test"));
+        assert!(tmux_target_is_missing(
+            "no server running on /tmp/tmux-test/default"
+        ));
+        assert!(tmux_target_is_missing(
+            "error connecting to /tmp/test-owned-tmux/tmux-1000/default (No such file or directory)"
+        ));
+        assert!(!tmux_target_is_missing(
+            "error connecting to /tmp/test-owned-tmux/tmux-1000/default (Permission denied)"
+        ));
+        for message in [
+            "permission denied",
+            "can't open /tmp/tmux: permission denied",
+            "unknown option",
+            "failed to connect to tmux socket",
+            "server exited unexpectedly",
+        ] {
+            assert!(!tmux_target_is_missing(message), "{message}");
+        }
+    }
 }
 
 async fn load_session_registry_from_store(
@@ -491,6 +535,18 @@ impl TerminalManager {
     }
 
     fn handle_session_exit(&self, session_id: &str, session: &TerminalSession) {
+        // A stopped tmux client may exit *after* the same persisted session
+        // has been restored with a fresh PTY. A stale exit worker must never
+        // remove the successor or its registry entry. Share the restoration
+        // gate with create/stop/delete and check exact Arc identity.
+        let _restore_guard = recover_terminal_mutex(&self.restore_lock, "terminal exit cleanup");
+        let is_current = self
+            .sessions
+            .get(session_id)
+            .is_some_and(|current| std::ptr::eq(current.value().as_ref(), session));
+        if !is_current {
+            return;
+        }
         self.sessions.remove(session_id);
         if session.keep_persisted_entry_after_exit() {
             return;
@@ -806,6 +862,7 @@ impl TerminalManager {
         if sid.is_empty() {
             return Err(TerminalError::NotFound);
         }
+        let _restore_guard = recover_terminal_mutex(&self.restore_lock, "terminal delete");
 
         if let Some((_, session)) = self.sessions.remove(sid) {
             session.kill().map_err(TerminalError::Kill)?;
@@ -830,6 +887,7 @@ impl TerminalManager {
         if sid.is_empty() {
             return Err(TerminalError::NotFound);
         }
+        let _restore_guard = recover_terminal_mutex(&self.restore_lock, "terminal stop");
 
         if let Some((_, session)) = self.sessions.remove(sid) {
             session.stop_runtime().map_err(TerminalError::Kill)?;
@@ -1398,6 +1456,10 @@ pub async fn terminal_stream(
             "type": "connected",
             "runtime": "rust",
             "ptyBackend": "portable-pty",
+            // A client may checkpoint this sequence before sending a command,
+            // then resume from precisely this cursor. Without the sequence
+            // the initial tail can be mistaken for newly produced output.
+            "lastSeq": snapshot_last_seq,
         });
         sse_json(payload, None)
     };

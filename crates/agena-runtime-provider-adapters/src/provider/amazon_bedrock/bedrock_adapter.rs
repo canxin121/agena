@@ -1075,6 +1075,7 @@ impl AmazonBedrockAdapter {
             let mut stream_tool_call_seen = false;
             let mut response_id: Option<String> = None;
             let mut stream_model = initial_model.clone();
+            let mut saw_message_stop = false;
 
             loop {
                 let event = match receiver.next().await {
@@ -1325,10 +1326,17 @@ impl AmazonBedrockAdapter {
                                 Some(merge_bedrock_anthropic_usage(stream_usage.take(), usage));
                         }
 
+                        saw_message_stop = true;
                         break;
                     }
                     BedrockAnthropicStreamEvent::Other => {}
                 }
+            }
+
+            if !saw_message_stop {
+                Err::<(), ProviderError>(ProviderError::Provider(
+                    "Bedrock Anthropic event stream ended before message_stop; partial output is not a completed reply".to_owned(),
+                ))?;
             }
 
             if stream_has_content || stream_finish_reason.is_some() || stream_usage.is_some() {

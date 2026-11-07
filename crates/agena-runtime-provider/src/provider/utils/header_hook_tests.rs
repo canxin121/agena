@@ -51,10 +51,14 @@ async fn header_hooks_cannot_read_or_mutate_provider_credentials() {
     assert_eq!(output["x-client-name"], "agena");
     assert_eq!(output["x-hook-owner"], "session-a");
 
-    let seen = observed.lock().unwrap();
-    assert_eq!(seen.len(), 1);
-    assert_eq!(seen[0].len(), 1);
-    assert_eq!(seen[0]["x-client-name"], "agena");
+    {
+        // End the synchronous mutex guard before the next asynchronous hook
+        // invocation. Holding it across await can block another resolver.
+        let seen = observed.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].len(), 1);
+        assert_eq!(seen[0]["x-client-name"], "agena");
+    }
 
     let rejected = with_request_header_hook(
         Arc::new(HeaderPolicyProbe {

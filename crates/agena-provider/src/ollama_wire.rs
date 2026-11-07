@@ -43,6 +43,23 @@ pub struct OllamaChatRequest {
 pub struct OllamaChatMessage {
     pub role: String,
     pub content: String,
+    /// Prior assistant tool invocations must be replayed as native Ollama
+    /// function-call records. A text marker alone is not a valid tool history.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<OllamaRequestToolCall>,
+}
+
+#[derive(Debug, Serialize)]
+/// Ollama request-side function call, different from the response parser's
+/// optional/partial streaming fields.
+pub struct OllamaRequestToolCall {
+    pub function: OllamaRequestFunctionCall,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OllamaRequestFunctionCall {
+    pub name: String,
+    pub arguments: Value,
 }
 
 #[derive(Debug, Serialize, Default)]

@@ -3,8 +3,8 @@ use agena_domain::*;
 use agena_provider::{
     CompletionFinishReason, CompletionToolCall, CompletionUsage, OllamaChatMessage,
     OllamaChatRequest, OllamaChatResponse, OllamaFunctionDefinition, OllamaOptions,
-    OllamaTagsResponse, OllamaToolCall, OllamaToolDefinition, StreamResumePolicy,
-    ollama_usage_to_completion,
+    OllamaRequestFunctionCall, OllamaRequestToolCall, OllamaTagsResponse, OllamaToolCall,
+    OllamaToolDefinition, StreamResumePolicy, ollama_usage_to_completion,
 };
 use async_trait::async_trait;
 use futures_core::Stream;
@@ -51,10 +51,14 @@ impl OllamaAdapter {
         format!("{}/api/chat", self.base_url)
     }
 
-    fn to_chat_request(&self, request: &CompletionRequest, stream: bool) -> OllamaChatRequest {
-        OllamaChatRequest {
+    fn to_chat_request(
+        &self,
+        request: &CompletionRequest,
+        stream: bool,
+    ) -> Result<OllamaChatRequest, ProviderError> {
+        Ok(OllamaChatRequest {
             model: request.model.to_string(),
-            messages: to_ollama_messages(request),
+            messages: to_ollama_messages(request)?,
             tools: (!request.tool_api_functions.is_empty())
                 .then(|| tools_to_ollama_definitions(&request.tool_api_functions)),
             stream,
@@ -66,7 +70,7 @@ impl OllamaAdapter {
                 top_k: request.top_k,
                 seed: request.seed,
             },
-        }
+        })
     }
 
     fn parse_models(&self, payload: OllamaTagsResponse) -> Vec<Model> {
@@ -205,7 +209,7 @@ impl ModelRuntime for OllamaAdapter {
         let fallback_model = request.model.clone();
         let adapter = self.clone();
         let body_json = utils::prepare_request_with(move || {
-            let body = adapter.to_chat_request(&request, false);
+            let body = adapter.to_chat_request(&request, false)?;
             let body_json = utils::prepare_request_body_sync(&body, &Default::default())?;
             Ok(body_json)
         })
@@ -247,7 +251,7 @@ impl ModelRuntime for OllamaAdapter {
     > {
         let adapter = self.clone();
         let (request, body_json) = utils::prepare_request_with(move || {
-            let body = adapter.to_chat_request(&request, true);
+            let body = adapter.to_chat_request(&request, true)?;
             let body_json = utils::prepare_request_body_sync(&body, &Default::default())?;
             Ok((request, body_json))
         })
@@ -368,18 +372,10 @@ impl ModelRuntime for OllamaAdapter {
                 }
             }
 
-            if !completed && (emitted_content || finish_reason.is_some() || usage.is_some()) {
-                yield CompletionStreamEvent::Completed {
-                    provider_id,
-                    model: model_name,
-                    finish_reason: CompletionFinishReason::normalize_with_tool_calls(
-                        CompletionFinishReason::from_provider(finish_reason.as_deref()),
-                        stream_tool_call_seen,
-                    ),
-                    usage,
-                    provider_metadata: None,
-                    end_turn: None,
-                };
+            if !completed {
+                Err::<(), ProviderError>(ProviderError::Provider(format!(
+                    "Ollama stream ended before done=true (received_content={emitted_content}); partial output is not a completed reply"
+                )))?;
             }
         };
 
@@ -393,7 +389,9 @@ struct ParsedToolCall {
     arguments_json: String,
 }
 
-fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
+fn to_ollama_messages(
+    request: &CompletionRequest,
+) -> Result<Vec<OllamaChatMessage>, ProviderError> {
     let mut messages = Vec::new();
     if let Some(system) = request
         .system
@@ -403,24 +401,76 @@ fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
         messages.push(OllamaChatMessage {
             role: "system".to_owned(),
             content: system.clone(),
+            tool_calls: Vec::new(),
         });
     }
-
     for run in &request.turns {
-        if let Some(content) = message_text(run) {
+        // Ollama requires prior function calls in a native assistant
+        // tool_calls field, followed by distinct tool-role result messages.
+        // A lossy text projection used to hide the actual output and only
+        // preserve placeholder markers, making multi-round tools unusable.
+        let mut plain = String::new();
+        let role = role_name(run.role);
+        for part in wire_message::project(run) {
+            match part {
+                wire_message::WirePart::ToolCall {
+                    function,
+                    arguments_json,
+                    ..
+                } => {
+                    if !plain.trim().is_empty() {
+                        messages.push(OllamaChatMessage {
+                            role: role.to_owned(),
+                            content: std::mem::take(&mut plain),
+                            tool_calls: Vec::new(),
+                        });
+                    }
+                    let arguments = serde_json::from_str(&arguments_json).map_err(|error| {
+                        ProviderError::Provider(format!(
+                            "invalid tool arguments when replaying Ollama assistant history: {error}"
+                        ))
+                    })?;
+                    messages.push(OllamaChatMessage {
+                        role: "assistant".to_owned(),
+                        content: String::new(),
+                        tool_calls: vec![OllamaRequestToolCall {
+                            function: OllamaRequestFunctionCall {
+                                name: function.function_name().to_owned(),
+                                arguments,
+                            },
+                        }],
+                    });
+                }
+                wire_message::WirePart::ToolResult {
+                    tool_call_id,
+                    output_json,
+                    ..
+                } => {
+                    if !plain.trim().is_empty() {
+                        messages.push(OllamaChatMessage {
+                            role: role.to_owned(),
+                            content: std::mem::take(&mut plain),
+                            tool_calls: Vec::new(),
+                        });
+                    }
+                    messages.push(OllamaChatMessage {
+                        role: "tool".to_owned(),
+                        content: format!("tool_call_id={tool_call_id}\n{output_json}"),
+                        tool_calls: Vec::new(),
+                    });
+                }
+                other => plain.push_str(&other.as_text_lossy()),
+            }
+        }
+        if !plain.trim().is_empty() {
             messages.push(OllamaChatMessage {
-                role: role_name(run.role).to_owned(),
-                content,
+                role: role.to_owned(),
+                content: plain,
+                tool_calls: Vec::new(),
             });
         }
     }
-    messages
-}
-
-fn message_text(run: &agena_provider::CompletionInputRun) -> Option<String> {
-    let text = wire_message::project_text_lossy(run);
-    let trimmed = text.trim();
-    (!trimmed.is_empty()).then_some(text)
+    Ok(messages)
 }
 
 fn role_name(role: Role) -> &'static str {

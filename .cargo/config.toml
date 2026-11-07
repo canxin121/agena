@@ -13,3 +13,15 @@
 # budget instead of crashing with `has overflowed its stack`.
 [env]
 RUST_MIN_STACK = "8388608"
+
+[alias]
+# Ordinary libtest targets; bound concurrent product processes on developer/CI hosts.
+test-bundled = "test -p agena --test bundled_plugins -- --test-threads=2"
+test-system = "test -p agena --test system -- --test-threads=2"
+test-control = "test -p agena --test system scenarios::control -- --test-threads=2"
+test-clock = "test -p agena --test system scenarios::clock -- --test-threads=2"
+test-faults = "test -p agena --test system -- --test-threads=2 scenarios::control scenarios::fault_lifecycle"
+test-native = "test -p agena --test system scenarios::native -- --test-threads=2"
+# Exercise every Rust library's retained contract tests without re-running the
+# longer product system and bundled integration suites.
+test-libs = "test --workspace --lib --locked -- --test-threads=2"

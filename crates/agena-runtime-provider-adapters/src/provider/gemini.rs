@@ -495,17 +495,10 @@ impl ModelRuntime for GeminiAdapter {
                 }
             }
 
-            if !completed_emitted
-                && (saw_content || fallback_usage.is_some() || fallback_provider_metadata.is_some())
-            {
-                yield CompletionStreamEvent::Completed {
-                    provider_id: provider_id.clone(),
-                    model: model_name.clone(),
-                    finish_reason: tool_call_seen.then_some(CompletionFinishReason::ToolCalls),
-                    usage: fallback_usage,
-                    provider_metadata: fallback_provider_metadata,
-                    end_turn: None,
-                };
+            if !completed_emitted {
+                Err::<(), ProviderError>(ProviderError::Provider(format!(
+                    "Gemini stream ended before a candidate finishReason (received_content={saw_content}); partial output is not a completed reply"
+                )))?;
             }
         };
 

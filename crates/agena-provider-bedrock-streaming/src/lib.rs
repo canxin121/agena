@@ -84,19 +84,43 @@ impl UnmarshallMessage for BedrockAnthropicStreamUnmarshaller {
         &self,
         message: &EventStreamMessage,
     ) -> Result<UnmarshalledMessage<Self::Output, Self::Error>, EventStreamError> {
-        let event_type = message
-            .headers()
-            .iter()
-            .find(|header| header.name().as_str() == ":event-type")
-            .and_then(|header| match header.value() {
-                HeaderValue::String(value) => Some(value.as_str()),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                EventStreamError::unmarshalling(
-                    "amazon-bedrock stream frame missing :event-type header",
-                )
-            })?;
+        let header = |name: &str| {
+            message
+                .headers()
+                .iter()
+                .find(|header| header.name().as_str() == name)
+                .and_then(|header| match header.value() {
+                    HeaderValue::String(value) => Some(value.as_str()),
+                    _ => None,
+                })
+        };
+        let message_type = header(":message-type").unwrap_or("event");
+        if message_type == "error" {
+            let code = header(":error-code").unwrap_or("unknown");
+            let text = header(":error-message").unwrap_or(code);
+            let mut error = BedrockAnthropicStreamServiceError::from_payload(
+                code,
+                serde_json::json!({"message": text}),
+            );
+            // An explicit header value is authoritative, including the empty
+            // string; modeled JSON payload fallback must not rewrite it.
+            error.message = text.to_owned();
+            return Ok(UnmarshalledMessage::Error(error));
+        }
+        let type_header = match message_type {
+            "event" => ":event-type",
+            "exception" => ":exception-type",
+            other => {
+                return Err(EventStreamError::unmarshalling(format!(
+                    "amazon-bedrock stream returned unknown :message-type {other:?}"
+                )));
+            }
+        };
+        let event_type = header(type_header).ok_or_else(|| {
+            EventStreamError::unmarshalling(format!(
+                "amazon-bedrock stream frame missing {type_header} header"
+            ))
+        })?;
 
         let payload = if message.payload().is_empty() {
             Value::Object(serde_json::Map::new())
@@ -107,6 +131,15 @@ impl UnmarshallMessage for BedrockAnthropicStreamUnmarshaller {
                 ))
             })?
         };
+
+        // Smithy modeled errors use :exception-type, not :event-type.
+        // Preserve unknown service errors as errors instead of trying to
+        // decode them as an Anthropic base64 chunk.
+        if message_type == "exception" {
+            return Ok(UnmarshalledMessage::Error(
+                BedrockAnthropicStreamServiceError::from_payload(event_type, payload),
+            ));
+        }
 
         match event_type {
             "chunk" => {
@@ -258,4 +291,116 @@ pub fn decode_response(
             yield Err(BedrockAnthropicStreamDecodeError::Decode("unexpected end of Bedrock event stream".to_owned()));
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_smithy_eventstream::frame::write_message_to;
+    use aws_smithy_types::event_stream::Header;
+    use serde_json::json;
+
+    fn frame(message_type: &str, type_header: &str, name: &str, payload: Value) -> Bytes {
+        let message = EventStreamMessage::new(serde_json::to_vec(&payload).unwrap())
+            .add_header(Header::new(
+                ":message-type",
+                HeaderValue::String(message_type.to_owned().into()),
+            ))
+            .add_header(Header::new(
+                type_header.to_owned(),
+                HeaderValue::String(name.to_owned().into()),
+            ));
+        let mut bytes = Vec::new();
+        write_message_to(&message, &mut bytes).unwrap();
+        Bytes::from(bytes)
+    }
+
+    #[test]
+    fn smithy_exception_type_headers_preserve_service_errors_and_retryability() {
+        for (kind, retryable) in [
+            ("throttlingException", true),
+            ("modelStreamErrorException", true),
+            ("modelTimeoutException", true),
+            ("validationException", false),
+            ("futureServiceException", false),
+        ] {
+            let bytes = frame(
+                "exception",
+                ":exception-type",
+                kind,
+                json!({"message":"specific provider failure"}),
+            );
+            let mut state = FrameBuffer::default();
+            let mut results = state.feed(Some(bytes));
+            assert_eq!(results.len(), 1);
+            let Err(BedrockAnthropicStreamDecodeError::Service(error)) = results.remove(0) else {
+                panic!("exception must retain service failure rather than become a decode error");
+            };
+            assert_eq!(error.event_type, kind);
+            assert_eq!(error.message, "specific provider failure");
+            assert_eq!(error.retryable, retryable);
+            assert!(state.ended);
+        }
+    }
+
+    #[test]
+    fn smithy_frames_decode_across_every_byte_and_reject_corrupt_crcs() {
+        let event = json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"中文"}});
+        let bytes = frame(
+            "event",
+            ":event-type",
+            "chunk",
+            json!({"bytes":BASE64_STANDARD.encode(serde_json::to_vec(&event).unwrap())}),
+        );
+        let mut state = FrameBuffer::default();
+        let mut results = Vec::new();
+        for byte in bytes.iter() {
+            results.extend(state.feed(Some(Bytes::from(vec![*byte]))));
+        }
+        assert_eq!(results.len(), 1);
+        assert_eq!(results.remove(0).unwrap(), event);
+        assert!(state.pending.is_empty());
+        let mut corrupt = bytes.to_vec();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert!(matches!(
+            FrameBuffer::default().feed(Some(corrupt.into())).remove(0),
+            Err(BedrockAnthropicStreamDecodeError::Decode(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_exception_headers_are_not_treated_as_successful_chunks() {
+        let bytes = frame("exception", ":event-type", "chunk", json!({"bytes":"e30="}));
+        let error = FrameBuffer::default()
+            .feed(Some(bytes))
+            .remove(0)
+            .unwrap_err();
+        assert!(error.to_string().contains(":exception-type"));
+    }
+
+    #[test]
+    fn unmodeled_errors_read_their_header_message() {
+        let message = EventStreamMessage::new(Bytes::new())
+            .add_header(Header::new(
+                ":message-type",
+                HeaderValue::String("error".into()),
+            ))
+            .add_header(Header::new(
+                ":error-code",
+                HeaderValue::String("UnmodeledError".into()),
+            ))
+            .add_header(Header::new(
+                ":error-message",
+                HeaderValue::String("service unavailable".into()),
+            ));
+        let UnmarshalledMessage::Error(error) = BedrockAnthropicStreamUnmarshaller
+            .unmarshall(&message)
+            .unwrap()
+        else {
+            panic!("expected unmodeled service error");
+        };
+        assert_eq!(error.message, "service unavailable");
+        assert_eq!(error.event_type, "UnmodeledError");
+    }
 }

@@ -562,6 +562,12 @@ pub struct HostCallbackContext {
     /// a token outside the originating call is rejected by the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority_token: Option<String>,
+    /// Opaque HTTP callback generation selected by the transport. This is only
+    /// a routing selector for a registered binding; it grants no authority and
+    /// must never contain a callback URL or credential. HTTP drivers overwrite
+    /// it from the validated request header at every independent boundary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_binding_id: Option<String>,
 }
 
 tokio::task_local! {
@@ -593,6 +599,9 @@ where
     }
     if let Some(authority_token) = patch.authority_token {
         current.authority_token = Some(authority_token);
+    }
+    if let Some(http_binding_id) = patch.http_binding_id {
+        current.http_binding_id = Some(http_binding_id);
     }
     run_in_isolated_host_callback_context(current, fut).await
 }

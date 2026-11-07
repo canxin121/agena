@@ -76,6 +76,24 @@ pub trait PluginTransport: Send + Sync + 'static {
         owner.is_accepting()
     }
 
+    /// Create a successor binding without invalidating this generation.
+    /// The returned transport owns its own shutdown boundary even when physical
+    /// IO is shared. `None` opts into the historical destructive handoff below;
+    /// a supported fork that fails must return an error instead of falling back.
+    async fn fork_host(
+        &self,
+        _host: Arc<crate::host::HostHandle>,
+        _scope: Arc<crate::effect_scope::PluginEffectScope>,
+        _previous_scope: Arc<crate::effect_scope::PluginEffectScope>,
+        _initialization: initialization::PluginInitialization,
+    ) -> Result<Option<Arc<dyn PluginTransport>>, TransportError> {
+        Ok(None)
+    }
+
+    /// Start owned cleanup for an unfinished fork synchronously. Awaited
+    /// shutdown still joins the same operation and reports its outcome.
+    fn abandon_host_fork(&self) {}
+
     /// Transfer a running transport and its future restart inputs together.
     /// False means that no handoff started and the caller must prepare a new
     /// transport. This does not invoke init again in the current process.

@@ -9,6 +9,8 @@ struct PermissionHost {
     mcp_authorizations: std::sync::atomic::AtomicUsize,
     mcp_starts: std::sync::atomic::AtomicUsize,
     allow_mcp: std::sync::atomic::AtomicBool,
+    allowed_query_session: Option<i64>,
+    query_contexts: std::sync::Mutex<Vec<HostCallbackContext>>,
 }
 
 #[async_trait::async_trait]
@@ -36,6 +38,14 @@ impl HostClient for PermissionHost {
     ) -> crate::sdk::Result<PermissionQuery> {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let context = host_api::current_host_callback_context().unwrap_or_default();
+        let allowed = self
+            .allowed_query_session
+            .is_some_and(|session| context.session_id == Some(session));
+        self.query_contexts.lock().unwrap().push(context);
+        if allowed {
+            return Ok(PermissionQuery::Allow {});
+        }
         Ok(PermissionQuery::Ask {
             reason: "review required".into(),
         })
@@ -100,6 +110,140 @@ impl HostClient for PermissionHost {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
+}
+
+#[derive(Clone, Default)]
+struct MessagesPermissionProbe {
+    host: Arc<std::sync::OnceLock<Arc<dyn HostClient>>>,
+}
+
+#[crate::sdk::agena_plugin(
+    namespace = "test",
+    name = "messages-permissions",
+    version = "test",
+    summary = "Recall context only when the current session grants read access."
+)]
+impl MessagesPermissionProbe {
+    #[hook(
+        init,
+        summary = "Bind permission queries",
+        help = "Keep the scoped host supplied by the real dispatcher."
+    )]
+    async fn init(
+        &self,
+        _context: crate::sdk::InitContext,
+        host: Arc<dyn HostClient>,
+    ) -> crate::sdk::Result<crate::sdk::InitOutcome> {
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::internal("permission probe initialized twice"))?;
+        Ok(crate::sdk::InitOutcome::ack(crate::sdk::Plugin::manifest(
+            self,
+        )))
+    }
+
+    #[hook(chat.messages, summary = "Recall permitted context", help = "Query path permission through the real callback authority before adding context.")]
+    async fn messages(
+        &self,
+        input: crate::sdk::ChatMessagesTransformInput,
+    ) -> crate::sdk::Result<Option<crate::sdk::ChatMessagesTransformPatch>> {
+        let allowed = self
+            .host
+            .get()
+            .expect("initialized permission host")
+            .check_path_permission(PathPermissionQuery::read("memory/record.md"))
+            .await?
+            .is_allowed();
+        if !allowed {
+            return Ok(None);
+        }
+        let mut messages = input.messages;
+        messages.insert(
+            0,
+            crate::sdk::ChatMessage::system("permitted saved context"),
+        );
+        Ok(Some(crate::sdk::ChatMessagesTransformPatch {
+            messages: Some(messages),
+        }))
+    }
+}
+
+#[tokio::test]
+async fn chat_messages_permission_queries_use_input_session_and_workspace_without_tool_authority() {
+    let inner = Arc::new(PermissionHost {
+        allowed_query_session: Some(41),
+        ..Default::default()
+    });
+    let key: PluginKey = "test.messages-permissions".parse().unwrap();
+    let mut config = crate::config::PluginsConfig::default();
+    config
+        .list
+        .insert(key.to_string(), ConfiguredPlugin::static_default());
+    let host = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            key.clone(),
+            MessagesPermissionProbe::default(),
+        )],
+        config,
+        workspace_root: "/permission-tests".into(),
+        agena_version: "test".into(),
+        callback_base_url: None,
+        host_client: Some(inner.clone()),
+        previous: None,
+        previous_plugins: Default::default(),
+    })
+    .await
+    .unwrap();
+
+    for (session_id, workspace_root, expected_messages) in [
+        (41, Some("/session-41"), 2),
+        (42, Some("/session-42"), 1),
+        (41, None, 2),
+    ] {
+        let transformed = host_api::run_in_isolated_host_callback_context(
+            HostCallbackContext {
+                session_id: Some(999),
+                call_id: Some(777),
+                tool_name: Some("test.unrelated_tool".into()),
+                workspace_root: Some("/unrelated-session".into()),
+                ..Default::default()
+            },
+            host.dispatch_chat_messages_transform(crate::sdk::ChatMessagesTransformInput {
+                session_id,
+                workspace_root: workspace_root.map(str::to_owned),
+                messages: vec![crate::sdk::ChatMessage::user("recall saved context")],
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(transformed.messages.len(), expected_messages);
+        if expected_messages == 2 {
+            assert_eq!(
+                transformed.messages[0].text(),
+                Some("permitted saved context")
+            );
+        }
+    }
+
+    let contexts = inner.query_contexts.lock().unwrap().clone();
+    assert_eq!(contexts.len(), 3);
+    assert_eq!(contexts[0].session_id, Some(41));
+    assert_eq!(contexts[1].session_id, Some(42));
+    assert_eq!(contexts[2].session_id, Some(41));
+    assert_eq!(contexts[0].workspace_root.as_deref(), Some("/session-41"));
+    assert_eq!(contexts[1].workspace_root.as_deref(), Some("/session-42"));
+    // Legacy callers that omit the workspace must not inherit unrelated
+    // ambient workspace authority from the thread running the hook.
+    assert_eq!(contexts[2].workspace_root, None);
+    for context in contexts {
+        assert_eq!(
+            context.plugin_id.as_deref(),
+            Some("test.messages-permissions")
+        );
+        assert_eq!(context.call_id, None);
+        assert_eq!(context.tool_name, None);
+    }
+    host.shutdown_report().await.into_result().unwrap();
 }
 
 fn context() -> HostCallbackContext {

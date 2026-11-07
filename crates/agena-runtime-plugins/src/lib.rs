@@ -11,6 +11,7 @@
 pub mod plugin_config;
 pub mod plugin_runtime_service;
 pub mod plugin_shutdown;
+pub use plugin_shutdown::PluginShutdownCoordinator;
 pub mod plugin_slot;
 pub mod plugins;
 

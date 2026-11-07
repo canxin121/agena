@@ -11,9 +11,9 @@ use crate::sdk::drivers::http::{HttpCallbackBinding, HttpCallbackRebind};
 
 #[derive(Clone)]
 pub(super) struct HttpBinding {
-    host: Weak<HostHandle>,
-    scope: Arc<PluginEffectScope>,
-    callback: HttpCallbackBinding,
+    pub(super) host: Weak<HostHandle>,
+    pub(super) scope: Arc<PluginEffectScope>,
+    pub(super) callback: HttpCallbackBinding,
     pub(super) initialized: bool,
 }
 
@@ -55,7 +55,7 @@ impl Drop for HandoffGuard<'_> {
     }
 }
 
-async fn destination(
+pub(super) async fn destination(
     host: &Arc<HostHandle>,
     scope: &Arc<PluginEffectScope>,
 ) -> Result<HttpCallbackBinding, TransportError> {
@@ -89,7 +89,7 @@ impl HttpTransport {
     }
 
     pub(super) fn close_local(&self, message: &str) {
-        self.shutdown.cancel();
+        self.local_shutdown.cancel();
         if let Some(binding) = self.binding().as_ref() {
             binding.scope.stop_admission();
         }
@@ -106,6 +106,7 @@ impl HttpTransport {
         let mut binding = self.binding();
         if binding.is_some()
             || self.shutdown.is_cancelled()
+            || self.local_shutdown.is_cancelled()
             || !host.is_current_effect_scope(scope.plugin_id(), &scope)
             || !scope.is_accepting()
         {
@@ -128,6 +129,7 @@ impl HttpTransport {
         let binding = self.binding().clone()?;
         (binding.initialized
             && !self.shutdown.is_cancelled()
+            && !self.local_shutdown.is_cancelled()
             && owner.is_accepting()
             && Arc::ptr_eq(owner, &binding.scope)
             && binding
@@ -143,6 +145,11 @@ impl HttpTransport {
         context: Option<crate::sdk::host_api::HostCallbackContext>,
         future: impl std::future::Future<Output = Result<T, TransportError>>,
     ) -> Result<T, TransportError> {
+        if self.local_shutdown.is_cancelled() {
+            return Err(TransportError::disconnected(
+                "HTTP plugin binding has retired",
+            ));
+        }
         if matches!(
             method,
             method::META_MANIFEST | method::META_PING | method::META_SHUTDOWN
@@ -204,6 +211,18 @@ impl HttpTransport {
         previous_scope: Arc<PluginEffectScope>,
     ) -> Result<bool, TransportError> {
         let _handoff = self.handoff.lock().await;
+        if self
+            .owners
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .active
+            .len()
+            != 1
+        {
+            return Err(TransportError::disconnected(
+                "destructive HTTP handoff cannot replace shared snapshot bindings",
+            ));
+        }
         let Some(previous) = self.reusable_binding(&previous_scope) else {
             return Err(TransportError::disconnected(
                 "HTTP handoff belongs to a stopped or stale owner",

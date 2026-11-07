@@ -323,10 +323,18 @@ impl LoadedPlugin {
     }
 
     pub fn rebind_effect_scope(&self, effect_scope: Arc<PluginEffectScope>) -> Self {
+        self.rebind_transport(effect_scope, Arc::clone(&self.transport))
+    }
+
+    pub fn rebind_transport(
+        &self,
+        effect_scope: Arc<PluginEffectScope>,
+        transport: Arc<dyn PluginTransport>,
+    ) -> Self {
         Self::new_with_scope(
             self.kind,
             self.configured_plugin.clone(),
-            Arc::clone(&self.transport),
+            transport,
             effect_scope,
             self.manifest.clone(),
             self.trust_level.clone(),
@@ -523,6 +531,48 @@ pub struct ToolInvokeStream {
     pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd, PluginError>>,
 }
 
+/// One transport or effect-disposal failure observed during shutdown.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PluginShutdownFailure {
+    pub plugin_id: String,
+    pub stage: String,
+    pub message: String,
+}
+
+/// Cached outcome of closing every transport and generation-owned effect.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PluginShutdownReport {
+    pub failures: Vec<PluginShutdownFailure>,
+}
+
+impl PluginShutdownReport {
+    pub fn is_success(&self) -> bool {
+        self.failures.is_empty()
+    }
+
+    pub fn into_result(self) -> Result<(), Self> {
+        if self.is_success() { Ok(()) } else { Err(self) }
+    }
+}
+
+impl std::fmt::Display for PluginShutdownReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, failure) in self.failures.iter().enumerate() {
+            if index != 0 {
+                f.write_str("; ")?;
+            }
+            write!(
+                f,
+                "{} [{}]: {}",
+                failure.plugin_id, failure.stage, failure.message
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for PluginShutdownReport {}
+
 /// Result-bearing asynchronous facade for plugin hooks and tool calls.
 pub struct PluginHost {
     plugins: Vec<Arc<LoadedPlugin>>,
@@ -550,7 +600,10 @@ pub struct PluginHost {
     _host_handle: Arc<HostHandle>,
     /// Plugin ids whose transports we transferred to a successor host;
     /// `shutdown()` skips those so we don't kill what the new host is using.
-    transferred_to_successor: tokio::sync::Mutex<std::collections::HashSet<PluginKey>>,
+    transferred_to_successor: Arc<tokio::sync::Mutex<std::collections::HashSet<PluginKey>>>,
+    /// One owned shutdown operation; cancelling a waiter never cancels cleanup.
+    shutdown_result:
+        std::sync::Mutex<Option<tokio::sync::watch::Receiver<Option<PluginShutdownReport>>>>,
     /// Observed hook runs awaiting recording by the session runtime. Every
     /// dispatch pushes one record per plugin invocation; session operations
     /// drain the queue and attribute runs by `session_id`.
@@ -575,6 +628,7 @@ fn tool_hook_context(
                 .unwrap_or_else(|| tool_name.to_string()),
         ),
         authority_token: None,
+        http_binding_id: None,
     }
 }
 

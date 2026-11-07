@@ -22,6 +22,8 @@ use crate::rpc::{
 
 const MAX_CALLBACK_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
+mod bindings;
+pub use bindings::{BINDING_HEADER, HttpCallbackFork, HttpCallbackRetire, HttpCallbackRetired};
 mod host_proxy;
 mod instance;
 pub use instance::{
@@ -86,7 +88,7 @@ impl<P: Plugin> HttpDriverState<P> {
 
 struct HttpCallbackHostClient {
     client: reqwest::Client,
-    binding: std::sync::RwLock<HttpCallbackBinding>,
+    bindings: Arc<bindings::CallbackBindings>,
     next_id: AtomicI64,
 }
 
@@ -136,20 +138,16 @@ pub struct HttpCallbackRebind {
 }
 
 impl HttpCallbackHostClient {
-    fn from_init_context(ctx: &InitContext) -> crate::error::Result<Option<Self>> {
-        let binding = HttpCallbackBinding {
-            url: ctx.host_callback_url.clone(),
-            token: ctx.host_callback_token.clone(),
-        };
-        binding.validate()?;
-        if binding.url.is_none() {
-            return Ok(None);
-        }
-        Self::from_binding(binding).map(Some)
+    #[cfg(test)]
+    fn from_binding(binding: HttpCallbackBinding) -> crate::Result<Self> {
+        Self::from_bindings(Arc::new(bindings::CallbackBindings::new(
+            None,
+            binding,
+            tokio_util::sync::CancellationToken::new(),
+        )?))
     }
 
-    fn from_binding(binding: HttpCallbackBinding) -> crate::Result<Self> {
-        binding.validate()?;
+    fn from_bindings(bindings: Arc<bindings::CallbackBindings>) -> crate::Result<Self> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(60))
@@ -159,7 +157,7 @@ impl HttpCallbackHostClient {
             })?;
         Ok(Self {
             client,
-            binding: std::sync::RwLock::new(binding),
+            bindings,
             next_id: AtomicI64::new(1),
         })
     }
@@ -169,80 +167,84 @@ impl HttpCallbackHostClient {
         method_name: &str,
         params: serde_json::Value,
     ) -> crate::error::Result<T> {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let req = Request {
-            jsonrpc: JsonRpcVersion,
-            id: RequestId::Num(id),
-            method: method_name.to_string(),
-            params: Some(params),
-            context: None,
-        };
-        let binding = self
-            .binding
-            .read()
-            .map_err(|_| PluginError::internal("HTTP callback binding lock is poisoned"))?
-            .clone();
-        let url = binding.url.ok_or_else(|| {
-            PluginError::from_kind(
-                PluginErrorKind::HostUnavailable,
-                "HTTP host callbacks are disabled",
-            )
-        })?;
-        let mut builder = self.client.post(url).json(&req);
-        if matches!(
-            method_name,
-            method::HOST_PERMISSION_REQUIRE_PATH | method::HOST_PERMISSION_REQUIRE_NETWORK
-        ) {
-            builder = builder.timeout(Duration::from_secs(86_400));
-        }
-        if let Some(token) = binding.token {
-            builder = builder.bearer_auth(token);
-        }
-        let mut resp = builder.send().await.map_err(|error| {
-            PluginError::from_kind(
-                PluginErrorKind::Disconnected,
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    format!("failed to send HTTP host callback `{method_name}`"),
-                    &error,
-                ),
-            )
-            .with_hook(method_name)
-        })?;
-        let status = resp.status();
-        let mut body = Vec::new();
-        while let Some(chunk) = resp.chunk().await.map_err(|error| {
-            PluginError::from_kind(
-                PluginErrorKind::Disconnected,
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    format!("failed to read HTTP host callback `{method_name}` response body"),
-                    &error,
-                ),
-            )
-            .with_hook(method_name)
-        })? {
-            if body.len().saturating_add(chunk.len()) > MAX_CALLBACK_RESPONSE_BYTES {
-                return Err(PluginError::from_kind(
+        // Stream forwarders carry an explicit captured context, while ordinary
+        // HostClient methods attach their current task-local context here.
+        let binding_id = params
+            .get("context")
+            .and_then(|context| context.get("http_binding_id"))
+            .and_then(serde_json::Value::as_str);
+        let lease = self.bindings.callback(binding_id).await?;
+        let binding = lease.destination.clone();
+        let request = async {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let req = Request {
+                jsonrpc: JsonRpcVersion,
+                id: RequestId::Num(id),
+                method: method_name.to_string(),
+                params: Some(params),
+                context: None,
+            };
+            let url = binding.url.ok_or_else(|| {
+                PluginError::from_kind(
+                    PluginErrorKind::HostUnavailable,
+                    "HTTP host callbacks are disabled",
+                )
+            })?;
+            let mut builder = self.client.post(url).json(&req);
+            if matches!(
+                method_name,
+                method::HOST_PERMISSION_REQUIRE_PATH | method::HOST_PERMISSION_REQUIRE_NETWORK
+            ) {
+                builder = builder.timeout(Duration::from_secs(86_400));
+            }
+            if let Some(token) = binding.token {
+                builder = builder.bearer_auth(token);
+            }
+            let mut resp = builder.send().await.map_err(|error| {
+                PluginError::from_kind(
                     PluginErrorKind::Disconnected,
-                    format_args!(
-                        "host callback response exceeds the {} MiB limit",
-                        MAX_CALLBACK_RESPONSE_BYTES / 1024 / 1024
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        format!("failed to send HTTP host callback `{method_name}`"),
+                        &error,
                     ),
                 )
-                .with_hook(method_name));
+                .with_hook(method_name)
+            })?;
+            let status = resp.status();
+            let mut body = Vec::new();
+            while let Some(chunk) = resp.chunk().await.map_err(|error| {
+                PluginError::from_kind(
+                    PluginErrorKind::Disconnected,
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        format!("failed to read HTTP host callback `{method_name}` response body"),
+                        &error,
+                    ),
+                )
+                .with_hook(method_name)
+            })? {
+                if body.len().saturating_add(chunk.len()) > MAX_CALLBACK_RESPONSE_BYTES {
+                    return Err(PluginError::from_kind(
+                        PluginErrorKind::Disconnected,
+                        format_args!(
+                            "host callback response exceeds the {} MiB limit",
+                            MAX_CALLBACK_RESPONSE_BYTES / 1024 / 1024
+                        ),
+                    )
+                    .with_hook(method_name));
+                }
+                body.extend_from_slice(&chunk);
             }
-            body.extend_from_slice(&chunk);
-        }
-        let body = String::from_utf8(body).map_err(|error| {
-            PluginError::from_kind(
-                PluginErrorKind::Disconnected,
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    format!("HTTP host callback `{method_name}` returned a non-UTF-8 body"),
-                    &error,
-                ),
-            )
-            .with_hook(method_name)
-        })?;
-        let resp: Response = serde_json::from_str(&body).map_err(|error| {
+            let body = String::from_utf8(body).map_err(|error| {
+                PluginError::from_kind(
+                    PluginErrorKind::Disconnected,
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        format!("HTTP host callback `{method_name}` returned a non-UTF-8 body"),
+                        &error,
+                    ),
+                )
+                .with_hook(method_name)
+            })?;
+            let resp: Response = serde_json::from_str(&body).map_err(|error| {
             PluginError::from_kind(
                 PluginErrorKind::Disconnected,
                 agena_failure::diagnostic::format_error_chain_with_context(
@@ -254,18 +256,22 @@ impl HttpCallbackHostClient {
             )
             .with_hook(method_name)
         })?;
-        if resp.id != RequestId::Num(id) {
-            return Err(PluginError::from_kind(
-                PluginErrorKind::Disconnected,
-                "HTTP host callback response ID does not match its request",
-            )
-            .with_hook(method_name));
-        }
-        match resp.payload {
-            ResponsePayload::Ok { result } => serde_json::from_value(result)
-                .map_err(|error| PluginError::invalid_params_error(&error)),
-            ResponsePayload::Err { error } => Err(PluginError::from_rpc_error(error, method_name)),
-        }
+            if resp.id != RequestId::Num(id) {
+                return Err(PluginError::from_kind(
+                    PluginErrorKind::Disconnected,
+                    "HTTP host callback response ID does not match its request",
+                )
+                .with_hook(method_name));
+            }
+            match resp.payload {
+                ResponsePayload::Ok { result } => serde_json::from_value(result)
+                    .map_err(|error| PluginError::invalid_params_error(&error)),
+                ResponsePayload::Err { error } => {
+                    Err(PluginError::from_rpc_error(error, method_name))
+                }
+            }
+        };
+        lease.run(request).await
     }
 
     async fn fire(&self, method_name: &str, params: serde_json::Value) -> crate::error::Result<()> {
@@ -363,7 +369,14 @@ async fn handle_rpc<P: Plugin>(
 ) -> Json<Response> {
     let id = req.id.clone();
     let params = req.params.unwrap_or(serde_json::Value::Null);
-    let callback_context = req.context;
+    let binding_id = match bindings::header(&headers) {
+        Ok(binding_id) => binding_id,
+        Err(error) => return Json(error_response(id, error)),
+    };
+    let mut callback_context = req.context.unwrap_or_default();
+    // Request bodies cannot select a different callback generation. Only the
+    // independently validated header is authoritative, including its absence.
+    callback_context.http_binding_id = binding_id;
     if req.method == method::CANCEL_REQUEST {
         let result = serde_json::from_value::<crate::rpc::CancelRequest>(params)
             .map_err(PluginError::from)
@@ -381,6 +394,8 @@ async fn handle_rpc<P: Plugin>(
         method::META_INIT
             | method::META_SHUTDOWN
             | method::META_HOST_REBIND
+            | method::META_HOST_FORK
+            | method::META_HOST_RETIRE
             | method::META_HTTP_STATE
     ) {
         return Json(rpc_response(
@@ -391,7 +406,7 @@ async fn handle_rpc<P: Plugin>(
                     &headers,
                     &req.method,
                     params,
-                    callback_context,
+                    Some(callback_context),
                 ))
                 .await,
         ));
@@ -442,7 +457,7 @@ async fn handle_rpc<P: Plugin>(
             call_id: Some(input.call_id),
             workspace_root: Some(input.workspace_root.clone()),
             tool_name: Some(input.tool_name.clone()),
-            ..callback_context.unwrap_or_default()
+            ..callback_context
         };
         let mut handle = crate::host_api::run_in_isolated_host_callback_context(
             callback_context.clone(),
@@ -617,7 +632,7 @@ async fn handle_rpc<P: Plugin>(
     let result = admission
         .run(
             request_scope.run(crate::host_api::run_in_isolated_host_callback_context(
-                callback_context.unwrap_or_default(),
+                callback_context,
                 dispatch,
             )),
         )
@@ -653,34 +668,46 @@ async fn rebind_callback_client<P: Plugin>(
     // This control operation needs no ordinary dispatch permit or plugin code.
     // A long-running plugin stream must not starve its own callback handoff.
     let mut current = instance.callback_client.write().await;
-    if let Some(client) = current.as_ref() {
-        let mut binding = client
-            .binding
-            .write()
-            .map_err(|_| PluginError::internal("HTTP callback binding lock is poisoned"))?;
-        if *binding != rebind.expected {
-            return Err(PluginError::from_kind(
-                PluginErrorKind::PolicyDenied,
-                "HTTP callback binding changed before handoff",
-            ));
-        }
-        *binding = rebind.next.clone();
+    let prepared = if current.is_none() && rebind.next.url.is_some() {
+        Some(Arc::new(HttpCallbackHostClient::from_bindings(
+            instance.bindings.clone(),
+        )?))
     } else {
-        if rebind.expected.url.is_some() || rebind.expected.token.is_some() {
-            return Err(PluginError::from_kind(
-                PluginErrorKind::PolicyDenied,
-                "HTTP callback binding changed before handoff",
-            ));
-        }
-        if rebind.next.url.is_some() {
-            let client = Arc::new(HttpCallbackHostClient::from_binding(rebind.next.clone())?);
-            instance.host_proxy.replace(client.clone());
-            *current = Some(client);
-        }
+        None
+    };
+    instance
+        .bindings
+        .rebind(&rebind.expected, rebind.next.clone())?;
+    if let Some(client) = prepared {
+        instance.host_proxy.replace(client.clone());
+        *current = Some(client);
     }
     if rebind.next.url.is_none() {
         instance.host_proxy.replace(state.fallback_host.clone());
         *current = None;
+    }
+    Ok(())
+}
+
+async fn fork_callback_client<P: Plugin>(
+    instance: &instance::Instance<P>,
+    fork: HttpCallbackFork,
+) -> crate::Result<()> {
+    // Prepare any fallible client construction before publishing the new slot.
+    // Existing saved HostClient Arcs remain valid because the proxy and client
+    // select from the same registry on each explicitly bound call.
+    let mut current = instance.callback_client.write().await;
+    let prepared = if current.is_none() && fork.next.url.is_some() {
+        Some(Arc::new(HttpCallbackHostClient::from_bindings(
+            instance.bindings.clone(),
+        )?))
+    } else {
+        None
+    };
+    instance.bindings.fork(fork)?;
+    if let Some(client) = prepared {
+        instance.host_proxy.replace(client.clone());
+        *current = Some(client);
     }
     Ok(())
 }

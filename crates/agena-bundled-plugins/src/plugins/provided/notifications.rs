@@ -3,14 +3,16 @@
 //! Canonical kernel execution and interaction facts produce persisted
 //! `host.notify` intents, shared by the terminal and browser delivery adapters.
 //! The observer lives with the plugin, independently of connected pages, and
-//! stops when the plugin shuts down. Lifecycle hooks publish title activity;
-//! they do not decide whether an AI execution has finished.
+//! stops when the plugin shuts down. A separate read-only kernel observer
+//! projects terminal activity into every runtime snapshot's display registry.
+//! Lifecycle hooks provide a fallback only when no canonical source is supplied.
 //!
 //! The plugin exposes no AI tools. Terminal OSC capability detection and
 //! browser Web Push delivery remain responsibilities of the respective adapters.
 
 use std::sync::{Arc, Mutex, RwLock};
 
+mod activity;
 mod attention;
 pub use attention::NotificationSource;
 
@@ -38,10 +40,9 @@ pub(crate) const ACTIVITY_CONTRIBUTION_PRIORITY: i32 = i32::MAX - 1;
 
 /// The activity phase projected to the terminal title.
 ///
-/// The plugin observes the session lifecycle hooks, so it can only distinguish
-/// idle/running/blocked. Permission and user-input waits are not observable
-/// through a plugin hook today; the TUI overlays those states locally when a
-/// pending interactive request is present.
+/// Canonical session facts distinguish active work, pending user interaction
+/// and the latest failed outcome across all visible sessions. Standalone plugin
+/// hosts without a notification source retain the lifecycle-hook fallback.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum TerminalActivity {
@@ -55,6 +56,27 @@ pub(crate) struct NotificationsPlugin {
     activity: Arc<RwLock<TerminalActivity>>,
     notification_source: Option<NotificationSource>,
     notification_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    activity_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+async fn publish_activity(host: &dyn HostClient, activity: TerminalActivity) -> SdkResult<()> {
+    let value = match activity {
+        TerminalActivity::Idle => "idle",
+        TerminalActivity::Running => "running",
+        TerminalActivity::Blocked => "blocked",
+    };
+    host.display_contribute(HostDisplayContributeRequest {
+        contribution: PluginDisplayContribution {
+            id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
+            kind: ContributionKind::TerminalActivity,
+            priority: ACTIVITY_CONTRIBUTION_PRIORITY,
+            content: PluginDisplayContent::TerminalActivity {
+                value: value.to_owned(),
+            },
+        },
+    })
+    .await
+    .map(|_| ())
 }
 
 fn recover_read<'a, T>(lock: &'a RwLock<T>, context: &str) -> std::sync::RwLockReadGuard<'a, T> {
@@ -110,6 +132,7 @@ impl NotificationsPlugin {
             activity: Arc::new(RwLock::new(TerminalActivity::Idle)),
             notification_source: None,
             notification_task: Mutex::new(None),
+            activity_task: Mutex::new(None),
         }
     }
 
@@ -118,14 +141,26 @@ impl NotificationsPlugin {
         self
     }
 
-    fn stop_notifications(&self) {
-        if let Some(task) = self
-            .notification_task
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
+    async fn stop_notifications(&self) {
+        // Take ownership before awaiting; neither std mutex is held across the
+        // join. Both workers must stop before removing the display contribution.
+        let tasks: Vec<_> = [&self.notification_task, &self.activity_task]
+            .into_iter()
+            .filter_map(|slot| {
+                slot.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+            })
+            .collect();
+        for task in &tasks {
             task.abort();
+        }
+        for task in tasks {
+            if let Err(error) = task.await
+                && !error.is_cancelled()
+            {
+                tracing::warn!(%error, "notifications worker failed during shutdown");
+            }
         }
     }
 
@@ -140,6 +175,12 @@ impl NotificationsPlugin {
     /// render the terminal title. Best-effort: a missing host or a failed
     /// write is non-fatal because the TUI retains a local fallback.
     async fn set_and_publish(&self, activity: TerminalActivity) {
+        // A callback belongs to one run/snapshot, not the global activity.
+        // In canonical mode even session.start/end and a retired run.post must
+        // not clear another session's work or override a newly loaded host.
+        if self.notification_source.is_some() {
+            return;
+        }
         *recover_write(&self.activity, "update terminal activity") = activity;
         self.publish_display().await;
     }
@@ -156,24 +197,7 @@ impl NotificationsPlugin {
             }
         };
         let activity = *recover_read(&self.activity, "read terminal activity");
-        let value = match activity {
-            TerminalActivity::Idle => "idle",
-            TerminalActivity::Running => "running",
-            TerminalActivity::Blocked => "blocked",
-        };
-        if let Err(error) = host
-            .display_contribute(HostDisplayContributeRequest {
-                contribution: PluginDisplayContribution {
-                    id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
-                    kind: ContributionKind::TerminalActivity,
-                    priority: ACTIVITY_CONTRIBUTION_PRIORITY,
-                    content: PluginDisplayContent::TerminalActivity {
-                        value: value.to_owned(),
-                    },
-                },
-            })
-            .await
-        {
+        if let Err(error) = publish_activity(host.as_ref(), activity).await {
             tracing::warn!(
                 diagnostic = %error.diagnostic.message,
                 "failed to publish terminal activity display"
@@ -249,15 +273,29 @@ impl NotificationsPlugin {
         )
     )]
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+        self.stop_notifications().await;
         *recover_write(&self.host, "initialize notifications plugin host") = Some(host.clone());
         if let Some(source) = self.notification_source.clone() {
-            let task = attention::start(source, host)
+            let task = activity::start(source.reader.clone(), host.clone())
                 .await
                 .map_err(|error| PluginError::internal(error.to_string()))?;
             *self
-                .notification_task
+                .activity_task
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+            match attention::start(source, host).await {
+                Ok(task) => {
+                    *self
+                        .notification_task
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(task);
+                }
+                Err(error) => {
+                    self.stop_notifications().await;
+                    let _ = self.clear_display().await;
+                    return Err(PluginError::internal(error.to_string()));
+                }
+            }
         }
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
@@ -322,7 +360,7 @@ impl NotificationsPlugin {
         )
     )]
     async fn shutdown(&self) -> SdkResult<()> {
-        self.stop_notifications();
+        self.stop_notifications().await;
         self.clear_display().await
     }
 
@@ -463,13 +501,14 @@ impl NotificationsPlugin {
 
 impl Drop for NotificationsPlugin {
     fn drop(&mut self) {
-        if let Some(task) = self
-            .notification_task
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
+        for slot in [&mut self.notification_task, &mut self.activity_task] {
+            if let Some(task) = slot
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                task.abort();
+            }
         }
     }
 }

@@ -92,7 +92,7 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "plugins": 23,
+    "plugins": 24,
     "tools": 207
   },
   "plugins": [
@@ -1950,6 +1950,22 @@
           ]
         }
       ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
+        "init",
+        "shutdown",
+        "session.start",
+        "session.end",
+        "prompt.submit",
+        "agent.stop",
+        "run.pre",
+        "run.post"
+      ],
+      "id": "agena.notifications",
+      "tools": [],
       "version": "0.1.0"
     },
     {

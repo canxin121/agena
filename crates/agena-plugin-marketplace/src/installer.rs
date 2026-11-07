@@ -908,14 +908,30 @@ fn pick_version_for_req(index: &RegistryIndex, plugin_id: &str, req: &str) -> Op
 }
 
 fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
+    // Registry artifact downloads have a compressed-size limit, which alone
+    // cannot prevent decompression bombs, huge entry counts or external links.
+    const MAX_ARCHIVE_ENTRIES: usize = 4096;
+    const MAX_ARCHIVE_UNPACKED_BYTES: u64 = 256 * 1024 * 1024;
+    if let Ok(metadata) = std::fs::symlink_metadata(dest)
+        && (metadata.file_type().is_symlink() || !metadata.is_dir())
+    {
+        return Err("archive destination is not a regular directory".into());
+    }
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder);
-    archive.set_preserve_permissions(true);
+    // Runtime stdio entrypoint permissions are set separately after extract;
+    // do not blindly restore arbitrary source archive permissions.
+    archive.set_preserve_permissions(false);
     archive.set_overwrite(true);
-    for entry in archive
+    let mut unpacked_bytes = 0_u64;
+    for (index, entry) in archive
         .entries()
         .map_err(|e| format!("read tar entries: {e}"))?
+        .enumerate()
     {
+        if index >= MAX_ARCHIVE_ENTRIES {
+            return Err(format!("archive exceeds {MAX_ARCHIVE_ENTRIES} entries"));
+        }
         let mut entry = entry.map_err(|e| format!("read entry: {e}"))?;
         let entry_path = entry
             .path()
@@ -931,6 +947,39 @@ fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
                         entry_path.display()
                     ));
                 }
+            }
+        }
+        let kind = entry.header().entry_type();
+        if !kind.is_file() && !kind.is_dir() {
+            return Err(format!(
+                "archive contains unsupported link or special file at {}",
+                entry_path.display()
+            ));
+        }
+        unpacked_bytes = unpacked_bytes.saturating_add(entry.size());
+        if unpacked_bytes > MAX_ARCHIVE_UNPACKED_BYTES {
+            return Err(format!(
+                "archive exceeds {MAX_ARCHIVE_UNPACKED_BYTES} extracted bytes"
+            ));
+        }
+        // The cache may already contain files from an earlier installation.
+        // An attacker-controlled archive must not traverse existing symlinks
+        // even if all of its own entry paths look lexically safe.
+        let mut component_path = dest.to_path_buf();
+        for component in entry_path.components() {
+            if let std::path::Component::Normal(name) = component {
+                component_path.push(name);
+            }
+            match std::fs::symlink_metadata(&component_path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "archive entry crosses a symbolic link: {}",
+                        entry_path.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(error) => return Err(format!("inspect archive target: {error}")),
             }
         }
         entry
@@ -1276,5 +1325,96 @@ impl InstallTransaction {
 
     fn commit(self) {
         self.armed.set(false);
+    }
+}
+
+#[cfg(test)]
+mod archive_security_tests {
+    use super::extract_tar_gz;
+    use flate2::{Compression, write::GzEncoder};
+    use std::io::{self, Write as _};
+    use tar::{Builder, EntryType, Header};
+
+    fn archive_with_entry(path: &str, content: &[u8]) -> Vec<u8> {
+        let mut builder = Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        let mut header = Header::new_gnu();
+        header.set_path(path).unwrap();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o600);
+        header.set_cksum();
+        builder.append(&header, content).unwrap();
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn valid_regular_archive_unpacks_exact_bytes_in_the_plugin_directory() {
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("plugin");
+        std::fs::create_dir(&dest).unwrap();
+        let bytes = archive_with_entry("hello.txt", b"example plugin payload\n");
+        extract_tar_gz(&bytes, &dest).unwrap();
+        assert_eq!(
+            std::fs::read(dest.join("hello.txt")).unwrap(),
+            b"example plugin payload\n"
+        );
+    }
+
+    #[test]
+    fn compressed_archive_cannot_install_a_link_to_a_parent_directory() {
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("plugin");
+        std::fs::create_dir(&dest).unwrap();
+
+        let mut builder = Builder::new(GzEncoder::new(Vec::new(), Compression::fast()));
+        let mut header = Header::new_gnu();
+        header.set_path("alias").unwrap();
+        header.set_entry_type(EntryType::Symlink);
+        header.set_link_name("../outside").unwrap();
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_cksum();
+        builder.append(&header, io::empty()).unwrap();
+        let archive = builder.into_inner().unwrap().finish().unwrap();
+        let error = extract_tar_gz(&archive, &dest).unwrap_err();
+        assert!(error.contains("unsupported link"), "{error}");
+        assert!(!dest.join("alias").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn archive_entries_cannot_overwrite_preexisting_destination_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("plugin");
+        std::fs::create_dir(&dest).unwrap();
+        let outside = fixture.path().join("outside.txt");
+        std::fs::write(&outside, b"must remain intact").unwrap();
+        symlink(&outside, dest.join("payload.txt")).unwrap();
+
+        let archive = archive_with_entry("payload.txt", b"overwrite attempt");
+        let error = extract_tar_gz(&archive, &dest).unwrap_err();
+        assert!(error.contains("symbolic link"), "{error}");
+        assert_eq!(std::fs::read(outside).unwrap(), b"must remain intact");
+    }
+
+    #[test]
+    fn archive_declaring_oversize_unpacked_data_is_rejected_from_its_header() {
+        let fixture = tempfile::tempdir().unwrap();
+        let dest = fixture.path().join("plugin");
+        std::fs::create_dir(&dest).unwrap();
+
+        let mut header = Header::new_gnu();
+        header.set_path("huge-file").unwrap();
+        header.set_size(256 * 1024 * 1024 + 1);
+        header.set_mode(0o600);
+        header.set_cksum();
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(header.as_bytes()).unwrap();
+        encoder.write_all(&[0; 1024]).unwrap();
+        let archive = encoder.finish().unwrap();
+        let error = extract_tar_gz(&archive, &dest).unwrap_err();
+        assert!(error.contains("extracted bytes"), "{error}");
+        assert!(!dest.join("huge-file").exists());
     }
 }

@@ -31,7 +31,12 @@ struct ActivityState {
 
 #[derive(Default)]
 struct FinishState {
-    outcome: Option<Result<(), TransportError>>,
+    outcome: Option<FinishOutcome>,
+}
+
+struct FinishOutcome {
+    shutdown: Result<(), TransportError>,
+    close: Result<(), TransportError>,
 }
 
 impl ActivityState {
@@ -140,26 +145,49 @@ impl QuiescentTransport {
         let mut finish = self.state.finish.lock().await;
         if let Some(outcome) = &finish.outcome {
             self.state.wait_idle().await;
-            return outcome.clone();
+            return if graceful {
+                outcome.shutdown.clone()
+            } else {
+                outcome.close.clone()
+            };
         }
         self.state.accepting.store(false, Ordering::Release);
         self.state.closing.cancel();
-        if graceful {
+        let shutdown_error = if graceful {
             self.state.wait_idle().await;
             // The shutdown hook runs outside admission tracking after all
             // ordinary calls settle, so it cannot race with a new invocation.
-            let _ = self
-                .state
-                .run(self.inner.dispatch(
+            tokio::select! {
+                biased;
+                // Forced close deliberately interrupts an unfinished hook.
+                // Preserve its existing cancellation semantics without hiding
+                // an error actually returned by a completed shutdown hook.
+                _ = self.state.forced_stop.cancelled() => None,
+                result = self.inner.dispatch(
                     method::META_SHUTDOWN,
                     serde_json::Value::Object(Default::default()),
-                ))
-                .await;
-        }
-        let result = self.inner.close().await;
+                ) => result.err(),
+            }
+        } else {
+            None
+        };
+        // A rejected shutdown hook still requires transport cleanup. Keep the
+        // two outcomes distinct: loader fallback close must not report a past
+        // hook error as a new failure to close an already-closed transport.
+        let close = self.inner.close().await;
+        let result = match (shutdown_error, close.clone()) {
+            (None, close) => close,
+            (Some(error), Ok(())) => Err(error),
+            (Some(error), Err(close_error)) => Err(TransportError::Io(format!(
+                "{error}; transport close also failed: {close_error}"
+            ))),
+        };
         // Cache the terminal transport outcome before awaiting wrappers. A
         // cancelled waiter must not erase a cleanup failure or rerun close.
-        finish.outcome = Some(result.clone());
+        finish.outcome = Some(FinishOutcome {
+            shutdown: result.clone(),
+            close,
+        });
         self.state.wait_idle().await;
         result
     }
@@ -228,6 +256,29 @@ impl PluginTransport for QuiescentTransport {
                     .try_rebind_host(host, scope, previous_scope, initialization),
             )
             .await
+    }
+
+    async fn fork_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+        previous_scope: Arc<crate::effect_scope::PluginEffectScope>,
+        initialization: super::initialization::PluginInitialization,
+    ) -> Result<Option<Arc<dyn PluginTransport>>, TransportError> {
+        let _activity = self.state.enter()?;
+        self.state
+            .run(
+                self.inner
+                    .fork_host(host, scope, previous_scope, initialization),
+            )
+            .await
+            .map(|transport| transport.map(Self::wrap))
+    }
+
+    fn abandon_host_fork(&self) {
+        self.state.accepting.store(false, Ordering::Release);
+        self.state.closing.cancel();
+        self.inner.abandon_host_fork();
     }
 
     async fn invoke_stream(
@@ -364,5 +415,152 @@ impl PluginTransport for QuiescentTransport {
 
     async fn close(&self) -> Result<(), TransportError> {
         self.finish(false).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    use super::{PluginTransport, QuiescentTransport, TransportError};
+    use crate::sdk::{Plugin, PluginError, PluginManifest};
+    use crate::transport::inproc::InProcessTransport;
+
+    struct ShutdownProbe {
+        calls: Arc<AtomicUsize>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl Plugin for ShutdownProbe {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest::new("test", "shutdown-propagation", "test")
+        }
+
+        async fn shutdown(&self) -> crate::sdk::Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail {
+                Err(PluginError::not_implemented("deliberate shutdown failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// Retain the real SDK dispatcher/in-process error conversion while making
+    /// the underlying close operation observable and independently fallible.
+    struct CloseProbe {
+        inner: InProcessTransport<ShutdownProbe>,
+        calls: Arc<AtomicUsize>,
+        fail: bool,
+    }
+
+    #[async_trait]
+    impl PluginTransport for CloseProbe {
+        async fn dispatch(&self, method: &str, params: Value) -> Result<Value, TransportError> {
+            self.inner.dispatch(method, params).await
+        }
+
+        async fn close(&self) -> Result<(), TransportError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.close().await?;
+            if self.fail {
+                Err(TransportError::Io("deliberate close failure".into()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct Probe {
+        transport: Arc<QuiescentTransport>,
+        shutdown_calls: Arc<AtomicUsize>,
+        close_calls: Arc<AtomicUsize>,
+    }
+
+    impl Probe {
+        fn new(fail_shutdown: bool, fail_close: bool) -> Self {
+            let shutdown_calls = Arc::new(AtomicUsize::new(0));
+            let close_calls = Arc::new(AtomicUsize::new(0));
+            let transport = Arc::new(QuiescentTransport::new(Arc::new(CloseProbe {
+                inner: InProcessTransport::new(ShutdownProbe {
+                    calls: shutdown_calls.clone(),
+                    fail: fail_shutdown,
+                }),
+                calls: close_calls.clone(),
+                fail: fail_close,
+            })));
+            Self {
+                transport,
+                shutdown_calls,
+                close_calls,
+            }
+        }
+
+        fn assert_called_once(&self) {
+            assert_eq!(self.shutdown_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(self.close_calls.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_sdk_shutdown_reaches_loader_and_does_not_repeat_close() {
+        let probe = Probe::new(true, false);
+        let first = crate::loader::shutdown_transport(probe.transport.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(&first, TransportError::Plugin(_)), "{first}");
+        assert!(first.to_string().contains("deliberate shutdown failure"));
+        assert!(
+            !first
+                .to_string()
+                .contains("forced transport cleanup also failed")
+        );
+        let repeated = crate::loader::shutdown_transport(probe.transport.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(repeated.to_string(), first.to_string());
+        // The loader's fallback and later explicit close only observe cleanup;
+        // neither may rerun the failed plugin hook or invent a close failure.
+        probe.transport.close().await.unwrap();
+        probe.assert_called_once();
+    }
+
+    #[tokio::test]
+    async fn shutdown_and_close_errors_are_both_retained_for_later_waiters() {
+        let probe = Probe::new(true, true);
+        let first = probe.transport.shutdown().await.unwrap_err().to_string();
+        assert!(first.contains("deliberate shutdown failure"), "{first}");
+        assert!(first.contains("deliberate close failure"), "{first}");
+        assert_eq!(
+            probe.transport.shutdown().await.unwrap_err().to_string(),
+            first
+        );
+        let close = probe.transport.close().await.unwrap_err().to_string();
+        assert!(close.contains("deliberate close failure"), "{close}");
+        assert!(!close.contains("deliberate shutdown failure"), "{close}");
+        probe.assert_called_once();
+    }
+
+    #[tokio::test]
+    async fn successful_hook_does_not_hide_a_failed_transport_close() {
+        let probe = Probe::new(false, true);
+        let first = probe.transport.shutdown().await.unwrap_err().to_string();
+        assert!(first.contains("deliberate close failure"), "{first}");
+        assert_eq!(
+            probe.transport.shutdown().await.unwrap_err().to_string(),
+            first
+        );
+        assert_eq!(
+            probe.transport.close().await.unwrap_err().to_string(),
+            first
+        );
+        probe.assert_called_once();
     }
 }

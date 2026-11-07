@@ -253,18 +253,20 @@ impl<'a> Service<'a> {
                     path,
                     expected_sha256,
                 } => {
-                    let local_path = self.root.join(path);
+                    let local_path = official_service::resolve_local_path(self.root, path)?;
                     crate::permissions::require_path(
                         self.host.as_ref(),
                         agena_domain::PathKind::Read,
                         &local_path.to_string_lossy(),
                     )
                     .await?;
-                    let root = self.root.to_owned();
-                    let path = path.clone();
+                    // Blocking workers do not inherit callback task-local state.
+                    // Read the already-resolved target without joining it to
+                    // the plugin initialization directory a second time.
+                    let path = local_path.to_string_lossy().into_owned();
                     let expected = expected_sha256.clone();
                     let prepared = tokio::task::spawn_blocking(move || {
-                        media_input::read_local(&root, &path, expected.as_deref())
+                        media_input::read_local(Path::new(""), &path, expected.as_deref())
                     })
                     .await
                     .map_err(|e| {

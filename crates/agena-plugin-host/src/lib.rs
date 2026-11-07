@@ -66,8 +66,9 @@ pub use host::{
     PluginActivationInspect, PluginArchitectureCatalog, PluginArchitectureEffect,
     PluginArchitectureNode, PluginArchitecturePipeline, PluginDependencyEdge, PluginDependencyKind,
     PluginHost, PluginHostBuildConfig, PluginInspect, PluginServiceImportInspect,
-    PluginServiceInspect, PluginSurfaceCatalog, PluginTerminalSurfaceCatalog,
-    PluginToolInvokeResponse, PluginToolInvokeStatus, StaticPluginRegistration, ToolInvokeStream,
+    PluginServiceInspect, PluginShutdownFailure, PluginShutdownReport, PluginSurfaceCatalog,
+    PluginTerminalSurfaceCatalog, PluginToolInvokeResponse, PluginToolInvokeStatus,
+    StaticPluginRegistration, ToolInvokeStream,
 };
 pub use host::{
     PluginCallCompletion, PluginCallbackDispatcher, PluginCallbackRpcError,

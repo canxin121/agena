@@ -9,6 +9,7 @@ enum BuildCandidate {
 #[derive(Default)]
 struct ReusedBuildGuard {
     transfers: Vec<(Arc<PluginHost>, Arc<HostHandle>, Arc<LoadedPlugin>)>,
+    forks: Vec<(Arc<HostHandle>, Arc<LoadedPlugin>)>,
     committed: bool,
 }
 
@@ -16,6 +17,18 @@ impl Drop for ReusedBuildGuard {
     fn drop(&mut self) {
         if self.committed {
             return;
+        }
+        for (host, plugin) in std::mem::take(&mut self.forks) {
+            // This transport is a distinct logical owner. Retiring it must not
+            // close the predecessor's shared physical instance or effect scope.
+            plugin.transport.abandon_host_fork();
+            tokio::spawn(async move {
+                if let Err(error) = shutdown_transport(plugin.transport.clone()).await {
+                    tracing::error!(diagnostic = %error, "failed to retire an unfinished plugin binding fork");
+                }
+                host.dispose_plugin_resources_for_scope(&plugin.key(), &plugin.effect_scope)
+                    .await;
+            });
         }
         for (previous, successor, plugin) in std::mem::take(&mut self.transfers) {
             tokio::spawn(async move {
@@ -536,20 +549,47 @@ impl PluginHost {
                         }
                         let attach_context =
                             "failed to attach the successor host to a reused plugin transport";
+                        let initialization =
+                            crate::transport::initialization::PluginInitialization {
+                                host: Arc::downgrade(&host_handle),
+                                plugin_id: plugin_key.clone(),
+                                manifest: reused.manifest.clone(),
+                                agena_version: agena_version.clone(),
+                                workspace_root: workspace_root.clone(),
+                                settings: reused.configured_plugin.settings().clone(),
+                            };
+                        if let Some(transport) = reused
+                            .transport
+                            .fork_host(
+                                Arc::clone(&host_handle),
+                                Arc::clone(&scope),
+                                Arc::clone(&reused.effect_scope),
+                                initialization.clone(),
+                            )
+                            .await
+                            .map_err(|error| HostError::Load {
+                                plugin: id.clone(),
+                                message: agena_failure::diagnostic::format_error_chain_with_context(
+                                    "failed to fork a snapshot-preserving plugin binding",
+                                    &error,
+                                ),
+                            })?
+                        {
+                            let forked = Arc::new(reused.rebind_transport(scope, transport));
+                            reused_build
+                                .forks
+                                .push((Arc::clone(&host_handle), Arc::clone(&forked)));
+                            // Both logical transports must be retired. Marking
+                            // the predecessor transferred would leak its binding.
+                            break Some(forked);
+                        }
                         let bound = reused
                             .transport
                             .try_rebind_host(
                                 Arc::clone(&host_handle),
                                 Arc::clone(&scope),
                                 Arc::clone(&reused.effect_scope),
-                                crate::transport::initialization::PluginInitialization {
-                                    host: Arc::downgrade(&host_handle),
-                                    plugin_id: plugin_key.clone(),
-                                    manifest: reused.manifest.clone(),
-                                    agena_version: agena_version.clone(),
-                                    workspace_root: workspace_root.clone(),
-                                    settings: reused.configured_plugin.settings().clone(),
-                                },
+                                initialization,
                             )
                             .await
                             .map_err(|error| HostError::Load {
@@ -946,7 +986,8 @@ impl PluginHost {
             service_bindings: service_plan.bindings,
             timeouts: config.host.timeouts,
             _host_handle: host_handle,
-            transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
+            transferred_to_successor: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            shutdown_result: Default::default(),
             hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
         });
         reused_build.committed = true;
@@ -1061,6 +1102,6 @@ use super::{
     PluginPackage, PluginServiceBinding, PluginServiceBindingKey, PluginToolRegistry,
     PreparedPlugin, RwLock, StaticRegistration, ToolAfterDispatch, ToolAfterPatch, ToolBeforeBail,
     ToolBeforeDispatch, ToolBeforePatch, TransportError, activate_entry, call_with_timeout,
-    hook_registration_for_plugin, method, prepare_entry, tool_hook_context,
+    hook_registration_for_plugin, method, prepare_entry, shutdown_transport, tool_hook_context,
     transport_to_plugin_error,
 };

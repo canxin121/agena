@@ -145,6 +145,10 @@ pub mod method {
     pub const META_PING: &str = "meta/ping";
     /// HTTP-only atomic update of a retained plugin's callback destination.
     pub const META_HOST_REBIND: &str = "meta/host.rebind";
+    /// HTTP-only retained-instance callback generation registration.
+    pub const META_HOST_FORK: &str = "meta/host.fork";
+    /// HTTP-only retirement of one registered callback generation.
+    pub const META_HOST_RETIRE: &str = "meta/host.retire";
     pub const META_HTTP_STATE: &str = "meta/http.state";
 
     pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.before";

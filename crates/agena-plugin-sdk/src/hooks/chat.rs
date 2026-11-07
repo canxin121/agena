@@ -148,6 +148,10 @@ pub struct ChatSystemTransformPatch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessagesTransformInput {
     pub session_id: i64,
+    /// Effective workspace of the session whose provider request is being
+    /// transformed. Older hosts may omit it; no ambient tool scope is implied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
     pub messages: Vec<ChatMessage>,
 }
 
@@ -157,4 +161,24 @@ pub struct ChatMessagesTransformPatch {
     /// Replace the entire message list. If `None` the original is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub messages: Option<Vec<ChatMessage>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChatMessagesTransformInput;
+
+    #[test]
+    fn messages_input_workspace_is_optional_for_existing_wire_payloads() {
+        let legacy = serde_json::json!({"session_id":41,"messages":[]});
+        let input: ChatMessagesTransformInput = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(input.workspace_root, None);
+        assert_eq!(serde_json::to_value(input).unwrap(), legacy);
+
+        let scoped = serde_json::json!({
+            "session_id":41,"workspace_root":"/session-workspace","messages":[]
+        });
+        let input: ChatMessagesTransformInput = serde_json::from_value(scoped.clone()).unwrap();
+        assert_eq!(input.workspace_root.as_deref(), Some("/session-workspace"));
+        assert_eq!(serde_json::to_value(input).unwrap(), scoped);
+    }
 }

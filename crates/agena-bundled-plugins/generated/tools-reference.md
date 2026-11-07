@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **23 plugins and 207 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 207 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -29,6 +29,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
 - [`agena.monitor`](#agenamonitor) — WebSocket event subscriptions with background notifications. Use shell.watch for local command-output monitoring. (2 tools)
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
+- [`agena.notifications`](#agenanotifications) — AI completion, question and approval notifications for browsers and terminals, with terminal window titles. (0 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.provider`](#agenaprovider) — Discover model routes across all enabled adapters of the current provider. (1 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
@@ -61,10 +62,58 @@ Agent communication and delegation.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "target": {}
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "target": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -93,16 +142,112 @@ Agent communication and delegation.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "target": {}
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "message": {}
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "message": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "message": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "target": {
       "description": "An agent_id, a visible agent name, or `parent`.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -132,16 +277,112 @@ Agent communication and delegation.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "target": {}
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "message": {}
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "message": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "message": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "target": {
       "description": "An agent_id, a visible agent name, or `parent`.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -233,6 +474,92 @@ Agent communication and delegation.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "prompt": {}
+              },
+              "required": [
+                "prompt"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "prompt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "prompt"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "commands": {
       "default": [],
@@ -265,13 +592,23 @@ Agent communication and delegation.
     "name": {
       "description": "Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "prompt": {
       "description": "Scope, constraints, required context and output contracts, and expected final result.\nParent history is not copied; include any chart or UI contract the task needs.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "selection": {
@@ -665,6 +1002,49 @@ Model-based tools default to the current session model. Use an OpenAI model that
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -696,7 +1076,12 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -1605,6 +1990,49 @@ Model-based tools default to the current session model. Use an OpenAI model that
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -1636,7 +2064,12 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -1908,10 +2341,58 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "handle": {}
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "handle": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -2037,10 +2518,58 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "handle": {}
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "handle": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -2073,6 +2602,49 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "expected_sha256": {
       "default": null,
@@ -2095,7 +2667,12 @@ Model-based tools default to the current session model. Use an OpenAI model that
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -2369,12 +2946,117 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "images": {
+                  "not": {
+                    "items": {
+                      "not": {}
+                    }
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "images"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "images": {
+                "not": {
+                  "items": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                          "type": "string"
+                        },
+                        {
+                          "maxItems": 0,
+                          "type": "array"
+                        },
+                        {
+                          "maxProperties": 0,
+                          "properties": {},
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "images"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "images": {
       "description": "One to sixteen permitted local image paths to upload as originals or references. URLs and remote file IDs are not accepted here.",
       "items": {
         "minLength": 1,
-        "type": "string"
+        "not": {
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+          "type": "string"
+        },
+        "type": "string",
+        "x-agena-non-empty": true
       },
       "maxItems": 16,
       "minItems": 1,
@@ -2399,7 +3081,12 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "prompt": {
       "description": "Natural-language edit instructions, including details to preserve from the supplied images.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -2733,6 +3420,49 @@ Model-based tools default to the current session model. Use an OpenAI model that
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -2764,7 +3494,12 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -5880,6 +6615,49 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -5911,7 +6689,12 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -5943,10 +6726,58 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "handle": {}
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "handle": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -5977,10 +6808,58 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "handle": {}
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "handle": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -6013,6 +6892,49 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "expected_sha256": {
       "default": null,
@@ -6035,7 +6957,12 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -6368,6 +7295,49 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -6399,7 +7369,12 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -7190,6 +8165,49 @@ Structured code search and syntax inspection tools.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "apply": {
       "default": false,
@@ -7199,10 +8217,15 @@ Structured code search and syntax inspection tools.
     },
     "expected_sha256": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000006"
     },
     "language": {
@@ -7218,16 +8241,26 @@ Structured code search and syntax inspection tools.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "pattern": {
       "maxLength": 16384,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "replacement": {
@@ -7311,6 +8344,49 @@ Structured code search and syntax inspection tools.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "language": {
       "anyOf": [
@@ -7335,17 +8411,27 @@ Structured code search and syntax inspection tools.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "pattern": {
       "description": "Simple ast-grep pattern; provide exactly one of pattern or rule.",
       "maxLength": 16384,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "rule": {
@@ -7420,6 +8506,49 @@ Structured code search and syntax inspection tools.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "language": {
       "anyOf": [
@@ -7444,7 +8573,12 @@ Structured code search and syntax inspection tools.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -7757,11 +8891,145 @@ Cron-style and one-shot wakeup scheduling tools.
     }
   },
   "description": "Input of the cron create tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "expression": {}
+          },
+          "required": [
+            "expression"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "expression": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "prompt": {}
+              },
+              "required": [
+                "prompt"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "prompt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "prompt"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "timezone": {}
+              },
+              "required": [
+                "timezone"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "timezone": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "timezone"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "expression": {
       "description": "6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "max_age_days": {
@@ -7779,7 +9047,12 @@ Cron-style and one-shot wakeup scheduling tools.
     "prompt": {
       "description": "Prompt to enqueue when the job fires.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "retry_policy": {
@@ -7794,7 +9067,12 @@ Cron-style and one-shot wakeup scheduling tools.
     "timezone": {
       "description": "IANA timezone in which the cron expression is evaluated (for example\n`Asia/Shanghai`). This is required so local wall-clock requests cannot\nbe silently interpreted as UTC.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000002"
     }
   },
@@ -7827,10 +9105,58 @@ Cron-style and one-shot wakeup scheduling tools.
 ```json
 {
   "description": "Input of the cron delete tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "id": {}
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -7926,10 +9252,58 @@ Cron-style and one-shot wakeup scheduling tools.
 ```json
 {
   "description": "Input of the cron job control tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "id": {}
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -7960,10 +9334,58 @@ Cron-style and one-shot wakeup scheduling tools.
 ```json
 {
   "description": "Input of the cron job control tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "id": {}
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -8045,6 +9467,49 @@ Cron-style and one-shot wakeup scheduling tools.
     }
   },
   "description": "Input of the cron update tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "id": {}
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "expression": {
       "description": "Optional replacement cron expression. Valid only for cron jobs.",
@@ -8056,7 +9521,12 @@ Cron-style and one-shot wakeup scheduling tools.
     },
     "id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "max_age_days": {
@@ -8187,6 +9657,49 @@ Filesystem command tools for read/search and explicit edits.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "backend": {
       "$ref": "#/$defs/Backend",
@@ -8212,16 +9725,26 @@ Filesystem command tools for read/search and explicit edits.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "pattern": {
       "maxLength": 4096,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "start_line": {
@@ -8278,6 +9801,49 @@ Filesystem command tools for read/search and explicit edits.
   },
   "additionalProperties": false,
   "description": "Input of the glob tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "pattern": {}
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "exclude": {
       "description": "Exclude matching base-path-relative globs. Exclusions win.",
@@ -8324,16 +9890,26 @@ Filesystem command tools for read/search and explicit edits.
     "path": {
       "description": "Optional base path. Defaults to the workspace root.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "pattern": {
       "description": "Glob pattern to match.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -8463,10 +10039,15 @@ Filesystem command tools for read/search and explicit edits.
       "description": "Optional glob filter applied before matching lines.",
       "maxLength": 1024,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "include_ignored": {
@@ -8505,10 +10086,15 @@ Filesystem command tools for read/search and explicit edits.
     "path": {
       "description": "Optional target: a directory to search recursively, or a single file.\nDefaults to the workspace root.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "pattern": {
@@ -8563,6 +10149,49 @@ Filesystem command tools for read/search and explicit edits.
     }
   },
   "description": "Input of the file read tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "byte_limit": {
       "description": "Byte-range page size (4–16384; default 8192). May start at byte 0 when\nbyte_offset is omitted. UTF-8 boundaries are preserved.",
@@ -8588,7 +10217,12 @@ Filesystem command tools for read/search and explicit edits.
     "file_path": {
       "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "limit": {
@@ -8642,6 +10276,63 @@ Filesystem command tools for read/search and explicit edits.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "paths": {
+              "not": {
+                "items": {
+                  "not": {}
+                }
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "paths"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "paths": {
+            "not": {
+              "items": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                      "type": "string"
+                    },
+                    {
+                      "maxItems": 0,
+                      "type": "array"
+                    },
+                    {
+                      "maxProperties": 0,
+                      "properties": {},
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "max_total_bytes": {
       "default": 131072,
@@ -8654,7 +10345,12 @@ Filesystem command tools for read/search and explicit edits.
     "paths": {
       "items": {
         "minLength": 1,
-        "type": "string"
+        "not": {
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+          "type": "string"
+        },
+        "type": "string",
+        "x-agena-non-empty": true
       },
       "maxItems": 64,
       "minItems": 1,
@@ -8691,20 +10387,73 @@ Filesystem command tools for read/search and explicit edits.
 {
   "additionalProperties": false,
   "description": "Read immutable media bytes into the current conversation model's context.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "expected_sha256": {
       "description": "Optional revision guard from fs.stat or a previous read_media result.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "path": {
       "description": "Local image, PDF, audio, video or UTF-8 file. Relative paths resolve\nagainst the active workspace, like the other filesystem tools.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -8737,6 +10486,49 @@ Filesystem command tools for read/search and explicit edits.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "expected_occurrences": {
       "default": 1,
@@ -8747,10 +10539,15 @@ Filesystem command tools for read/search and explicit edits.
     },
     "expected_sha256": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000005"
     },
     "new": {
@@ -8766,7 +10563,12 @@ Filesystem command tools for read/search and explicit edits.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "replace_all": {
@@ -8802,6 +10604,49 @@ Filesystem command tools for read/search and explicit edits.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "hash": {
       "default": true,
@@ -8810,7 +10655,12 @@ Filesystem command tools for read/search and explicit edits.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -8844,6 +10694,49 @@ Filesystem command tools for read/search and explicit edits.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "content": {
       "maxLength": 16777216,
@@ -8858,15 +10751,25 @@ Filesystem command tools for read/search and explicit edits.
     "expected_sha256": {
       "description": "Required when replacing an existing file. Use the hash returned by\n`fs.stat` or a prior mutating result.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000003"
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -9206,6 +11109,49 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -9237,7 +11183,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -10133,6 +12084,49 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -10164,7 +12158,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -10436,10 +12435,58 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "handle": {}
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "handle": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -10552,10 +12599,58 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "handle": {}
+          },
+          "required": [
+            "handle"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "handle": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "handle"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "handle": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -10588,6 +12683,49 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "expected_sha256": {
       "default": null,
@@ -10610,7 +12748,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -11050,6 +13193,106 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "images": {
+                  "not": {
+                    "items": {
+                      "not": {}
+                    }
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "images"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "images": {
+                "not": {
+                  "items": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                          "type": "string"
+                        },
+                        {
+                          "maxItems": 0,
+                          "type": "array"
+                        },
+                        {
+                          "maxProperties": 0,
+                          "properties": {},
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "images"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "cached_content": {
       "type": [
@@ -11067,7 +13310,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "images": {
       "items": {
         "minLength": 1,
-        "type": "string"
+        "not": {
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+          "type": "string"
+        },
+        "type": "string",
+        "x-agena-non-empty": true
       },
       "maxItems": 16,
       "minItems": 1,
@@ -11084,7 +13332,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     },
     "prompt": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "request_options": {
@@ -11126,6 +13379,49 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "cached_content": {
       "description": "Existing Gemini cachedContents resource name.",
@@ -11152,7 +13448,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "request_options": {
@@ -11251,6 +13552,49 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -11282,7 +13626,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -13477,6 +15826,49 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "detail": {
       "$ref": "#/$defs/ImageDetail",
@@ -13508,7 +15900,12 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "prompt": {
       "maxLength": 64000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -14514,7 +16911,12 @@ User interaction tools.
         },
         "label": {
           "minLength": 1,
-          "type": "string"
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
+          "type": "string",
+          "x-agena-non-empty": true
         }
       },
       "required": [
@@ -14545,7 +16947,12 @@ User interaction tools.
         },
         "question": {
           "minLength": 1,
-          "type": "string"
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
+          "type": "string",
+          "x-agena-non-empty": true
         }
       },
       "required": [
@@ -14555,6 +16962,79 @@ User interaction tools.
     }
   },
   "description": "Input of the ask-user tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "questions": {
+              "not": {
+                "items": {
+                  "not": {
+                    "properties": {
+                      "question": {}
+                    },
+                    "required": [
+                      "question"
+                    ],
+                    "type": "object"
+                  }
+                }
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "questions": {
+            "not": {
+              "items": {
+                "not": {
+                  "properties": {
+                    "question": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                          "type": "string"
+                        },
+                        {
+                          "maxItems": 0,
+                          "type": "array"
+                        },
+                        {
+                          "maxProperties": 0,
+                          "properties": {},
+                          "type": "object"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "questions"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "auto_resolution_ms": {
       "description": "Automatically continue without an answer after this many milliseconds.\nValues are limited to 60 seconds through 10 minutes.\nA timeout is not approval; only independent, already-authorized work may continue.",
@@ -14631,12 +17111,60 @@ User interaction tools.
     }
   },
   "description": "Input of the interaction notify tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "body_markdown": {}
+          },
+          "required": [
+            "body_markdown"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "body_markdown": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "body_markdown"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "body_markdown": {
       "description": "Markdown notification body. This tool never waits for a reply.",
       "maxLength": 16000,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "level": {
@@ -14683,6 +17211,49 @@ LSP read-only observability and navigation tools.
 ```json
 {
   "description": "Input of the LSP definition tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "character": {
       "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
@@ -14693,7 +17264,12 @@ LSP read-only observability and navigation tools.
     },
     "file_path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000.000000"
     },
     "line": {
@@ -14730,10 +17306,58 @@ LSP read-only observability and navigation tools.
 ```json
 {
   "description": "Input of the LSP diagnostics tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "file_path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -14763,6 +17387,49 @@ LSP read-only observability and navigation tools.
 ```json
 {
   "description": "Input of the LSP hover tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "character": {
       "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
@@ -14773,7 +17440,12 @@ LSP read-only observability and navigation tools.
     },
     "file_path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000.000000"
     },
     "line": {
@@ -14813,6 +17485,49 @@ LSP read-only observability and navigation tools.
 ```json
 {
   "description": "Input of the LSP references tool.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "character": {
       "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
@@ -14823,7 +17538,12 @@ LSP read-only observability and navigation tools.
     },
     "file_path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000.000000"
     },
     "include_declaration": {
@@ -15521,6 +18241,92 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "name": {}
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "arguments": {
       "additionalProperties": {
@@ -15535,12 +18341,22 @@ MCP discovery and bridge tools.
     },
     "name": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15570,6 +18386,49 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "cursor": {
       "type": [
@@ -15580,7 +18439,12 @@ MCP discovery and bridge tools.
     },
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15609,6 +18473,49 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "cursor": {
       "type": [
@@ -15619,7 +18526,12 @@ MCP discovery and bridge tools.
     },
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15648,15 +18560,111 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "uri": {}
+              },
+              "required": [
+                "uri"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "uri": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "uri"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "uri": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -15686,6 +18694,49 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "cursor": {
       "type": [
@@ -15696,7 +18747,12 @@ MCP discovery and bridge tools.
     },
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15724,10 +18780,58 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15774,6 +18878,92 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "name": {}
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "arguments": {
       "default": null,
@@ -15781,12 +18971,22 @@ MCP discovery and bridge tools.
     },
     "name": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "server": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15858,10 +19058,58 @@ Persistent memory with searchable retrieval and write tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "name": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15892,10 +19140,58 @@ Persistent memory with searchable retrieval and write tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "name": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -15959,6 +19255,49 @@ Persistent memory with searchable retrieval and write tools.
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "query": {}
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "limit": {
       "format": "uint32",
@@ -15971,7 +19310,12 @@ Persistent memory with searchable retrieval and write tools.
     },
     "query": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -16016,11 +19360,102 @@ Persistent memory with searchable retrieval and write tools.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "content": {}
+              },
+              "required": [
+                "content"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "content": {
       "maxLength": 8388608,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000003"
     },
     "description": {
@@ -16051,7 +19486,12 @@ Persistent memory with searchable retrieval and write tools.
     },
     "name": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -16133,6 +19573,49 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
     },
     "ws": {
       "$ref": "#/$defs/MonitorWsInput",
+      "not": {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "url": {}
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "url": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "properties": {
         "protocols": {
           "items": {
@@ -16143,7 +19626,12 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
         },
         "url": {
           "minLength": 1,
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
           "type": "string",
+          "x-agena-non-empty": true,
           "x-agena-order": "000000.000000"
         }
       },
@@ -16177,10 +19665,58 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "monitor_id": {}
+          },
+          "required": [
+            "monitor_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "monitor_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "monitor_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "monitor_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -16240,6 +19776,92 @@ Revision-safe Jupyter notebook cell editing.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "expected_sha256": {}
+              },
+              "required": [
+                "expected_sha256"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "expected_sha256": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "expected_sha256"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "action": {
       "$ref": "#/$defs/NotebookEditAction"
@@ -16263,12 +19885,22 @@ Revision-safe Jupyter notebook cell editing.
     },
     "expected_sha256": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000006"
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "preserve_outputs": {
@@ -16293,6 +19925,12 @@ Revision-safe Jupyter notebook cell editing.
   "type": "object"
 }
 ```
+
+## agena.notifications
+
+**Version** `0.1.0` · **Tools** 0
+
+AI completion, question and approval notifications for browsers and terminals, with terminal window titles.
 
 ## agena.plan
 
@@ -16976,13 +20614,75 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "names": {
+              "not": {
+                "items": {
+                  "not": {}
+                }
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "names"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "names": {
+            "not": {
+              "items": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                      "type": "string"
+                    },
+                    {
+                      "maxItems": 0,
+                      "type": "array"
+                    },
+                    {
+                      "maxProperties": 0,
+                      "properties": {},
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "names"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "names": {
       "default": [],
       "description": "Curated tool names or aliases. Empty lists installed tools and missing names.",
       "items": {
         "minLength": 1,
-        "type": "string"
+        "not": {
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+          "type": "string"
+        },
+        "type": "string",
+        "x-agena-non-empty": true
       },
       "maxItems": 32,
       "type": "array",
@@ -17056,10 +20756,58 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "title": {}
+          },
+          "required": [
+            "title"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "title": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -17128,6 +20876,49 @@ Inspect and edit Agena's global and workspace agena.json settings.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "dry_run": {
       "default": false,
@@ -17155,7 +20946,12 @@ Inspect and edit Agena's global and workspace agena.json settings.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "reload": {
@@ -17546,6 +21342,49 @@ Inspect and edit Agena's global and workspace agena.json settings.
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "dry_run": {
       "default": false,
@@ -17573,7 +21412,12 @@ Inspect and edit Agena's global and workspace agena.json settings.
     },
     "path": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "reload": {
@@ -17693,10 +21537,58 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   },
   "additionalProperties": false,
   "description": "A non-interactive command. The selected tool determines whether it waits\nfor completion (`shell.exec`) or returns a background receipt (`shell.spawn`).",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "command": {}
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "command": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001.000000"
     },
     "description": {
@@ -17759,10 +21651,15 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "workdir": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001.000000"
     },
     "writes": {
@@ -17829,6 +21726,49 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "process_id": {}
+          },
+          "required": [
+            "process_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "event_offset": {
       "default": 0,
@@ -17859,7 +21799,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "process_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "since_seq": {
@@ -17930,6 +21875,49 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   },
   "additionalProperties": false,
   "description": "Open a persistent interactive shell/PTY. Waiting for initial output never\nends the terminal's lifetime and never creates a completion-notified job.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "command": {}
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "cols": {
       "default": 80,
@@ -17941,7 +21929,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "command": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001.000000"
     },
     "description": {
@@ -18018,10 +22011,15 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "workdir": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001.000000"
     },
     "writes": {
@@ -18082,6 +22080,49 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 {
   "additionalProperties": false,
   "description": "Read a background job or terminal without input. Explicit cursors replay output;\nomitting the cursor consumes only previously unread output.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "process_id": {}
+          },
+          "required": [
+            "process_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "event_offset": {
       "default": 0,
@@ -18118,7 +22159,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "process_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "since_seq": {
@@ -18165,6 +22211,49 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "process_id": {}
+          },
+          "required": [
+            "process_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "cols": {
       "format": "uint16",
@@ -18175,7 +22264,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "process_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "rows": {
@@ -18228,10 +22322,58 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "process_id": {}
+          },
+          "required": [
+            "process_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "process_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "signal": {
@@ -18286,10 +22428,58 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   },
   "additionalProperties": false,
   "description": "A non-interactive command. The selected tool determines whether it waits\nfor completion (`shell.exec`) or returns a background receipt (`shell.spawn`).",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "command": {}
+          },
+          "required": [
+            "command"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "command": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001.000000"
     },
     "description": {
@@ -18352,10 +22542,15 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "workdir": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001.000000"
     },
     "writes": {
@@ -18397,10 +22592,58 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "process_id": {}
+          },
+          "required": [
+            "process_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "process_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -18529,10 +22772,58 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     {
       "additionalProperties": false,
       "description": "Input of a shell command execution.",
+      "not": {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "command": {}
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "command": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "command"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "properties": {
         "command": {
           "minLength": 1,
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
           "type": "string",
+          "x-agena-non-empty": true,
           "x-agena-order": "000001.000000"
         },
         "description": {
@@ -18678,10 +22969,15 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         },
         "workdir": {
           "minLength": 1,
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
           "type": [
             "string",
             "null"
           ],
+          "x-agena-non-empty": true,
           "x-agena-order": "000001.000000"
         },
         "writes": {
@@ -18706,6 +23002,49 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     {
       "additionalProperties": false,
+      "not": {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "process_id": {}
+              },
+              "required": [
+                "process_id"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "process_id": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "process_id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "properties": {
         "policy": {
           "additionalProperties": false,
@@ -18798,7 +23137,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         },
         "process_id": {
           "minLength": 1,
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
           "type": "string",
+          "x-agena-non-empty": true,
           "x-agena-order": "000000"
         },
         "since_seq": {
@@ -18854,6 +23198,49 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 {
   "additionalProperties": false,
   "description": "Input is terminal data, not a new shell command. Never trim it or append a newline.",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "process_id": {}
+          },
+          "required": [
+            "process_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "process_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "chars": {
       "description": "Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use\n\\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D; at most 65536 bytes.",
@@ -18895,7 +23282,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     },
     "process_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "reads": {
@@ -19826,6 +24218,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "frame_selector": {
       "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
@@ -19850,15 +24285,25 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "selector": {
       "maxLength": 4096,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "snapshot_id": {
@@ -19903,10 +24348,58 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "session_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -19936,11 +24429,102 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "url": {}
+              },
+              "required": [
+                "url"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "url": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    ]
+  },
   "properties": {
     "session_id": {
       "description": "Existing managed browser page to use for the navigation. Its browser\nprofile (for example, authenticated cookies) remains intact.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "timeout_ms": {
@@ -19954,7 +24538,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "url": {
       "description": "HTTP(S) download URL. The artifact is always written under the\nmanaged workspace artifact directory; callers cannot choose an\narbitrary destination path.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     }
   },
@@ -19985,40 +24574,64 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 
 ### browser_open
 
-`agena.web.browser_open` · **Summary**: Open a page in a managed interactive browser session.
+`agena.web.browser_open` · **Summary**: Open a public page or an owned running preview in a managed interactive browser session.
 
 **Tags**: `network` `interactive` `mutate` `read_only`
 
 **Runtime**: streaming `buffered`
 
+**Help**:
+> Supply exactly one of url or preview_id. browser_list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.
+
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `preview_id` | `string / null` | — | — | Running preview owned by this workspace and Agena session. Use browser_list<br>to discover IDs. Private URLs are never accepted through the url field. |
 | `timeout_ms` | `integer` | — | `30000` |  |
-| `url` | `string` | ✓ | — |  |
+| `url` | `string / null` | — | — | Public HTTP(S) URL. Supply exactly one of url and preview_id. |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "preview_id": {
+      "description": "Running preview owned by this workspace and Agena session. Use browser_list\nto discover IDs. Private URLs are never accepted through the url field.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001"
+    },
     "timeout_ms": {
       "default": 30000,
       "format": "uint64",
       "maximum": 120000,
       "minimum": 1,
       "type": "integer",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "url": {
+      "description": "Public HTTP(S) URL. Supply exactly one of url and preview_id.",
       "minLength": 1,
-      "type": "string",
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
-  "required": [
-    "url"
-  ],
   "type": "object"
 }
 ```
@@ -20042,6 +24655,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "full_page": {
       "default": false,
@@ -20057,7 +24713,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "session_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -20105,10 +24766,58 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "session_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -20143,6 +24852,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "frame_selector": {
       "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
@@ -20171,15 +24923,25 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "selector": {
       "maxLength": 4096,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "snapshot_id": {
@@ -20234,6 +24996,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "frame_selector": {
       "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
@@ -20247,24 +25052,39 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "selector": {
       "maxLength": 4096,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "session_id": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "text": {
       "maxLength": 4096,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000002"
     },
     "timeout_ms": {
@@ -20309,6 +25129,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "start_url": {}
+          },
+          "required": [
+            "start_url"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "start_url": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "start_url"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "concurrency": {
       "description": "Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.",
@@ -20356,7 +25219,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "start_url": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "use_cache": {
@@ -20405,6 +25273,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     }
   },
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "url": {}
+          },
+          "required": [
+            "url"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "url": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "extractor": {
       "anyOf": [
@@ -20430,10 +25341,15 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "prompt": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "render_js": {
@@ -20446,7 +25362,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "url": {
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
     "use_cache": {
@@ -20585,6 +25506,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "query": {}
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "max_results": {
       "default": null,
@@ -20601,7 +25565,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "description": "Search the local crawl index; does not search the public web or refresh stored pages.",
       "maxLength": 4096,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -20634,6 +25603,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "page_id": {}
+          },
+          "required": [
+            "page_id"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "page_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "page_id"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "max_chars": {
       "default": null,
@@ -20658,7 +25670,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "page_id": {
       "description": "Immutable snapshot handle returned by fetch, fetch_many, or query. Expires after 15 minutes or memory eviction.",
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },
@@ -20695,6 +25712,49 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "properties": {
+            "query": {}
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      {
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                "type": "string"
+              },
+              {
+                "maxItems": 0,
+                "type": "array"
+              },
+              {
+                "maxProperties": 0,
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    ]
+  },
   "properties": {
     "allowed_domains": {
       "items": {
@@ -20758,7 +25818,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     "query": {
       "maxLength": 8192,
       "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
       "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000000"
     }
   },

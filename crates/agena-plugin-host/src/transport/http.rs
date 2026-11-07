@@ -18,6 +18,9 @@ use crate::sdk::rpc::{JsonRpcVersion, Request, RequestId, Response, ResponsePayl
 use crate::sdk::{ToolInvokeInput, ToolInvokeStreamHandle};
 use crate::transport::{PluginTransport, ToolStreamHandle};
 
+#[cfg(test)]
+mod fork_tests;
+mod forked;
 mod hosted;
 mod streams;
 use streams::{StreamEvent, StreamRegistry};
@@ -31,14 +34,19 @@ pub struct HttpTransport {
     client: Client,
     url: Url,
     auth_header: Option<String>,
-    stream_callbacks: AtomicBool,
-    binding: std::sync::Mutex<Option<hosted::HttpBinding>>,
-    handoff: tokio::sync::Mutex<()>,
-    next_id: AtomicI64,
+    stream_callbacks: Arc<AtomicBool>,
+    binding: Arc<std::sync::Mutex<Option<hosted::HttpBinding>>>,
+    binding_id: String,
+    handoff: Arc<tokio::sync::Mutex<()>>,
+    owners: Arc<std::sync::Mutex<forked::PhysicalOwners>>,
+    finish: Arc<std::sync::Mutex<Option<forked::FinishReceiver>>>,
+    retire_on_drop: bool,
+    next_id: Arc<AtomicI64>,
     streams: Arc<StreamRegistry>,
     shutdown: CancellationToken,
+    local_shutdown: CancellationToken,
     instance_id: String,
-    expected_revision: std::sync::Mutex<Option<String>>,
+    expected_revision: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl HttpTransport {
@@ -68,6 +76,7 @@ impl HttpTransport {
                 Some(format!("Basic {encoded}"))
             }
         };
+        let binding_id = uuid::Uuid::new_v4().simple().to_string();
         Self {
             client: Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -76,14 +85,21 @@ impl HttpTransport {
                 .expect("plugin HTTP client with static configuration should build"),
             url,
             auth_header,
-            stream_callbacks: AtomicBool::new(stream_callbacks),
-            binding: std::sync::Mutex::new(None),
-            handoff: tokio::sync::Mutex::new(()),
-            next_id: AtomicI64::new(1),
+            stream_callbacks: Arc::new(AtomicBool::new(stream_callbacks)),
+            binding: Arc::new(std::sync::Mutex::new(None)),
+            owners: Arc::new(std::sync::Mutex::new(forked::PhysicalOwners::initial(
+                &binding_id,
+            ))),
+            binding_id,
+            handoff: Arc::new(tokio::sync::Mutex::new(())),
+            finish: Arc::new(std::sync::Mutex::new(None)),
+            retire_on_drop: true,
+            next_id: Arc::new(AtomicI64::new(1)),
             streams: Arc::new(StreamRegistry::default()),
             shutdown: CancellationToken::new(),
+            local_shutdown: CancellationToken::new(),
             instance_id: uuid::Uuid::new_v4().simple().to_string(),
-            expected_revision: std::sync::Mutex::new(None),
+            expected_revision: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -106,6 +122,7 @@ impl HttpTransport {
                     crate::sdk::drivers::http::INSTANCE_HEADER,
                     &self.instance_id,
                 )
+                .header(crate::sdk::drivers::http::BINDING_HEADER, &self.binding_id)
                 .header(reqwest::header::CONTENT_TYPE, "application/json")
                 .body(body);
             if init {
@@ -183,6 +200,7 @@ impl HttpTransport {
         let url = self.url.clone();
         let auth_header = self.auth_header.clone();
         let instance_id = self.instance_id.clone();
+        let binding_id = self.binding_id.clone();
         let cancel = Request {
             jsonrpc: JsonRpcVersion,
             id: RequestId::Num(self.next_request_id()),
@@ -200,6 +218,7 @@ impl HttpTransport {
                 let mut request = client
                     .post(url)
                     .header(crate::sdk::drivers::http::INSTANCE_HEADER, instance_id)
+                    .header(crate::sdk::drivers::http::BINDING_HEADER, binding_id)
                     .timeout(Duration::from_secs(5))
                     .json(&cancel);
                 if let Some(auth) = auth_header {
@@ -260,6 +279,22 @@ impl PluginTransport for HttpTransport {
         self.reusable_binding(owner).is_some()
     }
 
+    async fn fork_host(
+        &self,
+        host: Arc<crate::host::HostHandle>,
+        scope: Arc<crate::effect_scope::PluginEffectScope>,
+        previous_scope: Arc<crate::effect_scope::PluginEffectScope>,
+        _: super::initialization::PluginInitialization,
+    ) -> Result<Option<Arc<dyn PluginTransport>>, TransportError> {
+        self.fork_binding(host, scope, previous_scope)
+            .await
+            .map(Some)
+    }
+
+    fn abandon_host_fork(&self) {
+        self.abandon_candidate();
+    }
+
     async fn try_rebind_host(
         &self,
         host: Arc<crate::host::HostHandle>,
@@ -282,12 +317,20 @@ impl PluginTransport for HttpTransport {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, TransportError> {
+        if method == method::META_SHUTDOWN {
+            self.retire().await?;
+            return Ok(serde_json::json!({}));
+        }
+        let mut context = crate::sdk::host_api::current_host_callback_context();
+        if let Some(context) = &mut context {
+            context.http_binding_id = Some(self.binding_id.clone());
+        }
         let req = Request {
             jsonrpc: JsonRpcVersion,
             id: RequestId::Num(self.next_request_id()),
             method: method.to_string(),
             params: Some(params),
-            context: crate::sdk::host_api::current_host_callback_context(),
+            context,
         };
         let method = req.method.clone();
         let context = req.context.clone();
@@ -310,7 +353,8 @@ impl PluginTransport for HttpTransport {
         if !self.stream_callbacks.load(Ordering::Acquire) {
             return Ok(None);
         }
-        let context = crate::sdk::host_api::current_host_callback_context().unwrap_or_default();
+        let mut context = crate::sdk::host_api::current_host_callback_context().unwrap_or_default();
+        context.http_binding_id = Some(self.binding_id.clone());
         let req = Request {
             jsonrpc: JsonRpcVersion,
             id: RequestId::Num(self.next_request_id()),
@@ -392,14 +436,17 @@ impl PluginTransport for HttpTransport {
     }
 
     async fn close(&self) -> Result<(), TransportError> {
-        self.close_local("plugin transport closed");
-        Ok(())
+        self.retire().await
     }
 }
 
 impl Drop for HttpTransport {
     fn drop(&mut self) {
-        self.close_local("plugin transport dropped");
+        // Failed/cancelled candidate construction can bypass PluginHost's
+        // awaited shutdown, so transfer it to the same owned retire operation.
+        if self.retire_on_drop {
+            self.begin_retire();
+        }
     }
 }
 

@@ -140,7 +140,8 @@ impl PluginHost {
             service_bindings: BTreeMap::new(),
             timeouts: TimeoutsConfig::default(),
             _host_handle: host_handle,
-            transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
+            transferred_to_successor: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            shutdown_result: Default::default(),
             hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
     }
@@ -2187,21 +2188,38 @@ impl PluginHost {
         let timeout = self.timeouts.chat_or(Duration::from_secs(10));
         let session_id = Some(input.session_id);
         let mut runs = Vec::new();
-        let result =
-            self.chain_patch_with_default_context::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
-                method::HOOK_CHAT_MESSAGES_TRANSFORM,
-                HookSubscription::CHAT_MESSAGES_TRANSFORM,
-                timeout,
-                input,
-                |inp, patch| {
-                    if let Some(msgs) = patch.messages {
-                        inp.messages = msgs;
-                    }
-                },
-                session_id,
-                &mut runs,
-            )
-            .await;
+        let result = dispatcher::chain_patch_in_context::<
+            ChatMessagesTransformInput,
+            ChatMessagesTransformPatch,
+            _,
+            _,
+        >(
+            &self.plugins,
+            method::HOOK_CHAT_MESSAGES_TRANSFORM,
+            HookSubscription::CHAT_MESSAGES_TRANSFORM,
+            timeout,
+            input,
+            |inp, patch| {
+                if let Some(msgs) = patch.messages {
+                    inp.messages = msgs;
+                }
+            },
+            |plugin, input| {
+                // Recall and other input hooks must query the same session
+                // policy and workspace as the pending model request. No tool-call
+                // authority is implied by a model-input transformation.
+                Some(HostCallbackContext {
+                    plugin_id: Some(plugin.key().to_string()),
+                    session_id: Some(input.session_id),
+                    workspace_root: input.workspace_root.clone().filter(|root| !root.is_empty()),
+                    ..Default::default()
+                })
+            },
+            Some(&self._host_handle),
+            session_id,
+            &mut runs,
+        )
+        .await;
         self.push_hook_runs(runs);
         result.map_err(transport_to_plugin_error)
     }
@@ -2210,29 +2228,146 @@ impl PluginHost {
     /// Plugins whose transport has been transferred to a successor host during
     /// hot-reload keep running; this host still disposes its old registrations.
     pub async fn shutdown(&self) {
-        let transferred = self.transferred_to_successor.lock().await.clone();
-        for plugin in &self.plugins {
-            if transferred.contains(&plugin.key()) {
-                self._host_handle
-                    .dispose_plugin_resources(&plugin.key())
-                    .await;
-                continue;
+        let _ = self.shutdown_report().await;
+    }
+
+    /// Send meta/shutdown and dispose every generation-owned effect once.
+    /// Concurrent callers share a cached report; cancelling a caller does not
+    /// cancel the owned operation or repeat the plugin shutdown callback.
+    pub async fn shutdown_report(&self) -> super::PluginShutdownReport {
+        use super::{PluginShutdownFailure, PluginShutdownReport};
+        use futures_util::FutureExt;
+
+        let mut receiver = {
+            let mut cached = self
+                .shutdown_result
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            if let Some(receiver) = cached.as_ref() {
+                receiver.clone()
+            } else {
+                let (sender, receiver) = tokio::sync::watch::channel(None);
+                *cached = Some(receiver.clone());
+                let plugins = self.plugins.clone();
+                let transferred = self.transferred_to_successor.clone();
+                let host = self._host_handle.clone();
+                let logs = self.logs.clone();
+                let statuses = self.statuses.clone();
+                let work = async move {
+                    let transferred = transferred.lock().await.clone();
+                    let mut report = PluginShutdownReport::default();
+                    for plugin in plugins {
+                        let plugin_id = plugin.key();
+                        let moved = transferred.contains(&plugin_id);
+                        if !moved {
+                            let close = std::panic::AssertUnwindSafe(shutdown_transport(
+                                Arc::clone(&plugin.transport),
+                            ))
+                            .catch_unwind()
+                            .await;
+                            let message = match close {
+                                Ok(Ok(())) => None,
+                                Ok(Err(error)) => Some(
+                                    agena_failure::diagnostic::format_error_chain_with_context(
+                                        "plugin shutdown did not reach quiescence",
+                                        &error,
+                                    ),
+                                ),
+                                Err(_) => Some("plugin transport shutdown panicked".to_owned()),
+                            };
+                            if let Some(message) = message {
+                                logs.append(
+                                    &plugin_id,
+                                    "error",
+                                    "shutdown",
+                                    message.clone(),
+                                    serde_json::Value::Null,
+                                );
+                                report.failures.push(PluginShutdownFailure {
+                                    plugin_id: plugin_id.to_string(),
+                                    stage: "transport".into(),
+                                    message,
+                                });
+                            }
+                        }
+                        // Read the scope's cached result, not a bounded log ring
+                        // which may already have evicted a disposal error.
+                        let scope = host.effect_scope(&plugin_id);
+                        let disposed = std::panic::AssertUnwindSafe(async {
+                            host.dispose_plugin_resources(&plugin_id).await;
+                            if let Some(scope) = scope {
+                                scope.dispose().await.errors
+                            } else {
+                                Vec::new()
+                            }
+                        })
+                        .catch_unwind()
+                        .await;
+                        let errors = match disposed {
+                            Ok(errors) => errors,
+                            Err(_) => vec!["plugin effect cleanup panicked".to_owned()],
+                        };
+                        report.failures.extend(errors.into_iter().map(|message| {
+                            PluginShutdownFailure {
+                                plugin_id: plugin_id.to_string(),
+                                stage: "effects".into(),
+                                message,
+                            }
+                        }));
+                        if !moved {
+                            statuses.record_stopped(&plugin_id);
+                        }
+                    }
+                    report
+                };
+                match tokio::runtime::Handle::try_current() {
+                    Ok(executor) => {
+                        executor.spawn(async move {
+                            let report = std::panic::AssertUnwindSafe(work)
+                                .catch_unwind()
+                                .await
+                                .unwrap_or_else(|_| PluginShutdownReport {
+                                    failures: vec![PluginShutdownFailure {
+                                        plugin_id: "<host>".into(),
+                                        stage: "shutdown_task".into(),
+                                        message: "plugin shutdown task panicked".into(),
+                                    }],
+                                });
+                            if !report.is_success() {
+                                tracing::error!(%report, "plugin host shutdown failed");
+                            }
+                            sender.send_replace(Some(report));
+                        });
+                    }
+                    Err(error) => {
+                        sender.send_replace(Some(PluginShutdownReport {
+                            failures: vec![PluginShutdownFailure {
+                                plugin_id: "<host>".into(),
+                                stage: "shutdown_task".into(),
+                                message: format!(
+                                    "plugin shutdown requires a Tokio executor: {error}"
+                                ),
+                            }],
+                        }));
+                    }
+                }
+                receiver
             }
-            let plugin_id = plugin.key();
-            if let Err(error) = shutdown_transport(Arc::clone(&plugin.transport)).await {
-                self.logs.append(
-                    &plugin_id,
-                    "error",
-                    "shutdown",
-                    agena_failure::diagnostic::format_error_chain_with_context(
-                        "plugin shutdown did not reach quiescence",
-                        &error,
-                    ),
-                    serde_json::Value::Null,
-                );
+        };
+        loop {
+            let report = receiver.borrow_and_update().clone();
+            if let Some(report) = report {
+                return report;
             }
-            self._host_handle.dispose_plugin_resources(&plugin_id).await;
-            self.statuses.record_stopped(&plugin_id);
+            if receiver.changed().await.is_err() {
+                return PluginShutdownReport {
+                    failures: vec![PluginShutdownFailure {
+                        plugin_id: "<host>".into(),
+                        stage: "shutdown_task".into(),
+                        message: "plugin shutdown owner ended without a result".into(),
+                    }],
+                };
+            }
         }
     }
 

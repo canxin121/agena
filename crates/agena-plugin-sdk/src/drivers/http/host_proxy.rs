@@ -23,6 +23,9 @@ impl HostClientProxy {
     }
 
     async fn run<T>(&self, future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
+        if super::bindings::in_shutdown_scope() {
+            return future.await;
+        }
         tokio::select! {
             biased;
             _ = self.stop.cancelled() => Err(PluginError::from_kind(PluginErrorKind::HostUnavailable, "HTTP plugin callback owner has stopped")),

@@ -1,6 +1,7 @@
 //! HTTP requests are fenced by their initialized instance. Lifecycle changes
 //! serialize, retire admitted work, and compare the revision observed before init.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -20,6 +21,11 @@ pub const EXPECTED_REVISION_HEADER: &str = "x-agena-expected-revision";
 /// HTTP lifecycle extension version, independent of the global RPC version.
 pub const HTTP_INSTANCE_VERSION: u32 = 1;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+// A delayed predecessor may acknowledge retirement after a successor's init
+// already shut it down. Keep bounded evidence of actual successful cleanup.
+// An unknown or evicted owner still fails closed: a predecessor retained across
+// more than this many cleanups may therefore report a retirement error.
+const COMPLETED_SHUTDOWN_CAPACITY: usize = 256;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +38,12 @@ pub struct HttpInstanceState {
 pub(super) struct Instances<P: Plugin> {
     control: tokio::sync::Mutex<()>,
     current: Mutex<Option<Arc<Instance<P>>>>,
+    completed_shutdowns: Mutex<VecDeque<CompletedShutdown>>,
+}
+
+struct CompletedShutdown {
+    owner: String,
+    bindings: Vec<String>,
 }
 
 pub(super) struct Instance<P: Plugin> {
@@ -44,6 +56,7 @@ pub(super) struct Instance<P: Plugin> {
     dispatcher: Mutex<Option<Arc<PluginDispatcher<P>>>>,
     pub(super) host_proxy: Arc<host_proxy::HostClientProxy>,
     pub(super) callback_client: RwLock<Option<Arc<HttpCallbackHostClient>>>,
+    pub(super) bindings: Arc<bindings::CallbackBindings>,
 }
 
 pub(super) struct Admission<P: Plugin> {
@@ -51,6 +64,7 @@ pub(super) struct Admission<P: Plugin> {
     pub(super) dispatcher: Arc<PluginDispatcher<P>>,
     pub(super) stop: CancellationToken,
     _operation: Arc<OwnedRwLockReadGuard<()>>,
+    _binding: bindings::BindingLease,
 }
 
 impl<P: Plugin> Clone for Admission<P> {
@@ -60,6 +74,7 @@ impl<P: Plugin> Clone for Admission<P> {
             dispatcher: self.dispatcher.clone(),
             stop: self.stop.clone(),
             _operation: self._operation.clone(),
+            _binding: self._binding.clone(),
         }
     }
 }
@@ -79,6 +94,7 @@ impl<P: Plugin> Default for Instances<P> {
         Self {
             control: tokio::sync::Mutex::new(()),
             current: Mutex::new(None),
+            completed_shutdowns: Mutex::new(VecDeque::new()),
         }
     }
 }
@@ -127,12 +143,70 @@ fn header(headers: &HeaderMap, name: &str) -> crate::Result<Option<String>> {
 /// cancel a successor's work, including initialization not yet admitted.
 pub(super) fn request_id(headers: &HeaderMap, id: &RequestId) -> crate::Result<RequestId> {
     let owner = header(headers, INSTANCE_HEADER)?;
-    serde_json::to_string(&(owner, id))
+    let binding = bindings::header(headers)?;
+    serde_json::to_string(&(owner, binding, id))
         .map(RequestId::Str)
         .map_err(PluginError::from)
 }
 
 impl<P: Plugin> Instances<P> {
+    fn shutdown_completed(&self, owner: Option<&str>) -> bool {
+        let Some(owner) = owner else {
+            // Legacy requests have no identity with which to prove retirement.
+            return false;
+        };
+        self.completed_shutdowns
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|completed| completed.owner == owner)
+    }
+
+    fn binding_shutdown_completed(&self, owner: Option<&str>, binding: &str) -> bool {
+        let Some(owner) = owner else {
+            return false;
+        };
+        self.completed_shutdowns
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .any(|completed| {
+                completed.owner == owner && completed.bindings.iter().any(|id| id == binding)
+            })
+    }
+
+    fn forget_completed_shutdown(&self, owner: Option<&str>) {
+        if let Some(owner) = owner {
+            self.completed_shutdowns
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .retain(|completed| completed.owner != owner);
+        }
+    }
+
+    fn record_completed_shutdown(&self, owner: Option<&str>, mut bindings: Vec<String>) {
+        let Some(owner) = owner else {
+            return;
+        };
+        let mut completed = self
+            .completed_shutdowns
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(previous) = completed.iter().find(|previous| previous.owner == owner) {
+            bindings.extend(previous.bindings.iter().cloned());
+            bindings.sort_unstable();
+            bindings.dedup();
+        }
+        completed.retain(|previous| previous.owner != owner);
+        if completed.len() == COMPLETED_SHUTDOWN_CAPACITY {
+            completed.pop_front();
+        }
+        completed.push_back(CompletedShutdown {
+            owner: owner.to_owned(),
+            bindings,
+        });
+    }
+
     pub(super) fn current(&self) -> Option<Arc<Instance<P>>> {
         self.current
             .lock()
@@ -162,24 +236,29 @@ impl<P: Plugin> Instances<P> {
         if current.stop.is_cancelled() || !current.ready.load(Ordering::Acquire) {
             return Err(stopped());
         }
+        let binding = current
+            .bindings
+            .admit(bindings::header(headers)?.as_deref())
+            .await?;
         Ok(Admission {
-            stop: current.stop.clone(),
+            stop: binding.stop.clone(),
             dispatcher: current.dispatcher()?,
             instance: current,
             _operation: Arc::new(guard),
+            _binding: binding,
         })
     }
 }
 
-async fn cleanup<P: Plugin>(current: &Instance<P>) -> crate::Result<()> {
+async fn cleanup<P: Plugin>(instances: &Instances<P>, current: &Instance<P>) -> crate::Result<()> {
     current.stop.cancel();
     let _quiet = current.operations.write().await;
     if current.needs_cleanup.load(Ordering::Acquire) {
         let dispatcher = current.dispatcher()?;
-        crate::host_api::run_in_isolated_host_callback_context(
+        bindings::shutdown_scope(crate::host_api::run_in_isolated_host_callback_context(
             HostCallbackContext::default(),
             dispatcher.dispatch(method::META_SHUTDOWN, serde_json::json!({})),
-        )
+        ))
         .await?;
         current.needs_cleanup.store(false, Ordering::Release);
     }
@@ -191,6 +270,11 @@ async fn cleanup<P: Plugin>(current: &Instance<P>) -> crate::Result<()> {
         .unwrap_or_else(|error| error.into_inner())
         .take();
     drop(retired);
+    // Record success only after the shutdown hook and object retirement finish.
+    // CleanupGuard's retry uses this same path, so cancellation cannot invent a
+    // receipt and a later successful retry can truthfully complete retirement.
+    let bindings = current.bindings.clear_after_shutdown()?;
+    instances.record_completed_shutdown(current.owner.as_deref(), bindings);
     Ok(())
 }
 
@@ -221,7 +305,7 @@ impl<P: Plugin> Drop for CleanupGuard<P> {
                 {
                     return Ok(());
                 }
-                cleanup(&instance).await
+                cleanup(&state.instances, &instance).await
             })
             .await;
             match result {
@@ -280,14 +364,58 @@ async fn control_inner<P: Plugin>(
     // Independent from dispatch permits: control must be able to cancel all
     // admitted requests even when each ordinary slot is occupied by a stream.
     let _control = state.instances.control.lock().await;
-    if method_name == method::META_SHUTDOWN {
+    if method_name == method::META_HOST_RETIRE {
+        let retire: HttpCallbackRetire = serde_json::from_value(params)?;
+        bindings::identifier(&retire.binding_id)?;
+        if bindings::header(headers)?.as_deref() != Some(retire.binding_id.as_str()) {
+            return Err(PluginError::invalid_params(
+                "HTTP retirement requires its matching binding header",
+            ));
+        }
+        let owner = header(headers, INSTANCE_HEADER)?;
+        let current = state.instances.current();
+        let still_owned = current.as_ref().is_some_and(|current| {
+            current.owner == owner && current.needs_cleanup.load(Ordering::Acquire)
+        });
+        if !still_owned
+            && state
+                .instances
+                .binding_shutdown_completed(owner.as_deref(), &retire.binding_id)
+        {
+            return Ok(serde_json::to_value(HttpCallbackRetired {
+                last: false,
+                instance_stopped: true,
+                fenced_uncommitted: false,
+            })?);
+        }
         let current = state.instances.owned(headers)?;
+        if current.stop.is_cancelled() || !current.ready.load(Ordering::Acquire) {
+            return Err(stopped());
+        }
+        let retired = if retire.abort_uncommitted {
+            current.bindings.abort_fork(&retire.binding_id).await?
+        } else {
+            current.bindings.retire(&retire.binding_id).await?
+        };
+        return Ok(serde_json::to_value(retired)?);
+    }
+    if method_name == method::META_SHUTDOWN {
+        let owner = header(headers, INSTANCE_HEADER)?;
+        // Always prefer the live owner, including when a caller reuses an old
+        // owner ID. A receipt must never bypass a new instance's shutdown hook.
+        let current = match state.instances.current() {
+            Some(current) if current.owner == owner => current,
+            _ if state.instances.shutdown_completed(owner.as_deref()) => {
+                return Ok(serde_json::json!({}));
+            }
+            _ => return Err(stopped()),
+        };
         let mut guard = CleanupGuard {
             state: state.clone(),
             instance: current.clone(),
             committed: false,
         };
-        cleanup(&current).await?;
+        cleanup(&state.instances, &current).await?;
         guard.committed = true;
         return Ok(serde_json::json!({}));
     }
@@ -297,6 +425,20 @@ async fn control_inner<P: Plugin>(
             return Err(stopped());
         }
         rebind_callback_client(&state, &current, params).await?;
+        return Ok(serde_json::json!({}));
+    }
+    if method_name == method::META_HOST_FORK {
+        let current = state.instances.owned(headers)?;
+        if current.stop.is_cancelled() || !current.ready.load(Ordering::Acquire) {
+            return Err(stopped());
+        }
+        let fork: HttpCallbackFork = serde_json::from_value(params)?;
+        if bindings::header(headers)?.as_deref() != Some(fork.expected_id.as_str()) {
+            return Err(PluginError::invalid_params(
+                "HTTP fork requires its expected binding header",
+            ));
+        }
+        fork_callback_client(&current, fork).await?;
         return Ok(serde_json::json!({}));
     }
     if !params.is_object() {
@@ -343,7 +485,20 @@ async fn control_inner<P: Plugin>(
     {
         return Err(stopped());
     }
-    let callback = HttpCallbackHostClient::from_init_context(&ctx)?.map(Arc::new);
+    let stop = CancellationToken::new();
+    let bindings = Arc::new(bindings::CallbackBindings::new(
+        bindings::header(headers)?,
+        HttpCallbackBinding {
+            url: ctx.host_callback_url.clone(),
+            token: ctx.host_callback_token.clone(),
+        },
+        stop.clone(),
+    )?);
+    let callback = ctx
+        .host_callback_url
+        .as_ref()
+        .map(|_| HttpCallbackHostClient::from_bindings(bindings.clone()).map(Arc::new))
+        .transpose()?;
     // Construction and immutable-manifest validation precede predecessor retirement.
     let plugin = state.prepare_plugin()?;
     if let Some(current) = current {
@@ -352,10 +507,9 @@ async fn control_inner<P: Plugin>(
             instance: current.clone(),
             committed: false,
         };
-        cleanup(&current).await?;
+        cleanup(&state.instances, &current).await?;
         retiring.committed = true;
     }
-    let stop = CancellationToken::new();
     let target: Arc<dyn HostClient> = callback
         .clone()
         .map(|client| client as Arc<dyn HostClient>)
@@ -377,7 +531,13 @@ async fn control_inner<P: Plugin>(
         )))),
         host_proxy: proxy,
         callback_client: RwLock::new(callback),
+        bindings,
     });
+    // Owner IDs are caller-selected. Remove evidence for a previous use before
+    // installing this generation, even if its initialization later fails.
+    state
+        .instances
+        .forget_completed_shutdown(instance.owner.as_deref());
     *state
         .instances
         .current
@@ -406,4 +566,250 @@ async fn control_inner<P: Plugin>(
     instance.ready.store(true, Ordering::Release);
     guard.committed = true;
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    struct ShutdownProbe {
+        calls: AtomicUsize,
+        fail: AtomicBool,
+        hold: AtomicBool,
+        entered: tokio::sync::Semaphore,
+        release: CancellationToken,
+    }
+
+    struct ProbePlugin(Arc<ShutdownProbe>);
+
+    #[async_trait::async_trait]
+    impl Plugin for ProbePlugin {
+        fn manifest(&self) -> crate::PluginManifest {
+            crate::PluginManifest::new("test", "http-retirement", "test")
+        }
+
+        async fn shutdown(&self) -> crate::Result<()> {
+            self.0.calls.fetch_add(1, Ordering::SeqCst);
+            self.0.entered.add_permits(1);
+            if self.0.hold.load(Ordering::SeqCst) {
+                self.0.release.cancelled().await;
+            }
+            if self.0.fail.load(Ordering::SeqCst) {
+                Err(PluginError::internal("deliberate shutdown failure"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    type State = Arc<HttpDriverState<ProbePlugin>>;
+
+    fn fixture() -> (State, Arc<ShutdownProbe>) {
+        let probe = Arc::new(ShutdownProbe {
+            calls: AtomicUsize::new(0),
+            fail: AtomicBool::new(false),
+            hold: AtomicBool::new(false),
+            entered: tokio::sync::Semaphore::new(0),
+            release: CancellationToken::new(),
+        });
+        let factory_probe = probe.clone();
+        let state = Arc::new(HttpDriverState::new(
+            move || ProbePlugin(factory_probe.clone()),
+            Arc::new(crate::host_api::NoopHostClient),
+        ));
+        (state, probe)
+    }
+
+    fn headers(owner: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(INSTANCE_HEADER, owner.parse().unwrap());
+        headers
+    }
+
+    async fn initialize(state: &State, owner: &str) -> crate::Result<Value> {
+        let observed = control(
+            state.clone(),
+            &HeaderMap::new(),
+            method::META_HTTP_STATE,
+            serde_json::json!({}),
+            None,
+        )
+        .await?;
+        let mut headers = headers(owner);
+        headers.insert(
+            EXPECTED_REVISION_HEADER,
+            observed["revision"]
+                .as_str()
+                .unwrap_or("-")
+                .parse()
+                .unwrap(),
+        );
+        control(
+            state.clone(),
+            &headers,
+            method::META_INIT,
+            serde_json::json!({
+                "agena_version": "test",
+                "workspace_root": "/",
+                "plugin_id": "test.http-retirement",
+                "settings": {},
+                "protocol_version": crate::rpc::PROTOCOL_VERSION,
+            }),
+            None,
+        )
+        .await
+    }
+
+    async fn shutdown(state: &State, owner: &str) -> crate::Result<Value> {
+        control(
+            state.clone(),
+            &headers(owner),
+            method::META_SHUTDOWN,
+            serde_json::json!({}),
+            None,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn replaced_owner_shutdown_is_idempotent_without_stopping_successor() {
+        let (state, probe) = fixture();
+        initialize(&state, "first").await.unwrap();
+        initialize(&state, "second").await.unwrap();
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        shutdown(&state, "first").await.unwrap();
+        shutdown(&state, "first").await.unwrap();
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        assert!(state.instances.admit(&headers("first")).await.is_err());
+        assert!(state.instances.admit(&headers("second")).await.is_ok());
+
+        shutdown(&state, "second").await.unwrap();
+        shutdown(&state, "second").await.unwrap();
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_or_malformed_owner_cannot_acknowledge_shutdown() {
+        let (state, probe) = fixture();
+        initialize(&state, "first").await.unwrap();
+        initialize(&state, "second").await.unwrap();
+        let mut duplicate = headers("first");
+        duplicate.append(INSTANCE_HEADER, "first".parse().unwrap());
+        for (request_headers, expected) in [
+            (headers("unknown"), PluginErrorKind::HostUnavailable),
+            (HeaderMap::new(), PluginErrorKind::HostUnavailable),
+            (duplicate, PluginErrorKind::InvalidParams),
+            (headers("first!"), PluginErrorKind::InvalidParams),
+        ] {
+            let error = control(
+                state.clone(),
+                &request_headers,
+                method::META_SHUTDOWN,
+                serde_json::json!({}),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.kind, expected);
+        }
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        assert!(state.instances.admit(&headers("second")).await.is_ok());
+        shutdown(&state, "second").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_cleanup_does_not_create_a_receipt_or_replace_current() {
+        let (state, probe) = fixture();
+        initialize(&state, "first").await.unwrap();
+        probe.fail.store(true, Ordering::SeqCst);
+        let error = initialize(&state, "second").await.unwrap_err();
+        assert_eq!(error.diagnostic_message(), "deliberate shutdown failure");
+        assert!(!state.instances.shutdown_completed(Some("first")));
+        assert_eq!(
+            state.instances.current().unwrap().owner.as_deref(),
+            Some("first"),
+        );
+        let error = shutdown(&state, "first").await.unwrap_err();
+        assert_eq!(error.diagnostic_message(), "deliberate shutdown failure");
+        assert!(!state.instances.shutdown_completed(Some("first")));
+        assert_eq!(
+            shutdown(&state, "second").await.unwrap_err().kind,
+            PluginErrorKind::HostUnavailable,
+        );
+        assert!(state.instances.admit(&headers("first")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reused_owner_must_run_its_new_shutdown_hook() {
+        let (state, probe) = fixture();
+        initialize(&state, "first").await.unwrap();
+        initialize(&state, "second").await.unwrap();
+        assert!(state.instances.shutdown_completed(Some("first")));
+        initialize(&state, "first").await.unwrap();
+        assert!(!state.instances.shutdown_completed(Some("first")));
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        probe.fail.store(true, Ordering::SeqCst);
+        let error = shutdown(&state, "first").await.unwrap_err();
+        assert_eq!(error.diagnostic_message(), "deliberate shutdown failure");
+        assert!(probe.calls.load(Ordering::SeqCst) >= 3);
+        assert!(!state.instances.shutdown_completed(Some("first")));
+    }
+
+    #[tokio::test]
+    async fn cancelled_cleanup_only_records_success_after_its_retry_finishes() {
+        let (state, probe) = fixture();
+        initialize(&state, "first").await.unwrap();
+        probe.hold.store(true, Ordering::SeqCst);
+        let shutdown_state = state.clone();
+        let caller = tokio::spawn(async move { shutdown(&shutdown_state, "first").await });
+        let first = tokio::time::timeout(Duration::from_secs(2), probe.entered.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        first.forget();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        let retry = tokio::time::timeout(Duration::from_secs(2), probe.entered.acquire())
+            .await
+            .unwrap()
+            .unwrap();
+        retry.forget();
+        assert!(!state.instances.shutdown_completed(Some("first")));
+        probe.release.cancel();
+        // The successor serializes behind the retry, which must finish before
+        // its successful retirement receipt can acknowledge the old owner.
+        initialize(&state, "second").await.unwrap();
+        assert!(state.instances.shutdown_completed(Some("first")));
+        shutdown(&state, "first").await.unwrap();
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        assert!(state.instances.admit(&headers("second")).await.is_ok());
+        shutdown(&state, "second").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn evicted_retirement_evidence_fails_closed_without_stopping_current() {
+        let (state, probe) = fixture();
+        for index in 0..=COMPLETED_SHUTDOWN_CAPACITY + 1 {
+            initialize(&state, &format!("owner-{index}")).await.unwrap();
+        }
+        assert_eq!(
+            state.instances.completed_shutdowns.lock().unwrap().len(),
+            COMPLETED_SHUTDOWN_CAPACITY,
+        );
+        let calls = probe.calls.load(Ordering::SeqCst);
+        // Retention is deliberately bounded; even a formerly valid owner must
+        // not receive an invented success once its proof has been evicted.
+        assert_eq!(
+            shutdown(&state, "owner-0").await.unwrap_err().kind,
+            PluginErrorKind::HostUnavailable,
+        );
+        shutdown(&state, &format!("owner-{COMPLETED_SHUTDOWN_CAPACITY}"))
+            .await
+            .unwrap();
+        let current = format!("owner-{}", COMPLETED_SHUTDOWN_CAPACITY + 1);
+        assert!(state.instances.admit(&headers(&current)).await.is_ok());
+        assert_eq!(probe.calls.load(Ordering::SeqCst), calls);
+        shutdown(&state, &current).await.unwrap();
+    }
 }

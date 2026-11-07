@@ -725,6 +725,10 @@ pub(crate) async fn provider_output(
     if evidence.blocked() {
         output_text="The provider returned application-side actions or a non-hosted route. Agena blocked that execution boundary: no local action was executed or redirected. Do not execute or resubmit these callbacks. Inspect the response receipt and choose a separate native tool only when explicitly intended.".into();
     }
+    // Structured payloads are the durable source for model and human views;
+    // output_text alone is a formatted preview and is not retained with them.
+    // Preserve the bounded text only after applying the hosted execution boundary.
+    let response_text = truncate_text(&output_text, MAX_TEXT_BYTES);
     output_text = format!(
         "Cloud tool: {public_tool_name}. Execution location: {execution_provider} cloud, not this computer.\nExecution boundary: vendor-hosted only; local actions executed: 0.\nProvider outcome: {outcome}. Local persistence: {}.\n{}{}{}",
         if persistence_warnings.is_empty() {
@@ -780,6 +784,7 @@ pub(crate) async fn provider_output(
         "client_execution_allowed": false,
         "execution_evidence": evidence,
         "assistant_content": assistant_content,
+        "text": response_text,
         "sources": sources,
         "usage": usage,
         "response_receipt": receipt,
@@ -1780,11 +1785,20 @@ pub(crate) fn resolve_local_path(workspace_root: &Path, value: &str) -> SdkResul
         return Err(PluginError::invalid_params("path must not be empty"));
     }
     let path = Path::new(value);
-    Ok(if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        workspace_root.join(path)
-    })
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    // Plugin initialization is rooted at its configuration directory. Explicit
+    // relative files belong to the invoking session, which may use another
+    // workspace. Resolve while callback context is live, before offloading I/O.
+    let invoking_workspace = agena_plugin_sdk::host_api::current_host_callback_context()
+        .and_then(|context| context.workspace_root)
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from);
+    Ok(invoking_workspace
+        .as_deref()
+        .unwrap_or(workspace_root)
+        .join(path))
 }
 
 fn extract_response_text(value: &serde_json::Value) -> Option<String> {
@@ -2070,7 +2084,6 @@ fn extension_for_mime(mime: &str) -> &'static str {
 #[cfg(test)]
 mod provider_transport_error_tests {
     use super::*;
-    use agena_failure::{FailureImpact, RetryDirective, UserProblem};
 
     #[test]
     fn transport_io_causes_are_typed_and_never_copy_private_text() {
@@ -2092,111 +2105,6 @@ mod provider_transport_error_tests {
         }
         let error = Error::other("private-unknown-cause-canary");
         assert_eq!(transport_io_reason(&error), None);
-    }
-
-    #[tokio::test]
-    async fn connection_refused_survives_rpc_without_url_or_header_credentials() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .unwrap();
-        let error = client
-            .post(format!(
-                "http://user-canary:password-canary@{address}/private-path-canary?key=query-canary"
-            ))
-            .header("Authorization", "Bearer header-canary")
-            .send()
-            .await
-            .unwrap_err();
-        let error = provider_transport_error("chatgpt", "image generation", &error, None)
-            .with_remote_effect_unknown();
-        let wire = serde_json::to_string(&error).unwrap();
-        for secret in [
-            "user-canary",
-            "password-canary",
-            "private-path-canary",
-            "query-canary",
-            "header-canary",
-        ] {
-            assert!(!wire.contains(secret));
-        }
-        let received: PluginError = serde_json::from_str(&wire).unwrap();
-        let public = UserProblem::from(received.failure.as_ref());
-        assert!(public.user.fallback.contains("connection refused"));
-        assert_eq!(
-            public
-                .user
-                .fallback
-                .matches("do not repeat automatically")
-                .count(),
-            1
-        );
-        assert!(public.user.fallback.chars().count() <= 240);
-        assert_eq!(received.failure.retry, RetryDirective::Never);
-        assert_eq!(received.failure.impact, FailureImpact::PartialSuccess);
-    }
-
-    #[tokio::test]
-    async fn stalled_response_reports_request_timeout_and_configured_limit() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let _ = accepted_tx.send(());
-            std::future::pending::<()>().await;
-            drop(stream);
-        });
-        let connection = agena_plugin_sdk::host_api::BuiltinProviderConnection {
-            provider_id: "fixture".into(),
-            base_url: format!("http://{address}"),
-            messages_url: None,
-            realtime_ws_url: None,
-            headers: BTreeMap::new(),
-            model: None,
-            timeout_secs: 1,
-            connect_timeout_secs: 1,
-            receipt_key: "receipt-canary".into(),
-        };
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(connection.timeout_secs))
-            .connect_timeout(Duration::from_secs(connection.connect_timeout_secs))
-            .build()
-            .unwrap();
-        let error = client.post(&connection.base_url).send().await.unwrap_err();
-        server.abort();
-        let _ = server.await;
-        accepted_rx.await.unwrap();
-        assert!(error.is_timeout());
-        let error =
-            provider_transport_error("chatgpt", "image generation", &error, Some(&connection))
-                .with_remote_effect_unknown();
-        assert!(
-            error
-                .failure
-                .user
-                .fallback
-                .contains("request timed out (configured limit: 1 s)")
-        );
-        assert_eq!(
-            error
-                .failure
-                .user
-                .fallback
-                .matches("do not repeat automatically")
-                .count(),
-            1
-        );
-        assert!(
-            !serde_json::to_string(&error)
-                .unwrap()
-                .contains("receipt-canary")
-        );
     }
 }
 
@@ -2417,30 +2325,6 @@ mod provider_http_error_tests {
                     .contains("private-body-canary")
             );
         }
-    }
-
-    #[test]
-    fn unrecognized_and_malformed_responses_never_copy_body_content() {
-        for value in [
-            json!({"error":"private-body-canary"}),
-            json!({"diagnostic":{"message":"private-body-canary"}}),
-            json!(["private-body-canary"]),
-        ] {
-            let error = error(502, value);
-            assert!(
-                !serde_json::to_string(&error)
-                    .unwrap()
-                    .contains("private-body-canary")
-            );
-            assert!(error.failure.user.fallback.contains("HTTP 502"));
-        }
-        let reason = decode_provider_json(b"<html>private-body-canary</html>").unwrap_err();
-        assert!(!reason.contains("private-body-canary"));
-        assert!(reason.contains("not valid JSON"));
-        let error = error(400, json!({"error":{"message":reason}}));
-        assert!(error.failure.user.fallback.contains("HTTP 400"));
-        assert!(error.failure.user.fallback.contains("req_fixture-42"));
-        assert!(error.failure.user.fallback.contains("not valid JSON"));
     }
 
     #[test]

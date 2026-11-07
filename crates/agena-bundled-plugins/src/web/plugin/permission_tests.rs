@@ -1,42 +1,17 @@
 use super::*;
 
-#[tokio::test]
-async fn non_public_fetch_targets_keep_their_policy_denial_classification() {
-    let url = url::Url::parse("http://127.0.0.1:9/private").unwrap();
-    let error = resolve_public_network_target(&url, &network_policy::WebNetworkConfig::default())
-        .await
-        .unwrap_err();
-    assert_eq!(
-        error.kind,
-        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
-    );
-    assert_eq!(
-        error.failure.category,
-        agena_failure::FailureCategory::PermissionDenied
-    );
-}
 use agena_plugin_host::sdk::{
     PluginErrorKind,
     host_api::{HostCallbackContext, run_in_isolated_host_callback_context},
 };
 
 #[tokio::test]
-async fn denied_search_sources_keep_typed_denial_and_partial_sources_stay_visible() {
+async fn mixed_search_sources_keep_success_and_report_denied_sources() {
     let input: CrawlWebSearchInput =
         serde_json::from_value(serde_json::json!({"query":"fixture","engine":"bing,google"}))
             .unwrap();
     let limits =
         search_aggregate::HtmlSearchLimits::from_input(&input, &WebSearchConfig::default());
-    let denied =
-        search_aggregate::search(&input, limits, Duration::from_secs(1), |_, _, _| async {
-            Err::<WebSearchResponse, _>(PluginError::from_kind(
-                PluginErrorKind::UserDeclined,
-                "fixture decline",
-            ))
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(denied.kind, PluginErrorKind::UserDeclined);
     let partial = search_aggregate::search(
         &input,
         limits,

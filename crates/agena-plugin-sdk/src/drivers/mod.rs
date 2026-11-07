@@ -58,6 +58,8 @@ macro_rules! impl_callback_host_client {
                 -> $crate::host_api::AgentMessageReceipt = HOST_AGENT_CANCEL { "request": request };
             image_execute(request: $crate::host_api::HostImageExecuteRequest)
                 -> $crate::host_api::HostImageExecuteResponse = HOST_IMAGE_EXECUTE { "request": request };
+            notify(request: $crate::host_api::PluginNotifyRequest)
+                -> () = HOST_NOTIFY { "request": request } [discard_response];
         );
     };
     (@select remote ($($configuration:tt)*); $($common:tt)*) => {
@@ -141,8 +143,6 @@ macro_rules! impl_callback_host_client {
                 -> () = HOST_UI_DISPLAY_CONTRIBUTE { "request": request } [discard_response];
             display_remove(request: $crate::host_api::HostDisplayRemoveRequest)
                 -> $crate::host_api::HostDisplayRemoveResponse = HOST_UI_DISPLAY_REMOVE { "request": request };
-            notify(request: $crate::host_api::PluginNotifyRequest)
-                -> () = HOST_NOTIFY { "request": request } [discard_response];
             ui_theme_register(request: $crate::host_api::HostThemeRegisterRequest)
                 -> () = HOST_UI_THEME_REGISTER { "request": request } [discard_response];
             ui_theme_list()

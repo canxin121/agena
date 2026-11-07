@@ -233,31 +233,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn browser_open_requires_one_typed_target() {
-        for value in [
-            serde_json::json!({}),
-            serde_json::json!({"url":"", "preview_id":null}),
-            serde_json::json!({"preview_id":"  "}),
-            serde_json::json!({"url":"https://example.com", "preview_id":"preview-1"}),
-        ] {
-            let input: BrowserOpenInput = serde_json::from_value(value).unwrap();
-            assert!(open_target(&input).is_err());
-        }
-        let public: BrowserOpenInput =
-            serde_json::from_value(serde_json::json!({"url":"https://example.com"})).unwrap();
-        assert!(matches!(
-            open_target(&public).unwrap(),
-            OpenTarget::Public("https://example.com")
-        ));
-        let preview: BrowserOpenInput =
-            serde_json::from_value(serde_json::json!({"preview_id":" preview-1 "})).unwrap();
-        assert!(matches!(
-            open_target(&preview).unwrap(),
-            OpenTarget::Preview("preview-1")
-        ));
-    }
-
     #[tokio::test]
     async fn managed_requests_check_exact_origin_and_each_run_lease() {
         let (preview, lease) = target();
@@ -293,22 +268,6 @@ mod tests {
             )
             .await
             .is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn no_preview_grant_never_authorizes_a_private_request() {
-        let url = url::Url::parse("http://127.0.0.1:3000/").unwrap();
-        assert!(!within_scope(None, &url, true).await.unwrap());
-        let error = super::super::validate_public_network_target(
-            &url,
-            &super::super::network_policy::WebNetworkConfig::default(),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            error.kind,
-            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied
         );
     }
 

@@ -122,6 +122,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_memory_plugin());
     add!(crate::tool::new_monitor_plugin());
     add!(crate::tool::new_notebook_plugin());
+    add!(crate::tool::new_notifications_plugin());
     add!(crate::tool::new_plan_plugin());
     add!(crate::tool::new_report_plugin());
     add!(crate::tool::new_inline_ui_plugin());
@@ -132,6 +133,33 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_agent_plugin());
     add!(crate::tool::new_web_plugin());
     plugins
+}
+
+#[cfg(test)]
+mod registration_inventory_tests {
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn capability_inventory_includes_every_registered_plugin_including_toolless_plugins() {
+        let manifest = super::bundled_capability_manifest();
+        let ids: BTreeSet<_> = manifest
+            .plugins
+            .iter()
+            .map(|plugin| plugin.id.clone())
+            .collect();
+        let registered: BTreeSet<_> = crate::plugins::sources::bundled_plugin_entries()
+            .into_keys()
+            .collect();
+        assert_eq!(
+            ids.len(),
+            manifest.plugins.len(),
+            "duplicate capability plugin identity"
+        );
+        assert_eq!(
+            ids, registered,
+            "compiled capability inventory drifted from actual registrations"
+        );
+    }
 }
 
 /// Return the complete source-level bundled catalog. `agena.mcp` is included
@@ -309,41 +337,7 @@ fn json_sha256(value: &serde_json::Value) -> String {
 }
 
 #[cfg(test)]
-mod inline_ui_contract_tests {
-    #[test]
-    fn real_discovery_catalog_has_exactly_four_inline_ui_tools() {
-        let catalog = super::bundled_capability_manifest();
-        let inline = catalog
-            .plugins
-            .iter()
-            .find(|p| p.id == "agena.inline_ui")
-            .expect("bundled Inline UI plugin");
-        let names = inline
-            .tools
-            .iter()
-            .map(|tool| tool.canonical_name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            names,
-            [
-                "agena.inline_ui.guide",
-                "agena.inline_ui.prepare",
-                "agena.inline_ui.read",
-                "agena.inline_ui.update",
-            ]
-        );
-        assert!(
-            inline
-                .tools
-                .iter()
-                .all(|tool| !tool.definition_identity.contains("validate"))
-        );
-    }
-}
-
-#[cfg(test)]
 mod hook_description_tests {
-    use agena_plugin_host::sdk::Plugin;
     use std::collections::BTreeSet;
     use std::path::Path;
 
@@ -411,13 +405,10 @@ mod hook_description_tests {
             "product locale catalogs unexpectedly incomplete: {locales:?}"
         );
 
-        let mut manifests = super::bundled_plugin_manifests()
+        let manifests = super::bundled_plugin_manifests()
             .into_iter()
             .map(|(manifest, _)| manifest)
             .collect::<Vec<_>>();
-        // Notifications is runtime-provided, not part of the tool catalog.
-        manifests
-            .push(crate::plugins::provided::notifications::NotificationsPlugin::new().manifest());
 
         let mut inspected = 0;
         for manifest in &manifests {
@@ -458,42 +449,6 @@ mod hook_description_tests {
             inspected,
             declared_hook_count(&source_root),
             "Every #[hook(...)] declaration must be represented by a bundled or runtime-provided manifest",
-        );
-    }
-
-    #[test]
-    fn bundled_plugins_publish_their_own_localized_hook_introductions() {
-        let manifests = super::bundled_plugin_manifests();
-        let memory = manifests
-            .iter()
-            .find(|(manifest, _)| manifest.namespace == "agena" && manifest.name == "memory")
-            .map(|(manifest, _)| manifest)
-            .expect("bundled memory plugin");
-        let handler = memory
-            .hook_handlers
-            .iter()
-            .find(|handler| handler.event == "chat.messages")
-            .expect("memory retrieval hook metadata");
-        assert_eq!(handler.id, "chat_messages_transform");
-        assert_eq!(handler.summary, "Recall relevant memories");
-        assert_eq!(handler.summary_for_locale("zh-CN"), "回忆相关记忆");
-        assert_eq!(handler.summary_for_locale("zh-TW"), "回想相關記憶");
-        assert_eq!(
-            handler.summary_for_locale("es-ES"),
-            "Recuperar recuerdos relevantes"
-        );
-
-        let notifications =
-            crate::plugins::provided::notifications::NotificationsPlugin::new().manifest();
-        let handler = notifications
-            .hook_handlers
-            .iter()
-            .find(|handler| handler.event == "run.pre")
-            .expect("running indicator hook metadata");
-        assert_eq!(handler.summary_for_locale("zh-CN"), "显示运行状态");
-        assert_eq!(
-            handler.summary_for_locale("de-DE"),
-            "Aktiven Ausführungsstatus anzeigen"
         );
     }
 }

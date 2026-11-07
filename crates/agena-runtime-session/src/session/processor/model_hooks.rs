@@ -236,6 +236,7 @@ impl SessionProcessor {
     pub(crate) async fn transform_model_input(
         &self,
         session_id: i64,
+        workspace_root: Option<&std::path::Path>,
         system: &mut String,
         turns: &mut Vec<CompletionInputRun>,
     ) -> Result<(), AppError> {
@@ -297,6 +298,7 @@ impl SessionProcessor {
                 .plugins
                 .dispatch_chat_messages_transform(ChatMessagesTransformInput {
                     session_id,
+                    workspace_root: workspace_root.map(|root| root.to_string_lossy().into_owned()),
                     messages,
                 })
                 .await

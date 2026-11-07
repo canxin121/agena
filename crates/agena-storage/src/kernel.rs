@@ -235,6 +235,20 @@ pub struct ExecutionView {
     pub purpose: ExecutionPurpose,
 }
 
+/// Durable facts of one exact attempt, including an older retry generation.
+/// Unlike a user entry projection, generation never follows the execution's
+/// current generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionAttemptView {
+    pub session_id: SessionId,
+    pub execution_id: ExecutionId,
+    pub message_id: EntryId,
+    pub generation: AttemptGeneration,
+    pub current_generation: AttemptGeneration,
+    pub phase: ExecutionPhase,
+    pub owner_epoch: Option<KernelEpoch>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EntryPayload {
@@ -455,6 +469,17 @@ pub struct ToolView {
     pub blobs: Vec<BlobDescriptor>,
 }
 
+/// Canonical result metadata for a terminal tool originally executed by this
+/// session. Unlike transcript projections, these records remain readable after
+/// membership changes and never include a fork's inherited tool references.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnedToolMetadata {
+    pub id: ToolId,
+    pub created_at_ms: i64,
+    pub finished_at_ms: i64,
+    pub metadata: serde_json::Value,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InteractionView {
     pub created_at_ms: i64,
@@ -653,10 +678,67 @@ impl SessionCommands {
     ) -> Result<CommitReceipt<ExecutionView>> {
         execution_receipt(
             self.0
-                .command(request, Command::Cancel { session, execution })
+                .command(
+                    request,
+                    Command::Cancel {
+                        session,
+                        execution,
+                        expected_generation: None,
+                        epoch: None,
+                    },
+                )
                 .await?,
         )
     }
+    /// Cancel the current generation on behalf of runtime-owned callbacks.
+    /// Raw cancellation retains its original command identity; this operation
+    /// additionally records ownership when cancelling never-claimed input.
+    pub async fn cancel_owned(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::Cancel {
+                        session,
+                        execution,
+                        expected_generation: None,
+                        epoch: Some(self.0.epoch),
+                    },
+                )
+                .await?,
+        )
+    }
+
+    /// Fence only this generation. The writer validates the expected
+    /// generation in the same transaction as cancellation; a stale client
+    /// cannot stop a replacement attempt or close its content streams.
+    pub async fn cancel_attempt(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::Cancel {
+                        session,
+                        execution,
+                        expected_generation: Some(generation),
+                        epoch: Some(self.0.epoch),
+                    },
+                )
+                .await?,
+        )
+    }
+
     /// Cancel only while input is still queued. The writer serializes this
     /// decision against claim, so editing a queued message cannot stop a run.
     pub async fn cancel_queued(
@@ -1243,6 +1325,21 @@ impl KernelReader {
         execution: ExecutionId,
     ) -> Result<ReadView<ExecutionView>> {
         self.0.backend.execution(session, execution).await
+    }
+    /// Identity of this live kernel, independent of Runtime reload generations.
+    pub fn epoch(&self) -> KernelEpoch {
+        self.0.epoch
+    }
+    pub async fn execution_attempt(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<ExecutionAttemptView>> {
+        self.0
+            .backend
+            .execution_attempt(session, execution, generation)
+            .await
     }
     pub async fn history(
         &self,

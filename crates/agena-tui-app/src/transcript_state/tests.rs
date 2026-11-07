@@ -108,12 +108,17 @@ async fn completed_image_layout_is_not_invalidated_by_other_media_completions() 
             attempt < 7,
             "media layout must converge once pixels are ready"
         );
+        // This runs a real image decoding worker. Workspace-wide test runs
+        // may compile and execute other renderers concurrently, so three
+        // seconds is not a reliable bound for an OS-scheduled worker. Keep
+        // the completion barrier and the original pixel/layout assertions,
+        // but report a meaningful failure after a bounded 15-second wait.
         tokio::time::timeout(
-            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(15),
             context.background_changed(),
         )
         .await
-        .unwrap();
+        .expect("background SVG render did not signal completion within 15 seconds");
     }
     assert!(!state.entry_render_cache.is_empty());
     let rendered = state.rendered(80);

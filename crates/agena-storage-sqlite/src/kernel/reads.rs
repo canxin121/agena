@@ -205,6 +205,45 @@ pub(super) async fn execution_visible(
     Ok(view)
 }
 
+pub(super) async fn execution_attempt(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    execution: ExecutionId,
+    generation: AttemptGeneration,
+) -> Result<ExecutionAttemptView> {
+    // One indexed read binds historical phase/ownership to the current
+    // generation. Branch transcript visibility is not execution ownership.
+    let row = sqlx::query(
+        "SELECT e.message_id,e.current_generation,a.phase,a.owner_epoch FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id JOIN agena_sessions s ON s.id=e.session_id WHERE e.id=? AND e.session_id=? AND a.generation=? AND s.deleted_at_ms IS NULL",
+    )
+    .bind(execution.to_string())
+    .bind(session.get())
+    .bind(generation.get())
+    .fetch_optional(connection)
+    .await
+    .map_err(sql_error)?
+    .ok_or_else(|| KernelError::NotFound("execution attempt".into()))?;
+    let phase: String = row.try_get("phase").map_err(storage)?;
+    Ok(ExecutionAttemptView {
+        session_id: session,
+        execution_id: execution,
+        message_id: EntryId::try_from(row.try_get::<i64, _>("message_id").map_err(storage)?)
+            .map_err(storage)?,
+        generation,
+        current_generation: AttemptGeneration::try_from(
+            row.try_get::<i64, _>("current_generation")
+                .map_err(storage)?,
+        )
+        .map_err(storage)?,
+        phase: decode(&serde_json::to_string(&phase).map_err(storage)?)?,
+        owner_epoch: row
+            .try_get::<Option<String>, _>("owner_epoch")
+            .map_err(storage)?
+            .map(|epoch| epoch.parse().map_err(storage))
+            .transpose()?,
+    })
+}
+
 pub(super) async fn execution(
     connection: &mut SqliteConnection,
     session: SessionId,

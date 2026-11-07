@@ -319,6 +319,119 @@ fn attachment_download_names_prefer_utf8_and_keep_literal_plus() {
 }
 
 #[tokio::test]
+async fn session_media_download_limits_reject_before_the_response_body_finishes() {
+    // Keep each response unfinished until the client returns. A client that
+    // buffers the whole body before checking its limit would time out here.
+    for (framing, prefix, limit, expected) in [
+        ("Content-Length: 9\r\n".to_owned(), "", 8, "8 byte"),
+        (
+            "Transfer-Encoding: chunked\r\n".to_owned(),
+            "5\r\n12345\r\n",
+            4,
+            "4 byte",
+        ),
+        (
+            format!("Content-Length: {}\r\n", MAX_BINARY_RESPONSE_BYTES + 1),
+            "",
+            usize::MAX,
+            "100 MiB",
+        ),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, held) = tokio::sync::oneshot::channel::<()>();
+        let mut server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+                assert!(request.len() < 16_384);
+            }
+            socket
+                .write_all(
+                    format!("HTTP/1.1 200 OK\r\n{framing}Connection: close\r\n\r\n{prefix}")
+                        .as_bytes(),
+                )
+                .await
+                .unwrap();
+            let _ = held.await;
+            request
+        });
+        let client = AgenaClient::new(format!("http://{address}")).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.download_session_media_file_with_limit(23, "agena:media:v1:opaque", limit),
+        )
+        .await;
+        let _ = release.send(());
+        match tokio::time::timeout(Duration::from_secs(2), &mut server).await {
+            Ok(joined) => {
+                joined.expect("media response fixture failed");
+            }
+            Err(_) => {
+                server.abort();
+                let _ = server.await;
+                panic!("unfinished media response fixture did not stop");
+            }
+        }
+        let error = result
+            .expect("limit was checked only after consuming the entire body")
+            .unwrap_err();
+        assert!(
+            matches!(error, ClientError::Protocol(ref message) if message.contains(expected)),
+            "{error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn session_media_download_limit_keeps_auth_opaque_query_and_safe_filename() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            request.push(socket.read_u8().await.unwrap());
+            assert!(request.len() < 16_384);
+        }
+        socket.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Disposition: attachment; filename*=UTF-8''..%2Fsafe%2Bname.bin\r\nConnection: close\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n").await.unwrap();
+        String::from_utf8(request).unwrap()
+    });
+    let client = AgenaClient::new(format!("http://{address}"))
+        .unwrap()
+        .with_bearer_token("media-test-token")
+        .unwrap();
+    let reference = "agena:media:v1:opaque+selector";
+    let (filename, bytes) = client
+        .download_session_media_file_with_limit(23, reference, 5)
+        .await
+        .unwrap();
+    assert_eq!(filename, "safe+name.bin");
+    assert_eq!(bytes, b"abcde");
+    let request = server.await.unwrap();
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer media-test-token\r\n")
+    );
+    let target = request
+        .lines()
+        .next()
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap();
+    let url = url::Url::parse(&format!("http://{address}{target}")).unwrap();
+    assert_eq!(url.path(), "/api/v1/sessions/23/media");
+    let query = url
+        .query_pairs()
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    assert_eq!(query, vec![("path".to_owned(), reference.to_owned())]);
+}
+
+#[tokio::test]
 async fn inline_ui_human_export_expands_body_references_but_raw_sdk_reads_preserve_them() {
     use agena_domain::{
         ContentChunk, ContentCursor, ContentKind, ContentPage, ContentPayload, ContentRef,
@@ -916,4 +1029,83 @@ async fn typed_auth_lists_reject_invalid_dates_and_unknown_credential_variants()
             "wire: {wire}"
         );
     }
+}
+
+#[tokio::test]
+async fn settings_delete_transmits_false_instead_of_triggering_default_reload() {
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "settings",
+        Some(r#"{"config_path":"/fixture/config.json","config_found":true,"operation":"delete","path":"model","dry_run":false,"changed":true,"created":false,"deleted":true,"validated":true,"reload_requested":false,"reload_required":false,"previous":"old","current":null}"#),
+    ).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let result = client
+        .delete_settings_layer_value("workspace", "model", false, false)
+        .await
+        .unwrap();
+    assert!(!result.reload_requested);
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    let line = requests[0].lines().next().unwrap();
+    assert!(line.starts_with("DELETE /api/v1/settings/layers/workspace?"));
+    let target = line.split_whitespace().nth(1).unwrap();
+    let url = url::Url::parse(&format!("{}{target}", server.url)).unwrap();
+    let query: BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(query.get("path").map(String::as_str), Some("model"));
+    assert_eq!(query.get("reload").map(String::as_str), Some("false"));
+}
+
+#[tokio::test]
+async fn attempt_wait_distinguishes_recovered_terminal_from_settled() {
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "attempts",
+        Some(r#"{"session_id":7,"execution_id":"00000000-0000-0000-0000-000000000001","message_id":11,"attempt_generation":2,"current_attempt_generation":2,"phase":"interrupted","settlement":"recovered","kernel_epoch":"00000000-0000-0000-0000-000000000003","owner_epoch":"00000000-0000-0000-0000-000000000002"}"#),
+    ).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let execution = uuid::Uuid::from_u128(1);
+    let terminal = client
+        .wait_execution_attempt_terminal(7, execution, 2, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert!(terminal.phase.is_terminal());
+    assert_eq!(
+        terminal.settlement,
+        agena_api::resource::ExecutionAttemptSettlement::Recovered
+    );
+    let error = client
+        .wait_execution_attempt_settled(7, execution, 2, Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert!(error.operator_diagnostic().contains("Recovered"));
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| request.starts_with(&format!(
+        "GET /api/v1/sessions/7/executions/{execution}/attempts/2 ",
+    ))));
+}
+
+#[tokio::test]
+async fn exact_attempt_cancel_sends_generation_and_preserves_mismatch_outcome() {
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "attempts",
+        Some(r#"{"result":"execution_mismatch"}"#),
+    )
+    .await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let execution = uuid::Uuid::from_u128(1);
+    let outcome = client
+        .cancel_execution_attempt(7, execution, 2)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.result,
+        agena_domain::CancellationResult::ExecutionMismatch
+    );
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with(&format!(
+        "DELETE /api/v1/sessions/7/executions/{execution}/attempts/2 ",
+    )));
 }

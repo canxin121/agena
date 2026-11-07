@@ -89,6 +89,28 @@ impl ExecutionPhase {
     }
 }
 
+/// Process-local supervision observed alongside a durable attempt outcome.
+/// Settled concerns this exact attempt's provider/tool driver, post-run hooks
+/// direct agent bookkeeping and accepted cancellation callbacks. It does not
+/// wait for detached background work,
+/// descendants, title generation, or the whole session to become idle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionAttemptSettlement {
+    /// The attempt is queued or running.
+    Pending,
+    /// A terminal decision is durable, but its effect owner is still retiring.
+    Terminal,
+    /// The current kernel's owners have finished retiring this terminal attempt.
+    Settled,
+    /// The attempt belonged to another kernel epoch. Recovery is not evidence
+    /// that its former process completed post-run hooks or normal settlement.
+    Recovered,
+    /// A later generation owns the execution. This does not assert that the
+    /// older supervisor has finished its own settlement.
+    Superseded,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransitionEffect {
     Changed,

@@ -466,6 +466,10 @@ pub fn router(state: AppState) -> Router {
                 get(rest::get_session_state),
             )
             .route(
+                "/api/v1/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}",
+                get(rest::get_execution_attempt).delete(rest::cancel_execution_attempt),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/prompts/preview",
                 get(rest::get_session_prompt_preview),
             )

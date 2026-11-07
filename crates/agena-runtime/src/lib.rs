@@ -161,7 +161,7 @@ pub(crate) use agena_runtime_plugins::plugin_runtime_service::dispatch_plugin_rp
 pub use agena_runtime_plugins::plugin_runtime_service::{
     PluginRuntimeRpcError, PluginRuntimeService, PluginToolDescriptor, RuntimePluginToolCatalogItem,
 };
-pub(crate) use agena_runtime_plugins::plugin_shutdown::plugin_shutdown_guard;
+pub(crate) use agena_runtime_plugins::plugin_shutdown::PluginShutdownCoordinator;
 pub(crate) use agena_runtime_plugins::plugin_slot::{current_plugin_host, install_plugin_host};
 pub(crate) use agena_runtime_provider::fetch_latest_provider_client_versions;
 pub(crate) use agena_runtime_provider::provider_model_catalog_priorities;
@@ -189,12 +189,14 @@ pub use agena_runtime_session::{
     SessionUserRunRequest,
 };
 pub use agena_runtime_session::{
+    SessionExecutionAttempt, SessionExecutionControl, SessionExecutionControlError,
+};
+pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
 };
 pub use agena_runtime_session::{
     SessionExecutionContext, SessionPresentation, SessionQueryError, SessionQueryService,
 };
-pub use agena_runtime_session::{SessionExecutionControl, SessionExecutionControlError};
 pub use agena_runtime_session::{
     SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
 };

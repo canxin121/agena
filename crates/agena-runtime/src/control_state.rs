@@ -54,6 +54,15 @@ where
         Arc::clone(&self.task_control)
     }
 
+    /// Drain cancelled worker futures before closing their persistence.
+    pub(crate) async fn shutdown_and_wait(&self) {
+        self.shutdown();
+        tokio::join!(
+            self.background_tasks.shutdown_and_wait(),
+            self.task_control.shutdown_and_wait(),
+        );
+    }
+
     /// Reload the active tracing filter when a reload handle was configured.
     /// Returns `false` when no handle exists or the subscriber rejected it.
     pub fn reload_tracing_filter(&self, filter: tracing_subscriber::EnvFilter) -> bool {

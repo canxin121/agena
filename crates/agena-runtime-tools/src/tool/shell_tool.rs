@@ -400,7 +400,11 @@ async fn execute_managed_launch_async(
     let worker_command = command.clone();
     let worker_permit = launch_worker_permit(executor).await?;
     let output = activity_context
-        .begin_activity_output(activity_kind, command.description.clone(), content_kind)
+        .begin_activity_output(
+            activity_kind,
+            activity_label(command, tool_name),
+            content_kind,
+        )
         .await?;
     let launch_output = output.clone();
     let result = super::terminal_tool::blocking(executor, move |cancel| {
@@ -648,6 +652,26 @@ fn into_tool_error(err: MonitorError) -> ToolError {
         MonitorError::InvalidPattern(e) => ToolError::InvalidRegexPattern(e),
         MonitorError::RuntimeMissing => ToolError::invalid_input_error(&err),
     }
+}
+
+fn activity_label(command: &crate::part::ShellCommandInput, tool_name: &str) -> String {
+    // Description is optional in the public shell contract. The durable
+    // activity requires a nonempty label of at most 1024 UTF-8 bytes, even when
+    // callers omit it or supply a longer description/command.
+    let subject = [
+        command.description.as_str(),
+        command.command.as_str(),
+        tool_name,
+    ]
+    .into_iter()
+    .map(str::trim)
+    .find(|value| !value.is_empty())
+    .unwrap_or("shell");
+    let mut end = subject.len().min(1024);
+    while !subject.is_char_boundary(end) {
+        end -= 1;
+    }
+    subject[..end].to_owned()
 }
 
 fn command_title(action: &str, command: &crate::part::ShellCommandInput) -> String {
@@ -978,5 +1002,67 @@ fn insert_summary_metadata(view: &mut ToolExecutionView, summary: &ProcessSummar
     if let Some(reason) = summary.completion_reason.as_ref() {
         view.metadata
             .insert("completion_reason".into(), reason.clone());
+    }
+}
+
+#[cfg(test)]
+mod activity_label_tests {
+    use super::activity_label;
+    use crate::part::ShellLaunchInput;
+    use serde_json::json;
+
+    #[test]
+    fn omitted_or_blank_description_uses_command_then_tool_name() {
+        let mut input: ShellLaunchInput = serde_json::from_value(json!({
+            "command": "  printf ready\n", "reads": [], "writes": [], "network": []
+        }))
+        .unwrap();
+        assert!(input.command.description.is_empty());
+        assert_eq!(
+            activity_label(&input.command, "agena.shell.spawn"),
+            "printf ready"
+        );
+
+        input.command.description = " \t\u{3000}\n".into();
+        assert_eq!(
+            activity_label(&input.command, "agena.shell.watch"),
+            "printf ready"
+        );
+        input.command.command = "\r\n\t ".into();
+        assert_eq!(
+            activity_label(&input.command, "agena.shell.open"),
+            "agena.shell.open"
+        );
+
+        input.command.description = "  build local fixture  ".into();
+        assert_eq!(
+            activity_label(&input.command, "agena.shell.spawn"),
+            "build local fixture"
+        );
+    }
+
+    #[test]
+    fn labels_respect_storage_byte_limit_without_splitting_unicode() {
+        let mut input: ShellLaunchInput = serde_json::from_value(json!({
+            "command": "printf ready", "description": "界".repeat(400)
+        }))
+        .unwrap();
+        let label = activity_label(&input.command, "agena.shell.spawn");
+        assert_eq!(label, "界".repeat(341));
+        assert_eq!(label.len(), 1023);
+
+        input.command.description.clear();
+        input.command.command = format!("{}🚀tail", "a".repeat(1021));
+        assert_eq!(
+            activity_label(&input.command, "agena.shell.spawn"),
+            "a".repeat(1021)
+        );
+
+        input.command.description = "🚀".repeat(256);
+        let exact = activity_label(&input.command, "agena.shell.spawn");
+        assert_eq!(exact, input.command.description);
+        assert_eq!(exact.len(), 1024);
+        input.command.description.push('界');
+        assert_eq!(activity_label(&input.command, "agena.shell.spawn"), exact);
     }
 }

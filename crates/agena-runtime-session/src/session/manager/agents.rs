@@ -46,6 +46,7 @@ struct AgentSettlement {
 pub(super) struct PendingAgentSettlement {
     started: i64,
     execution: ExecutionId,
+    generation: AttemptGeneration,
     done: Arc<Notify>,
 }
 
@@ -468,7 +469,7 @@ impl SessionManager {
         .value;
         let execution_id = execution.id;
         let generation = execution.generation;
-        let registration = self.register_agent_settlement(child, now, execution_id);
+        let registration = self.register_agent_settlement(child, now, execution_id, generation);
         let control = self.supervise_with_budget(
             execution,
             options.clone(),
@@ -541,11 +542,27 @@ impl SessionManager {
         })
     }
 
+    pub(super) fn has_pending_agent_settlement(
+        &self,
+        child: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> bool {
+        self.pending_agent_settlements
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&child)
+            .is_some_and(|pending| {
+                pending.execution == execution && pending.generation == generation
+            })
+    }
+
     fn register_agent_settlement(
         &self,
         child: SessionId,
         started: i64,
         execution: ExecutionId,
+        generation: AttemptGeneration,
     ) -> AgentSettlementRegistration {
         let done = Arc::new(Notify::new());
         self.pending_agent_settlements
@@ -556,6 +573,7 @@ impl SessionManager {
                 PendingAgentSettlement {
                     started,
                     execution,
+                    generation,
                     done: done.clone(),
                 },
             );

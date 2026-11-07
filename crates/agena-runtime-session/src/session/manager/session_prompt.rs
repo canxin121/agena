@@ -23,6 +23,22 @@ pub(super) struct PromptInputs<'a> {
     pub tools_enabled: bool,
 }
 
+/// Explicit run instructions replace the inherited additional layers for this
+/// request only. An empty string is still an override; omission inherits them.
+/// The built-in session instructions and plugin transforms are assembled later.
+pub(super) fn request_system_layer(system: Option<&str>) -> Option<PromptLayer> {
+    system.map(|body| {
+        let id = agena_prompt_layers::FragmentId::parse("request-system")
+            .expect("the request instruction fragment id is valid");
+        PromptLayer {
+            mode: agena_prompt_layers::LayerMode::Replace,
+            order: vec![id.clone()],
+            inline: vec![agena_prompt_layers::PromptFragment::new(id, body)],
+            ..Default::default()
+        }
+    })
+}
+
 /// Resolve the configured layers plus the session and request layers.
 ///
 /// Assembly failures are reported to the model instead of aborting the turn:

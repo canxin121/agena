@@ -198,6 +198,10 @@ async fn prepare(
         return Err(database_error("only SQLite database URLs are supported"));
     }
     let mut options = SqliteConnectOptions::from_str(url).map_err(database_error)?;
+    #[cfg(debug_assertions)]
+    {
+        options = crate::kernel::test_fault::configure_sqlite(options).map_err(database_error)?;
+    }
     let memory = memory_url(url);
     let owner = if memory {
         None

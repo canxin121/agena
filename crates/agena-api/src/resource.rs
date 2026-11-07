@@ -1020,8 +1020,30 @@ pub struct QueuedMessageEditResource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionExecutionReceiptResource {
     pub execution_id: uuid::Uuid,
+    /// Committed user/control input identity, independent of transcript paging.
+    pub message_id: i64,
+    /// Allocated when accepted, including while the attempt is still queued.
+    pub attempt_generation: i64,
     pub turn_id: uuid::Uuid,
     pub reply_id: uuid::Uuid,
+}
+
+pub use agena_domain::session_kernel::ExecutionAttemptSettlement;
+
+/// Exact-attempt observation. A terminal phase alone does not mean that
+/// post-run work has retired. Recovery/supersession must not be treated as
+/// successful settlement, even when the durable phase is succeeded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExecutionAttemptResource {
+    pub session_id: i64,
+    pub execution_id: Uuid,
+    pub message_id: i64,
+    pub attempt_generation: i64,
+    pub current_attempt_generation: i64,
+    pub phase: agena_domain::session_kernel::ExecutionPhase,
+    pub settlement: ExecutionAttemptSettlement,
+    pub kernel_epoch: Uuid,
+    pub owner_epoch: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

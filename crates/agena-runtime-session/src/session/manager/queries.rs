@@ -8,7 +8,109 @@ use agena_domain::{
     SessionSummary, SessionUsage, WorkflowState,
 };
 
+/// The canonical tool result owns this usage transfer. The same metadata can
+/// also appear in raw/model projections, which must never be billed again.
+fn provider_tool_usage(
+    metadata: &serde_json::Value,
+) -> Result<Option<agena_provider::AttributedCompletionUsage>, AppError> {
+    metadata
+        .get(agena_provider::PROVIDER_TOOL_USAGE_METADATA_KEY)
+        .map(|value| {
+            let encoded: String = serde_json::from_value(value.clone())?;
+            Ok(serde_json::from_str(&encoded)?)
+        })
+        .transpose()
+}
+
 impl SessionManager {
+    /// The active registration is installed before a claim can create effects,
+    /// and removed only after the driver and post-run hooks return. Combining
+    /// that exact ownership with the persisted claim epoch proves retirement
+    /// without inferring completion from session idleness. A foreign epoch can
+    /// never prove normal settlement, including after a graceful restart.
+    pub async fn execution_attempt(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<Option<crate::SessionExecutionAttempt>, AppError> {
+        let session = session_id(id)?;
+        let attempt = match self
+            .kernel()
+            .reader
+            .execution_attempt(session, execution, generation)
+            .await
+        {
+            Ok(attempt) => attempt,
+            Err(KernelError::NotFound(_) | KernelError::Ownership) => return Ok(None),
+            Err(error) => return Err(kernel_error(error)),
+        };
+        let epoch = self.kernel().reader.epoch();
+        let live = self
+            .active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&execution)
+            .filter(|run| run.session == session)
+            .cloned();
+        let mut current_generation = live.as_ref().map_or(attempt.current_generation, |run| {
+            attempt.current_generation.max(run.generation)
+        });
+        let mut settlement = if current_generation > generation {
+            ExecutionAttemptSettlement::Superseded
+        } else if attempt.phase == ExecutionPhase::Interrupted
+            || attempt.owner_epoch.is_some_and(|owner| owner != epoch)
+        {
+            ExecutionAttemptSettlement::Recovered
+        } else if !attempt.phase.is_terminal() {
+            ExecutionAttemptSettlement::Pending
+        } else if live.as_ref().is_some_and(|run| {
+            run.generation == generation && !run.settled.load(std::sync::atomic::Ordering::Acquire)
+        }) || self.has_pending_agent_settlement(session, execution, generation)
+            || self
+                .attempt_controls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .contains_key(&(id, execution, generation))
+        {
+            ExecutionAttemptSettlement::Terminal
+        } else {
+            // An unclaimed, cancelled input has no provider effects to drain.
+            // Claimed attempts must belong to this live kernel (checked above).
+            ExecutionAttemptSettlement::Settled
+        };
+        if settlement == ExecutionAttemptSettlement::Settled {
+            // Generation publication and live ownership are separate reads.
+            // Revalidate after inspecting owners so even a rapidly admitted
+            // and retired retry cannot make an older registration look done.
+            let latest = match self
+                .kernel()
+                .reader
+                .execution_attempt(session, execution, generation)
+                .await
+            {
+                Ok(latest) => latest,
+                Err(KernelError::NotFound(_) | KernelError::Ownership) => return Ok(None),
+                Err(error) => return Err(kernel_error(error)),
+            };
+            current_generation = current_generation.max(latest.current_generation);
+            if current_generation > generation {
+                settlement = ExecutionAttemptSettlement::Superseded;
+            }
+        }
+        Ok(Some(crate::SessionExecutionAttempt {
+            session_id: id,
+            execution_id: execution,
+            message_id: attempt.message_id,
+            attempt_generation: generation,
+            current_attempt_generation: current_generation,
+            phase: attempt.phase,
+            settlement,
+            kernel_epoch: epoch,
+            owner_epoch: attempt.owner_epoch,
+        }))
+    }
+
     /// Managed session artifacts belong to the workspace recorded on the
     /// session, not the server's default executor or a child task's cwd.
     /// Resolve the same durable identity used by the session-media reader.
@@ -415,6 +517,28 @@ impl SessionManager {
             }
             after = page.last().map(|r| r.id);
         }
+        let mut after = None;
+        loop {
+            let page = self
+                .kernel()
+                .reader
+                .owned_tool_metadata(id, after, 200)
+                .await
+                .map_err(kernel_error)?;
+            if page.is_empty() {
+                break;
+            }
+            for tool in page.iter() {
+                if let Some(attributed) = provider_tool_usage(&tool.metadata)? {
+                    accumulator.observe(
+                        &attributed.provider_id,
+                        &attributed.model_id,
+                        &attributed.usage,
+                    );
+                }
+            }
+            after = page.last().map(|tool| tool.id);
+        }
         Ok(accumulator.finish())
     }
     pub async fn usage_stats(
@@ -469,6 +593,35 @@ impl SessionManager {
                         }
                     }
                     after = rounds.last().map(|r| r.id);
+                }
+                let mut after = None;
+                loop {
+                    let tools = self
+                        .kernel()
+                        .reader
+                        .owned_tool_metadata(session.id, after, 200)
+                        .await
+                        .map_err(kernel_error)?;
+                    if tools.is_empty() {
+                        break;
+                    }
+                    for tool in tools.iter() {
+                        if let Some(attributed) = provider_tool_usage(&tool.metadata)? {
+                            accumulator.observe(
+                                &crate::UsageStatRecord {
+                                    session_id: session.id.get(),
+                                    session_title: session.title.clone(),
+                                    is_subagent: config.relation_kind.is_subagent(),
+                                    created_at: timestamp(tool.created_at_ms),
+                                    provider_id: attributed.provider_id,
+                                    model_id: attributed.model_id,
+                                    usage: *attributed.usage,
+                                },
+                                &query,
+                            );
+                        }
+                    }
+                    after = tools.last().map(|tool| tool.id);
                 }
             }
             if !sessions.has_more {

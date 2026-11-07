@@ -133,6 +133,7 @@ impl AgenaCli {
                 Ok(())
             }
             PluginSubcommand::Init(args) => {
+                let skip_lockfile = args.skip_lockfile;
                 let short_name = args
                     .id
                     .split_once('.')
@@ -160,8 +161,10 @@ impl AgenaCli {
                     force: args.force,
                 })
                 .map_err(|error| AppError::config_error(&error))?;
-                generate_plugin_lockfile(&args.path)
-                    .map_err(|error| AppError::config_error(&error))?;
+                if !skip_lockfile {
+                    generate_plugin_lockfile(&args.path)
+                        .map_err(|error| AppError::config_error(&error))?;
+                }
                 println!("Created Agena plugin repository at {}", args.path.display());
                 println!("Next: agena plugin validate .");
                 Ok(())

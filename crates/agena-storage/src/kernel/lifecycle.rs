@@ -142,6 +142,20 @@ pub struct SummaryQuery {
     pub offset: u64,
     pub limit: usize,
 }
+/// Canonical activity of visible, non-temporary, non-subagent sessions.
+///
+/// All fields come from one read snapshot. A metadata edit cannot make an old
+/// execution look recent. Only each execution's current attempt participates.
+/// If terminal attempts share the newest millisecond, any failure in that
+/// timestamp group keeps attention visible; UUID/session order is not time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionActivitySummary {
+    pub running_sessions: u64,
+    pub awaiting_interaction_sessions: u64,
+    pub latest_terminal_at_ms: Option<i64>,
+    pub latest_terminal_failed: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct WorkspaceStatistics {
     pub total: u64,
@@ -471,6 +485,11 @@ impl KernelReader {
     ) -> Result<ReadView<SessionSummaryPage>> {
         self.0.backend.query_summaries(query).await
     }
+    /// Read cross-session activity and the latest durable terminal outcome
+    /// without loading transcripts or relying on lifecycle callback ordering.
+    pub async fn activity_summary(&self) -> Result<ReadView<SessionActivitySummary>> {
+        self.0.backend.activity_summary().await
+    }
     pub async fn workspace_statistics(
         &self,
         workspace_ids: &[i64],
@@ -485,6 +504,21 @@ impl KernelReader {
     ) -> Result<ReadView<Vec<ProviderRoundView>>> {
         self.0.backend.rounds(session, after, limit).await
     }
+    /// Read terminal, origin-owned tool result metadata in ascending tool ID
+    /// order. This historical read excludes model/raw-output copies and is not
+    /// filtered by the session's current transcript membership.
+    pub async fn owned_tool_metadata(
+        &self,
+        session: SessionId,
+        after: Option<ToolId>,
+        limit: usize,
+    ) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
+        self.0
+            .backend
+            .owned_tool_metadata(session, after, limit)
+            .await
+    }
+
     pub fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch> {
         self.0.backend.watch_all(after)
     }

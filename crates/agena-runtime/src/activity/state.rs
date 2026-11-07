@@ -505,6 +505,7 @@ impl BackgroundCompletionBridge {
         };
         let bridge = self.clone();
         let process_id = summary.process_id.clone();
+        let kind = process_notification_kind(summary).to_owned();
         let status = match summary.status {
             ProcessStatus::Exited => "completed",
             ProcessStatus::TimedOut => "timed_out",
@@ -526,10 +527,7 @@ impl BackgroundCompletionBridge {
             if let Some(flushed) = event_flush {
                 let _ = tokio::time::timeout(Duration::from_secs(2), flushed).await;
             }
-            let Some((session_id, kind)) = bridge
-                .resolve_background_session_either(&["shell", "monitor"], &process_id)
-                .await
-            else {
+            let Some(session_id) = bridge.resolve_background_session(&process_id).await else {
                 return;
             };
             // The kernel retains a business delivery; consuming it and
@@ -588,18 +586,17 @@ impl BackgroundCompletionBridge {
         );
         drop(routes);
         let bridge = self.clone();
+        let kind = process_notification_kind(summary).to_owned();
         tokio::spawn(async move {
             // Resolve once through the durable index for either launch kind;
             // never query the database or start a new worker for every line.
-            let owner = bridge
-                .resolve_background_session_either(&["shell", "monitor"], &process_id)
-                .await;
+            let owner = bridge.resolve_background_session(&process_id).await;
             let manager = bridge
                 .manager
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone();
-            let (Some((session_id, kind)), Some(_manager)) = (owner, manager) else {
+            let (Some(session_id), Some(_manager)) = (owner, manager) else {
                 bridge.ignore_monitor_events(&process_id, generation);
                 return;
             };
@@ -717,29 +714,20 @@ impl BackgroundCompletionBridge {
         }
     }
 
-    async fn resolve_background_session_either(
-        &self,
-        _kinds: &[&str],
-        id: &str,
-    ) -> Option<(i64, String)> {
+    async fn resolve_background_session(&self, id: &str) -> Option<i64> {
         let (session, tool) = managed_process_scope(id)?;
         let manager = self
             .manager
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()?;
-        let view = manager
+        manager
             .session_kernel()
             .reader
             .tool(session, tool)
             .await
             .ok()?;
-        let kind = if view.call.name.contains("monitor") {
-            "monitor"
-        } else {
-            "shell"
-        };
-        Some((session.get(), kind.into()))
+        Some(session.get())
     }
 
     async fn deliver_background(
@@ -831,6 +819,17 @@ fn background_failure(status: ProcessStatus, fallback: String) -> Failure {
             detail_key: None,
         },
     )
+}
+
+// The durable provider call may be tools_call/tools_run, so its name does not
+// identify the underlying plugin. The managed process knows which transport it
+// actually opened, including when a monitor was launched through a gateway.
+fn process_notification_kind(summary: &ProcessSummary) -> &'static str {
+    if summary.websocket {
+        "monitor"
+    } else {
+        "shell"
+    }
 }
 
 /// Resolve the deterministic launch identity without enumerating processes.

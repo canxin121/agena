@@ -576,6 +576,10 @@ impl SessionManager {
         if before.phase.is_terminal() {
             return Ok(CancellationResult::AlreadyTerminal.into());
         }
+        let _registration = AttemptControlRegistration::new(
+            self.attempt_controls.clone(),
+            (id, execution, before.generation),
+        );
         // Signal external cancellation promptly; the returned acknowledgement
         // still waits for the durable cancellation fence below.
         if let Some(run) = self
@@ -588,9 +592,13 @@ impl SessionManager {
             run.cancel.cancel();
         }
         let request = RequestId::new();
-        persist(|| self.kernel().sessions.cancel(request, session, execution))
-            .await
-            .map_err(kernel_error)?;
+        persist(|| {
+            self.kernel()
+                .sessions
+                .cancel_owned(request, session, execution)
+        })
+        .await
+        .map_err(kernel_error)?;
         self.tool_executor()
             .plugin_manager()
             .dispatch_agent_cancel(agena_plugin_host::AgentCancelInput {
@@ -600,6 +608,105 @@ impl SessionManager {
             .await;
         Ok(CancellationResult::CancellationRequested.into())
     }
+    /// Commit a generation-checked fence before signalling external effects.
+    /// The accepted cancellation owns its handoff even if the HTTP waiter goes
+    /// away while the kernel is committing the command.
+    pub async fn cancel_execution_attempt_with_outcome(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<CancellationOutcome, AppError> {
+        // Acquire ownership before checking admission so shutdown either sees
+        // this task or this task rejects without effects.
+        let ownership = self.control_tasks.token();
+        if self.shutdown.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+        let registration = AttemptControlRegistration::new(
+            self.attempt_controls.clone(),
+            (id, execution, generation),
+        );
+        let manager = self.clone();
+        let (sent, received) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let _ownership = ownership;
+            let _registration = registration;
+            let result = manager
+                .cancel_execution_attempt_inner(id, execution, generation)
+                .await;
+            let _ = sent.send(result);
+        });
+        received.await.map_err(|_| AppError::Cancelled)?
+    }
+
+    async fn cancel_execution_attempt_inner(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<CancellationOutcome, AppError> {
+        let session = session_id(id)?;
+        let dispatch = self.session_dispatch(session);
+        let _submission = dispatch.submission.lock().await;
+        let before = match self
+            .kernel()
+            .reader
+            .execution_attempt(session, execution, generation)
+            .await
+        {
+            Ok(attempt) => attempt,
+            Err(KernelError::NotFound(_) | KernelError::Ownership) => {
+                return Ok(CancellationResult::NotFound.into());
+            }
+            Err(error) => return Err(kernel_error(error)),
+        };
+        if before.current_generation != generation {
+            return Ok(CancellationResult::ExecutionMismatch.into());
+        }
+        if before.phase.is_terminal() {
+            return Ok(CancellationResult::AlreadyTerminal.into());
+        }
+        let request = RequestId::new();
+        // The read above is only a no-op fast path. This writer check is the
+        // authority against a retry/claim race, including other kernel callers.
+        match persist(|| {
+            self.kernel()
+                .sessions
+                .cancel_attempt(request, session, execution, generation)
+        })
+        .await
+        {
+            Ok(_) => {}
+            Err(KernelError::StaleAttempt) => {
+                return Ok(CancellationResult::ExecutionMismatch.into());
+            }
+            Err(KernelError::Conflict(_)) => return Ok(CancellationResult::AlreadyTerminal.into()),
+            Err(KernelError::NotFound(_) | KernelError::Ownership) => {
+                return Ok(CancellationResult::NotFound.into());
+            }
+            Err(error) => return Err(kernel_error(error)),
+        }
+        if let Some(run) = self
+            .active
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&execution)
+            .filter(|run| run.session == session && run.generation == generation)
+        {
+            run.phase(agena_domain::ExecutionPhase::Cancelling);
+            run.cancel.cancel();
+        }
+        self.tool_executor()
+            .plugin_manager()
+            .dispatch_agent_cancel(agena_plugin_host::AgentCancelInput {
+                session_id: id,
+                execution_id: execution.to_string(),
+            })
+            .await;
+        Ok(CancellationResult::CancellationRequested.into())
+    }
+
     pub async fn steer_input(&self, id: i64, document: ComposerDocument) -> Result<(), AppError> {
         // Steering is a committed input execution queued behind the current
         // owner. It has a stable identity and cannot mutate frozen input.
@@ -992,6 +1099,16 @@ impl SessionExecutionCommandService for SessionManager {
 }
 #[async_trait::async_trait]
 impl crate::SessionExecutionControl for SessionManager {
+    async fn execution_attempt(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<Option<crate::SessionExecutionAttempt>, crate::SessionExecutionControlError> {
+        SessionManager::execution_attempt(self, id, execution, generation)
+            .await
+            .map_err(|error| crate::SessionExecutionControlError::internal_error(&error))
+    }
     async fn set_message_queue_paused(
         &self,
         id: i64,
@@ -1029,6 +1146,17 @@ impl crate::SessionExecutionControl for SessionManager {
         .await;
         result.map_err(|e| crate::SessionExecutionControlError::internal_error(&e))
     }
+    async fn cancel_execution_attempt_with_outcome(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<CancellationOutcome, crate::SessionExecutionControlError> {
+        SessionManager::cancel_execution_attempt_with_outcome(self, id, execution, generation)
+            .await
+            .map_err(|error| crate::SessionExecutionControlError::internal_error(&error))
+    }
+
     async fn cancel_session_with_outcome(
         &self,
         id: i64,

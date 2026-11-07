@@ -540,8 +540,10 @@ impl LiveContent {
                     {
                         CaptureState::Complete
                     }
-                    Command::Cancel { session, execution }
-                        if matches!(source.scope, OutputScope::Attempt(scope) if scope.session == *session && scope.execution == *execution) =>
+                    Command::Cancel { session, execution, expected_generation, .. }
+                        if matches!(source.scope, OutputScope::Attempt(scope)
+                            if scope.session == *session && scope.execution == *execution
+                            && expected_generation.is_none_or(|expected| expected == scope.generation)) =>
                     {
                         CaptureState::Interrupted
                     }
@@ -876,8 +878,13 @@ pub(super) async fn seal_stored(
         Command::CommitCompaction { scope, round, .. } => {
             (TerminalTarget::Round(*scope, *round), CaptureEnd::Complete)
         }
-        Command::Cancel { session, execution } => (
-            TerminalTarget::Attempt(*session, *execution, None),
+        Command::Cancel {
+            session,
+            execution,
+            expected_generation,
+            ..
+        } => (
+            TerminalTarget::Attempt(*session, *execution, *expected_generation),
             CaptureEnd::Interrupted {
                 diagnostic: "execution cancelled".into(),
             },

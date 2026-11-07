@@ -175,7 +175,7 @@ pub(crate) fn merge_provider_model_adapter_patch_for_save(
     existing_adapter: Option<JsonValue>,
     adapter_id: &str,
     model_id: &str,
-    mut model_value: JsonValue,
+    model_value: JsonValue,
 ) -> std::result::Result<JsonValue, ProviderStudioSaveError> {
     let mut adapter = match existing_adapter {
         Some(JsonValue::Object(object)) => object,

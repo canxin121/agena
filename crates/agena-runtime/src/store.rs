@@ -34,6 +34,7 @@ pub struct TaskControl {
     notify: Notify,
     cancelled: tokio_util::sync::CancellationToken,
     guards: parking_lot::Mutex<Vec<Arc<crate::AbortOnDrop>>>,
+    workers: tokio_util::task::TaskTracker,
 }
 
 impl TaskControl {
@@ -49,12 +50,19 @@ impl TaskControl {
             let first_shutdown = !self.shutdown.swap(true, Ordering::SeqCst);
             (first_shutdown, std::mem::take(&mut *guards))
         };
+        self.workers.close();
         self.cancelled.cancel();
         self.notify.notify_waiters();
         // Dropping the guards aborts runtime-owned workers immediately even
         // when another component still holds an Arc<TaskControl>.
         drop(guards);
         first_shutdown
+    }
+
+    /// Wait for cancelled worker futures to actually release their resources.
+    pub(crate) async fn shutdown_and_wait(&self) {
+        self.shutdown();
+        self.workers.wait().await;
     }
 
     /// Observe shutdown without losing a notification before the first poll.
@@ -87,6 +95,38 @@ impl TaskControl {
             drop(guards);
             return;
         }
-        guards.push(Arc::new(crate::spawn_abortable(future)));
+        // Register under the same lock as shutdown, including before the
+        // future's first poll. Aborting the worker releases its tracker token.
+        guards.push(Arc::new(crate::spawn_abortable(
+            self.workers.track_future(future),
+        )));
+    }
+}
+
+#[cfg(test)]
+mod drain_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn drain_joins_cancelled_worker_destructors_before_returning() {
+        struct MarkDropped(Arc<AtomicBool>);
+        impl Drop for MarkDropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let control = TaskControl::default();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let marker = MarkDropped(dropped.clone());
+        let (started, running) = tokio::sync::oneshot::channel();
+        control.spawn(async move {
+            let _marker = marker;
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        running.await.unwrap();
+        control.shutdown_and_wait().await;
+        assert!(dropped.load(Ordering::SeqCst));
+        control.shutdown_and_wait().await;
     }
 }

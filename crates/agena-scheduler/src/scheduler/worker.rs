@@ -52,10 +52,24 @@ impl SchedulerWorker {
         let reconciliation = worker
             .tick
             .clamp(Duration::from_millis(100), Duration::from_secs(60));
+        let clock_poll = crate::clock::reconciliation_tick();
+        let mut clock_revision = None;
+        let mut clock_observation = None;
 
         loop {
             if stop.is_cancelled() {
                 break;
+            }
+            // Capture one control generation for this admission pass. A new
+            // test revision interrupts a distant deadline, while preserving
+            // real safety backoff and ownership of admitted deliveries.
+            let clock_control = crate::clock::control();
+            let admission_paused = clock_control.is_some_and(|clock| clock.scheduler_paused);
+            if let Some(clock) = clock_control
+                && clock_revision != Some(clock.revision)
+            {
+                clock_revision = Some(clock.revision);
+                next_read = Instant::now().max(reads_allowed_at);
             }
             // Coalesce completions that became ready together before doing
             // another store read; refill their slots in one bounded batch.
@@ -64,7 +78,10 @@ impl SchedulerWorker {
                 next_read = Instant::now().max(reads_allowed_at);
             }
             deferred.retain(|_, until| *until > Instant::now());
-            if active.len() < MAX_CONCURRENT_DELIVERIES && Instant::now() >= next_read {
+            if !admission_paused
+                && active.len() < MAX_CONCURRENT_DELIVERIES
+                && Instant::now() >= next_read
+            {
                 // Observe before I/O: a mutation racing either read remains
                 // pending, and cannot be swallowed by arming the next wait.
                 wake.borrow_and_update();
@@ -78,7 +95,8 @@ impl SchedulerWorker {
                 let read_result = match deadline {
                     Err(error) => Err(error),
                     Ok(deadline)
-                        if deadline.is_none_or(|at| at > Utc::now().timestamp_millis()) =>
+                        if deadline
+                            .is_none_or(|at| at > crate::clock::now().timestamp_millis()) =>
                     {
                         Ok(deadline)
                     }
@@ -86,7 +104,7 @@ impl SchedulerWorker {
                         let candidates = tokio::select! {
                             biased;
                             _ = stop.cancelled() => break,
-                            result = worker.store.list_due_batch(Utc::now().timestamp_millis(), &query) => result,
+                            result = worker.store.list_due_batch(crate::clock::now().timestamp_millis(), &query) => result,
                         };
                         match candidates {
                             Err(error) => Err(error),
@@ -111,7 +129,7 @@ impl SchedulerWorker {
                                     // its task, never while queued behind a sink.
                                     let task = deliveries.spawn(async move {
                                         match delivery_worker
-                                            .claim_candidate(candidate, Utc::now())
+                                            .claim_candidate(candidate, crate::clock::now())
                                             .await?
                                         {
                                             Some(claim) => {
@@ -147,7 +165,8 @@ impl SchedulerWorker {
                         reads_allowed_at = now;
                         let delay = deadline.map_or(reconciliation, |at| {
                             Duration::from_millis(
-                                at.saturating_sub(Utc::now().timestamp_millis()).max(0) as u64,
+                                at.saturating_sub(crate::clock::now().timestamp_millis())
+                                    .max(0) as u64,
                             )
                             .min(reconciliation)
                         });
@@ -175,6 +194,17 @@ impl SchedulerWorker {
                 }
             }
 
+            // Acknowledgements are admission fences, not delivery receipts.
+            // Once a pause is acknowledged, no later task is admitted until
+            // release. Tasks counted as active were admitted before the fence.
+            if let Some(clock) = clock_control {
+                let observation = (clock.revision, active.len());
+                if clock_observation != Some(observation) {
+                    crate::clock::acknowledge(clock, active.len());
+                    clock_observation = Some(observation);
+                }
+            }
+
             tokio::select! {
                 biased;
                 _ = stop.cancelled() => break,
@@ -188,7 +218,12 @@ impl SchedulerWorker {
                     if result.is_err() { break; }
                     next_read = Instant::now().max(reads_allowed_at);
                 }
-                _ = tokio::time::sleep_until(next_read), if active.len() < MAX_CONCURRENT_DELIVERIES => {}
+                _ = tokio::time::sleep_until(next_read), if !admission_paused && active.len() < MAX_CONCURRENT_DELIVERIES => {}
+                _ = tokio::time::sleep(clock_poll.unwrap_or(Duration::from_secs(86400))), if clock_poll.is_some() => {
+                    // Re-check the virtual wall clock without bypassing
+                    // admission/backoff constraints or lease ownership.
+                    next_read = Instant::now().max(reads_allowed_at);
+                }
             }
         }
         // Graceful stop closes admission but lets each admitted occurrence
@@ -226,7 +261,7 @@ impl SchedulerWorker {
                         &expected,
                         job.clone(),
                         claim_key.clone(),
-                        now.timestamp_millis(),
+                        crate::clock::lease_now().timestamp_millis(),
                     )
                     .await?
                 {
@@ -252,14 +287,18 @@ impl SchedulerWorker {
         let id = claim.job.id;
         if !self
             .store
-            .renew(id, &claim.claim_key, Utc::now().timestamp_millis())
+            .renew(
+                id,
+                &claim.claim_key,
+                crate::clock::lease_now().timestamp_millis(),
+            )
             .await?
         {
             return Err(SchedulerError::Conflict(id));
         }
         let work = async {
             let result = self.sink.deliver(&claim.job, &claim.delivery).await;
-            self.persist_completed_delivery(&claim, result, Utc::now())
+            self.persist_completed_delivery(&claim, result, crate::clock::now())
                 .await
         };
         let renewals = async {
@@ -267,8 +306,11 @@ impl SchedulerWorker {
                 tokio::time::sleep(heartbeat).await;
                 let renewed = tokio::time::timeout(
                     CLAIM_HEARTBEAT,
-                    self.store
-                        .renew(id, &claim.claim_key, Utc::now().timestamp_millis()),
+                    self.store.renew(
+                        id,
+                        &claim.claim_key,
+                        crate::clock::lease_now().timestamp_millis(),
+                    ),
                 )
                 .await;
                 match renewed {
@@ -315,7 +357,7 @@ impl SchedulerWorker {
                     &expected,
                     &claim.claim_key,
                     job.clone(),
-                    Utc::now().timestamp_millis(),
+                    crate::clock::lease_now().timestamp_millis(),
                 )
                 .await?
             {
@@ -347,6 +389,14 @@ fn admission_query(
             .chain(deferred.keys().copied())
             .collect(),
         excluded_session_ids: sessions,
+        // A virtual calendar jump is not 6 hours of heartbeat execution.
+        // Project real lease deadlines onto the simulated calendar for reads.
+        lease_clock: crate::clock::control().map(|clock| {
+            (
+                clock.now().timestamp_millis(),
+                crate::clock::lease_now().timestamp_millis(),
+            )
+        }),
     }
 }
 

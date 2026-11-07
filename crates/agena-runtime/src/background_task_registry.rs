@@ -30,6 +30,7 @@ pub(crate) struct RuntimeBackgroundTaskRegistry<E> {
     inner: Arc<Mutex<RuntimeBackgroundTaskState>>,
     history_limit: usize,
     active_limit: usize,
+    workers: tokio_util::task::TaskTracker,
     marker: PhantomData<fn() -> E>,
 }
 
@@ -39,6 +40,7 @@ impl<E> Clone for RuntimeBackgroundTaskRegistry<E> {
             inner: Arc::clone(&self.inner),
             history_limit: self.history_limit,
             active_limit: self.active_limit,
+            workers: self.workers.clone(),
             marker: PhantomData,
         }
     }
@@ -50,6 +52,7 @@ impl<E> Default for RuntimeBackgroundTaskRegistry<E> {
             inner: Arc::new(Mutex::new(RuntimeBackgroundTaskState::default())),
             history_limit: DEFAULT_TASK_HISTORY_LIMIT,
             active_limit: DEFAULT_ACTIVE_TASK_LIMIT,
+            workers: tokio_util::task::TaskTracker::new(),
             marker: PhantomData,
         }
     }
@@ -88,9 +91,15 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             state.shutdown = true;
             state.controls.values().cloned().collect::<Vec<_>>()
         };
+        self.workers.close();
         for token in tokens {
             token.cancel();
         }
+    }
+
+    pub(crate) async fn shutdown_and_wait(&self) {
+        self.shutdown();
+        self.workers.wait().await;
     }
 
     pub(crate) fn cancel(
@@ -134,7 +143,7 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         F: FnOnce(CancellationToken) -> Fut + Send + 'static,
         Fut: Future<Output = Result<RuntimeBackgroundTaskOutcome, E>> + Send + 'static,
     {
-        let (task, token, executor, listener) = {
+        let (task, token, executor, listener, ownership) = {
             let mut state = self.inner.lock();
             if state.shutdown {
                 return Err(RuntimeBackgroundTaskControlError::Shutdown);
@@ -182,7 +191,15 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                 state.dedupe_keys.insert(task.id.clone(), dedupe_key);
             }
             state.trim_history(self.history_limit);
-            (task, token, executor, state.listener.clone())
+            // Track accepted work before releasing the admission lock: a
+            // concurrent drain must also wait for an unpolled/new worker.
+            (
+                task,
+                token,
+                executor,
+                state.listener.clone(),
+                self.workers.token(),
+            )
         };
 
         // Observers may inspect/cancel tasks. Never call them while locked,
@@ -198,6 +215,7 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             task_id: Some(task_id.clone()),
         };
         let worker = executor.spawn(async move {
+            let _ownership = ownership;
             if start_rx.await.is_err() {
                 return;
             }

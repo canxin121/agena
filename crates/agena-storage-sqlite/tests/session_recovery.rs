@@ -94,6 +94,7 @@ async fn interrupted_agent_recovery_preserves_queued_compaction_without_resuming
         .await
         .unwrap()
         .value;
+    let previous_epoch = runtime.ports.reader.epoch();
     let image = directory.path().join("recovery.db");
     sea_orm::sqlx::query("VACUUM INTO ?")
         .bind(image.to_string_lossy().as_ref())
@@ -119,6 +120,29 @@ async fn interrupted_agent_recovery_preserves_queued_compaction_without_resuming
     let reopened = open_kernel_runtime(&format!("sqlite://{}?mode=rwc", image.display()))
         .await
         .unwrap();
+    assert_ne!(reopened.ports.reader.epoch(), previous_epoch);
+    let recovered_attempt = reopened
+        .ports
+        .reader
+        .execution_attempt(child, current.id, current.generation)
+        .await
+        .unwrap();
+    assert_eq!(recovered_attempt.generation, current.generation);
+    assert_eq!(recovered_attempt.message_id, current.message_id);
+    assert_eq!(recovered_attempt.phase, ExecutionPhase::Interrupted);
+    assert_eq!(recovered_attempt.owner_epoch, Some(previous_epoch));
+    assert!(
+        matches!(
+            reopened
+                .ports
+                .reader
+                .execution_attempt(parent, current.id, current.generation)
+                .await,
+            Err(KernelError::NotFound(_)),
+        ),
+        "a readable child transcript must not grant the parent's execution ownership"
+    );
+    drop(recovered_attempt);
     let snapshot = reopened
         .ports
         .reader

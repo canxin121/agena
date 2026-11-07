@@ -632,6 +632,10 @@ pub struct PluginInitArgs {
     /// Overwrite template-owned files in a non-empty directory.
     #[arg(long, default_value_t = false)]
     pub force: bool,
+    /// Scaffold while offline without immediately resolving Cargo.lock.
+    /// Generate the lockfile before publishing or running generated CI.
+    #[arg(long, default_value_t = false)]
+    pub skip_lockfile: bool,
 }
 
 #[derive(Debug, Clone, Args)]

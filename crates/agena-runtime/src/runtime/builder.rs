@@ -190,6 +190,7 @@ impl AgenaRuntime {
                 agent_bridge: Arc::new(std::sync::Mutex::new(None)),
                 background_completion,
                 automatic_maintenance,
+                shutdown_completion: Default::default(),
             }),
         };
 
@@ -2125,6 +2126,7 @@ pub(crate) struct AgenaRuntimeShared {
     /// their own outcomes directly through the same kernel delivery port.
     background_completion: crate::activity::BackgroundCompletionBridge,
     automatic_maintenance: bool,
+    shutdown_completion: crate::bootstrap_result::RuntimeShutdownCompletion,
 }
 
 pub(crate) type AgenaRuntimeInner = agena_runtime::RuntimeProcessState<
@@ -2134,9 +2136,14 @@ pub(crate) type AgenaRuntimeInner = agena_runtime::RuntimeProcessState<
     AppError,
 >;
 
+#[async_trait::async_trait]
 impl agena_runtime::RuntimeBootstrapLifecycle for AgenaRuntime {
     fn shutdown(&self) {
         AgenaRuntime::shutdown(self);
+    }
+
+    async fn shutdown_and_wait(&self) -> Result<(), crate::RuntimeControlServiceError> {
+        AgenaRuntime::shutdown_and_wait(self).await
     }
 }
 
@@ -2270,72 +2277,106 @@ impl AgenaRuntime {
         &self.inner.workspace_root
     }
 
+    /// Request one runtime-owned drain. The compatibility entrypoint remains
+    /// synchronous; shutdown_and_wait observes the same task and cached result.
     pub fn shutdown(&self) {
-        // Close admission and order shutdown after any admitted publication
-        // before selecting the session notification host. Concurrent/repeated
-        // calls share the same first-transition decision.
-        if !self.inner.control_state.shutdown() {
-            return;
-        }
-        self.background_completion.set_manager(None);
-        if let Some(task) = self
-            .agent_bridge
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            task.abort();
-        }
-        if let Some(service) = self.activities.monitor.as_ref() {
-            service.shutdown();
-        }
-        if let Some(session_manager) = self.session_manager() {
-            if let Some(scheduler) = session_manager.tool_executor().scheduler() {
-                scheduler.stop();
+        let started = self.shutdown_completion.start(|| {
+            // Close admission/publication before choosing the notification host.
+            self.inner.control_state.shutdown();
+            self.background_completion.set_manager(None);
+            let bridge = self
+                .agent_bridge
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+            if let Some(task) = &bridge {
+                task.abort();
             }
-            match tokio::runtime::Handle::try_current() {
-                Ok(_handle) => {
-                    let kernel = self.inner.session_kernel.clone();
-                    agena_runtime::spawn_detached(async move {
-                        session_manager
-                            .broadcast_active_session_end(
-                                agena_plugin_host::SessionEndReason::Other,
-                            )
-                            .await;
-                        loop {
-                            match session_manager.shutdown().await {
-                                Ok(()) => break,
-                                Err(AppError::PersistenceBusy) => {
-                                    tracing::warn!(
-                                        "waiting for session supervision to persist its final outcomes"
-                                    );
-                                    tokio::time::sleep(Duration::from_millis(100)).await;
-                                }
-                                Err(error) => {
-                                    tracing::warn!(%error,"session supervision shutdown failed; retaining its kernel");
-                                    return;
-                                }
+            if let Some(service) = self.activities.monitor.as_ref() {
+                service.shutdown();
+            }
+            let session_manager = self.session_manager();
+            let session_end = session_manager.as_ref().map(|manager| {
+                let notification = manager
+                    .broadcast_active_session_end(agena_plugin_host::SessionEndReason::Other);
+                if let Some(scheduler) = manager.tool_executor().scheduler() {
+                    scheduler.stop();
+                }
+                manager.request_shutdown();
+                notification
+            });
+            let runtime = self.clone();
+            async move {
+                // Workers may still own persistence or candidate snapshots
+                // after cancellation. Join them before closing the kernel.
+                runtime.inner.control_state.shutdown_and_wait().await;
+                if let Some(bridge) = bridge
+                    && let Err(error) = bridge.await
+                    && !error.is_cancelled()
+                {
+                    return Err(crate::RuntimeControlServiceError::from_error(&error));
+                }
+                if let Some(manager) = session_manager {
+                    loop {
+                        match manager.shutdown().await {
+                            Ok(()) => break,
+                            Err(AppError::PersistenceBusy) => {
+                                tracing::warn!(
+                                    "waiting for session supervision to persist its final outcomes"
+                                );
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                            }
+                            Err(error) => {
+                                return Err(crate::RuntimeControlServiceError::from_error(&error));
                             }
                         }
-                        if let Some(kernel) = kernel
-                            && let Err(error) = kernel.ports.clone().shutdown().await
-                        {
-                            tracing::warn!(%error,"session kernel shutdown failed");
-                        }
-                    });
+                    }
                 }
-                Err(error) => {
-                    tracing::warn!(
-                        target: "agena_plugin_host::session_end",
-                        diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "session.end could not be broadcast during runtime shutdown because no Tokio runtime is available",
-                            &error,
-                        ),
-                        "no tokio runtime available during shutdown; skipping session.end broadcast"
-                    );
+                // The active IDs were captured before cancellation. Let
+                // post-run and agent bookkeeping finish before session.end
+                // can release per-session plugin resources.
+                if let Some(notification) = session_end {
+                    notification.await;
+                }
+                // Retired generations share this coordinator. Normal reload
+                // keeps their live callers intact; process shutdown reaches
+                // this barrier only after those callers and session.end finish.
+                let plugin_result = runtime.current_snapshot().shutdown_plugins().await;
+                let kernel_result = if let Some(kernel) = runtime.inner.session_kernel.as_ref() {
+                    kernel.ports.clone().shutdown().await
+                } else {
+                    Ok(())
+                };
+                // Plugin failures must remain visible while still letting the
+                // session kernel release its connections.
+                let mut errors = Vec::new();
+                if let Err(error) = plugin_result {
+                    errors.push(format!("plugin retirement failed: {error}"));
+                }
+                if let Err(error) = kernel_result {
+                    errors.push(format!("session kernel shutdown failed: {error}"));
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(crate::RuntimeControlServiceError::new(errors.join("; ")))
                 }
             }
+        });
+        if let Err(error) = started {
+            // A synchronous caller outside Tokio can still close admission.
+            // A later asynchronous caller may start the remaining drain.
+            self.inner.control_state.shutdown();
+            if let Some(manager) = self.session_manager() {
+                manager.request_shutdown();
+            }
+            tracing::error!(%error, "runtime shutdown could not start");
         }
+    }
+
+    pub async fn shutdown_and_wait(&self) -> Result<(), crate::RuntimeControlServiceError> {
+        self.shutdown();
+        self.shutdown_completion.wait().await
     }
 
     pub async fn reload(&self) -> Result<RuntimeReloadReport, AppError> {

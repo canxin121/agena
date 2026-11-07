@@ -650,6 +650,26 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
         None
     };
 
+    // Reject unsupported single-scope requests before scanning the repository.
+    // Previously these silently fell back to the entire file list while the
+    // multi-scope form correctly rejected unknown values.
+    let scope = q
+        .scope
+        .as_deref()
+        .unwrap_or("all")
+        .trim()
+        .to_ascii_lowercase();
+    if scope != "all" && !STATUS_SCOPES.contains(&scope.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!("unsupported Git status scope `{scope}`"),
+                "code": "git_status_scope_invalid",
+            })),
+        )
+            .into_response();
+    }
+
     // A page continuation reuses the exact status snapshot produced by the
     // first read. Only a new summary/watch refresh runs libgit2 again.
     let cached_snapshot = q
@@ -832,12 +852,6 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
     let merge_count = snapshot.merge_indices.len();
 
     let summary = q.summary;
-    let scope = q
-        .scope
-        .as_deref()
-        .unwrap_or("all")
-        .trim()
-        .to_ascii_lowercase();
 
     let mut limit = q.limit.unwrap_or(200).min(500);
     let offset = if summary || requested_scopes.is_some() {

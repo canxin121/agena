@@ -134,6 +134,7 @@ async fn resolve_workspace_path_from_context(
     headers: &HeaderMap,
     query_directory: Option<&str>,
     target: &str,
+    allow_unlinking_final_symlink: bool,
 ) -> ApiResult<(PathBuf, PathBuf)> {
     let base = resolve_project_directory(headers, query_directory).await?;
 
@@ -157,6 +158,49 @@ async fn resolve_workspace_path_from_context(
 
     // Important: avoid canonicalize here because the path may not exist yet.
     ensure_within_base(&base, &candidate)?;
+    // A lexical prefix does not prevent a symlink inside the workspace from
+    // redirecting writes, mkdir, rename or delete into a different directory.
+    // Examine existing components without requiring a not-yet-created leaf.
+    let base_components: PathBuf = base.components().collect();
+    let target_components: PathBuf = candidate.components().collect();
+    let relative = target_components
+        .strip_prefix(&base_components)
+        .map_err(|_| AppError::bad_request("Path is outside of active workspace"))?;
+    let mut ancestor = base_components;
+    let actual_base = tokio::fs::canonicalize(&ancestor).await.map_err(|error| {
+        AppError::internal_error_with_context(
+            "resolve workspace before filesystem operation",
+            &error,
+        )
+    })?;
+    for component in relative.components() {
+        ancestor.push(component.as_os_str());
+        match tokio::fs::symlink_metadata(&ancestor).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                // Unlinking/renaming the final link never follows its target;
+                // other symbolic links may be used only within this workspace.
+                if allow_unlinking_final_symlink && ancestor == target_components {
+                    continue;
+                }
+                match tokio::fs::canonicalize(&ancestor).await {
+                    Ok(resolved) if resolved.starts_with(&actual_base) => {}
+                    _ => {
+                        return Err(AppError::bad_request(
+                            "Invalid path: symbolic-link traversal leaves the active workspace",
+                        ));
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(AppError::internal_error_with_context(
+                    "inspect filesystem path for symbolic-link traversal",
+                    &error,
+                ));
+            }
+        }
+    }
     Ok((base, candidate))
 }
 
@@ -199,7 +243,8 @@ pub async fn fs_mkdir(
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
     let (_, resolved) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), dir_path).await?;
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), dir_path, false)
+            .await?;
 
     tokio::fs::create_dir_all(&resolved)
         .await
@@ -559,7 +604,8 @@ pub async fn fs_upload(
     }
 
     let (_, resolved) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path).await?;
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path, false)
+            .await?;
 
     if let Some(parent) = resolved.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -618,7 +664,8 @@ pub async fn fs_write(
     }
 
     let (_, resolved) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path).await?;
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), file_path, false)
+            .await?;
 
     if let Some(parent) = resolved.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -660,7 +707,8 @@ pub async fn fs_delete(
         .ok_or_else(|| AppError::bad_request("Path is required"))?;
 
     let (_, resolved) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), target_path).await?;
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), target_path, true)
+            .await?;
 
     let meta = match tokio::fs::symlink_metadata(&resolved).await {
         Ok(m) => Some(m),
@@ -727,9 +775,11 @@ pub async fn fs_rename(
         .ok_or_else(|| AppError::bad_request("newPath is required"))?;
 
     let (base_old, resolved_old) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), old_path).await?;
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), old_path, true)
+            .await?;
     let (base_new, resolved_new) =
-        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), new_path).await?;
+        resolve_workspace_path_from_context(&headers, q.directory.as_deref(), new_path, false)
+            .await?;
 
     if normalize_for_workspace_compare(&base_old) != normalize_for_workspace_compare(&base_new) {
         return Err(AppError::bad_request(

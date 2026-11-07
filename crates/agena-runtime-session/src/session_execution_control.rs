@@ -38,10 +38,38 @@ impl std::fmt::Display for SessionExecutionControlError {
 
 impl std::error::Error for SessionExecutionControlError {}
 
+/// Ownership-aware observation of one accepted attempt. Durable phase and
+/// process-local settlement are deliberately separate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionExecutionAttempt {
+    pub session_id: i64,
+    pub execution_id: ExecutionId,
+    pub message_id: agena_domain::session_kernel::EntryId,
+    pub attempt_generation: agena_domain::session_kernel::AttemptGeneration,
+    pub current_attempt_generation: agena_domain::session_kernel::AttemptGeneration,
+    pub phase: agena_domain::session_kernel::ExecutionPhase,
+    pub settlement: agena_domain::session_kernel::ExecutionAttemptSettlement,
+    pub kernel_epoch: agena_domain::KernelEpoch,
+    pub owner_epoch: Option<agena_domain::KernelEpoch>,
+}
+
 /// Narrow control port for a composed session execution service.
 #[async_trait]
 /// Control interface for session execution.
 pub trait SessionExecutionControl: Send + Sync {
+    /// Read an exact attempt, including its historical durable phase after a
+    /// retry. Absence is distinct from a completed or recovered attempt.
+    async fn execution_attempt(
+        &self,
+        _session_id: i64,
+        _execution_id: ExecutionId,
+        _generation: agena_domain::session_kernel::AttemptGeneration,
+    ) -> Result<Option<SessionExecutionAttempt>, SessionExecutionControlError> {
+        Err(SessionExecutionControlError::internal(
+            "exact attempt observation is unavailable",
+        ))
+    }
+
     /// Persistently pauses claims or explicitly resumes the backend FIFO.
     async fn set_message_queue_paused(
         &self,
@@ -64,6 +92,20 @@ pub trait SessionExecutionControl: Send + Sync {
         session_id: i64,
         execution_id: ExecutionId,
     ) -> Result<CancellationOutcome, SessionExecutionControlError>;
+
+    /// Atomically cancel only the expected generation. A stale generation
+    /// returns ExecutionMismatch without pausing the queue or cancelling the
+    /// replacement's effects. This operation does not stop the entire session.
+    async fn cancel_execution_attempt_with_outcome(
+        &self,
+        _session_id: i64,
+        _execution_id: ExecutionId,
+        _generation: agena_domain::session_kernel::AttemptGeneration,
+    ) -> Result<CancellationOutcome, SessionExecutionControlError> {
+        Err(SessionExecutionControlError::internal(
+            "exact attempt cancellation is unavailable",
+        ))
+    }
 
     /// Cancels whichever execution currently owns the session and suppresses
     /// queued background notification wakes. This is the user-facing stop

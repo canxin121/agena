@@ -19,6 +19,7 @@
 //! 90-second lease expires. Recovery is at least once; sinks must deduplicate
 //! using the stable [`JobDeliveryAttempt::delivery_key`].
 
+pub mod clock;
 pub mod error;
 pub mod job;
 pub mod scheduler;

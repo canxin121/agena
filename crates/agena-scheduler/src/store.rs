@@ -167,7 +167,7 @@ pub trait JobStore: Send + Sync {
             .await?
             .iter()
             .filter(|entry| query.allows(&entry.job))
-            .filter_map(JobSnapshot::wake_at_ms)
+            .filter_map(|entry| entry.wake_at_ms(query))
             .min())
     }
     async fn replace(&self, expected: &JobSnapshot, job: ScheduledJob) -> SchedulerResult<bool>;
@@ -380,7 +380,7 @@ impl JobStore for InMemoryJobStore {
             .jobs
             .values()
             .filter(|entry| query.allows(&entry.job))
-            .filter_map(JobSnapshot::wake_at_ms)
+            .filter_map(|entry| entry.wake_at_ms(query))
             .min())
     }
 
@@ -640,7 +640,7 @@ impl SqliteJobStore {
             job.retry_at.map(|time| time.timestamp_millis()).into(),
             i64::from(job.paused).into(),
             i64::from(job.completed).into(),
-            chrono::Utc::now().timestamp_millis().into(),
+            crate::clock::now().timestamp_millis().into(),
         ]
     }
 

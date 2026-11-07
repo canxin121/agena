@@ -116,3 +116,134 @@ fn legacy_claim_next_wire_shape_has_no_generation_field() {
         1
     );
 }
+
+#[tokio::test]
+async fn stale_attempt_cancellation_cannot_fence_a_retry_or_its_live_content() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/cancel-generation")
+        .await
+        .unwrap();
+    let session = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Cancellation ownership".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let original = runtime
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "retry me".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    runtime
+        .ports
+        .sessions
+        .cancel_attempt(RequestId::new(), session, original.id, original.generation)
+        .await
+        .unwrap();
+    let cancelled = runtime
+        .ports
+        .reader
+        .execution_attempt(session, original.id, original.generation)
+        .await
+        .unwrap();
+    // A cancelled unclaimed input can own callbacks without a provider start.
+    // Both raw queue cancellation and guarded cancellation are exercised here.
+    assert_eq!(cancelled.owner_epoch, Some(runtime.ports.reader.epoch()));
+    drop(cancelled);
+    let next = runtime
+        .ports
+        .sessions
+        .continue_execution(RequestId::new(), session, original.message_id)
+        .await
+        .unwrap()
+        .value;
+    let owner = runtime
+        .ports
+        .executor
+        .claim_next_generation(RequestId::new(), session, next.id, next.generation)
+        .await
+        .unwrap()
+        .value;
+    let round = owner
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let output = round
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    output.append("before stale cancellation").await.unwrap();
+
+    let stale = runtime
+        .ports
+        .sessions
+        .cancel_attempt(RequestId::new(), session, original.id, original.generation)
+        .await;
+    assert!(matches!(stale, Err(KernelError::StaleAttempt)));
+    // This exercises live-content preflight as well as the transactional
+    // generation check. A stale cancel must not install a terminal gate.
+    output.append("after stale cancellation").await.unwrap();
+    let running = runtime
+        .ports
+        .reader
+        .execution_attempt(session, next.id, next.generation)
+        .await
+        .unwrap();
+    assert_eq!(running.phase, ExecutionPhase::Running);
+    assert_eq!(running.current_generation, next.generation);
+    drop(running);
+
+    let cancelled = runtime
+        .ports
+        .sessions
+        .cancel_attempt(RequestId::new(), session, next.id, next.generation)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(cancelled.phase, ExecutionPhase::Cancelled);
+    assert!(output.append("too late").await.is_err());
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[test]
+fn legacy_cancel_wire_shape_keeps_its_idempotency_digest() {
+    use agena_storage::backend::kernel::Command;
+    let session = SessionId::try_from(1).unwrap();
+    let execution = agena_domain::ExecutionId::new();
+    let legacy = serde_json::json!({"Cancel": {
+        "session": session, "execution": execution,
+    }});
+    let decoded: Command = serde_json::from_value(legacy.clone()).unwrap();
+    assert!(matches!(
+        &decoded,
+        Command::Cancel {
+            expected_generation: None,
+            ..
+        }
+    ));
+    assert_eq!(serde_json::to_value(decoded).unwrap(), legacy);
+    let guarded = Command::Cancel {
+        session,
+        execution,
+        expected_generation: Some(AttemptGeneration::INITIAL),
+        epoch: Some(agena_domain::KernelEpoch::new()),
+    };
+    assert_eq!(
+        serde_json::to_value(guarded).unwrap()["Cancel"]["expected_generation"],
+        1,
+    );
+}

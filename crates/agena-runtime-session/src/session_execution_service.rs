@@ -20,6 +20,8 @@ pub struct SessionExecutionCommandOutcome {
 /// Receipt of an accepted session execution.
 pub struct SessionExecutionReceipt {
     pub execution_id: agena_domain::ExecutionId,
+    pub message_id: agena_domain::session_kernel::EntryId,
+    pub attempt_generation: agena_domain::session_kernel::AttemptGeneration,
     pub turn_id: agena_domain::TurnId,
     pub reply_id: agena_domain::AssistantReplyId,
 }
@@ -35,6 +37,8 @@ impl SessionExecutionCommandOutcome {
     pub fn accepted(
         session_id: i64,
         execution_id: agena_domain::ExecutionId,
+        message_id: agena_domain::session_kernel::EntryId,
+        attempt_generation: agena_domain::session_kernel::AttemptGeneration,
         turn_id: agena_domain::TurnId,
         reply_id: agena_domain::AssistantReplyId,
     ) -> Self {
@@ -42,6 +46,8 @@ impl SessionExecutionCommandOutcome {
             session_id,
             receipt: Some(SessionExecutionReceipt {
                 execution_id,
+                message_id,
+                attempt_generation,
                 turn_id,
                 reply_id,
             }),

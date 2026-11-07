@@ -1190,12 +1190,44 @@ impl AgenaClient {
         session_id: i64,
         path: &str,
     ) -> Result<(String, Vec<u8>), ClientError> {
+        self.download_session_media_file_with_limit(session_id, path, MAX_BINARY_RESPONSE_BYTES)
+            .await
+    }
+
+    /// Download session-visible media with a caller-selected response-byte
+    /// budget. The effective limit is the smaller of `max_bytes` and the
+    /// client's 100 MiB hard limit. Both declared lengths and streamed chunks
+    /// are checked before being accumulated; an oversized file is an error,
+    /// never a successful truncated download.
+    pub async fn download_session_media_file_with_limit(
+        &self,
+        session_id: i64,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<(String, Vec<u8>), ClientError> {
         let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/media"));
         url.query_pairs_mut().append_pair("path", path);
-        self.download_binary_file(url).await
+        self.download_binary_file_with_limit(url, max_bytes).await
     }
 
     async fn download_binary_file(&self, url: url::Url) -> Result<(String, Vec<u8>), ClientError> {
+        self.download_binary_file_with_limit(url, MAX_BINARY_RESPONSE_BYTES)
+            .await
+    }
+
+    async fn download_binary_file_with_limit(
+        &self,
+        url: url::Url,
+        max_bytes: usize,
+    ) -> Result<(String, Vec<u8>), ClientError> {
+        let max_bytes = max_bytes.min(MAX_BINARY_RESPONSE_BYTES);
+        let limit_error = || {
+            ClientError::Protocol(if max_bytes == MAX_BINARY_RESPONSE_BYTES {
+                "workspace download exceeds the 100 MiB client limit".to_owned()
+            } else {
+                format!("media download exceeds the {max_bytes} byte client limit")
+            })
+        };
         let mut response = self
             .send_request(reqwest::Method::GET, url, None, None)
             .await?;
@@ -1205,11 +1237,9 @@ impl AgenaClient {
         }
         if response
             .content_length()
-            .is_some_and(|length| length > MAX_BINARY_RESPONSE_BYTES as u64)
+            .is_some_and(|length| length > max_bytes as u64)
         {
-            return Err(ClientError::Protocol(
-                "workspace download exceeds the 100 MiB client limit".to_owned(),
-            ));
+            return Err(limit_error());
         }
         let filename = response
             .headers()
@@ -1219,10 +1249,8 @@ impl AgenaClient {
             .unwrap_or_else(|| "workspace-file".to_owned());
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await? {
-            if bytes.len().saturating_add(chunk.len()) > MAX_BINARY_RESPONSE_BYTES {
-                return Err(ClientError::Protocol(
-                    "workspace download exceeds the 100 MiB client limit".to_owned(),
-                ));
+            if bytes.len().saturating_add(chunk.len()) > max_bytes {
+                return Err(limit_error());
             }
             bytes.extend_from_slice(&chunk);
         }
@@ -1925,9 +1953,8 @@ impl AgenaClient {
                 query.append_pair("dry_run", "true");
             }
             query.append_pair("validate", "true");
-            if reload {
-                query.append_pair("reload", "true");
-            }
+            // Omission defaults to true on the server; preserve false too.
+            query.append_pair("reload", if reload { "true" } else { "false" });
         }
         let response = self
             .send_request(reqwest::Method::DELETE, url, None, None)
@@ -2122,6 +2149,99 @@ impl AgenaClient {
             serde_json::to_value(options)?,
         )
         .await
+    }
+
+    /// Query one accepted attempt, retaining its identity across retry and
+    /// explicitly distinguishing terminal, settled, recovered and superseded.
+    pub async fn execution_attempt(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+    ) -> Result<agena_api::resource::ExecutionAttemptResource, ClientError> {
+        self.get_json(&format!(
+            "/api/v1/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}"
+        ))
+        .await
+    }
+
+    /// Atomically cancel one generation. ExecutionMismatch means a later
+    /// attempt owns the execution and was left untouched. This does not pause
+    /// the session's queue; use cancel_run for user-facing session stop.
+    pub async fn cancel_execution_attempt(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+    ) -> Result<agena_domain::CancellationOutcome, ClientError> {
+        let url = self.endpoint(&format!(
+            "/api/v1/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}"
+        ));
+        let response = self
+            .send_request(reqwest::Method::DELETE, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    /// Wait for a durable terminal decision. Inspect settlement separately;
+    /// a recovered or superseded attempt can already have a terminal phase.
+    pub async fn wait_execution_attempt_terminal(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+        timeout: Duration,
+    ) -> Result<agena_api::resource::ExecutionAttemptResource, ClientError> {
+        self.wait_execution_attempt(session_id, execution_id, attempt_generation, false, timeout)
+            .await
+    }
+
+    /// Wait for this kernel to retire the exact attempt's owned effects.
+    /// Recovery and retry supersession return an error rather than silently
+    /// waiting for a replacement or treating interruption as successful drain.
+    /// Dropping this wait does not cancel the server-owned execution.
+    pub async fn wait_execution_attempt_settled(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+        timeout: Duration,
+    ) -> Result<agena_api::resource::ExecutionAttemptResource, ClientError> {
+        self.wait_execution_attempt(session_id, execution_id, attempt_generation, true, timeout)
+            .await
+    }
+
+    async fn wait_execution_attempt(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+        settled: bool,
+        timeout: Duration,
+    ) -> Result<agena_api::resource::ExecutionAttemptResource, ClientError> {
+        use agena_api::resource::ExecutionAttemptSettlement;
+        tokio::time::timeout(timeout, async {
+            loop {
+                let attempt = self.execution_attempt(session_id, execution_id, attempt_generation).await?;
+                if !settled && attempt.phase.is_terminal()
+                    || settled && attempt.settlement == ExecutionAttemptSettlement::Settled
+                {
+                    return Ok(attempt);
+                }
+                if matches!(attempt.settlement,
+                    ExecutionAttemptSettlement::Recovered | ExecutionAttemptSettlement::Superseded
+                ) {
+                    return Err(ClientError::Protocol(format!(
+                        "attempt {execution_id}/{attempt_generation} cannot reach requested settlement: {:?}",
+                        attempt.settlement,
+                    )));
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await.map_err(|_| ClientError::Protocol(format!(
+            "timed out waiting for attempt {execution_id}/{attempt_generation} to become {}",
+            if settled { "settled" } else { "terminal" },
+        )))?
     }
 
     pub async fn get_session_state(

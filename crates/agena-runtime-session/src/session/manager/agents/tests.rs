@@ -555,10 +555,12 @@ async fn abandoned_settlement_registration_cannot_stall_a_direct_subagent_turn()
         .await
         .unwrap();
     let old_started = 3;
-    let registration =
-        fixture
-            .manager
-            .register_agent_settlement(fixture.child, old_started, ExecutionId::new());
+    let registration = fixture.manager.register_agent_settlement(
+        fixture.child,
+        old_started,
+        ExecutionId::new(),
+        AttemptGeneration::try_from(1).unwrap(),
+    );
     let execution = fixture.send().await;
     assert!(
         tokio::time::timeout(Duration::from_millis(30), fixture.requests.recv())

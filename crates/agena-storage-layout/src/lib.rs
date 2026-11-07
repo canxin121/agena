@@ -417,3 +417,121 @@ fn restrict(_path: &Path, _directory: bool) -> io::Result<()> {
 
 #[cfg(windows)]
 mod windows_acl;
+
+#[cfg(test)]
+mod filesystem_contract_tests {
+    use super::*;
+
+    #[test]
+    fn independent_layouts_keep_paths_and_workspace_keys_disjoint() {
+        let temporary = tempfile::tempdir().unwrap();
+        let first = StorageLayout::new(temporary.path().join("instance-a"));
+        let second = StorageLayout::new(temporary.path().join("instance-b"));
+        first.prepare().unwrap();
+        second.prepare().unwrap();
+        assert!(first.root().is_dir());
+        assert!(second.root().is_dir());
+        assert_ne!(first.database_path(), second.database_path());
+        assert!(first.config_path().starts_with(first.root()));
+        assert!(first.secrets_dir().starts_with(first.root()));
+        assert!(first.marketplace_dir().starts_with(first.root()));
+        assert!(first.terminal_ui_state_path().starts_with(first.root()));
+        assert_eq!(
+            first.memory_index_dir(Path::new("a")),
+            first.memory_index_dir(Path::new("a"))
+        );
+        assert_ne!(
+            first.workspace_dir(Path::new("a")),
+            first.workspace_dir(Path::new("b"))
+        );
+        assert_ne!(
+            first.client_scope_dir("owner-one"),
+            first.client_scope_dir("owner-two")
+        );
+    }
+
+    #[test]
+    fn injected_environment_prioritizes_data_root_without_touching_process_environment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let home = temporary.path().join("home");
+        let custom = temporary.path().join("explicit-data");
+        let home_only = StorageLayout::from_lookup(|key| {
+            (key == "HOME").then(|| home.as_os_str().to_os_string())
+        });
+        assert_eq!(home_only.root(), home.join("agena"));
+        let with_override = StorageLayout::from_lookup(|key| match key {
+            "AGENA_DATA_DIR" => Some(custom.as_os_str().to_os_string()),
+            "HOME" => Some(home.as_os_str().to_os_string()),
+            _ => None,
+        });
+        assert_eq!(with_override.root(), custom);
+        assert!(
+            !custom.exists(),
+            "constructing a layout unexpectedly created files"
+        );
+    }
+
+    #[test]
+    fn secure_storage_creates_nested_directories_and_restricts_existing_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        let private = temporary.path().join("data/nested");
+        secure_directory(&private).unwrap();
+        assert!(private.is_dir());
+        let file = private.join("secret.txt");
+        std::fs::write(&file, "private").unwrap();
+        secure_file(&file).unwrap();
+        assert_eq!(std::fs::read(&file).unwrap(), b"private");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&private).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_storage_rejects_symlinks_and_regular_file_ancestors_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        let anchor = temporary.path().join("anchor");
+        std::fs::create_dir(&anchor).unwrap();
+        symlink(&outside, anchor.join("redirect")).unwrap();
+        assert!(secure_directory(&anchor.join("redirect/more")).is_err());
+        assert!(!outside.join("more").exists());
+        assert!(secure_file(&anchor.join("redirect/file.txt")).is_err());
+
+        let ordinary = anchor.join("regular.txt");
+        std::fs::write(&ordinary, b"not a directory").unwrap();
+        assert!(secure_directory(&ordinary.join("nested")).is_err());
+        assert!(std::fs::read(&ordinary).unwrap() == b"not a directory");
+        let linked_file = anchor.join("file-alias.txt");
+        symlink(&ordinary, &linked_file).unwrap();
+        assert!(secure_file(&linked_file).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_identity_canonicalizes_real_aliases_without_conflating_other_directories() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let real = temporary.path().join("work-one");
+        let another = temporary.path().join("work-two");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::create_dir(&another).unwrap();
+        let alias = temporary.path().join("linked-one");
+        symlink(&real, &alias).unwrap();
+        assert_eq!(workspace_key(&real), workspace_key(&alias));
+        assert_ne!(workspace_key(&real), workspace_key(&another));
+    }
+}

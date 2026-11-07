@@ -44,6 +44,7 @@ mod history_views;
 mod read_cache;
 
 mod reads;
+pub(crate) mod test_fault;
 pub use read_cache::ReadCacheSnapshot;
 
 pub(crate) mod schema;
@@ -475,6 +476,9 @@ impl KernelBackend for Backend {
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>> {
         lifecycle::query_summaries(self, query).await
     }
+    async fn activity_summary(&self) -> Result<ReadView<SessionActivitySummary>> {
+        lifecycle::activity_summary(self).await
+    }
     async fn workspace_statistics(
         &self,
         ids: &[i64],
@@ -489,6 +493,15 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<Vec<ProviderRoundView>>> {
         lifecycle::rounds(self, session, after, limit).await
     }
+    async fn owned_tool_metadata(
+        &self,
+        session: SessionId,
+        after: Option<ToolId>,
+        limit: usize,
+    ) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
+        lifecycle::owned_tool_metadata(self, session, after, limit).await
+    }
+
     async fn pending_deliveries(
         &self,
         session: SessionId,
@@ -1201,6 +1214,28 @@ impl KernelBackend for Backend {
         )
         .await
     }
+    async fn execution_attempt(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<ExecutionAttemptView>> {
+        let _read = self
+            .control_reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::Busy)?;
+        let mut connection = self
+            .reader
+            .get_sqlite_connection_pool()
+            .acquire()
+            .await
+            .map_err(storage)?;
+        metrics::add(&self.live.diagnostics().0.detail_queries, 1);
+        let attempt =
+            reads::execution_attempt(&mut connection, session, execution, generation).await?;
+        self.views.wrap(session, attempt)
+    }
     async fn history_window(
         &self,
         session: SessionId,
@@ -1766,6 +1801,15 @@ async fn commit_batch(
                 }
             }
         }
+    }
+    // Fault gates are applied to the real uncommitted batch, before SQLite
+    // COMMIT and before installing any successful cache projections.
+    if let Some(effect) = test_fault::before_commit().await
+        && effect == test_fault::Effect::Fail
+    {
+        let error = storage("injected kernel.before_commit failure: SQL transaction rolled back");
+        let error = abort_transaction(transaction).await.err().unwrap_or(error);
+        return aborted_batch(results, batch.len(), sequence, error);
     }
     let fence = cache.pause();
 

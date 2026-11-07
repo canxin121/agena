@@ -91,7 +91,7 @@ impl Scheduler {
             job.paused = false;
             true
         } else {
-            job.resume(Utc::now())?
+            job.resume(crate::clock::now())?
         };
         if changed {
             return self.persist_edit(&expected, job).await.map(Some);
@@ -125,7 +125,7 @@ impl Scheduler {
             max_age_days,
             misfire_policy,
             retry_policy,
-            Utc::now(),
+            crate::clock::now(),
         )? {
             return self.persist_edit(&expected, job).await.map(Some);
         }

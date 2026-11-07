@@ -344,11 +344,27 @@ pub(super) async fn apply(
                 reads::execution(connection, *session, *execution).await?.0,
             ))
         }
-        Command::Cancel { session, execution } => {
+        Command::Cancel {
+            session,
+            execution,
+            expected_generation,
+            epoch,
+        } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;
-            finish(connection, view, ExecutionPhase::Cancelled)
-                .await
-                .map(Mutation::Execution)
+            if expected_generation.is_some_and(|expected| expected != view.generation) {
+                return Err(KernelError::StaleAttempt);
+            }
+            let unclaimed = view.phase == ExecutionPhase::Queued;
+            let finished = finish(connection, view, ExecutionPhase::Cancelled).await?;
+            if unclaimed && let Some(epoch) = epoch {
+                // Terminal rows permit ownership without a provider start.
+                // This fence owns cancellation callbacks, not a fictitious
+                // provider claim, and is committed atomically with cancellation.
+                sqlx::query("UPDATE agena_attempts SET owner_epoch=? WHERE execution_id=? AND generation=? AND owner_epoch IS NULL")
+                    .bind(epoch.to_string()).bind(execution.to_string())
+                    .bind(finished.generation.get()).execute(connection).await.map_err(sql_error)?;
+            }
+            Ok(Mutation::Execution(finished))
         }
         Command::CancelQueued { session, execution } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;

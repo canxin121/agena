@@ -81,6 +81,40 @@ struct LiveTool {
 }
 type ActiveToolMap = HashMap<(i64, i64), LiveTool>;
 
+type AttemptControlKey = (i64, ExecutionId, AttemptGeneration);
+type AttemptControlOwners = Arc<StdMutex<HashMap<AttemptControlKey, usize>>>;
+
+/// Every accepted cancellation keeps its exact-attempt callbacks in the drain
+/// boundary even when its transport receiver has disappeared.
+struct AttemptControlRegistration {
+    owners: AttemptControlOwners,
+    key: AttemptControlKey,
+}
+
+impl AttemptControlRegistration {
+    fn new(owners: AttemptControlOwners, key: AttemptControlKey) -> Self {
+        *owners
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .entry(key)
+            .or_default() += 1;
+        Self { owners, key }
+    }
+}
+
+impl Drop for AttemptControlRegistration {
+    fn drop(&mut self) {
+        let mut owners = self.owners.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(count) = owners.get_mut(&self.key) {
+            if *count == 1 {
+                owners.remove(&self.key);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
+}
+
 /// An operator call has a policy principal and a bounded lifetime, but no
 /// transcript, session, or user-interaction authority. Plugin callbacks still
 /// need the plugin host's exact, live callback token before reaching this map.
@@ -121,6 +155,9 @@ pub struct SessionManager {
     admission: Arc<Semaphore>,
     agent_settlements: Arc<Semaphore>,
     auxiliary_tasks: Arc<Semaphore>,
+    /// Accepted exact-attempt cancellations outlive their transport waiters.
+    control_tasks: tokio_util::task::TaskTracker,
+    attempt_controls: AttemptControlOwners,
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     tools: Arc<StdMutex<ActiveToolMap>>,
@@ -157,6 +194,8 @@ impl SessionManager {
             admission: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
             agent_settlements: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
             auxiliary_tasks: Arc::new(Semaphore::new(MAX_AUXILIARY_TASKS)),
+            control_tasks: tokio_util::task::TaskTracker::new(),
+            attempt_controls: Default::default(),
             sessions: Default::default(),
             tools: Default::default(),
             operator_calls: Default::default(),
@@ -243,7 +282,7 @@ impl SessionManager {
     pub fn broadcast_active_session_end(
         &self,
         reason: agena_plugin_host::SessionEndReason,
-    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+    ) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
         let sessions = self
             .active
             .lock()
@@ -268,7 +307,7 @@ impl SessionManager {
         &self,
         session_id: i64,
         reason: agena_plugin_host::SessionEndReason,
-    ) -> impl std::future::Future<Output = ()> + Send + 'static {
+    ) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
         let executor = self.tool_executor();
         async move {
             executor
@@ -277,8 +316,15 @@ impl SessionManager {
                 .await;
         }
     }
-    pub async fn shutdown(&self) -> Result<(), AppError> {
+    /// Close admission and cancel owned work without dropping its supervisors.
+    /// The asynchronous drain remains responsible for fencing/persisting it.
+    pub fn request_shutdown(&self) {
         self.shutdown.cancel();
+        self.control_tasks.close();
+    }
+
+    pub async fn shutdown(&self) -> Result<(), AppError> {
+        self.request_shutdown();
         let active = self
             .active
             .lock()
@@ -321,6 +367,7 @@ impl SessionManager {
         // Preparation owns an execution permit before it can commit input;
         // agent settlement has a separate permit after the provider exits.
         let drain = async {
+            self.control_tasks.wait().await;
             let _executions = self
                 .admission
                 .clone()

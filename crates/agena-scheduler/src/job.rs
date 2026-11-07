@@ -300,7 +300,7 @@ impl ScheduledJob {
     ) -> SchedulerResult<Self> {
         let expression = expression.into();
         let timezone = parse_timezone(timezone)?;
-        let now = Utc::now();
+        let now = crate::clock::now();
         let next = compute_next_fire(&expression, now, timezone)?;
         Ok(Self {
             id: Uuid::new_v4(),
@@ -339,7 +339,7 @@ impl ScheduledJob {
             owner_session_id: None,
             owner_workspace: None,
             launch_provenance: None,
-            created_at: Utc::now(),
+            created_at: crate::clock::now(),
             last_fired_at: None,
             next_fire_at: Some(at),
             timezone: "UTC".to_owned(),
@@ -516,7 +516,7 @@ impl ScheduledJob {
     }
 
     pub fn record_delivery(&mut self, triggered_at: DateTime<Utc>, result: JobDeliveryResult) {
-        self.record_delivery_attempt(triggered_at, Utc::now(), None, result);
+        self.record_delivery_attempt(triggered_at, crate::clock::now(), None, result);
     }
 
     fn record_delivery_attempt(

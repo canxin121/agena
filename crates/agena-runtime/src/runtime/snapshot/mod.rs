@@ -50,6 +50,7 @@ pub(crate) struct SnapshotDatabases {
 
 pub(crate) struct RuntimeSnapshot {
     client_identity: crate::ProviderClientIdentity,
+    plugin_shutdown: agena_runtime::PluginShutdownCoordinator,
     state: SnapshotState,
     resolution_meta: ConfigResolutionMeta,
     pub(super) host_client: Arc<super::host_client::RuntimeHostClient>,
@@ -215,7 +216,19 @@ impl RuntimeSnapshot {
         .await?;
         // Own successful plugin initialization across every later service
         // build error and cancellation, before awaiting provider composition.
-        let plugin_shutdown = agena_runtime::plugin_shutdown_guard(Arc::clone(&plugins));
+        let plugin_shutdown_coordinator = previous
+            .as_ref()
+            .map(|previous| previous.plugin_shutdown.clone())
+            .unwrap_or_default();
+        let plugin_shutdown = match plugin_shutdown_coordinator.register(Arc::clone(&plugins)) {
+            Ok(guard) => guard,
+            Err(mut report) => {
+                report
+                    .failures
+                    .extend(plugins.shutdown_report().await.failures);
+                return Err(AppError::Internal(report.to_string()));
+            }
+        };
         let (catalog_source_providers, model_catalog) = build_model_catalog_services(
             agena_runtime::ModelCatalogCompositionInputs {
                 providers: &resolution.config.providers,
@@ -291,6 +304,7 @@ impl RuntimeSnapshot {
         let config = resolution.config;
         let meta = resolution.meta;
         Ok(Self {
+            plugin_shutdown: plugin_shutdown_coordinator,
             state: agena_runtime::compose_runtime_snapshot_state(
                 agena_runtime::RuntimeSnapshotCompositionInputs {
                     generation,
@@ -582,6 +596,14 @@ impl RuntimeSnapshot {
 
     pub(crate) fn plugin_manager(&self) -> Arc<PluginHost> {
         Arc::clone(&self.state.services().plugins)
+    }
+
+    /// All execution/session owners must retire before final host draining.
+    /// Reload itself keeps using the lease-aware generation guards.
+    pub(crate) async fn shutdown_plugins(
+        &self,
+    ) -> Result<(), agena_plugin_host::PluginShutdownReport> {
+        self.plugin_shutdown.shutdown_and_wait().await
     }
 
     pub(crate) fn session_manager(&self) -> Option<Arc<SessionManager>> {

@@ -23,7 +23,13 @@ pub(crate) fn truncate_for_payload(s: &str, max: usize) -> String {
     if t.len() <= max {
         return t.to_string();
     }
-    format!("{}\n...(truncated)", &t[..max])
+    // Git errors can contain UTF-8 paths. Cut only at a character boundary so
+    // the error handler cannot panic when enforcing its public byte budget.
+    let mut boundary = max;
+    while !t.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    format!("{}\n...(truncated)", &t[..boundary])
 }
 
 pub(crate) fn redact_git_output(s: &str) -> String {
@@ -43,8 +49,9 @@ pub(crate) fn redact_git_output(s: &str) -> String {
             let start = after;
             let end = after + at_rel;
             out.replace_range(start..end, "***");
-            // Continue after the '@' to avoid reprocessing.
-            search_from = (after + at_rel + 1).min(out.len());
+            // After replacement, the old byte offset is no longer valid and
+            // could skip credentials in a following URL.
+            search_from = (after + "***".len() + 1).min(out.len());
         } else {
             search_from = (after + end_rel).min(out.len());
         }
@@ -696,4 +703,35 @@ pub(crate) async fn git_config_get(
     }
     let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if v.is_empty() { None } else { Some(v) }
+}
+
+#[cfg(test)]
+mod safety_tests {
+    use super::*;
+
+    #[test]
+    fn git_error_truncation_handles_utf8_at_every_byte_boundary() {
+        let message = "路径❄️文件名".repeat(12);
+        for max in 0..message.len() {
+            let shortened = truncate_for_payload(&message, max);
+            let prefix = shortened
+                .strip_suffix("\n...(truncated)")
+                .expect("an over-budget message must be marked truncated");
+            assert!(message.starts_with(prefix), "{shortened:?}");
+            assert!(prefix.len() <= max);
+        }
+        assert_eq!(truncate_for_payload(&message, message.len()), message);
+    }
+
+    #[test]
+    fn adjacent_git_urls_do_not_leak_the_second_credentials() {
+        let message = "fatal: https://alice:token-one@a.invalid https://bob:token-two@b.invalid";
+        let redacted = redact_git_output(message);
+        assert!(
+            !redacted.contains("token-one") && !redacted.contains("token-two"),
+            "{redacted}"
+        );
+        assert!(redacted.contains("https://***@a.invalid"), "{redacted}");
+        assert!(redacted.contains("https://***@b.invalid"), "{redacted}");
+    }
 }

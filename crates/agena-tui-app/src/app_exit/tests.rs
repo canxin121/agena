@@ -174,6 +174,8 @@ async fn stop_exists_only_for_the_current_sessions_confirmed_active_execution() 
             let snapshot = app.transcript.execution.as_mut().unwrap();
             snapshot.receipt = Some(agena_api::resource::SessionExecutionReceiptResource {
                 execution_id: queued,
+                message_id: 10,
+                attempt_generation: 1,
                 turn_id: uuid::Uuid::new_v4(),
                 reply_id: uuid::Uuid::new_v4(),
             });

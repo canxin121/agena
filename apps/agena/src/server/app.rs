@@ -838,10 +838,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
                     }
                 }
                 let _ = shutdown_started_tx.send(());
-                if let Err(error) = preview_shutdown_runtime.shutdown().await {
-                    tracing::error!(%error, "failed to shut down preview processes");
-                }
-                runtime.shutdown();
             })
             .await
     });
@@ -869,7 +865,20 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             }
         }
     };
+    // The HTTP task can be aborted after its grace period. Resource draining
+    // is owned by this outer boundary and must never be cancelled with it.
+    // Preview persistence is finalized before the Runtime closes its kernel.
+    let preview_result = preview_shutdown_runtime.shutdown().await;
+    let runtime_result = runtime.shutdown_and_wait().await;
     drop(server_record);
+    if let Err(error) = &preview_result {
+        tracing::error!(%error, "failed to shut down preview processes");
+    }
+    if let Err(error) = &runtime_result {
+        tracing::error!(%error, "failed to drain runtime during server shutdown");
+    }
+    runtime_result.context("failed to drain runtime during server shutdown")?;
+    preview_result.context("failed to shut down preview processes")?;
     result?;
     if let Ok(error) = shutdown_error_rx.try_recv() {
         return Err(error).context("failed to listen for the server shutdown signal");

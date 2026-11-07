@@ -1040,6 +1040,65 @@ pub(super) async fn query_summaries(
             .reserve_owned(ReadOwner::Workspace(workspace), bytes)?,
     ))
 }
+pub(super) async fn activity_summary(
+    backend: &Backend,
+) -> Result<ReadView<SessionActivitySummary>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .control_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    // Match the default session-list visibility with exclude_subagents=true.
+    // Ordinary child/fork sessions remain user-visible and participate.
+    let counts = sqlx::query(
+        "SELECT COALESCE(sum(t.processing_state='running'),0) AS running,          COALESCE(sum(t.processing_state='awaiting_interaction'),0) AS awaiting          FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id          WHERE s.deleted_at_ms IS NULL AND s.temporary=0 AND s.relation_kind!='subagent'",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    // The time belongs to the attempt, not mutable session metadata. At equal
+    // millisecond precision a failure wins the tie; no arbitrary identity is
+    // interpreted as a later completion.
+    let terminal = sqlx::query(
+        "SELECT a.finished_at_ms,(a.phase='failed') AS failed          FROM agena_attempts a JOIN agena_executions e          ON e.id=a.execution_id AND e.current_generation=a.generation          JOIN agena_sessions s ON s.id=e.session_id          WHERE a.finished_at_ms IS NOT NULL AND s.deleted_at_ms IS NULL          AND s.temporary=0 AND s.relation_kind!='subagent'          ORDER BY a.finished_at_ms DESC,(a.phase='failed') DESC LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    let value = SessionActivitySummary {
+        running_sessions: u64::try_from(counts.try_get::<i64, _>("running").map_err(storage)?)
+            .map_err(storage)?,
+        awaiting_interaction_sessions: u64::try_from(
+            counts.try_get::<i64, _>("awaiting").map_err(storage)?,
+        )
+        .map_err(storage)?,
+        latest_terminal_at_ms: terminal
+            .as_ref()
+            .map(|row| row.try_get::<i64, _>("finished_at_ms").map_err(storage))
+            .transpose()?,
+        latest_terminal_failed: terminal
+            .as_ref()
+            .map(|row| row.try_get::<bool, _>("failed").map_err(storage))
+            .transpose()?
+            .unwrap_or(false),
+    };
+    tx.rollback().await.map_err(storage)?;
+    let bytes = modeled_read_bytes(&value)?;
+    Ok(ReadView::from_lease(
+        value,
+        backend
+            .views
+            .reserve_owned(ReadOwner::Workspace(0), bytes)?,
+    ))
+}
+
 pub(super) async fn workspace_statistics(
     backend: &Backend,
     ids: &[i64],
@@ -1162,6 +1221,75 @@ pub(super) async fn rounds(
     let bytes = modeled_read_bytes(&values)?;
     backend.wrap_read(session, values, bytes)
 }
+/// Project only canonical result metadata, without loading tool bodies or
+/// inherited/live transcript entries. Accounting must survive compaction and
+/// rewind while charging an original tool invocation at most once.
+pub(super) async fn owned_tool_metadata(
+    backend: &Backend,
+    session: SessionId,
+    after: Option<ToolId>,
+    limit: usize,
+) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .content_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    reads::metadata(&mut tx, session).await?;
+    let rows = sqlx::query(
+        "SELECT t.id,
+                length(CAST(json_extract(t.result_json, '$.metadata') AS BLOB)) AS metadata_bytes
+         FROM agena_tool_calls t
+         JOIN agena_rounds r ON r.id = t.round_id
+         WHERE r.session_id = ? AND t.id > ?
+           AND t.result_json IS NOT NULL
+           AND json_type(t.result_json, '$.metadata') = 'object'
+         ORDER BY t.id LIMIT ?",
+    )
+    .bind(session.get())
+    .bind(after.map_or(0, |id| id.get()))
+    .bind(limit.clamp(1, 128) as i64)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    let mut values = Vec::with_capacity(rows.len());
+    let mut bytes = 0usize;
+    for row in rows {
+        let id =
+            ToolId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?;
+        let cost = row.try_get::<i64, _>("metadata_bytes").map_err(storage)? as usize + 512;
+        if !values.is_empty() && bytes.saturating_add(cost) > 4 * 1024 * 1024 {
+            break;
+        }
+        let row = sqlx::query(
+            "SELECT created_at_ms, finished_at_ms,
+                    json_extract(result_json, '$.metadata') AS metadata_json
+             FROM agena_tool_calls WHERE id = ?",
+        )
+        .bind(id.get())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(sql_error)?;
+        values.push(OwnedToolMetadata {
+            id,
+            created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
+            finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
+            metadata: decode(row.try_get("metadata_json").map_err(storage)?)?,
+        });
+        bytes = bytes.saturating_add(cost);
+    }
+    tx.rollback().await.map_err(storage)?;
+    let bytes = modeled_read_bytes(&values)?;
+    backend.wrap_read(session, values, bytes)
+}
+
 pub(super) async fn pending_deliveries(
     backend: &Backend,
     session: SessionId,

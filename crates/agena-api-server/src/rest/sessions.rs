@@ -118,6 +118,32 @@ pub async fn get_session_state(
     .await
 }
 
+pub async fn get_execution_attempt(
+    State(state): State<AppState>,
+    Path((session_id, execution_id, attempt_generation)): Path<(i64, uuid::Uuid, i64)>,
+) -> Result<impl IntoResponse, ServerError> {
+    // Settlement changes after the durable terminal commit, so a session
+    // revision ETag cannot safely cache this observation.
+    Ok(Json(
+        state
+            .application()
+            .execution_attempt(session_id, execution_id, attempt_generation)
+            .await?,
+    ))
+}
+
+pub async fn cancel_execution_attempt(
+    State(state): State<AppState>,
+    Path((session_id, execution_id, attempt_generation)): Path<(i64, uuid::Uuid, i64)>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .application()
+            .cancel_execution_attempt(session_id, execution_id, attempt_generation)
+            .await?,
+    ))
+}
+
 pub async fn get_session_prompt_preview(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,

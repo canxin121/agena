@@ -470,12 +470,14 @@ impl SessionManager {
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
-                let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:None,model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),tools_enabled:!bindings.is_empty()};
+                let request_layer=super::session_prompt::request_system_layer(options.system.as_deref());
+                let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),tools_enabled:!bindings.is_empty()};
                 let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
                 let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
                 state.processor.transform_model_input(
                     control.session.get(),
+                    context.effective_workspace_root.as_deref(),
                     &mut system_text,
                     prompt.turns_mut(),
                 ).await?;
@@ -1329,6 +1331,8 @@ pub(super) fn execution_outcome(
     crate::SessionExecutionCommandOutcome::accepted(
         execution.session_id.get(),
         execution.id,
+        execution.message_id,
+        execution.generation,
         turn,
         reply,
     )
@@ -1606,9 +1610,10 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
+        let request_layer = super::session_prompt::request_system_layer(options.system.as_deref());
         let prompt_inputs = super::session_prompt::PromptInputs {
             session: &context.prompts,
-            request_layer: None,
+            request_layer: request_layer.as_ref(),
             model: &options.model,
             session_id: control.session.get(),
             workspace: context
@@ -2090,7 +2095,5 @@ fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &st
 
 #[cfg(test)]
 mod compaction_tests;
-#[cfg(test)]
-mod model_hooks_tests;
 #[cfg(test)]
 mod stop_hook_tests;

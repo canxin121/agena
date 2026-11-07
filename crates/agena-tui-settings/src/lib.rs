@@ -45,6 +45,12 @@ impl SettingsState {
     pub fn reduce(&mut self, action: SettingsAction) -> Option<SettingsEffect> {
         match action {
             SettingsAction::SelectField { path } => {
+                // A pending value belongs to its original config path. Do not
+                // save that stale edit into an unrelated setting after a
+                // navigation-only selection change.
+                if self.selected_path.as_deref() != Some(path.as_str()) {
+                    self.pending_value = None;
+                }
                 self.selected_path = Some(path);
                 None
             }
@@ -592,3 +598,6 @@ pub fn handle_key<A>(
         _ => SettingsStudioEffect::KeepOpen,
     }
 }
+
+#[cfg(test)]
+mod tests;

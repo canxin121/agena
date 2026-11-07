@@ -11,11 +11,44 @@ pub struct DueJobQuery {
     pub limit: usize,
     pub excluded_job_ids: Vec<Uuid>,
     pub excluded_session_ids: Vec<i64>,
+    /// (business calendar UTC, real claim-lease UTC). Only the explicitly
+    /// virtual scheduler supplies this pair; standalone store tests retain
+    /// their caller-provided timestamp semantics.
+    pub lease_clock: Option<(i64, i64)>,
 }
 
 impl DueJobQuery {
     pub(super) fn batch_limit(&self) -> usize {
         self.limit.min(MAX_DUE_BATCH_SIZE)
+    }
+
+    fn lease_now_ms(&self, business_now_ms: i64) -> i64 {
+        self.lease_clock
+            .map_or(business_now_ms, |(_, lease_now)| lease_now)
+    }
+
+    fn translate_lease_deadline(&self, raw_ms: i64) -> i64 {
+        self.lease_clock
+            .map_or(raw_ms, |(calendar_now, lease_now)| {
+                calendar_now.saturating_add(raw_ms.saturating_sub(lease_now).max(0))
+            })
+    }
+
+    fn claim_wake_sql(&self) -> (&'static str, Vec<sea_orm::Value>) {
+        match self.lease_clock {
+            Some((calendar_now, lease_now)) => (
+                "CASE WHEN claimed_at_ms IS NULL THEN 0 ELSE ? + MAX(0, claimed_at_ms + ? - ?) END",
+                vec![
+                    calendar_now.into(),
+                    CLAIM_LEASE_MILLIS.into(),
+                    lease_now.into(),
+                ],
+            ),
+            None => (
+                "CASE WHEN claimed_at_ms IS NULL THEN 0 ELSE claimed_at_ms + ? END",
+                vec![CLAIM_LEASE_MILLIS.into()],
+            ),
+        }
     }
 
     pub(super) fn allows(&self, job: &ScheduledJob) -> bool {
@@ -45,14 +78,16 @@ impl DueJobQuery {
 }
 
 impl JobSnapshot {
-    pub(super) fn wake_at_ms(&self) -> Option<i64> {
+    pub(super) fn wake_at_ms(&self, query: &DueJobQuery) -> Option<i64> {
         if self.job.paused || self.job.completed {
             return None;
         }
         if self.claim_key.is_some() {
             return Some(
-                self.renewed_at_ms
-                    .map_or(0, |at| at.saturating_add(CLAIM_LEASE_MILLIS)),
+                query.translate_lease_deadline(
+                    self.renewed_at_ms
+                        .map_or(0, |at| at.saturating_add(CLAIM_LEASE_MILLIS)),
+                ),
             );
         }
         self.job
@@ -79,7 +114,7 @@ impl InMemoryJobStore {
         // for the small admitted batch, rather than for every due job.
         let mut selected = BinaryHeap::with_capacity(limit + 1);
         for entry in state.jobs.values().filter(|entry| query.allows(&entry.job)) {
-            if let Some(at) = entry.wake_at_ms().filter(|at| *at <= now_ms) {
+            if let Some(at) = entry.wake_at_ms(query).filter(|at| *at <= now_ms) {
                 selected.push((at, entry.job.id));
                 if selected.len() > limit {
                     selected.pop();
@@ -117,7 +152,9 @@ impl SqliteJobStore {
         let mut values = vec![now_ms.into()];
         values.extend(exclusions.clone());
         values.push((limit as i64).into());
-        values.extend([CLAIM_LEASE_MILLIS.into(), lease_cutoff(now_ms).into()]);
+        let (claim_wake_sql, claim_wake_values) = query.claim_wake_sql();
+        values.extend(claim_wake_values);
+        values.push(lease_cutoff(query.lease_now_ms(now_ms)).into());
         values.extend(exclusions);
         values.push((limit as i64).into());
         values.push((limit as i64).into());
@@ -133,7 +170,7 @@ impl SqliteJobStore {
                  AND COALESCE(retry_at_ms, next_fire_at_ms) <= ? {exclude} \
                ORDER BY COALESCE(retry_at_ms, next_fire_at_ms), id LIMIT ? \
                ) UNION ALL SELECT id, wake_at_ms FROM ( \
-               SELECT id, CASE WHEN claimed_at_ms IS NULL THEN 0 ELSE claimed_at_ms + ? END AS wake_at_ms \
+               SELECT id, {claim_wake_sql} AS wake_at_ms \
                FROM agena_scheduler_jobs \
                WHERE paused = 0 AND completed = 0 AND delivery_key IS NOT NULL \
                  AND (claimed_at_ms IS NULL OR claimed_at_ms <= ?) {exclude} \
@@ -156,7 +193,8 @@ impl SqliteJobStore {
     pub(super) async fn next_deadline(&self, query: &DueJobQuery) -> SchedulerResult<Option<i64>> {
         let (exclude, exclusions) = query.sql_exclusions();
         let mut values = exclusions.clone();
-        values.push(CLAIM_LEASE_MILLIS.into());
+        let (claim_wake_sql, claim_wake_values) = query.claim_wake_sql();
+        values.extend(claim_wake_values);
         values.extend(exclusions);
         // Two indexed first-row reads, including nullable abandoned leases.
         // Do not let an in-flight occurrence's old fire time cause busy waits.
@@ -169,7 +207,7 @@ impl SqliteJobStore {
                    AND COALESCE(retry_at_ms, next_fire_at_ms) IS NOT NULL {exclude} \
                  ORDER BY COALESCE(retry_at_ms, next_fire_at_ms), id LIMIT 1 \
                ) UNION ALL SELECT wake_at_ms FROM ( \
-                 SELECT CASE WHEN claimed_at_ms IS NULL THEN 0 ELSE claimed_at_ms + ? END AS wake_at_ms \
+                 SELECT {claim_wake_sql} AS wake_at_ms \
                  FROM agena_scheduler_jobs \
                  WHERE paused = 0 AND completed = 0 AND delivery_key IS NOT NULL {exclude} \
                  ORDER BY claimed_at_ms, id LIMIT 1 \

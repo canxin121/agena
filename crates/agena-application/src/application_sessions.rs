@@ -225,6 +225,42 @@ impl Application {
         self.with_background_activities(resource, session_id).await
     }
 
+    /// Observe the exact accepted attempt without following a retry or using
+    /// the session's aggregate busy/idle state as a completion signal.
+    pub async fn execution_attempt(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+    ) -> Result<agena_api::resource::ExecutionAttemptResource, ApplicationError> {
+        let generation = agena_domain::session_kernel::AttemptGeneration::try_from(
+            attempt_generation,
+        )
+        .map_err(|_| ApplicationError::bad_request("attempt_generation must be positive"))?;
+        let attempt = self
+            .session_execution_services()?
+            .execution_control
+            .execution_attempt(
+                session_id,
+                agena_domain::ExecutionId(execution_id),
+                generation,
+            )
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?
+            .ok_or_else(|| ApplicationError::not_found("The execution attempt was not found."))?;
+        Ok(agena_api::resource::ExecutionAttemptResource {
+            session_id: attempt.session_id,
+            execution_id: attempt.execution_id.0,
+            message_id: attempt.message_id.get(),
+            attempt_generation: attempt.attempt_generation.get(),
+            current_attempt_generation: attempt.current_attempt_generation.get(),
+            phase: attempt.phase,
+            settlement: attempt.settlement,
+            kernel_epoch: attempt.kernel_epoch.0,
+            owner_epoch: attempt.owner_epoch.map(|epoch| epoch.0),
+        })
+    }
+
     /// Bounded execution/status projection. Transcript history is fetched via
     /// the dedicated cursor-paged parts/transcript endpoints.
     pub async fn session_execution_shell(
@@ -612,6 +648,29 @@ impl Application {
         }
     }
 
+    /// Generation-checked cancellation. Unlike session stop, this affects
+    /// only the accepted attempt and leaves unrelated queued work alone.
+    pub async fn cancel_execution_attempt(
+        &self,
+        session_id: i64,
+        execution_id: uuid::Uuid,
+        attempt_generation: i64,
+    ) -> Result<CancellationOutcome, ApplicationError> {
+        let generation = agena_domain::session_kernel::AttemptGeneration::try_from(
+            attempt_generation,
+        )
+        .map_err(|_| ApplicationError::bad_request("attempt_generation must be positive"))?;
+        self.session_execution_services()?
+            .execution_control
+            .cancel_execution_attempt_with_outcome(
+                session_id,
+                ExecutionId(execution_id),
+                generation,
+            )
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
     /// Durable, idempotent acknowledgement that an interactive user-input
     /// request has been shown to the user.
     pub async fn mark_interactive_request_presented(
@@ -839,6 +898,8 @@ async fn session_command_resource(
         outcome.receipt.map(
             |receipt| agena_api::resource::SessionExecutionReceiptResource {
                 execution_id: receipt.execution_id.0,
+                message_id: receipt.message_id.get(),
+                attempt_generation: receipt.attempt_generation.get(),
                 turn_id: receipt.turn_id.0,
                 reply_id: receipt.reply_id.0,
             },

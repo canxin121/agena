@@ -171,6 +171,12 @@ pub enum Command {
     Cancel {
         session: SessionId,
         execution: ExecutionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_generation: Option<AttemptGeneration>,
+        /// Runtime-owned cancellation callbacks can run even for unclaimed
+        /// input. Preserve their process ownership for recovery observation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        epoch: Option<KernelEpoch>,
     },
     CancelQueued {
         session: SessionId,
@@ -494,6 +500,7 @@ pub trait KernelBackend: Send + Sync {
     ) -> Result<ReadView<Option<ProviderRoundView>>>;
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>>;
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>>;
+    async fn activity_summary(&self) -> Result<ReadView<SessionActivitySummary>>;
     async fn workspace_statistics(
         &self,
         workspace_ids: &[i64],
@@ -504,6 +511,12 @@ pub trait KernelBackend: Send + Sync {
         after: Option<RoundId>,
         limit: usize,
     ) -> Result<ReadView<Vec<ProviderRoundView>>>;
+    async fn owned_tool_metadata(
+        &self,
+        session: SessionId,
+        after: Option<ToolId>,
+        limit: usize,
+    ) -> Result<ReadView<Vec<OwnedToolMetadata>>>;
     fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch>;
     async fn pending_deliveries(
         &self,
@@ -703,6 +716,12 @@ pub trait KernelBackend: Send + Sync {
         session: SessionId,
         execution: ExecutionId,
     ) -> Result<ReadView<ExecutionView>>;
+    async fn execution_attempt(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<ExecutionAttemptView>>;
     async fn history_window(
         &self,
         session: SessionId,

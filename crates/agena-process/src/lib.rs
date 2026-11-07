@@ -341,3 +341,66 @@ impl Drop for ManagedChild {
         }
     }
 }
+
+// Process lifecycle has effects that cannot be verified with a fake Child:
+// OS pipes, exit statuses, byte limits and group-kill deadlines. These use
+// real short-lived processes and avoid touching the user's shell environment.
+#[cfg(all(test, unix))]
+mod process_contract_tests {
+    use super::*;
+    use std::{io::ErrorKind, time::Instant};
+
+    fn shell(script: &str) -> Command {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(script).stdin(Stdio::null());
+        command
+    }
+
+    #[tokio::test]
+    async fn real_child_stdout_stderr_and_nonzero_exit_remain_independent() {
+        let result = output(
+            shell("printf 'good-out'; printf 'useful-error' >&2; exit 23"),
+            Duration::from_secs(5),
+            512,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status.code(), Some(23));
+        assert_eq!(result.stdout, b"good-out");
+        assert_eq!(result.stderr, b"useful-error");
+    }
+
+    #[tokio::test]
+    async fn real_stdin_round_trip_and_empty_input_do_not_deadlock() {
+        for input in [b"hello\nworld\n".as_slice(), b"".as_slice()] {
+            let result = output_with_input(shell("cat"), input, Duration::from_secs(5), 512)
+                .await
+                .unwrap();
+            assert!(result.status.success());
+            assert_eq!(result.stdout, input);
+            assert!(result.stderr.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn real_output_limits_fail_instead_of_returning_truncated_success() {
+        let too_large = output(shell("yes x | head -c 8192"), Duration::from_secs(5), 128)
+            .await
+            .unwrap_err();
+        assert_eq!(too_large.kind(), ErrorKind::FileTooLarge, "{too_large}");
+        assert!(too_large.to_string().contains("128"));
+    }
+
+    #[tokio::test]
+    async fn hung_real_process_has_a_bounded_deadline() {
+        let began = Instant::now();
+        let timed_out = output(shell("sleep 5"), Duration::from_millis(80), 512)
+            .await
+            .unwrap_err();
+        assert_eq!(timed_out.kind(), ErrorKind::TimedOut, "{timed_out}");
+        assert!(
+            began.elapsed() < Duration::from_secs(3),
+            "process timeout did not bound cleanup"
+        );
+    }
+}

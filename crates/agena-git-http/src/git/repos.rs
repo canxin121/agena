@@ -466,6 +466,41 @@ pub struct GitInitBody {
     pub default_branch: Option<String>,
 }
 
+/// Git init and clone both create repository data. A nested existing symbolic
+/// link can make a lexically safe relative target point outside the selected
+/// directory. Reject such components before delegating filesystem writes to
+/// the production git executable.
+async fn reject_repo_target_symlinks(base: &Path, relative: &str) -> Result<(), Response> {
+    let mut component_path = base.to_path_buf();
+    for part in Path::new(relative).components() {
+        if let std::path::Component::Normal(name) = part {
+            component_path.push(name);
+        }
+        match tokio::fs::symlink_metadata(&component_path).await {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": "Repository path must not cross a symbolic link",
+                        "code": "invalid_path",
+                    })),
+                )
+                    .into_response());
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => {
+                return Err(git_io_error_response(
+                    "inspect repository target path before creating it",
+                    &error,
+                    "git_target_path_check_failed",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn git_init(Query(q): Query<DirectoryQuery>, Json(body): Json<GitInitBody>) -> Response {
     let base = match require_directory(&q) {
         Ok(d) => d,
@@ -496,6 +531,12 @@ pub async fn git_init(Query(q): Query<DirectoryQuery>, Json(body): Json<GitInitB
             ),
         )
             .into_response();
+    }
+
+    if rel != "."
+        && let Err(response) = reject_repo_target_symlinks(&base, rel).await
+    {
+        return response;
     }
 
     if let Err(err) = tokio::fs::create_dir_all(&target).await {
@@ -659,6 +700,10 @@ pub async fn git_clone(
             ),
         )
             .into_response();
+    }
+
+    if let Err(response) = reject_repo_target_symlinks(&base, rel).await {
+        return response;
     }
 
     match tokio::fs::metadata(&target).await {

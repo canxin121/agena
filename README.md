@@ -24,6 +24,11 @@ Engineering guides:
 - [Automatic session titles and auxiliary models](docs/session-titles.md)
 - [Layered prompt fragments and inheritance](docs/prompt-layers.md)
 - [Skill libraries, installation, and authoring](docs/skills.md)
+- [Multi-user channel roles, privacy and permissions](docs/channel-access.md)
+- [Plugin channels and event-driven automation](docs/integrations.md)
+- [Assistant personality, memory, and proactive contact](docs/assistant.md)
+- [Natural conversation work and automatic result delivery](docs/conversation-work.md)
+- [Durable tasks, Web/TUI workbenches, and chatbot ingress](docs/superagent.md)
 
 ## Install
 

@@ -2,6 +2,8 @@
 
 以下规模统计保留本轮驱动扩展前的静态快照：**69 个 Rust package**、约 **538,692 行 Rust 源代码**，识别 **1,344 个 Rust 测试声明**。此统计只说明测试入口数量，**不是代码命中率、分支覆盖率、通过率或全面覆盖的证据**。跨 crate 的系统测试会覆盖多个模块；不在此表内的 TypeScript/Web、OS 特定代码、构建脚本应分别评估。
 
+本次自然对话工作扩展新增 `agena-superagent`，已在清单中补记；上方总量仍是原始审计快照，不混算为本轮覆盖率。该 crate 的领域测试与跨 crate 的自然聊天、存储和真实 Web/TUI 验收分别记录在 `docs/conversation-work.md`。
+
 ## 已具备的真实产品测试入口
 
 - Chat/Runtime/Session、权限、Hook、工具和插件：apps/agena/tests/scenarios/ 及 bundled/。
@@ -77,6 +79,7 @@
 | `crates/agena-tui-platform` | 3,784 | 10 | 0 |
 | `crates/agena-skills` | 3,176 | 9 | 23 |
 | `crates/agena-scheduler` | 2,983 | 1 | 0 |
+| `crates/agena-superagent` | 573 | 4 | 0 |
 | `crates/agena-process` | 2,527 | 4 | 0 |
 | `crates/agena-plugin-contracts` | 2,285 | 3 | 0 |
 | `crates/agena-lsp` | 1,705 | 0 | 0 |

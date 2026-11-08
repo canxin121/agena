@@ -27,6 +27,11 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+mod memory_metadata;
+pub use memory_metadata::{
+    MemoryKind, MemoryMetadata, MemoryOrigin, MemoryRevision, MemoryScope, MemorySource,
+    MemoryStatus, MemoryWriteOptions, MemoryWriteSnapshot,
+};
 mod memory_store;
 pub use memory_store::MemoryStore;
 
@@ -203,6 +208,9 @@ pub struct MemoryFrontmatter {
     pub description: String,
     #[serde(default)]
     pub r#type: Option<MemoryType>,
+    /// Host revision makes metadata-only updates visible to document SHA checks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +222,7 @@ pub struct MemoryRecord {
     pub path: PathBuf,
     pub frontmatter: MemoryFrontmatter,
     pub body: String,
+    pub metadata: MemoryMetadata,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -236,11 +245,16 @@ pub type MemoryResult<T> = Result<T, MemoryError>;
 pub trait MemoryRepository: Send + Sync {
     fn directory(&self) -> PathBuf;
     fn ensure_index(&self) -> MemoryResult<PathBuf>;
+    fn pending_recovery_paths(&self) -> MemoryResult<Vec<PathBuf>>;
+    fn recover_pending(&self, allowed: &dyn Fn(&std::path::Path) -> bool) -> MemoryResult<bool>;
     fn list(&self) -> MemoryResult<Vec<MemoryRecord>>;
     fn get(&self, name: &str) -> MemoryResult<MemoryRecord>;
     fn index_lines(&self) -> MemoryResult<Vec<String>>;
     fn forget(&self, name: &str) -> MemoryResult<()>;
+    fn forget_checked(&self, name: &str, expected: Option<&str>) -> MemoryResult<()>;
+    fn forget_many_checked(&self, records: &[MemoryRevision]) -> MemoryResult<()>;
     fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord>;
+    fn save_checked(&self, entry: NewMemory, expected: Option<&str>) -> MemoryResult<MemoryRecord>;
 }
 
 #[derive(Debug, thiserror::Error)]

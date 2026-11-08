@@ -16,6 +16,8 @@ use super::{allow_permissions, fixture};
 
 #[path = "core_contracts.rs"]
 mod core_contracts;
+#[path = "core_memory.rs"]
+mod core_memory;
 #[path = "core_permissions.rs"]
 mod core_permissions;
 

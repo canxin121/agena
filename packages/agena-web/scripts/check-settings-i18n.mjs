@@ -10,6 +10,7 @@ const rootFiles = [
   ...globSync('src/components/settings/**/*.{vue,ts}'),
   'src/pages/SettingsPage.vue',
   'src/components/McpDialog.vue',
+  'src/components/MemoryMetadataView.vue',
   'src/lib/mcpConnections.ts',
 ].sort()
 const vueFiles = rootFiles.filter((file) => file.endsWith('.vue'))

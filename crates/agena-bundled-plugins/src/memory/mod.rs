@@ -1,6 +1,7 @@
 //! Bundled memory plugin: durable memory tools backed by `agena-memory-index`.
 
 mod plugin;
+mod retrieval;
 
 pub(crate) use plugin::{MEMORY_PLUGIN_ID, MemoryPlugin};
 

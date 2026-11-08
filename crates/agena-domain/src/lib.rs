@@ -42,6 +42,7 @@ mod ids;
 mod inline_ui;
 mod interaction_notification;
 mod json_path;
+mod memory;
 mod message_activity;
 mod message_activity_values;
 mod message_source;
@@ -144,6 +145,10 @@ pub use ids::{
 };
 pub use interaction_notification::InteractionNotificationLevel;
 pub use json_path::{JsonPathError, format_json_path, get_json_path, parse_json_path};
+pub use memory::{
+    MemoryKind, MemoryMetadata, MemoryOrigin, MemoryRevision, MemoryScope, MemorySource,
+    MemoryStatus,
+};
 pub use message_activity::{
     ArtifactRef, FileChangeKind, OperationUserInput, OperationUserInputRecord, SearchResultItem,
     TableColumn, TodoItem, TodoPriority, TodoStatus, UserInputOption, UserInputQuestion,

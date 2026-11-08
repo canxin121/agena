@@ -19491,7 +19491,9 @@ Persistent memory with searchable retrieval and write tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `limit` | `integer / null` | — | — | Body characters to return (default 8000, maximum 32000). |
 | `name` | `string` | ✓ | — |  |
+| `offset` | `integer` | — | `0` | Zero-based Unicode character offset into the body; use body_range.next_offset to continue. |
 
 **Input schema**:
 ```json
@@ -19541,6 +19543,16 @@ Persistent memory with searchable retrieval and write tools.
     ]
   },
   "properties": {
+    "limit": {
+      "description": "Body characters to return (default 8000, maximum 32000).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
     "name": {
       "minLength": 1,
       "not": {
@@ -19550,6 +19562,14 @@ Persistent memory with searchable retrieval and write tools.
       "type": "string",
       "x-agena-non-empty": true,
       "x-agena-order": "000000"
+    },
+    "offset": {
+      "default": 0,
+      "description": "Zero-based Unicode character offset into the body; use body_range.next_offset to continue.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000001"
     }
   },
   "required": [
@@ -19573,13 +19593,20 @@ Persistent memory with searchable retrieval and write tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `include_history` | `boolean` | — | `false` |  |
 | `limit` | `integer / null` | — | — |  |
+| `offset` | `integer` | — | `0` |  |
 
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
   "properties": {
+    "include_history": {
+      "default": false,
+      "type": "boolean",
+      "x-agena-order": "000002"
+    },
     "limit": {
       "format": "uint32",
       "minimum": 0,
@@ -19588,6 +19615,13 @@ Persistent memory with searchable retrieval and write tools.
         "null"
       ],
       "x-agena-order": "000000"
+    },
+    "offset": {
+      "default": 0,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer",
+      "x-agena-order": "000001"
     }
   },
   "type": "object"
@@ -19605,6 +19639,7 @@ Persistent memory with searchable retrieval and write tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `include_history` | `boolean` | — | `false` | Include archived/superseded history within the current scope. |
 | `limit` | `integer / null` | — | — |  |
 | `query` | `string` | ✓ | — |  |
 
@@ -19656,6 +19691,12 @@ Persistent memory with searchable retrieval and write tools.
     ]
   },
   "properties": {
+    "include_history": {
+      "default": false,
+      "description": "Include archived/superseded history within the current scope.",
+      "type": "boolean",
+      "x-agena-order": "000002"
+    },
     "limit": {
       "format": "uint32",
       "minimum": 0,
@@ -19666,6 +19707,7 @@ Persistent memory with searchable retrieval and write tools.
       "x-agena-order": "000001"
     },
     "query": {
+      "maxLength": 4096,
       "minLength": 1,
       "not": {
         "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
@@ -19697,13 +19739,44 @@ Persistent memory with searchable retrieval and write tools.
 | `content` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
 | `expected_sha256` | `string / null` | — | `null` | Required when updating an existing record; returned by memory.get/write. |
+| `importance` | `integer / null` | — | `null` | Relative importance (0–100), not confidence in factual truth. |
+| `kind` | `MemoryKind / null` | — | `null` | Omit to preserve the existing kind; new records infer a useful default. |
 | `memory_type` | `MemoryType / null` | — | — |  |
 | `name` | `string` | ✓ | — |  |
+| `scope` | `MemoryWriteScope / null` | — | `null` | Workspace knowledge or a checkpoint for the invoking session only. |
+| `status` | `MemoryWriteStatus / null` | — | `null` |  |
+| `supersedes` | `array<MemoryRevision>` | — | `[]` | Read these records first and provide their current revisions to replace them atomically. |
 
 **Input schema**:
 ```json
 {
   "$defs": {
+    "MemoryKind": {
+      "enum": [
+        "fact",
+        "preference",
+        "episode",
+        "procedure",
+        "task"
+      ],
+      "type": "string"
+    },
+    "MemoryRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sha256"
+      ],
+      "type": "object"
+    },
     "MemoryType": {
       "description": "Classification stored in a persistent memory document's frontmatter.",
       "enum": [
@@ -19712,6 +19785,20 @@ Persistent memory with searchable retrieval and write tools.
         "project",
         "reference",
         "other"
+      ],
+      "type": "string"
+    },
+    "MemoryWriteScope": {
+      "enum": [
+        "workspace",
+        "session"
+      ],
+      "type": "string"
+    },
+    "MemoryWriteStatus": {
+      "enum": [
+        "active",
+        "archived"
       ],
       "type": "string"
     }
@@ -19830,6 +19917,31 @@ Persistent memory with searchable retrieval and write tools.
       ],
       "x-agena-order": "000004"
     },
+    "importance": {
+      "default": null,
+      "description": "Relative importance (0–100), not confidence in factual truth.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ],
+      "x-agena-order": "000008"
+    },
+    "kind": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MemoryKind"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Omit to preserve the existing kind; new records infer a useful default.",
+      "x-agena-order": "000005"
+    },
     "memory_type": {
       "anyOf": [
         {
@@ -19850,6 +19962,40 @@ Persistent memory with searchable retrieval and write tools.
       "type": "string",
       "x-agena-non-empty": true,
       "x-agena-order": "000000"
+    },
+    "scope": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MemoryWriteScope"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Workspace knowledge or a checkpoint for the invoking session only.",
+      "x-agena-order": "000006"
+    },
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MemoryWriteStatus"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000007"
+    },
+    "supersedes": {
+      "default": [],
+      "description": "Read these records first and provide their current revisions to replace them atomically.",
+      "items": {
+        "$ref": "#/$defs/MemoryRevision"
+      },
+      "type": "array",
+      "x-agena-order": "000009"
     }
   },
   "required": [

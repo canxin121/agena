@@ -85,7 +85,19 @@ impl SessionManager {
         check: agena_tool::ToolPermissionCheck,
     ) -> Result<agena_domain::PermissionDecision, AppError> {
         let key = super::execution::permission_key(&check.action)?;
-        let workspace = self.current_workspace_id().await?;
+        // Read-only background/plugin checks use the same owning-workspace
+        // rule scope as foreground tool authorization.
+        let workspace = match session {
+            Some(id) if id != OPERATOR_SESSION => {
+                self.kernel()
+                    .reader
+                    .metadata(session_id(id)?)
+                    .await
+                    .map_err(kernel_error)?
+                    .workspace_id
+            }
+            _ => self.current_workspace_id().await?,
+        };
         let rules = self
             .kernel_runtime
             .permissions

@@ -32,6 +32,14 @@ fn fixture() -> TestAgenaBuilder {
         .startup_timeout(Duration::from_secs(60))
         .case_timeout(Duration::from_secs(60))
         .shutdown_timeout(Duration::from_secs(15))
+        // Scripted foreground scenarios do not consume background model calls.
+        // Dedicated memory lifecycle tests exercise automatic maintenance.
+        .configure_global(|config| {
+            config["plugins"]["list"]["agena.memory"] = json!({
+                "package": {"kind": "static"},
+                "settings": {"maintenance": {"enabled": false}}
+            });
+        })
         .model_options(ModelOptions {
             default_timeout: Duration::from_secs(20),
             ..Default::default()

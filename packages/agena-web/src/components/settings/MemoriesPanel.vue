@@ -12,7 +12,9 @@ import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
-import { apiJson } from '../../lib/api'
+import { apiJson, ApiError } from '../../lib/api'
+import MemoryMetadataView from '@/components/MemoryMetadataView.vue'
+import type { MemoryMetadata } from '@/generated/agenaState'
 import { useToastsStore } from '../../stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneRead } from '@/composables/usePaneRead'
@@ -26,6 +28,8 @@ type MemoryItem = {
   description?: string
   memory_type?: string
   body?: string
+  sha256?: string
+  metadata?: MemoryMetadata
 }
 
 type MemoriesOverview = {
@@ -48,6 +52,7 @@ const editMemoryType = ref('')
 const editBody = ref('')
 const editBusy = ref(false)
 const editError = ref('')
+const editConflict = ref(false)
 const searchQuery = ref('')
 const editorElement = ref<HTMLElement | null>(null)
 const originalMemory = ref<MemoryItem | null>(null)
@@ -70,7 +75,14 @@ const memoryTypeOptions = computed(() => [
 ])
 
 const sortedItems = computed(() =>
-  [...items.value].sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))),
+  [...items.value].sort((a, b) => {
+    const rank = (item: MemoryItem) => (item.metadata?.status && item.metadata.status !== 'active' ? 1 : 0)
+    return (
+      rank(a) - rank(b) ||
+      (b.metadata?.updated_at_ms ?? 0) - (a.metadata?.updated_at_ms ?? 0) ||
+      String(a.name || '').localeCompare(String(b.name || ''))
+    )
+  }),
 )
 const selectableItems = computed(() => sortedItems.value.filter((item) => memoryName(item)))
 const filteredItems = computed(() => {
@@ -90,7 +102,7 @@ const allMemoriesSelected = computed(
 )
 
 function memoryName(item: MemoryItem): string {
-  return String(item.name || item.file_name || '')
+  return String(item.file_name || item.name || '')
     .trim()
     .replace(/\.md$/i, '')
 }
@@ -124,6 +136,7 @@ function clearMemorySelection() {
 async function selectMemory(item: MemoryItem) {
   if (selectedName.value === memoryName(item)) return
   if (!(await canLeave())) return
+  editConflict.value = false
   originalMemory.value = { ...item }
   selectedName.value = memoryName(item) || null
   editName.value = item.name ?? item.file_name ?? ''
@@ -155,7 +168,7 @@ const { loading, error, refresh } = usePaneRead(
 
 async function saveSelected() {
   const name = selectedName.value
-  if (!name || editBusy.value) return
+  if (!name || editBusy.value || editConflict.value) return
   editBusy.value = true
   editError.value = ''
   try {
@@ -166,13 +179,19 @@ async function saveSelected() {
         description: editDescription.value.trim(),
         memory_type: editMemoryType.value.trim() || null,
         body: editBody.value,
+        expected_sha256: originalMemory.value?.sha256 || undefined,
       }),
     })
     toasts.push('success', st('Memory updated'))
     selectedName.value = null
     await refresh()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    editConflict.value = err instanceof ApiError && err.status === 409
+    const msg = editConflict.value
+      ? st('This memory changed. Reload the latest version before editing.')
+      : err instanceof Error
+        ? err.message
+        : String(err)
     editError.value = msg
     toasts.push('error', msg)
   } finally {
@@ -182,16 +201,23 @@ async function saveSelected() {
 
 async function deleteSelected() {
   const name = selectedName.value
-  if (!name || editBusy.value) return
+  if (!name || editBusy.value || editConflict.value) return
   editBusy.value = true
   editError.value = ''
   try {
-    await apiJson(`/api/v1/memories/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    const expected = originalMemory.value?.sha256
+    const query = expected ? `?expected_sha256=${encodeURIComponent(expected)}` : ''
+    await apiJson(`/api/v1/memories/${encodeURIComponent(name)}${query}`, { method: 'DELETE' })
     toasts.push('success', st('Memory deleted'))
     selectedName.value = null
     await refresh()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    editConflict.value = err instanceof ApiError && err.status === 409
+    const msg = editConflict.value
+      ? st('This memory changed. Reload the latest version before editing.')
+      : err instanceof Error
+        ? err.message
+        : String(err)
     editError.value = msg
     toasts.push('error', msg)
     await refresh().catch(() => {})
@@ -215,7 +241,14 @@ async function deleteSelectedMemories() {
       const deleted = await apiJson<string[]>('/api/v1/memories/batch-delete', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ names: batch }),
+        body: JSON.stringify({
+          names: batch,
+          expected_sha256: Object.fromEntries(
+            selectedItems.value
+              .filter((item) => batch.includes(memoryName(item)) && item.sha256)
+              .map((item) => [memoryName(item), item.sha256]),
+          ),
+        }),
       })
       deletedCount += Array.isArray(deleted) ? deleted.length : batch.length
     }
@@ -224,7 +257,12 @@ async function deleteSelectedMemories() {
     toasts.push('success', st('{count} memories deleted', { count: deletedCount }))
     await refresh()
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    editConflict.value = err instanceof ApiError && err.status === 409
+    const msg = editConflict.value
+      ? st('This memory changed. Reload the latest version before editing.')
+      : err instanceof Error
+        ? err.message
+        : String(err)
     editError.value = msg
     toasts.push('error', msg)
     await refresh().catch(() => {})
@@ -235,6 +273,34 @@ async function deleteSelectedMemories() {
     editBusy.value = false
   }
 }
+async function reloadSelected() {
+  if (editBusy.value || !selectedName.value) return
+  const name = selectedName.value
+  editBusy.value = true
+  try {
+    const latest = await apiJson<MemoryItem>(`/api/v1/memories/${encodeURIComponent(name)}`)
+    items.value = items.value.map((item) => (memoryName(item) === name ? latest : item))
+    originalMemory.value = { ...latest }
+    editDescription.value = latest.description ?? ''
+    editMemoryType.value = latest.memory_type ?? ''
+    editBody.value = latest.body ?? ''
+    editError.value = ''
+    editConflict.value = false
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    editError.value = msg
+    toasts.push('error', msg)
+    if (err instanceof ApiError && err.status === 404) {
+      selectedName.value = null
+      originalMemory.value = null
+      items.value = items.value.filter((item) => memoryName(item) !== name)
+      editConflict.value = false
+    }
+  } finally {
+    editBusy.value = false
+  }
+}
+
 function discardDraft() {
   if (!originalMemory.value) return
   editDescription.value = originalMemory.value.description ?? ''
@@ -385,6 +451,7 @@ defineExpose({ refresh })
               class="mt-1 block break-words text-xs leading-relaxed text-muted-foreground"
               >{{ item.description }}</span
             >
+            <MemoryMetadataView :metadata="item.metadata" compact />
           </button>
           <RiEditLine class="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/50" aria-hidden="true" />
         </div>
@@ -414,6 +481,7 @@ defineExpose({ refresh })
           }}</Button></template
         >
         <div class="space-y-4">
+          <MemoryMetadataView :metadata="originalMemory?.metadata" />
           <div class="grid gap-3 sm:grid-cols-2">
             <label class="min-w-0 space-y-2"
               ><span class="block text-xs font-medium text-muted-foreground">{{ $st('Name') }}</span
@@ -445,6 +513,14 @@ defineExpose({ refresh })
             />
           </label>
           <p v-if="editError" role="alert" class="break-words text-xs text-destructive">{{ editError }}</p>
+          <Button
+            v-if="editConflict"
+            variant="outline"
+            size="sm"
+            :disabled="editBusy || loading"
+            @click="reloadSelected"
+            >{{ $st('Reload latest version') }}</Button
+          >
           <ConfirmPopover
             :title="$st('Delete memory?')"
             :description="selectedName"
@@ -453,12 +529,16 @@ defineExpose({ refresh })
             variant="destructive"
             @confirm="deleteSelected"
           >
-            <Button variant="ghost" size="sm" class="text-destructive hover:bg-destructive/10" :disabled="editBusy">{{
-              $st('Delete')
-            }}</Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              class="text-destructive hover:bg-destructive/10"
+              :disabled="editBusy || editConflict"
+              >{{ $st('Delete') }}</Button
+            >
           </ConfirmPopover>
           <SettingsSaveBar
-            v-if="dirty || editBusy"
+            v-if="(dirty || editBusy) && !editConflict"
             :dirty="dirty"
             :saving="editBusy"
             @save="saveSelected"

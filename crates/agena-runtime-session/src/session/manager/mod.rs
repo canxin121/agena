@@ -32,6 +32,7 @@ mod execution;
 mod host;
 mod managed;
 mod media;
+mod memory;
 mod queries;
 mod results;
 mod results_text;
@@ -131,6 +132,8 @@ struct SessionDispatch {
     execution: tokio::sync::Mutex<()>,
     tail: StdMutex<std::sync::Weak<RunControl>>,
     title: StdMutex<titles::TitleWork>,
+    memory: StdMutex<memory::MemoryWork>,
+    memory_changed: Notify,
 }
 impl RunControl {
     fn phase(&self, phase: agena_domain::ExecutionPhase) {
@@ -169,6 +172,7 @@ pub struct SessionManager {
     host_sequences: Arc<StdMutex<HashMap<(i64, i64), u64>>>,
     workspace: Arc<tokio::sync::OnceCell<i64>>,
     channel_verifier: std::sync::OnceLock<Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>>,
+    memory_preferences: Arc<std::sync::OnceLock<Arc<dyn agena_superagent::CompanionRepository>>>,
     shutdown: CancellationToken,
 }
 
@@ -207,6 +211,7 @@ impl SessionManager {
             delivery_scan: Default::default(),
             workspace: Default::default(),
             channel_verifier: Default::default(),
+            memory_preferences: Default::default(),
             shutdown: CancellationToken::new(),
         }
     }

@@ -19,6 +19,7 @@ fn memory_view(record: agena_storage::MemoryRecord) -> AssistantMemory {
         body: record.body[..end].into(),
         sha256: record.sha256,
         truncated,
+        metadata: record.metadata,
     }
 }
 fn memory_error(e: agena_storage::MemoryError) -> Error {
@@ -235,6 +236,19 @@ impl SuperagentRuntime {
     /// plugin's permission filter. Workers can read preferences but not mutate.
     pub(crate) async fn companion_context(&self, source: i64) -> Result<Value> {
         let (workspace, memory_root) = self.assistant_scope(source).await?;
+        let manager = self.manager()?;
+        let memory_instance_id = manager.memory_instance_id().to_owned();
+        let memory_checkpoint_entry_id = manager
+            .session_kernel()
+            .reader
+            .prompt_window_status(
+                agena_storage::kernel::SessionId::try_from(source)
+                    .map_err(|_| Error::Invalid("invalid conversation"))?,
+            )
+            .await
+            .map_err(runtime_error)?
+            .checkpoint_entry_id
+            .map(|entry| entry.get());
         let mut profile = self.companion.profile(workspace).await?;
         let channel = self
             .manager()?
@@ -260,7 +274,7 @@ impl SuperagentRuntime {
         };
         Ok(
             json!({"enabled":enabled,"profile":profile,"reminders":reminders,"utc_now":Utc::now().to_rfc3339(),
-            "memory_workspace_root":memory_root,"channel_authority":channel,
+            "memory_workspace_root":memory_root,"memory_instance_id":memory_instance_id,"memory_checkpoint_entry_id":memory_checkpoint_entry_id,"channel_authority":channel,
             "memory_scope":"this private workspace only; never combine direct, group, tenant or user memories",
             "proactive_scope":"only explicit finite schedules; no autonomous creation of new goals"}),
         )

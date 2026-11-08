@@ -16,6 +16,14 @@ fn fixture() -> TestAgenaBuilder {
         .startup_timeout(Duration::from_secs(60))
         .case_timeout(Duration::from_secs(240))
         .shutdown_timeout(Duration::from_secs(20))
+        // These scenarios script foreground model calls. Background extraction
+        // has its own controlled-provider lifecycle tests.
+        .configure_global(|config| {
+            config["plugins"]["list"]["agena.memory"] = json!({
+                "package":{"kind":"static"},
+                "settings":{"maintenance":{"enabled":false}}
+            });
+        })
         .model_options(ModelOptions {
             default_timeout: Duration::from_secs(30),
             ..Default::default()

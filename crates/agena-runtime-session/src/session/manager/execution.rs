@@ -116,6 +116,9 @@ impl SessionManager {
                 .retire_supervised_run(&run, _permit, recover_queued)
                 .await;
             manager.schedule_title(run.session);
+            if matches!(result, Ok(DriveExit::Settled)) {
+                manager.schedule_memory(run.session);
+            }
         });
         result
     }
@@ -1856,6 +1859,7 @@ impl SessionManager {
         })
         .await
         .map_err(kernel_error)?;
+        self.schedule_memory(control.session);
         Ok(true)
     }
     pub(super) async fn classify_permission(

@@ -116,6 +116,7 @@ export type AssistantMemory = {
   body: string
   description: string
   memory_type?: string | null
+  metadata?: MemoryMetadata
   name: string
   sha256: string
   truncated: boolean
@@ -450,6 +451,48 @@ export type IntegrationSpec = {
   total_limit: number
   use_source_permissions?: boolean
 }
+
+export type MemoryKind = 'fact' | 'preference' | 'episode' | 'procedure' | 'task'
+
+export type MemoryMetadata = {
+  kind?: MemoryKind
+  created_at_ms?: number
+  id?: string
+  importance?: number
+  origin?: MemoryOrigin
+  provenance_verified?: boolean
+  revision?: number
+  scope?: MemoryScope
+  source?: MemorySource
+  source_suppressed?: boolean
+  status?: MemoryStatus
+  superseded_by?: string | null
+  supersedes?: string[]
+  updated_at_ms?: number
+}
+
+/** Who last changed these bytes; only intact Derived records may be auto-updated. */
+export type MemoryOrigin = 'external' | 'explicit' | 'derived'
+
+/** Scope always remains inside the owning workspace's permission boundary. */
+export type MemoryScope = {
+  kind: 'workspace'
+} | {
+  kind: 'session'
+  instance_id?: string | null
+  session_id: number
+}
+
+/** Supplied by the runtime from its authenticated callback/event context. */
+export type MemorySource = {
+  call_id?: string | null
+  entry_id?: number | null
+  instance_id?: string | null
+  session_id?: number | null
+  task_id?: string | null
+}
+
+export type MemoryStatus = 'active' | 'archived' | 'superseded'
 
 export type Reminder = {
   created_at_ms: number

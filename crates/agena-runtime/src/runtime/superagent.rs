@@ -55,6 +55,9 @@ impl SuperagentRuntime {
 
     pub(super) fn start(self: &Arc<Self>, control: Arc<crate::TaskControl>) {
         self.install_channel_verifier();
+        if let Ok(manager) = self.manager() {
+            manager.install_memory_preferences(self.companion.clone());
+        }
         self.start_integrations(control.clone());
         let service = self.clone();
         control.spawn(async move {

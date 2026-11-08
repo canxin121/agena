@@ -346,10 +346,10 @@ fn workflow_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec<S
     let memory = plugin_tools(tools, "agena.memory", &["search", "get", "write"]);
     if !memory.is_empty() {
         let mut text = format!(
-            "Use the `agena.memory` plugin ({memory}) for relevant historical context or durable information, choosing the available operations that fit the task."
+            "Use the `agena.memory` plugin ({memory}) when prior work, decisions, preferences or corrections matter. Search returns bounded evidence and source metadata; open the relevant record with get when more context is needed. Current task checkpoints support continuation; historical episodes describe past work. Verify repository facts against the current environment and keep memory within its workspace/session scope."
         );
         if has("agena.memory.write") {
-            text.push_str(" Save only suitable information with lasting value, never secrets or other sensitive content.");
+            text.push_str(" Save concise, reusable knowledge with its actual scope; distinguish user requirements, proposals and observed tool results. Do not promote a one-task constraint into a permanent preference or a proposed action into a completed fact. For a correction, read the old record and update with its current sha256, or explicitly supersede it with revision checks; archived and superseded records are historical only. User corrections take precedence over automatic summaries. Save no secrets or credentials.");
         }
         paragraphs.push(text);
     }

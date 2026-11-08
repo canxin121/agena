@@ -1871,8 +1871,8 @@
         {
           "canonical_name": "agena.memory.get",
           "conditional": null,
-          "definition_identity": "dd80735077564a2b7d33465412fb2b0f554187e79f3d1c509e09a96ba8f9d61c",
-          "input_schema_sha256": "4271e2c984145b88ce5d67c74c81b98f438f8c100a76cea2ea40d1dc1aae3cfd",
+          "definition_identity": "746e7384536b2e1fea94b966fc09e66f7a02d279b3a498e6e2f4bb4f4b42bedb",
+          "input_schema_sha256": "e5320fe8464875ee8cb88c11aa9133f52390a704d372311e83ffb0e2029a24c3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1883,8 +1883,8 @@
         {
           "canonical_name": "agena.memory.list",
           "conditional": null,
-          "definition_identity": "eaac5ee1a389fa247c8c4db5e62b48daf9dd57df7d669d90ac617232ffeffa30",
-          "input_schema_sha256": "160f560c7e86c5b459174c6d5ddb5db3e37aed0e396ee5177fbf9c0991cf8eae",
+          "definition_identity": "f002b7e517d1a535d71369182b02ab004cd6aec4088b8abd6f815b01b070cd85",
+          "input_schema_sha256": "52a38e15c5f470d7e039fb97d38a78a888206f8a056e1e1177a503599c2c503b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1896,8 +1896,8 @@
         {
           "canonical_name": "agena.memory.search",
           "conditional": null,
-          "definition_identity": "bcc3a21cb7f4fefcd3b3f72fc86de33bae16821418be6e4313296dd4f4b92eca",
-          "input_schema_sha256": "e1132514df2129bae5124f4a01f6649ac87f0f8b51571d6dce005bc01ea96029",
+          "definition_identity": "7396bb3eb713fb48242f08d04ad25c4bafa0742329b128d6ade1c4cf5254cd62",
+          "input_schema_sha256": "de097c889665d9fb44fa3b23dbd085fcb66c10b1c7cc295e3e9175a84c62d2ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "query",
@@ -1909,8 +1909,8 @@
         {
           "canonical_name": "agena.memory.write",
           "conditional": null,
-          "definition_identity": "94ad87f83fd892a9ee6fd7e8411fca88812e057b568407131f2bc7fc1f10c53b",
-          "input_schema_sha256": "74d8c7c8c38894e4b1a1bd2488db48d1c9763f71b81e483203b8757eaf7b7e6f",
+          "definition_identity": "bbdb9c9515743992b7e0b1df087012a7fcca70bf8f985f328b71d6fc6092612c",
+          "input_schema_sha256": "7c275d05e7b210b75535f8bb4e3d183c6d70c63f84f0c91f3e38f644318ce766",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",

@@ -388,6 +388,8 @@ pub struct AssistantMemory {
     pub body: String,
     pub sha256: String,
     pub truncated: bool,
+    #[serde(default)]
+    pub metadata: agena_domain::MemoryMetadata,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]

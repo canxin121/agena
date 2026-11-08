@@ -5,7 +5,10 @@ use std::{
 
 use agena_storage::MemoryDir;
 
-use super::{MemoryIndexError, MemorySearchDocument};
+use super::{
+    MAX_SEARCH_RESULTS, MemoryIndexError, MemorySearchDocument, MemorySearchHit, validate_documents,
+};
+use crate::retrieval::{LiteralQuery, sort_hits};
 
 const INDEX_FILE: &str = "documents.json";
 
@@ -16,18 +19,30 @@ pub struct MemoryIndex {
 }
 
 impl MemoryIndex {
+    // On little-endian hosts this backend is compiled only for its shared tests.
+    #[cfg_attr(all(test, target_endian = "little"), allow(dead_code))]
     pub fn for_workspace(workspace_root: &Path) -> Self {
         Self {
             dir: MemoryDir::from_workspace(workspace_root).index_dir(),
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn for_test(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
     pub fn replace_documents(
         &self,
         documents: &[MemorySearchDocument],
     ) -> Result<(), MemoryIndexError> {
+        validate_documents(documents)?;
         agena_storage_layout::secure_directory(&self.dir)?;
-        let bytes = serde_json::to_vec(documents)?;
+        // Stable ID ordering makes an unchanged set a no-op even if the caller
+        // lists its files in a different order.
+        let mut documents = documents.iter().collect::<Vec<_>>();
+        documents.sort_by(|left, right| left.id.cmp(&right.id));
+        let bytes = serde_json::to_vec(&documents)?;
         let target = self.dir.join(INDEX_FILE);
         if fs::read(&target).is_ok_and(|current| current == bytes) {
             return Ok(());
@@ -45,59 +60,54 @@ impl MemoryIndex {
         query: &str,
         limit: usize,
     ) -> Result<Vec<MemorySearchDocument>, MemoryIndexError> {
-        if limit == 0 {
+        Ok(self
+            .search_with_details(query, limit)?
+            .into_iter()
+            .map(|hit| hit.document)
+            .collect())
+    }
+
+    pub fn search_with_details(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchHit>, MemoryIndexError> {
+        let query = LiteralQuery::new(query);
+        if limit == 0 || query.is_empty() {
             return Ok(Vec::new());
         }
         let path = self.dir.join(INDEX_FILE);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let documents: Vec<MemorySearchDocument> = serde_json::from_slice(&fs::read(path)?)?;
-        let terms = query_terms(query);
-        if terms.is_empty() {
-            return Ok(Vec::new());
-        }
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let documents: Vec<MemorySearchDocument> = serde_json::from_slice(&bytes)?;
         let mut ranked = documents
             .into_iter()
-            .filter_map(|document| {
-                let score = document_score(&document, &terms);
-                (score > 0).then_some((score, document))
+            .filter_map(|mut document| {
+                let score = query.evidence(&document.name).0 * 2.0
+                    + query.evidence(&document.description).0
+                    + query.evidence(&document.searchable_text).0
+                    + query.evidence(&document.path).0;
+                document
+                    .searchable_ngrams
+                    .clone_from(&document.searchable_text);
+                (score > 0.0).then_some((score, document))
             })
             .collect::<Vec<_>>();
         ranked.sort_by(|(left_score, left), (right_score, right)| {
             right_score
-                .cmp(left_score)
+                .total_cmp(left_score)
                 .then_with(|| left.name.cmp(&right.name))
                 .then_with(|| left.id.cmp(&right.id))
         });
-        Ok(ranked
+        let mut hits = ranked
             .into_iter()
-            .take(limit)
-            .map(|(_, document)| document)
-            .collect())
+            .take(limit.min(MAX_SEARCH_RESULTS))
+            .map(|(score, document)| query.hit(document, score))
+            .collect::<Vec<_>>();
+        sort_hits(&mut hits);
+        Ok(hits)
     }
-}
-
-fn query_terms(query: &str) -> Vec<String> {
-    query
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|term| !term.is_empty())
-        .map(str::to_lowercase)
-        .collect()
-}
-
-fn document_score(document: &MemorySearchDocument, terms: &[String]) -> u32 {
-    let name = document.name.to_lowercase();
-    let description = document.description.to_lowercase();
-    let searchable = document.searchable_text.to_lowercase();
-    let memory_type = document.memory_type.as_deref().unwrap_or("").to_lowercase();
-    terms
-        .iter()
-        .map(|term| {
-            u32::from(name.contains(term)) * 8
-                + u32::from(description.contains(term)) * 4
-                + u32::from(memory_type.contains(term)) * 3
-                + u32::from(searchable.contains(term)) * 2
-        })
-        .sum()
 }

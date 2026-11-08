@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
+import MemoryMetadataView from '@/components/MemoryMetadataView.vue'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { assistantApi, type AssistantSnapshot, type AssistantMemory, type Reminder } from '@/lib/assistantApi'
 import type { AssistantPreferences, AssistantUpdate } from '@/generated/agenaState'
@@ -333,6 +334,7 @@ onBeforeUnmount(() => {
             <div>
               <h2 class="font-medium break-all">{{ memory.name }}</h2>
               <p class="mt-1 text-xs text-muted-foreground">{{ memory.memory_type }} · {{ memory.description }}</p>
+              <MemoryMetadataView :metadata="memory.metadata" :timezone="snapshot.profile.preferences.timezone" />
             </div>
             <div class="flex gap-2">
               <Button
@@ -414,6 +416,10 @@ onBeforeUnmount(() => {
       :description="memoryForm?.original.name"
       @close="!busy && (memoryForm = null)"
       ><form v-if="memoryForm" class="p-4 space-y-4" @submit.prevent="saveMemory">
+        <MemoryMetadataView
+          :metadata="memoryForm.original.metadata"
+          :timezone="snapshot?.profile.preferences.timezone"
+        />
         <p v-if="memoryForm.remove" class="text-sm">{{ t('assistant.confirmDelete') }}</p>
         <template v-else
           ><label class="assistant-field"

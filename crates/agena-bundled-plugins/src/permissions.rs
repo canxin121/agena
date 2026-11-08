@@ -31,6 +31,20 @@ impl PluginPermissions {
             .map_err(|_| PluginError::internal("plugin permission host initialized more than once"))
     }
 
+    /// Used by explicitly authorized recovery of host-owned multi-file state.
+    pub(crate) fn write_filter(
+        &self,
+        interactive: bool,
+    ) -> Result<agena_tool::path_filter::PathFilter<PluginError>> {
+        path_filter(
+            self.0.get().cloned().ok_or_else(|| {
+                PluginError::internal("plugin permission host is not initialized")
+            })?,
+            PathKind::Write,
+            interactive,
+        )
+    }
+
     pub(crate) async fn path(&self, kind: PathKind, path: &str) -> Result<()> {
         let host = self.0.get().ok_or_else(|| {
             PluginError::from_kind(
@@ -48,12 +62,23 @@ pub(crate) fn read_filter(
     host: Arc<dyn HostClient>,
     interactive: bool,
 ) -> Result<agena_tool::path_filter::PathFilter<PluginError>> {
+    path_filter(host, PathKind::Read, interactive)
+}
+
+fn path_filter(
+    host: Arc<dyn HostClient>,
+    kind: PathKind,
+    interactive: bool,
+) -> Result<agena_tool::path_filter::PathFilter<PluginError>> {
     let runtime =
         tokio::runtime::Handle::try_current().map_err(|e| PluginError::internal_error(&e))?;
     let context = agena_plugin_sdk::host_api::current_host_callback_context().unwrap_or_default();
     Ok(agena_tool::path_filter::PathFilter::new(move |path| {
         let host = host.clone();
-        let request = PathPermissionQuery::read(path.to_string_lossy().into_owned());
+        let request = PathPermissionQuery {
+            kind,
+            path: path.to_string_lossy().into_owned(),
+        };
         runtime.block_on(
             agena_plugin_sdk::host_api::run_in_isolated_host_callback_context(
                 context.clone(),
@@ -65,7 +90,7 @@ pub(crate) fn read_filter(
                     } else {
                         Err(PluginError::from_kind(
                             agena_plugin_sdk::PluginErrorKind::PolicyDenied,
-                            "memory recall requires ungranted child path access",
+                            "automatic plugin operation requires granted path access",
                         ))
                     }
                 },

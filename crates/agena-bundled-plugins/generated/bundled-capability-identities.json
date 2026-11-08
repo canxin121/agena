@@ -92,8 +92,8 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "plugins": 24,
-    "tools": 207
+    "plugins": 26,
+    "tools": 210
   },
   "plugins": [
     {
@@ -785,6 +785,29 @@
           "tags": [
             "mutate",
             "filesystem"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke",
+        "chat.system"
+      ],
+      "id": "agena.companion",
+      "tools": [
+        {
+          "canonical_name": "agena.companion.manage",
+          "conditional": null,
+          "definition_identity": "d9db580109f4568a81289c574231cd7ca1d8a83b164dcebcd2ed21bba54931a5",
+          "input_schema_sha256": "c8f15b65f3f7480642b4f3989cdf56e0378914226f273afbac7264f1836bc0b1",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "agent"
           ]
         }
       ],
@@ -1837,8 +1860,8 @@
         {
           "canonical_name": "agena.memory.delete",
           "conditional": null,
-          "definition_identity": "2605509bac5d1790cfd21594742d64ddeceb54af76e84be28f5287dfa82c34bf",
-          "input_schema_sha256": "4271e2c984145b88ce5d67c74c81b98f438f8c100a76cea2ea40d1dc1aae3cfd",
+          "definition_identity": "c9127631146094ed45723832681e601697e5dda33a85f8e749302a5166396da3",
+          "input_schema_sha256": "0691b7c2e3dd94bd7b3b137351233db99a2fbac0100142b89c07194be6f8836d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -2799,6 +2822,39 @@
             "network",
             "discovery",
             "read_only"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke",
+        "chat.system"
+      ],
+      "id": "agena.work",
+      "tools": [
+        {
+          "canonical_name": "agena.work.connections",
+          "conditional": null,
+          "definition_identity": "b413ff255d671f3fccb7521b8405264fa096fff58705d4cd706fca0a5d43f901",
+          "input_schema_sha256": "26ee593673247ca343977dbe7882ad0886cb4122df9e9e602bbfb274ccc43ef7",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "agent"
+          ]
+        },
+        {
+          "canonical_name": "agena.work.manage",
+          "conditional": null,
+          "definition_identity": "e48324fb80e5c5bfa6e2e0e6e7723737bad02595a9c34724e7aa2f77239c60fa",
+          "input_schema_sha256": "188287bc69fa96791866b179bd4b76991762e141d5d8ed3e1e3482004651b4a2",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
           ]
         }
       ],

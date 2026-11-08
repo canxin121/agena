@@ -21,6 +21,13 @@ function isProbablyLazyChunkError<T>(err: T): boolean {
 }
 
 const routes: RouteRecordRaw[] = [
+  { path: '/integrations', component: () => import('./pages/IntegrationsPage.vue'), meta: { shellSidebar: 'none', mobilePanel: 'integrations' } },
+  { path: '/assistant', component: () => import('./pages/AssistantPage.vue'), meta: { shellSidebar: 'none', mobilePanel: 'assistant' } },
+  {
+    path: '/tasks',
+    component: () => import('./pages/TasksPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'tasks' },
+  },
   {
     path: '/',
     component: () => import('./pages/EmptyWorkspacePage.vue'),

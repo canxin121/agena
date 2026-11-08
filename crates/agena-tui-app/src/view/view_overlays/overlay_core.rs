@@ -156,6 +156,9 @@ impl App {
             }
             Route::Activities(dialog) => self.render_activities_panel(frame, area, dialog),
             Route::PlanViewer(dialog) => self.render_plan_viewer(frame, area, dialog),
+            Route::Integrations(source) => self.render_integrations(frame, area, *source),
+            Route::Assistant(source) => self.render_assistant(frame, area, *source),
+            Route::Tasks(source) => self.render_tasks(frame, area, *source),
             Route::SessionWork(_) => self.render_session_work_panel(frame, area),
             Route::Btw(_) => self.render_btw_panel(frame, area),
             Route::SettingsStudio(dialog) => {

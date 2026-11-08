@@ -233,9 +233,9 @@ pub struct ExecutionPrincipal {
     pub permission_policy: PermissionPolicy,
     pub network_policy: NetworkPermissionPolicy,
     pub tool_policy: ToolPermissionPolicy,
-    permission_ceiling_policy: Option<PermissionPolicy>,
-    network_ceiling_policy: Option<NetworkPermissionPolicy>,
-    tool_ceiling_policy: Option<ToolPermissionPolicy>,
+    permission_ceiling_policy: Vec<PermissionPolicy>,
+    network_ceiling_policy: Vec<NetworkPermissionPolicy>,
+    tool_ceiling_policy: Vec<ToolPermissionPolicy>,
 }
 
 impl ExecutionPrincipal {
@@ -245,9 +245,9 @@ impl ExecutionPrincipal {
             permission_policy,
             network_policy: NetworkPermissionPolicy::allow_all(),
             tool_policy,
-            permission_ceiling_policy: None,
-            network_ceiling_policy: None,
-            tool_ceiling_policy: None,
+            permission_ceiling_policy: Vec::new(),
+            network_ceiling_policy: Vec::new(),
+            tool_ceiling_policy: Vec::new(),
         }
     }
 
@@ -292,18 +292,17 @@ impl ExecutionPrincipal {
         if config.is_empty() {
             return Ok(self);
         }
-        self.permission_ceiling_policy = Some(apply_to_permission_policy(
-            config,
-            PermissionPolicy::allow_all(),
-        )?);
-        self.network_ceiling_policy = Some(apply_to_network_permission_policy(
-            config,
-            NetworkPermissionPolicy::allow_all(),
-        )?);
-        self.tool_ceiling_policy = Some(apply_to_tool_permission_policy(
-            config,
-            ToolPermissionPolicy::allow_all(),
-        )?);
+        // Independent authorities only intersect. Replacing the earlier
+        // ceiling would allow a later channel/child grant to erase a stricter
+        // parent restriction even though the effective base policy stayed the
+        // same. Compile all three before appending this authority layer.
+        let paths = apply_to_permission_policy(config, PermissionPolicy::allow_all())?;
+        let network =
+            apply_to_network_permission_policy(config, NetworkPermissionPolicy::allow_all())?;
+        let tools = apply_to_tool_permission_policy(config, ToolPermissionPolicy::allow_all())?;
+        self.permission_ceiling_policy.push(paths);
+        self.network_ceiling_policy.push(network);
+        self.tool_ceiling_policy.push(tools);
         Ok(self)
     }
 
@@ -347,13 +346,14 @@ impl ExecutionPrincipal {
         let decision = self
             .tool_policy
             .check_tool_with_names(tool_names, command, tags);
-        match self.tool_ceiling_policy.as_ref() {
-            Some(ceiling) => restrictive_decision(
-                decision,
-                ceiling.check_tool_with_names(tool_names, command, tags),
-            ),
-            None => decision,
-        }
+        self.tool_ceiling_policy
+            .iter()
+            .fold(decision, |decision, ceiling| {
+                restrictive_decision(
+                    decision,
+                    ceiling.check_tool_with_names(tool_names, command, tags),
+                )
+            })
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
@@ -367,10 +367,11 @@ impl ExecutionPrincipal {
             };
         }
         let decision = self.network_policy.check_connect(target);
-        match self.network_ceiling_policy.as_ref() {
-            Some(ceiling) => restrictive_decision(decision, ceiling.check_connect(target)),
-            None => decision,
-        }
+        self.network_ceiling_policy
+            .iter()
+            .fold(decision, |decision, ceiling| {
+                restrictive_decision(decision, ceiling.check_connect(target))
+            })
     }
 
     pub fn authorize_path_access(
@@ -387,13 +388,14 @@ impl ExecutionPrincipal {
         let decision = self
             .permission_policy
             .check_access(access, workspace_root, target_path);
-        match self.permission_ceiling_policy.as_ref() {
-            Some(ceiling) => restrictive_decision(
-                decision,
-                ceiling.check_access(access, workspace_root, target_path),
-            ),
-            None => decision,
-        }
+        self.permission_ceiling_policy
+            .iter()
+            .fold(decision, |decision, ceiling| {
+                restrictive_decision(
+                    decision,
+                    ceiling.check_access(access, workspace_root, target_path),
+                )
+            })
     }
 }
 
@@ -409,5 +411,70 @@ fn restrictive_decision(
         (PermissionDecision::Auto { .. }, _) => primary,
         (_, PermissionDecision::Auto { .. }) => ceiling,
         (PermissionDecision::Allow, PermissionDecision::Allow) => PermissionDecision::Allow,
+    }
+}
+
+#[cfg(test)]
+mod intersecting_ceiling_tests {
+    use super::*;
+    #[test]
+    fn later_channel_allow_cannot_erase_parent_tool_deny() {
+        let deny: PermissionConfig = serde_json::from_value(
+            serde_json::json!({"tools":{"names":{"agena.fs.write":"deny"}}}),
+        )
+        .unwrap();
+        let allow: PermissionConfig =
+            serde_json::from_value(serde_json::json!({"tools":{"default":"allow"}})).unwrap();
+        let principal = ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_ceiling(&deny)
+        .unwrap()
+        .try_apply_permission_ceiling(&allow)
+        .unwrap();
+        assert!(matches!(
+            principal.authorize_tool_name("agena.fs.write"),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            principal.authorize_tool_name("agena.fs.read"),
+            PermissionDecision::Allow
+        ));
+    }
+    #[test]
+    fn later_workspace_allow_cannot_erase_parent_path_deny() {
+        let deny: PermissionConfig = serde_json::from_value(
+            serde_json::json!({"path":{"workspace":{"read":"allow","write":"deny"}}}),
+        )
+        .unwrap();
+        let allow: PermissionConfig = serde_json::from_value(
+            serde_json::json!({"path":{"workspace":{"read":"allow","write":"allow"}}}),
+        )
+        .unwrap();
+        let principal = ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_ceiling(&deny)
+        .unwrap()
+        .try_apply_permission_ceiling(&allow)
+        .unwrap();
+        assert!(matches!(
+            principal.authorize_path_access(
+                AccessKind::Write,
+                Path::new("/project"),
+                Path::new("/project/file")
+            ),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            principal.authorize_path_access(
+                AccessKind::Read,
+                Path::new("/project"),
+                Path::new("/project/file")
+            ),
+            PermissionDecision::Allow
+        ));
     }
 }

@@ -489,29 +489,49 @@ impl McpPlugin {
         )
     )]
     async fn invoke_tools_search(&self, input: &McpToolSearchInput) -> SdkResult<ToolInvokeOutput> {
+        // Discovery must respect the same exact server/tool boundary as calls.
+        // A missing scope lookup fails closed instead of returning the global
+        // catalog to a channel member. Normal local sessions have no authority.
+        let context = self
+            .host
+            .get()
+            .ok_or_else(|| PluginError::internal("MCP host unavailable"))?
+            .companion_context()
+            .await?;
+        let channel = context
+            .get("channel_authority")
+            .filter(|value| !value.is_null())
+            .map(|value| serde_json::from_value::<agena_domain::ChannelAuthority>(value.clone()))
+            .transpose()
+            .map_err(|_| PluginError::internal("invalid channel tool discovery scope"))?;
         let query = input.query.trim().to_ascii_lowercase();
-        let mut tools = self
-            .manager
-            .all_tools()
-            .await
-            .into_iter()
-            .filter_map(|(server, tool)| {
-                let haystack = format!(
-                    "{} {} {}",
-                    server,
-                    tool.name,
-                    tool.description.as_deref().unwrap_or_default()
-                )
-                .to_ascii_lowercase();
-                if !query.is_empty() && !haystack.contains(query.as_str()) {
-                    return None;
-                }
-                let score = usize::from(tool.name.eq_ignore_ascii_case(query.as_str())) * 100
-                    + usize::from(tool.name.to_ascii_lowercase().contains(query.as_str())) * 10
-                    + usize::from(haystack.contains(query.as_str()));
-                Some((score, server, tool))
-            })
-            .collect::<Vec<_>>();
+        let mut tools =
+            self.manager
+                .all_tools()
+                .await
+                .into_iter()
+                .filter_map(|(server, tool)| {
+                    if channel.as_ref().is_some_and(|authority| {
+                        !authority.grant.allows_mcp_tool(&server, &tool.name)
+                    }) {
+                        return None;
+                    }
+                    let haystack = format!(
+                        "{} {} {}",
+                        server,
+                        tool.name,
+                        tool.description.as_deref().unwrap_or_default()
+                    )
+                    .to_ascii_lowercase();
+                    if !query.is_empty() && !haystack.contains(query.as_str()) {
+                        return None;
+                    }
+                    let score = usize::from(tool.name.eq_ignore_ascii_case(query.as_str())) * 100
+                        + usize::from(tool.name.to_ascii_lowercase().contains(query.as_str())) * 10
+                        + usize::from(haystack.contains(query.as_str()));
+                    Some((score, server, tool))
+                })
+                .collect::<Vec<_>>();
         tools.sort_by(|left, right| {
             right
                 .0

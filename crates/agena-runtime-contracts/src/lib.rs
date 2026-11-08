@@ -26,6 +26,11 @@ pub use provider_state::PartProviderState;
 
 /// Session state needed by tool execution, kept as a neutral port so neither
 /// the tool executor nor session core depends on the other's implementation.
+#[async_trait::async_trait]
+pub trait ChannelAccessVerifier: std::fmt::Debug + Send + Sync {
+    async fn authorize(&self, authority: &agena_domain::ChannelAuthority) -> Result<(), String>;
+}
+
 pub trait ToolSessionContext {
     fn relation_kind(&self) -> agena_domain::SessionRelationKind {
         agena_domain::SessionRelationKind::Root
@@ -43,6 +48,13 @@ pub trait ToolSessionContext {
     fn effective_permission(&self) -> &authorization::PermissionConfig;
     fn permission_ceiling(&self) -> &authorization::PermissionConfig;
     fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String>;
+    fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
+        None
+    }
+    fn channel_verifier(&self) -> Option<std::sync::Arc<dyn ChannelAccessVerifier>> {
+        None
+    }
+
     fn selected_model(&self) -> Option<&str>;
 }
 

@@ -190,6 +190,7 @@ impl AgenaRuntime {
                 agent_bridge: Arc::new(std::sync::Mutex::new(None)),
                 background_completion,
                 automatic_maintenance,
+                superagent: Default::default(),
                 shutdown_completion: Default::default(),
             }),
         };
@@ -227,6 +228,25 @@ impl AgenaRuntime {
             let host_handle = initial_snapshot.plugin_manager().host_handle();
             initial_snapshot.host_client.bind_runtime(&runtime);
             super::host_client::install_plugin_host_event_publisher(host_handle, &runtime);
+        }
+
+        if let (Some(database), Some(_)) =
+            (runtime.inner.database.as_ref(), runtime.session_manager())
+        {
+            let tasks = super::superagent::SuperagentRuntime::new(
+                runtime.downgrade(),
+                Arc::new(agena_storage_sqlite::SqliteTaskRepository::new(
+                    database.clone(),
+                )),
+                Arc::new(agena_storage_sqlite::SqliteCompanionRepository::new(
+                    database.clone(),
+                )),
+                Arc::new(agena_storage_sqlite::SqliteIntegrationRepository::new(
+                    database.clone(),
+                )),
+            );
+            let _ = runtime.superagent.set(tasks.clone());
+            tasks.start(runtime.task_control_handle());
         }
 
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
@@ -2126,6 +2146,7 @@ pub(crate) struct AgenaRuntimeShared {
     /// their own outcomes directly through the same kernel delivery port.
     background_completion: crate::activity::BackgroundCompletionBridge,
     automatic_maintenance: bool,
+    superagent: std::sync::OnceLock<Arc<super::superagent::SuperagentRuntime>>,
     shutdown_completion: crate::bootstrap_result::RuntimeShutdownCompletion,
 }
 
@@ -2159,6 +2180,12 @@ impl AgenaRuntime {
     /// Assemble application-facing runtime capabilities once at the concrete
     /// composition boundary. Application consumers receive the runtime-owned
     /// result rather than converting this concrete handle independently.
+    pub(super) fn conversation_work_service(
+        &self,
+    ) -> Option<Arc<super::superagent::SuperagentRuntime>> {
+        self.superagent.get().cloned()
+    }
+
     pub fn application_services(&self) -> agena_runtime::RuntimeApplicationServices {
         self.application_services_with_manager_option(self.session_manager())
     }
@@ -2210,6 +2237,10 @@ impl AgenaRuntime {
                     .as_ref()
                     .map(|kernel| kernel.instance_state.clone()),
                 repositories,
+                superagent: self
+                    .superagent
+                    .get()
+                    .map(|service| service.clone() as Arc<dyn agena_superagent::SuperagentService>),
                 provider_catalog: Arc::new(self.clone()),
                 model_catalog: Arc::new(self.clone()),
                 plugins: Arc::new(self.clone()),

@@ -30,6 +30,7 @@ mod commands;
 mod deliveries;
 mod execution;
 mod host;
+mod managed;
 mod media;
 mod queries;
 mod results;
@@ -167,6 +168,7 @@ pub struct SessionManager {
     delivery_scan: Arc<StdMutex<Option<SessionSummaryCursor>>>,
     host_sequences: Arc<StdMutex<HashMap<(i64, i64), u64>>>,
     workspace: Arc<tokio::sync::OnceCell<i64>>,
+    channel_verifier: std::sync::OnceLock<Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>>,
     shutdown: CancellationToken,
 }
 
@@ -204,9 +206,36 @@ impl SessionManager {
             pending_agent_settlements: Default::default(),
             delivery_scan: Default::default(),
             workspace: Default::default(),
+            channel_verifier: Default::default(),
             shutdown: CancellationToken::new(),
         }
     }
+    pub fn install_channel_verifier(
+        &self,
+        verifier: Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>,
+    ) {
+        let _ = self.channel_verifier.set(verifier);
+    }
+    pub async fn verify_channel_session(&self, id: i64) -> Result<(), AppError> {
+        let config = self
+            .kernel()
+            .reader
+            .configuration(session_id(id)?)
+            .await
+            .map_err(kernel_error)?;
+        if let Some(authority) = &config.channel_authority {
+            self.channel_verifier
+                .get()
+                .ok_or_else(|| {
+                    AppError::Config("channel authorization service is unavailable".into())
+                })?
+                .authorize(authority)
+                .await
+                .map_err(AppError::Config)?;
+        }
+        Ok(())
+    }
+
     pub fn reconfigure(
         &self,
         providers: Arc<ProviderRegistry>,

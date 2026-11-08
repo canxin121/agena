@@ -1066,6 +1066,47 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
+                    method::HOST_COMPANION_CONTEXT => {
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.companion_context(),
+                        )
+                        .await
+                    }
+                    method::HOST_COMPANION_OPERATION => {
+                        let p: HostRequestParams<crate::sdk::host_api::CompanionRequest> =
+                            parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.companion_operation(p.request),
+                        )
+                        .await
+                    }
+                    method::HOST_MANAGE_INTEGRATIONS => {
+                        let p: HostRequestParams<crate::sdk::host_api::IntegrationRequest> =
+                            parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.manage_integrations(p.request),
+                        )
+                        .await
+                    }
+                    method::HOST_CONVERSATION_WORK => {
+                        let p: HostRequestParams<crate::sdk::host_api::WorkRequest> =
+                            parse(params)?;
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.conversation_work(p.request),
+                        )
+                        .await
+                    }
+                    method::HOST_CONVERSATION_WORK_CONTEXT => {
+                        host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.conversation_work_context(),
+                        )
+                        .await
+                    }
                     method::HOST_AGENT_SPAWN => {
                         let p: HostRequestParams<AgentSpawnRequest> = parse(params)?;
                         let out = host_api::run_in_host_callback_context(

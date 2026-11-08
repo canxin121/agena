@@ -120,10 +120,17 @@ pub enum Command {
         business_key: String,
         payload: serde_json::Value,
     },
+    DeliverAndResume {
+        session: SessionId,
+        business_key: String,
+        payload: serde_json::Value,
+        message: Option<EntryId>,
+        text: String,
+    },
     ResumeDelivery {
         session: SessionId,
         delivery: CommandId,
-        message: EntryId,
+        message: Option<EntryId>,
         text: String,
     },
     ConsumeDelivery {
@@ -518,6 +525,7 @@ pub trait KernelBackend: Send + Sync {
         limit: usize,
     ) -> Result<ReadView<Vec<OwnedToolMetadata>>>;
     fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch>;
+    async fn delivery(&self, session: SessionId, id: CommandId) -> Result<ReadView<DeliveryView>>;
     async fn pending_deliveries(
         &self,
         session: SessionId,

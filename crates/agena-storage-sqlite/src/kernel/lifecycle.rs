@@ -118,6 +118,33 @@ async fn configure(
         }
         next.permission_ceiling = value.clone();
     }
+    if let Some(authority) = &change.channel_authority {
+        if original
+            .channel_authority
+            .as_ref()
+            .is_some_and(|old| old != authority)
+        {
+            return Err(KernelError::Conflict(
+                "channel authority is immutable; role changes require a fresh scoped session"
+                    .into(),
+            ));
+        }
+        if original.channel_authority.is_none() {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT entry_count FROM agena_session_statistics WHERE session_id=?",
+            )
+            .bind(session.get())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if count > 0 {
+                return Err(KernelError::Conflict(
+                    "channel authority cannot be retrofitted onto an existing conversation".into(),
+                ));
+            }
+        }
+        next.channel_authority = Some(authority.clone());
+    }
     if let Some(value) = &change.capability_denied_tool_names {
         if !original.capability_denied_tool_names.is_subset(value) {
             return Err(KernelError::Conflict(
@@ -199,6 +226,15 @@ async fn start_control_execution(
     session: SessionId,
     purpose: ControlExecutionPurpose,
 ) -> Result<ExecutionView> {
+    start_control_execution_with_system_origin(connection, session, purpose, false).await
+}
+
+async fn start_control_execution_with_system_origin(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    purpose: ControlExecutionPurpose,
+    system_origin: bool,
+) -> Result<ExecutionView> {
     reads::metadata(connection, session).await?;
     let source: Option<i64> = sqlx::query_scalar(
         "SELECT e.id FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
@@ -207,7 +243,9 @@ async fn start_control_execution(
     .fetch_optional(&mut *connection)
     .await
     .map_err(sql_error)?;
-    let source = source.ok_or_else(|| invalid("the session has no user context to continue"))?;
+    if source.is_none() && !system_origin {
+        return Err(invalid("the session has no user context to continue"));
+    }
     let active: i64 = sqlx::query_scalar(
         "SELECT queued_executions+running_executions FROM agena_session_statistics WHERE session_id=?",
     )
@@ -229,23 +267,22 @@ async fn start_control_execution(
     let execution = ExecutionId::new();
     // A local notice is the FIFO anchor. It does not alter the inherited user
     // input or increase user_message_count, and its own ID orders later input.
-    let anchor: i64 = sqlx::query_scalar(
-        "INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,1,?,'notice',?,?) RETURNING id",
+    // Allocate the AUTOINCREMENT successor under the existing write
+    // transaction and self-anchor the notice in the same INSERT. A system-only
+    // session has no user row to use as a temporary foreign key; inserting a
+    // fake user would incorrectly grant authority and inflate user history.
+    let previous: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='agena_entries'),0)",
     )
-    .bind(session.get())
-    .bind(execution.to_string())
-    .bind(source)
-    .bind(encode(text)?)
-    .bind(now)
     .fetch_one(&mut *connection)
     .await
     .map_err(sql_error)?;
-    sqlx::query("UPDATE agena_entries SET message_id=? WHERE id=?")
-        .bind(anchor)
-        .bind(anchor)
-        .execute(&mut *connection)
-        .await
-        .map_err(sql_error)?;
+    let anchor = previous
+        .checked_add(1)
+        .ok_or_else(|| invalid("entry identity exhausted"))?;
+    sqlx::query("INSERT INTO agena_entries (id,origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,?,1,?,'notice',?,?)")
+        .bind(anchor).bind(session.get()).bind(execution.to_string()).bind(anchor).bind(encode(text)?).bind(now)
+        .execute(&mut *connection).await.map_err(sql_error)?;
     sqlx::query("INSERT INTO agena_executions (id,session_id,message_id,current_generation,created_at_ms) VALUES (?,?,?,1,?)")
         .bind(execution.to_string()).bind(session.get()).bind(anchor).bind(now)
         .execute(&mut *connection).await.map_err(sql_error)?;
@@ -573,6 +610,29 @@ pub(super) async fn apply(
             policy_key,
             outcome,
         } => record_compaction(connection, *scope, policy_key, outcome).await?,
+        Command::DeliverAndResume {
+            session,
+            business_key,
+            payload,
+            message,
+            text,
+        } => {
+            // One commit owns both the notice and its continuation. An abrupt
+            // exit cannot leave a cancelled/muted reminder queued for unrelated
+            // session maintenance to rediscover later.
+            let delivery =
+                publish_delivery(connection, *session, None, business_key, payload).await?;
+            Box::pin(commands::apply(
+                connection,
+                &Command::ResumeDelivery {
+                    session: *session,
+                    delivery: delivery.id,
+                    message: *message,
+                    text: text.clone(),
+                },
+            ))
+            .await?
+        }
         Command::ResumeDelivery {
             session,
             delivery: id,
@@ -593,7 +653,8 @@ pub(super) async fn apply(
                     row.try_get::<&str, _>("purpose").map_err(storage)?,
                 )?)?;
                 if purpose == ExecutionPurpose::Message
-                    && row.try_get::<i64, _>("message_id").map_err(storage)? != message.get()
+                    && Some(row.try_get::<i64, _>("message_id").map_err(storage)?)
+                        != message.map(EntryId::get)
                 {
                     return Err(KernelError::Conflict(
                         "delivery continuation message changed".into(),
@@ -619,14 +680,36 @@ pub(super) async fn apply(
                     purpose,
                 })
             } else {
-                let continued = Box::pin(commands::apply(
-                    connection,
-                    &Command::Continue {
-                        session: *session,
-                        message: *message,
-                    },
-                ))
-                .await?;
+                // A work report is a system continuation, never a retry of a
+                // user request. Otherwise tools could mistake the old user
+                // anchor for fresh authorization and recursively start work.
+                let continued = if previous
+                    .payload
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("conversation_work")
+                {
+                    Mutation::Execution(
+                        start_control_execution_with_system_origin(
+                            connection,
+                            *session,
+                            ControlExecutionPurpose::Continuation,
+                            message.is_none(),
+                        )
+                        .await?,
+                    )
+                } else {
+                    Box::pin(commands::apply(
+                        connection,
+                        &Command::Continue {
+                            session: *session,
+                            message: message.ok_or_else(|| {
+                                invalid("user continuation requires its original input")
+                            })?,
+                        },
+                    ))
+                    .await?
+                };
                 let Mutation::Execution(execution) = continued else {
                     return Err(storage("invalid delivery continuation result"));
                 };
@@ -691,6 +774,7 @@ pub(super) async fn apply(
                     prompts: Some(config.prompts.clone()),
                     permission: Some(config.permission.clone()),
                     permission_ceiling: Some(config.permission_ceiling.clone()),
+                    channel_authority: config.channel_authority.clone(),
                     capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),
                     effective_workspace_root: Some(config.effective_workspace_root.clone()),
                     agent: Some(config.agent.clone()),
@@ -1288,6 +1372,30 @@ pub(super) async fn owned_tool_metadata(
     tx.rollback().await.map_err(storage)?;
     let bytes = modeled_read_bytes(&values)?;
     backend.wrap_read(session, values, bytes)
+}
+
+pub(super) async fn read_delivery(
+    backend: &Backend,
+    session: SessionId,
+    id: agena_domain::CommandId,
+) -> Result<ReadView<DeliveryView>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .content_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    reads::metadata(&mut tx, session).await?;
+    let value = delivery(&mut tx, session, id).await?;
+    tx.rollback().await.map_err(storage)?;
+    let bytes = modeled_read_bytes(&value)?;
+    backend.wrap_read(session, value, bytes)
 }
 
 pub(super) async fn pending_deliveries(

@@ -266,3 +266,6 @@ pub use inline_ui::{
 pub use inline_ui::{InlinePanelPatch, InlinePhase, InlineSnapshot, InlineUpdate};
 
 pub use inline_ui::expand_inline_references_with;
+
+mod channel_access;
+pub use channel_access::*;

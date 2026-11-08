@@ -96,6 +96,7 @@ use agena_tui_platform::external_editor::{edit_text, open_path};
 use agena_tui_platform::terminal::TerminalRuntime;
 
 mod app_activities;
+mod app_assistant;
 mod app_backend;
 mod app_btw;
 mod app_choice_helpers;
@@ -110,6 +111,7 @@ mod app_help;
 mod app_hub;
 mod app_inline_ui;
 mod app_input;
+mod app_integrations;
 mod app_lifecycle;
 mod app_message_queue;
 mod app_mouse;
@@ -139,6 +141,7 @@ mod app_settings_helpers;
 mod app_status_context;
 mod app_studio_overlays;
 mod app_studio_state_impls;
+mod app_tasks;
 mod app_terminal_integration;
 
 mod app_timeline_helpers;

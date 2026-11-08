@@ -24,6 +24,8 @@ impl ToolExecutor {
             lsp_registry,
             cancellation_token: None,
             permission_inspector: None,
+            channel_authority: None,
+            channel_verifier: None,
         }
     }
 
@@ -76,6 +78,23 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_ceiling_or_self(session_context.permission_ceiling());
         }
+        scoped.channel_authority = session_context.channel_authority().cloned();
+        scoped.channel_verifier = session_context.channel_verifier();
+        if let Some(authority) = &scoped.channel_authority {
+            scoped.principal = scoped
+                .principal
+                .clone()
+                .apply_permission_ceiling_or_self(&authority.permission_fence());
+            let permitted = authority
+                .grant
+                .allowed_tools()
+                .into_iter()
+                .collect::<std::collections::HashSet<_>>();
+            match scoped.allowed_tool_names.as_mut() {
+                Some(current) => current.retain(|name| permitted.contains(name)),
+                None => scoped.allowed_tool_names = Some(permitted),
+            }
+        }
         scoped.definition_catalog = None;
         let definition_catalog = scoped
             .registered_tools_with_definition_overrides_async()
@@ -112,6 +131,20 @@ impl ToolExecutor {
     ) -> Self {
         self.cancellation_token = cancellation_token;
         self
+    }
+
+    pub(super) async fn verify_channel_access(&self) -> Result<(), ToolError> {
+        if let Some(authority) = &self.channel_authority {
+            self.channel_verifier
+                .as_ref()
+                .ok_or_else(|| {
+                    ToolError::invalid_input("channel authorization is unavailable; access denied")
+                })?
+                .authorize(authority)
+                .await
+                .map_err(ToolError::invalid_input)?;
+        }
+        Ok(())
     }
 
     pub fn with_permission_inspector(
@@ -323,6 +356,14 @@ impl ToolExecutor {
     }
 
     pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
+        if self
+            .channel_authority
+            .as_ref()
+            .is_some_and(|a| !a.active_at(chrono::Utc::now().timestamp_millis()))
+        {
+            return false;
+        }
+
         // Derive role restrictions from live session identity so existing agents
         // are covered without copying parent-only restrictions into user forks.
         // Interactive terminals and browsers remain eligible.

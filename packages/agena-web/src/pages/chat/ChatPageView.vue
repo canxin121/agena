@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useRouter as useTaskRouter, useRoute as useTaskRoute } from 'vue-router'
+import { RiTaskLine } from '@remixicon/vue'
 import { computed, defineAsyncComponent, isRef, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -382,6 +384,14 @@ void modelTriggerRef
 void thinkingTriggerRef
 void speedTriggerRef
 const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
+
+const taskRouter = useTaskRouter(), taskRoute = useTaskRoute()
+function openTaskBoard() {
+  void taskRouter.push({ path: '/tasks', query: {
+    source: String(taskRoute.query.taskSource || chat.selectedSessionId || ''),
+    ...(typeof taskRoute.query.taskId === 'string' ? { task: taskRoute.query.taskId } : {}),
+  } })
+}
 </script>
 
 <template>
@@ -421,6 +431,10 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     >{{ transcriptVimModeLabel }}</span
                   >
                 </template>
+                <button v-if="chat.selectedSessionId" class="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" @click="taskRouter.push({ path: '/assistant', query: { source: String(taskRoute.query.taskSource || chat.selectedSessionId) } })" data-testid="chat-assistant">{{ t('assistant.title') }}</button>
+                <button v-if="chat.selectedSessionId" class="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" @click="openTaskBoard" data-testid="chat-tasks">
+                  <RiTaskLine class="h-3.5 w-3.5" />{{ t('tasks.title') }}
+                </button>
                 <IconButton
                   v-if="chat.selectedSessionId"
                   class="h-6 w-6"

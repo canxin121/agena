@@ -64,6 +64,9 @@ watch(
 const mobileTitle = computed(() => {
   const panelMap: Record<string, string> = {
     settings: String(t('nav.settings')),
+    tasks: String(t('tasks.title')),
+    assistant: String(t('assistant.title')),
+    integrations: String(t('integrations.title')),
     sessions: String(t('nav.chat')),
     files: String(t('nav.files')),
     preview: String(t('nav.preview')),

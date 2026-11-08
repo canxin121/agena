@@ -158,6 +158,77 @@ impl PluginHost {
         &self.plugins
     }
 
+    /// Host-only, explicitly pinned integration service call. It supplies no
+    /// session/tool authority: an adapter cannot turn a polling lease into a
+    /// filesystem/tool invocation in the owner's conversation. Plugin transport
+    /// lifecycle, schema validation and bounded timeout remain unchanged.
+    pub async fn invoke_integration_service(
+        &self,
+        provider: &str,
+        method_name: &str,
+        input: serde_json::Value,
+    ) -> Result<serde_json::Value, PluginError> {
+        let key: PluginKey = provider
+            .parse()
+            .map_err(|e| PluginError::invalid_params(format!("invalid provider: {e}")))?;
+        let plugin = self
+            .plugins_by_id
+            .get(&key)
+            .ok_or_else(|| PluginError::invalid_params("integration provider is not active"))?;
+        let export = plugin
+            .manifest
+            .services
+            .exports
+            .iter()
+            .find(|s| s.id == crate::sdk::integration::INTEGRATION_SERVICE && s.api_version == 1)
+            .ok_or_else(|| {
+                PluginError::invalid_params("provider does not export agena.integration API v1")
+            })?;
+        let contract = export
+            .methods
+            .iter()
+            .find(|m| m.id == method_name)
+            .ok_or_else(|| PluginError::invalid_params("integration method is not exported"))?;
+        if !matches!(method_name, "describe" | "poll" | "send") {
+            return Err(PluginError::invalid_params(
+                "unsupported integration operation",
+            ));
+        }
+        contract
+            .input
+            .validate_value(&input)
+            .map_err(|e| PluginError::invalid_params(format!("invalid adapter input: {e}")))?;
+        let request = crate::sdk::PluginServiceInvokeInput {
+            service: crate::sdk::integration::INTEGRATION_SERVICE.into(),
+            api_version: 1,
+            method: method_name.into(),
+            input,
+        };
+        let params =
+            serde_json::to_value(request).map_err(|e| PluginError::invalid_params_error(&e))?;
+        let value = self
+            .call_hook_with_default_context(
+                plugin,
+                crate::sdk::rpc::method::SERVICE_INVOKE,
+                params,
+                Duration::from_secs(if method_name == "describe" { 3 } else { 20 }),
+            )
+            .await
+            .map_err(|e| PluginError::internal(format!("adapter transport failed: {e}")))?;
+        if serde_json::to_vec(&value)
+            .map_err(|e| PluginError::internal_error(&e))?
+            .len()
+            > 1024 * 1024
+        {
+            return Err(PluginError::internal("adapter output exceeds 1 MiB"));
+        }
+        contract
+            .output
+            .validate_value(&value)
+            .map_err(|e| PluginError::internal(format!("invalid adapter output: {e}")))?;
+        Ok(value)
+    }
+
     pub fn plugin_summary(&self) -> (usize, BTreeMap<&'static str, usize>) {
         let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
         for p in &self.plugins {

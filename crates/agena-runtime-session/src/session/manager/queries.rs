@@ -182,6 +182,8 @@ impl SessionManager {
                 .permission
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
+            channel_authority: configuration.channel_authority.clone(),
+            channel_verifier: self.channel_verifier.get().cloned(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
             effective_workspace_root: Some(
                 self.execution_workspace_root(
@@ -270,6 +272,16 @@ impl SessionManager {
             self.kernel().reader.configuration(id)
         )
         .map_err(kernel_error)?;
+        if let Some(authority) = &configuration.channel_authority {
+            self.channel_verifier
+                .get()
+                .ok_or_else(|| {
+                    AppError::Config("channel authorization service is unavailable".into())
+                })?
+                .authorize(authority)
+                .await
+                .map_err(AppError::Config)?;
+        }
         Ok(ToolContext {
             scope_session_id: Some(id.get()),
             relation_kind: configuration.relation_kind,
@@ -284,6 +296,8 @@ impl SessionManager {
                 .permission
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
+            channel_authority: configuration.channel_authority.clone(),
+            channel_verifier: self.channel_verifier.get().cloned(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
             effective_workspace_root: Some(
                 self.execution_workspace_root(
@@ -635,7 +649,21 @@ impl SessionManager {
         &self,
         root: &SessionControlSnapshot,
     ) -> Result<Vec<PendingInteractiveRequestContext>, AppError> {
+        use agena_superagent::TaskRepository as _;
+        // Independent task workers still surface their questions and approval
+        // cards in the source conversation, just like delegated subagents.
+        // This read model changes no execution identity or permission owner.
+        let task_repository =
+            agena_storage_sqlite::SqliteTaskRepository::new(self.kernel_runtime.database.clone());
+        let task_workers = task_repository
+            .active_workers(root.metadata.id.get())
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
         let mut sessions = std::collections::VecDeque::from([root.metadata.id]);
+        for id in &task_workers {
+            sessions.push_back(session_id(*id)?);
+        }
+
         let mut visited = std::collections::BTreeSet::new();
         let mut result = Vec::new();
         while let Some(session) = sessions.pop_front() {
@@ -694,8 +722,15 @@ impl SessionManager {
                 };
                 result.push(PendingInteractiveRequestContext {
                     session_id: id,
-                    parent_session_id: config.parent_session_id.map(SessionId::get),
-                    agent_name: config.agent.as_ref().map(|t| t.name.clone()),
+                    parent_session_id: config
+                        .parent_session_id
+                        .map(SessionId::get)
+                        .or_else(|| task_workers.contains(&id).then_some(root.metadata.id.get())),
+                    agent_name: config.agent.as_ref().map(|t| t.name.clone()).or_else(|| {
+                        task_workers
+                            .contains(&id)
+                            .then_some(snapshot.metadata.title.clone())
+                    }),
                     request,
                 });
                 if result.len() >= 128 {

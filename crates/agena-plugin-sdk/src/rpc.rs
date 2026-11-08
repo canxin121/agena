@@ -209,6 +209,11 @@ pub mod method {
     pub const HOST_SERVICE_INVOKE: &str = "host/service.invoke";
     pub const HOST_ASK_USER: &str = "host/ask_user";
     pub const HOST_AGENT_SPAWN: &str = "host/agent.spawn";
+    pub const HOST_COMPANION_CONTEXT: &str = "host/companion.context";
+    pub const HOST_COMPANION_OPERATION: &str = "host/companion.operation";
+    pub const HOST_MANAGE_INTEGRATIONS: &str = "host/integrations.manage";
+    pub const HOST_CONVERSATION_WORK: &str = "host/conversation.work";
+    pub const HOST_CONVERSATION_WORK_CONTEXT: &str = "host/conversation.work_context";
     pub const HOST_AGENT_MESSAGE: &str = "host/agent.message";
     pub const HOST_AGENT_WAIT: &str = "host/agent.wait";
     pub const HOST_AGENT_FOLLOWUP: &str = "host/agent.followup";

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RiTaskLine } from '@remixicon/vue'
 import { computed, nextTick, ref, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -41,6 +42,7 @@ const { t } = useI18n()
 
 const TAB_ICONS: Record<MainTabId, Component> = {
   chat: RiChat4Line,
+  tasks: RiTaskLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,

@@ -63,6 +63,11 @@ pub struct SessionExecutionContext {
     pub selection: ExecutionSelection,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
+    #[serde(default)]
+    pub channel_authority: Option<agena_domain::ChannelAuthority>,
+    #[serde(skip)]
+    pub channel_verifier:
+        Option<std::sync::Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>>,
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
 }
@@ -87,6 +92,14 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     }
     fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
         &self.capability_denied_tool_names
+    }
+    fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
+        self.channel_authority.as_ref()
+    }
+    fn channel_verifier(
+        &self,
+    ) -> Option<std::sync::Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>> {
+        self.channel_verifier.clone()
     }
     fn selected_model(&self) -> Option<&str> {
         self.selection.model.as_deref()

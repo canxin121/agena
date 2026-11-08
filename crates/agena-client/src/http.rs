@@ -45,8 +45,11 @@ mod archive;
 mod content;
 mod inline_ui;
 pub use inline_ui::InlineUiSubscription;
+mod assistant;
+mod integrations;
 mod mcp_connections;
 mod skills;
+mod tasks;
 #[cfg(test)]
 mod tests;
 pub use content::ContentSubscription;

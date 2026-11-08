@@ -1,0 +1,1519 @@
+{
+  "github_issues": {
+    "hooks": [
+      "init",
+      "shutdown"
+    ],
+    "name": "github_issues",
+    "namespace": "example",
+    "schema_version": 1,
+    "services": {
+      "exports": [
+        {
+          "api_version": 1,
+          "id": "agena.integration",
+          "methods": [
+            {
+              "id": "describe",
+              "input": {
+                "root": {
+                  "constraints": {},
+                  "fields": [],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Describe Request"
+                },
+                "version": 1
+              },
+              "output": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "id": "channel_context_version",
+                      "kind": "integer",
+                      "path": "/channel_context_version",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel Context Version"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "config_schema",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/config_schema",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Config Schema"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "description",
+                      "kind": "text",
+                      "path": "/description",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Description"
+                    },
+                    {
+                      "constraints": {},
+                      "description": "False means a lost send acknowledgement is not automatically retried.",
+                      "id": "idempotent_send",
+                      "kind": "boolean",
+                      "path": "/idempotent_send",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Idempotent Send"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "kind",
+                      "kind": "choice",
+                      "options": [
+                        {
+                          "id": "channel",
+                          "title": "Channel",
+                          "value": "channel"
+                        },
+                        {
+                          "id": "event_source",
+                          "title": "Event Source",
+                          "value": "event_source"
+                        }
+                      ],
+                      "path": "/kind",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Kind"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "id": "minimum_poll_seconds",
+                      "kind": "integer",
+                      "path": "/minimum_poll_seconds",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Minimum Poll Seconds"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "title",
+                      "kind": "text",
+                      "path": "/title",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Title"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Description"
+                },
+                "version": 1
+              }
+            },
+            {
+              "id": "poll",
+              "input": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {},
+                      "id": "binding_id",
+                      "kind": "text",
+                      "path": "/binding_id",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Binding ID"
+                    },
+                    {
+                      "constraints": {},
+                      "fields": [
+                        {
+                          "constraints": {},
+                          "id": "account",
+                          "kind": "text",
+                          "path": "/channel_identity/account",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Account"
+                        },
+                        {
+                          "constraints": {},
+                          "id": "kind",
+                          "kind": "choice",
+                          "options": [
+                            {
+                              "id": "direct",
+                              "title": "Direct",
+                              "value": "direct"
+                            },
+                            {
+                              "id": "group",
+                              "title": "Group",
+                              "value": "group"
+                            },
+                            {
+                              "id": "public_channel",
+                              "title": "Public Channel",
+                              "value": "public_channel"
+                            },
+                            {
+                              "id": "private_channel",
+                              "title": "Private Channel",
+                              "value": "private_channel"
+                            }
+                          ],
+                          "path": "/channel_identity/kind",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Kind"
+                        },
+                        {
+                          "constraints": {},
+                          "id": "tenant",
+                          "kind": "text",
+                          "path": "/channel_identity/tenant",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Tenant"
+                        }
+                      ],
+                      "id": "channel_identity",
+                      "kind": "object",
+                      "path": "/channel_identity",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel Identity"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "config",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/config",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Config"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "cursor",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/cursor",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Cursor"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "id": "limit",
+                      "kind": "integer",
+                      "path": "/limit",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Limit"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "not_before_ms",
+                      "kind": "integer",
+                      "path": "/not_before_ms",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Not Before Ms"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "now_ms",
+                      "kind": "integer",
+                      "path": "/now_ms",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Now Ms"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Poll Request"
+                },
+                "version": 1
+              },
+              "output": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {},
+                      "id": "cursor",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/cursor",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Cursor"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "events",
+                      "item": {
+                        "constraints": {},
+                        "fields": [
+                          {
+                            "constraints": {},
+                            "id": "actor",
+                            "kind": "text",
+                            "path": "/events/*/actor",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Actor"
+                          },
+                          {
+                            "constraints": {},
+                            "default": false,
+                            "id": "bot",
+                            "kind": "boolean",
+                            "path": "/events/*/bot",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Bot"
+                          },
+                          {
+                            "constraints": {},
+                            "fields": [
+                              {
+                                "constraints": {},
+                                "description": "The installed adapter verifies these facts with its platform. A user\ncannot obtain membership just by putting an ID/role in message text.",
+                                "id": "actor_verified",
+                                "kind": "boolean",
+                                "path": "/events/*/channel/actor_verified",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Actor Verified"
+                              },
+                              {
+                                "constraints": {},
+                                "id": "addressed_to_bot",
+                                "kind": "boolean",
+                                "path": "/events/*/channel/addressed_to_bot",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Addressed To Bot"
+                              },
+                              {
+                                "constraints": {},
+                                "fields": [
+                                  {
+                                    "constraints": {},
+                                    "id": "account",
+                                    "kind": "text",
+                                    "path": "/events/*/channel/identity/account",
+                                    "required": true,
+                                    "secret": false,
+                                    "sensitive": false,
+                                    "title": "Account"
+                                  },
+                                  {
+                                    "constraints": {},
+                                    "id": "kind",
+                                    "kind": "choice",
+                                    "options": [
+                                      {
+                                        "id": "direct",
+                                        "title": "Direct",
+                                        "value": "direct"
+                                      },
+                                      {
+                                        "id": "group",
+                                        "title": "Group",
+                                        "value": "group"
+                                      },
+                                      {
+                                        "id": "public_channel",
+                                        "title": "Public Channel",
+                                        "value": "public_channel"
+                                      },
+                                      {
+                                        "id": "private_channel",
+                                        "title": "Private Channel",
+                                        "value": "private_channel"
+                                      }
+                                    ],
+                                    "path": "/events/*/channel/identity/kind",
+                                    "required": true,
+                                    "secret": false,
+                                    "sensitive": false,
+                                    "title": "Kind"
+                                  },
+                                  {
+                                    "constraints": {},
+                                    "id": "tenant",
+                                    "kind": "text",
+                                    "path": "/events/*/channel/identity/tenant",
+                                    "required": true,
+                                    "secret": false,
+                                    "sensitive": false,
+                                    "title": "Tenant"
+                                  }
+                                ],
+                                "id": "identity",
+                                "kind": "object",
+                                "path": "/events/*/channel/identity",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Identity"
+                              },
+                              {
+                                "constraints": {},
+                                "id": "is_member",
+                                "kind": "boolean",
+                                "path": "/events/*/channel/is_member",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Is Member"
+                              },
+                              {
+                                "constraints": {},
+                                "id": "verified_at_ms",
+                                "kind": "integer",
+                                "path": "/events/*/channel/verified_at_ms",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Verified At Ms"
+                              }
+                            ],
+                            "id": "channel",
+                            "kind": "object",
+                            "path": "/events/*/channel",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Channel"
+                          },
+                          {
+                            "constraints": {},
+                            "default": null,
+                            "id": "data",
+                            "kind": "json",
+                            "max_bytes": 32768,
+                            "max_depth": 12,
+                            "path": "/events/*/data",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Data"
+                          },
+                          {
+                            "constraints": {},
+                            "id": "event_type",
+                            "kind": "text",
+                            "path": "/events/*/event_type",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Event Type"
+                          },
+                          {
+                            "constraints": {},
+                            "description": "Stable PROVIDER event identity; a replay must keep identical content.",
+                            "id": "id",
+                            "kind": "text",
+                            "path": "/events/*/id",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "ID"
+                          },
+                          {
+                            "constraints": {},
+                            "id": "occurred_at_ms",
+                            "kind": "integer",
+                            "path": "/events/*/occurred_at_ms",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Occurred At Ms"
+                          },
+                          {
+                            "constraints": {},
+                            "description": "Exact repository/account-conversation identity selected by the grant.",
+                            "id": "resource",
+                            "kind": "text",
+                            "path": "/events/*/resource",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Resource"
+                          },
+                          {
+                            "constraints": {},
+                            "id": "text",
+                            "kind": "text",
+                            "path": "/events/*/text",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Text"
+                          },
+                          {
+                            "constraints": {},
+                            "default": null,
+                            "id": "thread",
+                            "kind": "text",
+                            "path": "/events/*/thread",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Thread"
+                          }
+                        ],
+                        "id": "events_item",
+                        "kind": "object",
+                        "path": "/events/*",
+                        "required": true,
+                        "secret": false,
+                        "sensitive": false,
+                        "title": "Events Item"
+                      },
+                      "kind": "list",
+                      "path": "/events",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Events"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "default": null,
+                      "description": "Provider backoff wins over the configured poll interval.",
+                      "id": "retry_after_seconds",
+                      "kind": "integer",
+                      "path": "/retry_after_seconds",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Retry After Seconds"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Batch"
+                },
+                "version": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "settings": {
+      "root": {
+        "constraints": {},
+        "fields": [
+          {
+            "constraints": {},
+            "default": false,
+            "id": "allow_loopback_http",
+            "kind": "boolean",
+            "path": "/allow_loopback_http",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Allow Loopback HTTP"
+          },
+          {
+            "constraints": {},
+            "default": "",
+            "id": "api_base",
+            "kind": "text",
+            "path": "/api_base",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "API Base"
+          },
+          {
+            "constraints": {},
+            "default": "",
+            "id": "token_env",
+            "kind": "text",
+            "path": "/token_env",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Token Env"
+          }
+        ],
+        "id": "root",
+        "kind": "object",
+        "path": "",
+        "required": true,
+        "secret": false,
+        "sensitive": false,
+        "title": "Github Settings"
+      },
+      "version": 1
+    },
+    "summary": "Read-only GitHub issue event source; no I/O without an enabled grant.",
+    "transports": [],
+    "version": "1.0.0"
+  },
+  "protocol_version": 3,
+  "webhook_chat": {
+    "hooks": [
+      "init",
+      "shutdown"
+    ],
+    "name": "webhook_chat",
+    "namespace": "example",
+    "schema_version": 1,
+    "services": {
+      "exports": [
+        {
+          "api_version": 1,
+          "id": "agena.integration",
+          "methods": [
+            {
+              "id": "describe",
+              "input": {
+                "root": {
+                  "constraints": {},
+                  "fields": [],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Describe Request"
+                },
+                "version": 1
+              },
+              "output": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "id": "channel_context_version",
+                      "kind": "integer",
+                      "path": "/channel_context_version",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel Context Version"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "config_schema",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/config_schema",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Config Schema"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "description",
+                      "kind": "text",
+                      "path": "/description",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Description"
+                    },
+                    {
+                      "constraints": {},
+                      "description": "False means a lost send acknowledgement is not automatically retried.",
+                      "id": "idempotent_send",
+                      "kind": "boolean",
+                      "path": "/idempotent_send",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Idempotent Send"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "kind",
+                      "kind": "choice",
+                      "options": [
+                        {
+                          "id": "channel",
+                          "title": "Channel",
+                          "value": "channel"
+                        },
+                        {
+                          "id": "event_source",
+                          "title": "Event Source",
+                          "value": "event_source"
+                        }
+                      ],
+                      "path": "/kind",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Kind"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "id": "minimum_poll_seconds",
+                      "kind": "integer",
+                      "path": "/minimum_poll_seconds",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Minimum Poll Seconds"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "title",
+                      "kind": "text",
+                      "path": "/title",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Title"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Description"
+                },
+                "version": 1
+              }
+            },
+            {
+              "id": "poll",
+              "input": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {},
+                      "id": "binding_id",
+                      "kind": "text",
+                      "path": "/binding_id",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Binding ID"
+                    },
+                    {
+                      "constraints": {},
+                      "fields": [
+                        {
+                          "constraints": {},
+                          "id": "account",
+                          "kind": "text",
+                          "path": "/channel_identity/account",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Account"
+                        },
+                        {
+                          "constraints": {},
+                          "id": "kind",
+                          "kind": "choice",
+                          "options": [
+                            {
+                              "id": "direct",
+                              "title": "Direct",
+                              "value": "direct"
+                            },
+                            {
+                              "id": "group",
+                              "title": "Group",
+                              "value": "group"
+                            },
+                            {
+                              "id": "public_channel",
+                              "title": "Public Channel",
+                              "value": "public_channel"
+                            },
+                            {
+                              "id": "private_channel",
+                              "title": "Private Channel",
+                              "value": "private_channel"
+                            }
+                          ],
+                          "path": "/channel_identity/kind",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Kind"
+                        },
+                        {
+                          "constraints": {},
+                          "id": "tenant",
+                          "kind": "text",
+                          "path": "/channel_identity/tenant",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Tenant"
+                        }
+                      ],
+                      "id": "channel_identity",
+                      "kind": "object",
+                      "path": "/channel_identity",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel Identity"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "config",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/config",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Config"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "cursor",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/cursor",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Cursor"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "id": "limit",
+                      "kind": "integer",
+                      "path": "/limit",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Limit"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "not_before_ms",
+                      "kind": "integer",
+                      "path": "/not_before_ms",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Not Before Ms"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "now_ms",
+                      "kind": "integer",
+                      "path": "/now_ms",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Now Ms"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Poll Request"
+                },
+                "version": 1
+              },
+              "output": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {},
+                      "id": "cursor",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/cursor",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Cursor"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "events",
+                      "item": {
+                        "constraints": {},
+                        "fields": [
+                          {
+                            "constraints": {},
+                            "id": "actor",
+                            "kind": "text",
+                            "path": "/events/*/actor",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Actor"
+                          },
+                          {
+                            "constraints": {},
+                            "default": false,
+                            "id": "bot",
+                            "kind": "boolean",
+                            "path": "/events/*/bot",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Bot"
+                          },
+                          {
+                            "constraints": {},
+                            "fields": [
+                              {
+                                "constraints": {},
+                                "description": "The installed adapter verifies these facts with its platform. A user\ncannot obtain membership just by putting an ID/role in message text.",
+                                "id": "actor_verified",
+                                "kind": "boolean",
+                                "path": "/events/*/channel/actor_verified",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Actor Verified"
+                              },
+                              {
+                                "constraints": {},
+                                "id": "addressed_to_bot",
+                                "kind": "boolean",
+                                "path": "/events/*/channel/addressed_to_bot",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Addressed To Bot"
+                              },
+                              {
+                                "constraints": {},
+                                "fields": [
+                                  {
+                                    "constraints": {},
+                                    "id": "account",
+                                    "kind": "text",
+                                    "path": "/events/*/channel/identity/account",
+                                    "required": true,
+                                    "secret": false,
+                                    "sensitive": false,
+                                    "title": "Account"
+                                  },
+                                  {
+                                    "constraints": {},
+                                    "id": "kind",
+                                    "kind": "choice",
+                                    "options": [
+                                      {
+                                        "id": "direct",
+                                        "title": "Direct",
+                                        "value": "direct"
+                                      },
+                                      {
+                                        "id": "group",
+                                        "title": "Group",
+                                        "value": "group"
+                                      },
+                                      {
+                                        "id": "public_channel",
+                                        "title": "Public Channel",
+                                        "value": "public_channel"
+                                      },
+                                      {
+                                        "id": "private_channel",
+                                        "title": "Private Channel",
+                                        "value": "private_channel"
+                                      }
+                                    ],
+                                    "path": "/events/*/channel/identity/kind",
+                                    "required": true,
+                                    "secret": false,
+                                    "sensitive": false,
+                                    "title": "Kind"
+                                  },
+                                  {
+                                    "constraints": {},
+                                    "id": "tenant",
+                                    "kind": "text",
+                                    "path": "/events/*/channel/identity/tenant",
+                                    "required": true,
+                                    "secret": false,
+                                    "sensitive": false,
+                                    "title": "Tenant"
+                                  }
+                                ],
+                                "id": "identity",
+                                "kind": "object",
+                                "path": "/events/*/channel/identity",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Identity"
+                              },
+                              {
+                                "constraints": {},
+                                "id": "is_member",
+                                "kind": "boolean",
+                                "path": "/events/*/channel/is_member",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Is Member"
+                              },
+                              {
+                                "constraints": {},
+                                "id": "verified_at_ms",
+                                "kind": "integer",
+                                "path": "/events/*/channel/verified_at_ms",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Verified At Ms"
+                              }
+                            ],
+                            "id": "channel",
+                            "kind": "object",
+                            "path": "/events/*/channel",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Channel"
+                          },
+                          {
+                            "constraints": {},
+                            "default": null,
+                            "id": "data",
+                            "kind": "json",
+                            "max_bytes": 32768,
+                            "max_depth": 12,
+                            "path": "/events/*/data",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Data"
+                          },
+                          {
+                            "constraints": {},
+                            "id": "event_type",
+                            "kind": "text",
+                            "path": "/events/*/event_type",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Event Type"
+                          },
+                          {
+                            "constraints": {},
+                            "description": "Stable PROVIDER event identity; a replay must keep identical content.",
+                            "id": "id",
+                            "kind": "text",
+                            "path": "/events/*/id",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "ID"
+                          },
+                          {
+                            "constraints": {},
+                            "id": "occurred_at_ms",
+                            "kind": "integer",
+                            "path": "/events/*/occurred_at_ms",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Occurred At Ms"
+                          },
+                          {
+                            "constraints": {},
+                            "description": "Exact repository/account-conversation identity selected by the grant.",
+                            "id": "resource",
+                            "kind": "text",
+                            "path": "/events/*/resource",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Resource"
+                          },
+                          {
+                            "constraints": {},
+                            "id": "text",
+                            "kind": "text",
+                            "path": "/events/*/text",
+                            "required": true,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Text"
+                          },
+                          {
+                            "constraints": {},
+                            "default": null,
+                            "id": "thread",
+                            "kind": "text",
+                            "path": "/events/*/thread",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Thread"
+                          }
+                        ],
+                        "id": "events_item",
+                        "kind": "object",
+                        "path": "/events/*",
+                        "required": true,
+                        "secret": false,
+                        "sensitive": false,
+                        "title": "Events Item"
+                      },
+                      "kind": "list",
+                      "path": "/events",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Events"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "default": null,
+                      "description": "Provider backoff wins over the configured poll interval.",
+                      "id": "retry_after_seconds",
+                      "kind": "integer",
+                      "path": "/retry_after_seconds",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Retry After Seconds"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Adapter Batch"
+                },
+                "version": 1
+              }
+            },
+            {
+              "id": "send",
+              "input": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {},
+                      "id": "binding_id",
+                      "kind": "text",
+                      "path": "/binding_id",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Binding ID"
+                    },
+                    {
+                      "constraints": {},
+                      "fields": [
+                        {
+                          "constraints": {},
+                          "id": "account",
+                          "kind": "text",
+                          "path": "/channel/account",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Account"
+                        },
+                        {
+                          "constraints": {},
+                          "id": "kind",
+                          "kind": "choice",
+                          "options": [
+                            {
+                              "id": "direct",
+                              "title": "Direct",
+                              "value": "direct"
+                            },
+                            {
+                              "id": "group",
+                              "title": "Group",
+                              "value": "group"
+                            },
+                            {
+                              "id": "public_channel",
+                              "title": "Public Channel",
+                              "value": "public_channel"
+                            },
+                            {
+                              "id": "private_channel",
+                              "title": "Private Channel",
+                              "value": "private_channel"
+                            }
+                          ],
+                          "path": "/channel/kind",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Kind"
+                        },
+                        {
+                          "constraints": {},
+                          "id": "tenant",
+                          "kind": "text",
+                          "path": "/channel/tenant",
+                          "required": true,
+                          "secret": false,
+                          "sensitive": false,
+                          "title": "Tenant"
+                        }
+                      ],
+                      "id": "channel",
+                      "kind": "object",
+                      "path": "/channel",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "config",
+                      "kind": "json",
+                      "max_bytes": 32768,
+                      "max_depth": 12,
+                      "path": "/config",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Config"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "delivery_id",
+                      "kind": "text",
+                      "path": "/delivery_id",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Delivery ID"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "resource",
+                      "kind": "text",
+                      "path": "/resource",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Resource"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "text",
+                      "kind": "text",
+                      "path": "/text",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Text"
+                    },
+                    {
+                      "constraints": {},
+                      "id": "thread",
+                      "kind": "text",
+                      "path": "/thread",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Thread"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Channel Delivery"
+                },
+                "version": 1
+              },
+              "output": {
+                "root": {
+                  "constraints": {},
+                  "fields": [
+                    {
+                      "constraints": {},
+                      "id": "disposition",
+                      "kind": "choice",
+                      "options": [
+                        {
+                          "id": "sent",
+                          "title": "Sent",
+                          "value": "sent"
+                        },
+                        {
+                          "id": "rejected",
+                          "title": "Rejected",
+                          "value": "rejected"
+                        },
+                        {
+                          "id": "retryable",
+                          "title": "Retryable",
+                          "value": "retryable"
+                        },
+                        {
+                          "id": "uncertain",
+                          "title": "Uncertain",
+                          "value": "uncertain"
+                        }
+                      ],
+                      "path": "/disposition",
+                      "required": true,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Disposition"
+                    },
+                    {
+                      "constraints": {},
+                      "default": null,
+                      "id": "remote_id",
+                      "kind": "text",
+                      "path": "/remote_id",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Remote ID"
+                    },
+                    {
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "default": null,
+                      "id": "retry_after_seconds",
+                      "kind": "integer",
+                      "path": "/retry_after_seconds",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Retry After Seconds"
+                    }
+                  ],
+                  "id": "root",
+                  "kind": "object",
+                  "path": "",
+                  "required": true,
+                  "secret": false,
+                  "sensitive": false,
+                  "title": "Channel Receipt"
+                },
+                "version": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "settings": {
+      "root": {
+        "constraints": {},
+        "fields": [
+          {
+            "constraints": {},
+            "default": false,
+            "id": "allow_loopback_http",
+            "kind": "boolean",
+            "path": "/allow_loopback_http",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Allow Loopback HTTP"
+          },
+          {
+            "constraints": {},
+            "default": "",
+            "id": "database_path",
+            "kind": "text",
+            "path": "/database_path",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Database Path"
+          },
+          {
+            "constraints": {},
+            "default": "",
+            "id": "listen_host",
+            "kind": "text",
+            "path": "/listen_host",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Listen Host"
+          },
+          {
+            "constraints": {
+              "maximum": 65535.0,
+              "minimum": 0.0
+            },
+            "default": 0,
+            "id": "listen_port",
+            "kind": "integer",
+            "path": "/listen_port",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Listen Port"
+          },
+          {
+            "constraints": {},
+            "default": false,
+            "id": "remote_idempotent",
+            "kind": "boolean",
+            "path": "/remote_idempotent",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Remote Idempotent"
+          },
+          {
+            "constraints": {},
+            "default": "",
+            "id": "reply_url",
+            "kind": "text",
+            "path": "/reply_url",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Reply URL"
+          },
+          {
+            "constraints": {},
+            "default": "",
+            "id": "secret_env",
+            "kind": "text",
+            "path": "/secret_env",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Secret Env"
+          },
+          {
+            "constraints": {},
+            "default": false,
+            "id": "spool_only",
+            "kind": "boolean",
+            "path": "/spool_only",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Spool Only"
+          },
+          {
+            "constraints": {},
+            "default": null,
+            "id": "status_path",
+            "kind": "text",
+            "path": "/status_path",
+            "required": false,
+            "secret": false,
+            "sensitive": false,
+            "title": "Status Path"
+          }
+        ],
+        "id": "root",
+        "kind": "object",
+        "path": "",
+        "required": true,
+        "secret": false,
+        "sensitive": false,
+        "title": "Chat Settings"
+      },
+      "version": 1
+    },
+    "summary": "Signed webhook chat adapter with durable inbox and explicit outbound receipts.",
+    "transports": [],
+    "version": "1.0.0"
+  }
+}

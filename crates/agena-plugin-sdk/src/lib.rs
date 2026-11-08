@@ -108,3 +108,5 @@ pub use settings_contract::{
 #[doc(hidden)]
 #[cfg(feature = "cdylib")]
 pub use abi_stable as abi_stable_reexport;
+
+pub mod integration;

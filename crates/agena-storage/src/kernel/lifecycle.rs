@@ -23,6 +23,8 @@ pub struct SessionConfiguration {
     pub prompts: agena_prompt_layers::PromptLayer,
     pub permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_authority: Option<agena_domain::ChannelAuthority>,
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
     pub agent: Option<SessionAgentConfiguration>,
@@ -93,6 +95,8 @@ pub struct SessionConfigurationChange {
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
     pub permission: Option<PermissionConfig>,
     pub permission_ceiling: Option<PermissionConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_authority: Option<agena_domain::ChannelAuthority>,
     pub capability_denied_tool_names: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<Option<PathBuf>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
@@ -522,6 +526,15 @@ impl KernelReader {
     pub fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch> {
         self.0.backend.watch_all(after)
     }
+    /// Read the current delivery state rather than replaying an old command
+    /// receipt. Scope ownership is checked exactly as for pending deliveries.
+    pub async fn delivery(
+        &self,
+        session: SessionId,
+        id: agena_domain::CommandId,
+    ) -> Result<ReadView<DeliveryView>> {
+        self.0.backend.delivery(session, id).await
+    }
     pub async fn pending_deliveries(
         &self,
         session: SessionId,
@@ -535,6 +548,62 @@ impl KernelReader {
     }
 }
 impl ExecutorCommands {
+    /// Atomic proactive handoff: publish and queue a control continuation in
+    /// one commit, with the business identity surviving a lost acknowledgement.
+    /// System-origin event delivery has no fabricated direct-user anchor.
+    pub async fn deliver_control_notice(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        business_key: String,
+        payload: serde_json::Value,
+        text: String,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        if payload.get("kind").and_then(serde_json::Value::as_str) != Some("conversation_work") {
+            return Err(KernelError::Invalid(
+                "control notice requires a typed system payload".into(),
+            ));
+        }
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::DeliverAndResume {
+                        session,
+                        business_key,
+                        payload,
+                        message: None,
+                        text,
+                    },
+                )
+                .await?,
+        )
+    }
+
+    pub async fn deliver_and_resume(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        business_key: String,
+        payload: serde_json::Value,
+        message: EntryId,
+        text: String,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::DeliverAndResume {
+                        session,
+                        business_key,
+                        payload,
+                        message: Some(message),
+                        text,
+                    },
+                )
+                .await?,
+        )
+    }
     /// Guidance belongs to this execution. Admission and the terminal fence
     /// are checked in the same transaction as durable publication.
     pub async fn deliver_to_execution(
@@ -583,7 +652,7 @@ impl ExecutorCommands {
                     Command::ResumeDelivery {
                         session,
                         delivery,
-                        message,
+                        message: Some(message),
                         text,
                     },
                 )

@@ -253,6 +253,45 @@ fn literal_enums() -> Vec<LiteralEnum> {
 fn structured_roots() -> Vec<(&'static str, Value)> {
     vec![
         (
+            "ChannelPolicyUpdate",
+            schema_of::<agena_api::integrations::ChannelPolicyUpdate>(),
+        ),
+        (
+            "IntegrationsSnapshot",
+            schema_of::<agena_api::integrations::IntegrationsSnapshot>(),
+        ),
+        (
+            "IntegrationDetail",
+            schema_of::<agena_api::integrations::IntegrationDetail>(),
+        ),
+        (
+            "CreateIntegration",
+            schema_of::<agena_api::integrations::CreateIntegration>(),
+        ),
+        (
+            "IntegrationControl",
+            schema_of::<agena_api::integrations::IntegrationControl>(),
+        ),
+        (
+            "AssistantSnapshot",
+            schema_of::<agena_api::assistant::AssistantSnapshot>(),
+        ),
+        (
+            "AssistantUpdate",
+            schema_of::<agena_api::assistant::AssistantUpdate>(),
+        ),
+        (
+            "AssistantMemoryUpdate",
+            schema_of::<agena_api::assistant::AssistantMemoryUpdate>(),
+        ),
+        (
+            "ReminderControl",
+            schema_of::<agena_api::assistant::ReminderControl>(),
+        ),
+        ("Task", schema_of::<agena_api::tasks::Task>()),
+        ("CreateTask", schema_of::<agena_api::tasks::CreateTask>()),
+        ("ResumeTask", schema_of::<agena_api::tasks::ResumeTask>()),
+        (
             "SessionState",
             schema_of::<agena_api::resource::SessionState>(),
         ),
@@ -496,6 +535,14 @@ fn render_node(
     definitions: &BTreeMap<String, Value>,
     indent: usize,
 ) -> Result<String, String> {
+    if object.get("x-agena-json-escape").and_then(Value::as_bool) == Some(true) {
+        let bytes = object.get("x-agena-json-max-bytes").and_then(Value::as_u64);
+        let depth = object.get("x-agena-json-max-depth").and_then(Value::as_u64);
+        if bytes.is_none_or(|n| n == 0 || n > 1048576) || depth.is_none_or(|n| n == 0 || n > 12) {
+            return Err("invalid bounded JSON escape contract".into());
+        }
+        return Ok("JsonValue".into());
+    }
     for keyword in UNSUPPORTED_KEYWORDS {
         if object.contains_key(keyword) {
             return Err(format!("unsupported schema keyword `{keyword}`"));

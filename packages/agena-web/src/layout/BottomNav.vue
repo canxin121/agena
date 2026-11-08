@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RiTaskLine } from '@remixicon/vue'
 import { computed, type Component } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -11,6 +12,7 @@ const { t } = useI18n()
 
 const TAB_ICONS: Record<NavigationMainTabId, Component> = {
   chat: RiChat4Line,
+  tasks: RiTaskLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,
@@ -40,7 +42,7 @@ function isActive(tab: NavigationMainTabId) {
     class="oc-bottom-nav fixed bottom-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-t border-border pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)]"
     :aria-label="String(t('aria.primaryNavigation'))"
   >
-    <div class="grid grid-cols-5 h-[56px]">
+    <div class="grid grid-cols-6 h-[56px]">
       <RouterLink
         v-for="item in items"
         :key="item.to"

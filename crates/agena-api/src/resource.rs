@@ -817,6 +817,16 @@ impl SessionState {
         requests: Vec<PendingInteractiveRequestResource>,
     ) -> Self {
         match self {
+            // A foreground conversation can be idle while one of its durable
+            // workers needs the real user's input. Preserve that attention in
+            // the source chat without inventing a foreground execution lease.
+            Self::Ready { .. } | Self::Failed { .. } if !requests.is_empty() => {
+                Self::AwaitingInteraction {
+                    run_id: None,
+                    execution,
+                    requests,
+                }
+            }
             Self::Running { .. } => Self::Running {
                 execution,
                 workflow,

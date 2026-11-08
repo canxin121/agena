@@ -48,6 +48,15 @@ macro_rules! impl_callback_host_client {
                 -> $crate::PluginServiceInvokeOutput = HOST_SERVICE_INVOKE { "request": request };
             spawn_agent(request: $crate::host_api::AgentSpawnRequest)
                 -> $crate::host_api::AgentHandle = HOST_AGENT_SPAWN { "request": request };
+            companion_context() -> $crate::serde_json::Value = HOST_COMPANION_CONTEXT {};
+            companion_operation(request: $crate::host_api::CompanionRequest)
+                -> $crate::serde_json::Value = HOST_COMPANION_OPERATION { "request": request };
+            manage_integrations(request: $crate::host_api::IntegrationRequest)
+                -> $crate::serde_json::Value = HOST_MANAGE_INTEGRATIONS { "request": request };
+            conversation_work(request: $crate::host_api::WorkRequest)
+                -> $crate::serde_json::Value = HOST_CONVERSATION_WORK { "request": request };
+            conversation_work_context()
+                -> $crate::serde_json::Value = HOST_CONVERSATION_WORK_CONTEXT {};
             message_agent(request: $crate::host_api::AgentMessageRequest)
                 -> $crate::host_api::AgentMessageReceipt = HOST_AGENT_MESSAGE { "request": request };
             wait_agent(request: $crate::host_api::AgentWaitRequest)

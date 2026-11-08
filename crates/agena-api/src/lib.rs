@@ -56,3 +56,9 @@ pub use scope::Scope;
 /// Fixed development wire contract. Do not increment this during development;
 /// change server and clients together against the one current format.
 pub const PROTOCOL_VERSION: u32 = 2;
+
+pub mod tasks;
+
+pub mod assistant;
+
+pub mod integrations;

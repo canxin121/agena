@@ -29,6 +29,7 @@ pub(super) async fn apply(
         | Command::Notice { .. }
         | Command::Deliver { .. }
         | Command::DeliverToExecution { .. }
+        | Command::DeliverAndResume { .. }
         | Command::ResumeDelivery { .. }
         | Command::ConsumeDelivery { .. } => unreachable!("lifecycle command handled above"),
         Command::CreateSession {

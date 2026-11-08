@@ -1,4 +1,4 @@
-export type MainTabId = 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings'
+export type MainTabId = 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings' | 'tasks'
 export type NavigationMainTabId = Exclude<MainTabId, 'settings'>
 
 export type MainTabDef<T extends MainTabId = MainTabId> = {
@@ -9,6 +9,7 @@ export type MainTabDef<T extends MainTabId = MainTabId> = {
 
 export const WORKSPACE_MAIN_TABS: MainTabDef[] = [
   { id: 'chat', path: '/chat', labelKey: 'nav.chat' },
+  { id: 'tasks', path: '/tasks', labelKey: 'tasks.title' },
   { id: 'files', path: '/files', labelKey: 'nav.files' },
   { id: 'preview', path: '/preview', labelKey: 'nav.preview' },
   { id: 'terminal', path: '/terminal', labelKey: 'nav.terminal' },

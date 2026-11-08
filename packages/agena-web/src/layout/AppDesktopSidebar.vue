@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RiTaskLine } from '@remixicon/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -57,6 +58,7 @@ const SETTINGS_LAST_ROUTE_KEY = localStorageKeys.settings.lastRoute
 
 const NAV_ICONS: Record<MainTabId, Component> = {
   chat: RiChat4Line,
+  tasks: RiTaskLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,

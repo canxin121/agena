@@ -110,6 +110,11 @@ impl App {
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-activities"),
             ),
+            Route::Integrations(_) => {
+                self.help_for_editor(self.i18n.text("integrations-title"), true)
+            }
+            Route::Assistant(_) => self.help_for_editor(self.i18n.text("assistant-title"), true),
+            Route::Tasks(_) => self.help_for_editor(self.i18n.text("task-board-title"), true),
             Route::PlanViewer(_) => self.help_for(
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-plan-viewer"),

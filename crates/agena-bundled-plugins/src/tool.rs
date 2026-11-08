@@ -6,7 +6,7 @@ pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
     agent, code, commands, cron, fs, interaction, lsp, mcp, monitor, notebook, notifications,
-    planning, report, session, settings, shell, skills,
+    planning, report, session, settings, shell, skills, work,
 };
 
 pub fn commands_plugin_id() -> &'static str {
@@ -127,6 +127,21 @@ pub fn plan_plugin_id() -> &'static str {
 
 pub fn new_plan_plugin() -> impl agena_plugin_host::sdk::Plugin {
     planning::PlanPlugin::new()
+}
+
+pub fn companion_plugin_id() -> &'static str {
+    "agena.companion"
+}
+pub fn new_companion_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::companion::CompanionPlugin::new()
+}
+
+pub fn work_plugin_id() -> &'static str {
+    "agena.work"
+}
+
+pub fn new_work_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    work::WorkPlugin::new()
 }
 
 pub fn agent_plugin_id() -> &'static str {

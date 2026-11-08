@@ -58,6 +58,26 @@ impl ToolExecutor {
                 },
             )));
         }
+        if let Some(authority) = &self.channel_authority
+            && definition.canonical_name() == "agena.mcp.tools.call"
+        {
+            let input = serde_json::Value::from(invocation.input.clone());
+            let server = input
+                .get("server")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let remote_tool = input
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if !authority.grant.allows_mcp_tool(server, remote_tool) {
+                return Err(ToolError::CapabilityUnavailable(Box::new(agena_domain::CapabilityUnavailableResult {
+                    capability:"channel_mcp_tool".into(),tool_name:Some(tool_name.clone()),
+                    reason:"MCP server/tool pair is outside this channel member's explicit allowlist".into(),
+                    source:agena_domain::CapabilitySourceKind::AgentProfile,retryable:false,
+                })));
+            }
+        }
         if !self.builtin_tool_set().is_tool_enabled(&definition) {
             return Err(ToolError::CapabilityUnavailable(Box::new(
                 agena_domain::CapabilityUnavailableResult {

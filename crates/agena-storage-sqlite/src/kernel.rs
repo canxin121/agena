@@ -502,6 +502,13 @@ impl KernelBackend for Backend {
         lifecycle::owned_tool_metadata(self, session, after, limit).await
     }
 
+    async fn delivery(
+        &self,
+        session: SessionId,
+        id: agena_domain::CommandId,
+    ) -> Result<ReadView<DeliveryView>> {
+        lifecycle::read_delivery(self, session, id).await
+    }
     async fn pending_deliveries(
         &self,
         session: SessionId,
@@ -1981,6 +1988,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::StartControlExecution { session, .. }
         | Command::Deliver { session, .. }
         | Command::DeliverToExecution { session, .. }
+        | Command::DeliverAndResume { session, .. }
         | Command::ResumeDelivery { session, .. }
         | Command::ConsumeDelivery { session, .. }
         | Command::Metadata { session, .. }
@@ -2088,7 +2096,9 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         Command::Withdraw { session, .. }
         | Command::DeleteSession { session }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
-        Command::Continue { session, .. } | Command::ResumeDelivery { session, .. } => {
+        Command::Continue { session, .. }
+        | Command::ResumeDelivery { session, .. }
+        | Command::DeliverAndResume { session, .. } => {
             let kind = if matches!(mutation, Mutation::Execution(view) if view.purpose != ExecutionPurpose::Message)
             {
                 ChangeKind::Membership

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { loadTaskDraft, saveTaskDraft } from '@/features/tasks/taskDraft'
+import { newTaskForm } from '@/features/tasks/taskBoard'
 import { createFailedAttachmentDraftSlot } from './chat/failedAttachmentDrafts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -1685,6 +1687,23 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'rename':
       openRenameDialog()
       return
+    case 'integrations':
+      await router.push({ path: '/integrations', query: sid ? { source: sid } : {} })
+      return
+    case 'assistant':
+      await router.push({ path: '/assistant', query: sid ? { source: sid } : {} })
+      return
+    case 'tasks':
+      await router.push({ path: '/tasks', query: sid ? { source: sid } : {} })
+      return
+    case 'task': {
+      if (!sid) throw new Error(String(t('tasks.noSession')))
+      const source = Number(sid)
+      const unfinished = loadTaskDraft(source)
+      if (!unfinished?.submitted) saveTaskDraft(source, newTaskForm('create', source, null, args))
+      await router.push({ path: '/tasks', query: { source: sid, compose: '1' } })
+      return
+    }
     case 'timeline':
       await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
       return
@@ -1966,6 +1985,13 @@ async function sendReady(sid: string | null) {
       if (commands.value.length === 0) await loadCommands()
       const matchedCommand = matchSlashCommand(commands.value, text)
       if (matchedCommand?.command.kind === 'builtin') {
+        // Preserve the visible draft until the task request has a UI owner.
+        if (matchedCommand.command.action === 'task' || matchedCommand.command.action === 'tasks') {
+          await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
+          if (draft.value === draftSnapshot) draft.value = ''
+          closeCommandPalette()
+          return
+        }
         draft.value = ''
         closeCommandPalette()
         await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)

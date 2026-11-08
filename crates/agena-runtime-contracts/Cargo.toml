@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Neutral contracts shared by Agena runtime feature crates"
 
 [dependencies]
+async-trait.workspace = true
 agena-storage-layout = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }

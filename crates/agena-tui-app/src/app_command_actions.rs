@@ -17,6 +17,10 @@ impl App {
             return;
         }
         match action {
+            ClientCommandAction::Integrations => self.open_integrations(),
+            ClientCommandAction::Assistant => self.open_assistant(),
+            ClientCommandAction::Tasks => self.open_tasks(false, ""),
+            ClientCommandAction::Task => self.open_tasks(true, args),
             ClientCommandAction::Help => {
                 self.open_context_help();
             }

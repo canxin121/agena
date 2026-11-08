@@ -474,6 +474,9 @@ pub struct App {
     pub(super) btw_sessions: BTreeMap<i64, crate::app_btw::BtwState>,
     pub(super) session_work: BTreeMap<i64, crate::app_session_work::SessionWorkState>,
     pub(super) session_plan: crate::app_session_plan::SessionPlanState,
+    pub(crate) integration_panels: BTreeMap<i64, crate::app_integrations::IntegrationState>,
+    pub(crate) assistant_panels: BTreeMap<i64, crate::app_assistant::AssistantState>,
+    pub(crate) task_boards: BTreeMap<i64, crate::app_tasks::TaskBoardState>,
     pub(super) route_stack: Vec<Route>,
     pub(super) overlay: Option<Overlay>,
     pub(super) overlay_stack: Vec<Overlay>,
@@ -1101,6 +1104,9 @@ pub(super) enum Route {
     Usage(UsageDashboardState),
     Activities(ActivitiesState),
     PlanViewer(PlanViewerState),
+    Tasks(i64),
+    Assistant(i64),
+    Integrations(i64),
     /// Full-screen session work surface (tasks / files / status).
     SessionWork(i64),
     /// Full-screen BTW question surface for one parent session.

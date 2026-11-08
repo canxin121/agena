@@ -74,15 +74,17 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
         self.ensure_not_cancelled()?;
+        self.verify_channel_access().await?;
         let model_tool_name = invocation_name(invocation).to_owned();
         let definition = self.invocation_definition(invocation);
-        if self
-            .conversation
-            .as_ref()
-            .is_some_and(|context| context.is_read_only())
+        if self.channel_authority.is_some()
+            || self
+                .conversation
+                .as_ref()
+                .is_some_and(|context| context.is_read_only())
         {
-            // Reject the capability before tool-before hooks or shell
-            // preparation can observe a mutation request.
+            // Reject channel and read-only capability violations before any
+            // plugin tool-before hook or shell preparation sees the request.
             self.authorize_invocation(invocation)?;
         }
         let Some(definition) = definition else {
@@ -147,6 +149,7 @@ impl ToolExecutor {
         _session_id: Option<i64>,
     ) -> Result<Vec<ToolPermissionCheck>, ToolError> {
         self.ensure_not_cancelled()?;
+        self.verify_channel_access().await?;
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
         let tags = self
@@ -288,6 +291,7 @@ impl ToolExecutor {
         let call_id = context.call_id.unwrap_or(-1);
         let output = context.output.clone();
         self.ensure_not_cancelled()?;
+        self.verify_channel_access().await?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
         let tool_name = plugin_invocation_name(&plugin_invocation);
         tracing::debug!(session_id, call_id, tool = tool_name.as_str(), "tool.call");
@@ -405,6 +409,7 @@ impl ToolExecutor {
             })
             .await?;
             self.ensure_not_cancelled()?;
+            self.verify_channel_access().await?;
             let execution: ToolInvocationExecution = execution.into();
             let payload = serde_json::Value::from(execution.output.payload.clone());
             return self
@@ -513,6 +518,7 @@ impl ToolExecutor {
         .await
         .map_err(|err| self.plugin_error_or_cancelled(err))?;
         self.ensure_not_cancelled()?;
+        self.verify_channel_access().await?;
 
         let view = ToolExecutionView {
             title: response.title.clone(),

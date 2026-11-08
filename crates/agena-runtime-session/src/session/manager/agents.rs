@@ -360,6 +360,11 @@ impl SessionManager {
                     .configuration(id)
                     .await
                     .map_err(kernel_error)?;
+                if previous.channel_authority != parent.execution.channel_authority {
+                    return Err(AppError::Config(
+                        "a child from a different channel authority cannot be reused".into(),
+                    ));
+                }
                 denials.extend(previous.capability_denied_tool_names.iter().cloned());
                 let change = SessionConfigurationChange {
                     agent: Some(Some(agent.clone())),
@@ -383,7 +388,15 @@ impl SessionManager {
                     parent_session_id: Some(session_id(parent.id)?),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     permission: parent.execution.effective_permission.clone(),
-                    permission_ceiling: parent.execution.effective_permission.clone(),
+                    // Delegation must retain a stricter inherited ceiling.
+                    // Capturing only the mutable effective policy can erase a
+                    // deny that exists exclusively in the parent's boundary.
+                    permission_ceiling: if parent.execution.permission_ceiling.is_empty() {
+                        parent.execution.effective_permission.clone()
+                    } else {
+                        parent.execution.permission_ceiling.clone()
+                    },
+                    channel_authority: parent.execution.channel_authority.clone(),
                     capability_denied_tool_names: denials.clone(),
                     effective_workspace_root: parent.execution.effective_workspace_root.clone(),
                     agent: Some(agent.clone()),

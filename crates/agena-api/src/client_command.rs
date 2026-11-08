@@ -92,6 +92,10 @@ client_command_actions! {
     Queue => "queue", "/queue";
     Background => "background", "/background";
     Plan => "plan", "/plan";
+    Tasks => "tasks", "/tasks";
+    Assistant => "assistant", "/assistant";
+    Integrations => "integrations", "/integrations";
+    Task => "task", "/task";
     InlineUi => "inline-ui", "/ui";
     Side => "side", "/side";
     Btw => "btw", "/btw";

@@ -640,6 +640,8 @@ pub struct ToolExecutor {
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
+    pub(super) channel_authority: Option<agena_domain::ChannelAuthority>,
+    pub(super) channel_verifier: Option<Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>>,
 }
 
 pub type ReadPathAuthorizer = dyn Fn(&std::path::Path) -> Result<(), ToolError> + Send + Sync;

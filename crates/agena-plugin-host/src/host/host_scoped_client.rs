@@ -258,6 +258,70 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn companion_context(&self) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.companion_context()).await
+        })
+        .await
+    }
+    async fn companion_operation(
+        &self,
+        request: crate::sdk::host_api::CompanionRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.companion_operation(request),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn manage_integrations(
+        &self,
+        request: crate::sdk::host_api::IntegrationRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.manage_integrations(request),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn conversation_work(
+        &self,
+        request: crate::sdk::host_api::WorkRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.conversation_work(request),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn conversation_work_context(&self) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.conversation_work_context(),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn spawn_agent(&self, req: AgentSpawnRequest) -> crate::sdk::Result<AgentHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();

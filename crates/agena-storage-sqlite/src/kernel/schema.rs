@@ -210,6 +210,19 @@ fn declarations() -> impl Iterator<Item = String> {
         .chain(SESSION_EXTENSIONS.iter().copied())
         .chain(infrastructure.copied())
         .chain(agena_scheduler::schema::declarations())
+        .chain(crate::superagent_repository::DECLARATIONS.iter().copied())
+        .chain(
+            crate::superagent_repository::CONVERSATION_DECLARATIONS
+                .iter()
+                .copied(),
+        )
+        .chain(crate::companion_repository::DECLARATIONS.iter().copied())
+        .chain(crate::integration_repository::DECLARATIONS.iter().copied())
+        .chain(
+            crate::integration_repository::CHANNEL_DECLARATIONS
+                .iter()
+                .copied(),
+        )
         .map(str::to_owned)
         .chain(std::iter::once(crate::schema::instance_table()))
         .chain(summary_triggers())
@@ -342,12 +355,46 @@ async fn validate_objects(
         .collect::<Result<std::collections::BTreeMap<_, _>, DbErr>>()?;
     let current = expected == actual;
     if !current {
+        // Recognize only complete historical baselines: immediately before
+        // task tables, or that baseline before the session extension bundle.
+        // Partial additions and foreign objects remain fail-closed.
         let mut previous = expected;
+        for sql in crate::integration_repository::CHANNEL_DECLARATIONS {
+            let d = declaration(sql)?;
+            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
+        }
+        let previous_integrations = previous == actual;
+        for sql in crate::integration_repository::DECLARATIONS {
+            let d = declaration(sql)?;
+            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
+        }
+        let previous_assistant = previous == actual;
+        for sql in crate::companion_repository::DECLARATIONS {
+            let d = declaration(sql)?;
+            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
+        }
+        let previous_conversation = previous == actual;
+        for sql in crate::superagent_repository::CONVERSATION_DECLARATIONS {
+            let d = declaration(sql)?;
+            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
+        }
+        let previous_tasks = previous == actual;
+        for sql in crate::superagent_repository::DECLARATIONS {
+            let d = declaration(sql)?;
+            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
+        }
+        let previous_with_sessions = previous == actual;
         for sql in SESSION_EXTENSIONS {
             let d = declaration(sql)?;
             previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
         }
-        if previous != actual {
+        if !previous_integrations
+            && !previous_assistant
+            && !previous_conversation
+            && !previous_tasks
+            && !previous_with_sessions
+            && previous != actual
+        {
             return Err(incompatible_database(
                 "database schema does not match the current Agena baseline",
             ));
@@ -377,7 +424,14 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
         // Only the exact recognized predecessor may receive these additive
         // tables. A partial/foreign schema still fails before any mutation.
         let transaction = database.begin().await?;
-        for sql in SESSION_EXTENSIONS {
+        for sql in SESSION_EXTENSIONS
+            .iter()
+            .chain(crate::superagent_repository::DECLARATIONS)
+            .chain(crate::superagent_repository::CONVERSATION_DECLARATIONS)
+            .chain(crate::companion_repository::DECLARATIONS)
+            .chain(crate::integration_repository::DECLARATIONS)
+            .chain(crate::integration_repository::CHANNEL_DECLARATIONS)
+        {
             transaction
                 .execute(Statement::from_string(
                     database.get_database_backend(),

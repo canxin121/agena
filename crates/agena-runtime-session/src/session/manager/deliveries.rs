@@ -557,7 +557,7 @@ fn shrink_hook_field(field: &mut Option<String>) -> bool {
     true
 }
 
-fn delivery_text(payload: &Value) -> Result<String, AppError> {
+pub(super) fn delivery_text(payload: &Value) -> Result<String, AppError> {
     let kind = payload
         .get("kind")
         .and_then(Value::as_str)
@@ -576,6 +576,9 @@ fn delivery_text(payload: &Value) -> Result<String, AppError> {
             "delivery_key",
             "text",
             "ready",
+        )?),
+        "conversation_work" => Some(delivery_system_notification(
+            payload, "task", "work_id", "text", "updated",
         )?),
         "agent_result" => Some(delivery_system_notification(
             payload,

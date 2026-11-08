@@ -308,7 +308,7 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
     BuiltInCommand {
         action: "activities",
         slash: "/activities",
-        aliases: &["tasks"],
+        aliases: &[],
         usage: None,
         summary_key: "command-activities-summary",
     },
@@ -332,6 +332,34 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         aliases: &["inline-ui"],
         usage: Some("[reference]"),
         summary_key: "command-inline-ui-summary",
+    },
+    BuiltInCommand {
+        action: "integrations",
+        slash: "/integrations",
+        aliases: &["connections"],
+        usage: None,
+        summary_key: "command-integrations-summary",
+    },
+    BuiltInCommand {
+        action: "assistant",
+        slash: "/assistant",
+        aliases: &["companion"],
+        usage: None,
+        summary_key: "command-assistant-summary",
+    },
+    BuiltInCommand {
+        action: "tasks",
+        slash: "/tasks",
+        aliases: &["task-board"],
+        usage: None,
+        summary_key: "command-tasks-summary",
+    },
+    BuiltInCommand {
+        action: "task",
+        slash: "/task",
+        aliases: &[],
+        usage: Some("[goal]"),
+        summary_key: "command-task-summary",
     },
     BuiltInCommand {
         action: "plan",

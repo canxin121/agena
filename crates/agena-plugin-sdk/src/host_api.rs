@@ -20,10 +20,37 @@ use crate::manifest::{
     ToolDefinition,
 };
 pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
+mod companion;
+mod integrations;
+mod work;
+pub use companion::{CompanionAction, CompanionRequest};
+pub use integrations::{IntegrationAction, IntegrationRequest};
+pub use work::{WorkAction, WorkRequest};
 
 #[async_trait]
 /// Client interface used by plugins to call host capabilities.
 pub trait HostClient: Send + Sync + 'static {
+    async fn manage_integrations(&self, _request: IntegrationRequest) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    async fn companion_context(&self) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+    async fn companion_operation(&self, _request: CompanionRequest) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    async fn conversation_work_context(&self) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    /// Host-owned work under the live tool callback. The caller cannot supply
+    /// another session identity or turn an automatic result into a user request.
+    async fn conversation_work(&self, _request: WorkRequest) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value);
 
     async fn publish_event(&self, env: EventEnvelope) -> Result<()>;

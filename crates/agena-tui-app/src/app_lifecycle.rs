@@ -77,6 +77,9 @@ impl App {
             btw_sessions: BTreeMap::new(),
             session_work: BTreeMap::new(),
             session_plan: Default::default(),
+            task_boards: Default::default(),
+            assistant_panels: Default::default(),
+            integration_panels: Default::default(),
             route_stack: Vec::new(),
             overlay: None,
             overlay_stack: Vec::new(),
@@ -402,6 +405,9 @@ impl App {
     }
 
     pub(crate) fn on_tick(&mut self) {
+        self.tick_tasks();
+        self.tick_assistant();
+        self.tick_integrations();
         let now = Instant::now();
         // Exit confirmation must revalidate the authoritative execution on
         // every tick, even if a server transition arrives without a keypress.

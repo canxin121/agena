@@ -4,6 +4,7 @@ use agena_testkit::{ModelOptions, TestAgena, TestAgenaBuilder, TestResult, UserS
 use anyhow::ensure;
 use serde_json::{Value, json};
 
+mod assistant;
 mod core;
 mod notifications;
 mod protocols;
@@ -57,6 +58,7 @@ type BundledBehaviorCase = (&'static str, fn() -> TestResult);
 #[test]
 fn every_registered_builtin_has_a_behavior_test() -> TestResult {
     let groups: &[&[BundledBehaviorCase]] = &[
+        assistant::CASES,
         core::CASES,
         runtime::CASES,
         protocols::CASES,

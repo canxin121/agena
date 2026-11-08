@@ -381,14 +381,13 @@ pub enum ReminderControlAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct AssistantMemory {
     pub name: String,
     pub description: String,
-    pub memory_type: Option<String>,
     pub body: String,
     pub sha256: String,
     pub truncated: bool,
-    #[serde(default)]
     pub metadata: agena_domain::MemoryMetadata,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -397,7 +396,7 @@ pub struct AssistantMemoryUpdate {
     pub name: String,
     pub body: Option<String>,
     pub description: Option<String>,
-    pub memory_type: Option<String>,
+    pub kind: Option<agena_domain::MemoryKind>,
     pub expected_sha256: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -483,5 +482,65 @@ mod tests {
         assert!(spec.due_ms(1000).is_err());
         spec.repeat_seconds = Some(3600);
         assert!(spec.due_ms(1000).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod memory_contract_tests {
+    use super::*;
+    use agena_domain::{MemoryKind, MemoryMetadata};
+
+    #[test]
+    fn assistant_memory_requires_lifecycle_metadata() {
+        let record = AssistantMemory {
+            name: "report-style".into(),
+            description: "Report preference".into(),
+            body: "Lead with the conclusion.".into(),
+            sha256: "a".repeat(64),
+            truncated: false,
+            metadata: MemoryMetadata {
+                kind: MemoryKind::Preference,
+                ..Default::default()
+            },
+        };
+        let value = serde_json::to_value(record).unwrap();
+        assert_eq!(value["metadata"]["kind"], "preference");
+        assert!(value.get("memory_type").is_none());
+        let mut missing = value.clone();
+        missing.as_object_mut().unwrap().remove("metadata");
+        assert!(serde_json::from_value::<AssistantMemory>(missing).is_err());
+        let mut obsolete = value;
+        obsolete["memory_type"] = serde_json::json!("user");
+        assert!(serde_json::from_value::<AssistantMemory>(obsolete).is_err());
+    }
+
+    #[test]
+    fn assistant_memory_updates_use_only_typed_kinds() {
+        let request: AssistantMemoryUpdate = serde_json::from_value(serde_json::json!({
+            "name": "report-style",
+            "body": "Lead with the conclusion.",
+            "kind": "preference"
+        }))
+        .unwrap();
+        assert_eq!(request.kind, Some(MemoryKind::Preference));
+        for kind in ["user", "feedback", "project", "reference", "other"] {
+            assert!(
+                serde_json::from_value::<AssistantMemoryUpdate>(serde_json::json!({
+                    "name": "report-style", "body": "A correction.", "kind": kind
+                }))
+                .is_err()
+            );
+        }
+        assert!(
+            serde_json::from_value::<AssistantMemoryUpdate>(serde_json::json!({
+                "name": "report-style", "body": "A correction.", "memory_type": "user"
+            }))
+            .is_err()
+        );
+        let delete: AssistantMemoryUpdate = serde_json::from_value(serde_json::json!({
+            "name": "report-style", "body": null, "expected_sha256": "a".repeat(64)
+        }))
+        .unwrap();
+        assert!(delete.kind.is_none());
     }
 }

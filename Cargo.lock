@@ -595,15 +595,15 @@ dependencies = [
 name = "agena-memory-index"
 version = "0.1.0"
 dependencies = [
- "agena-storage",
+ "agena-domain",
  "agena-storage-layout",
  "blake3",
+ "libc",
  "serde",
  "serde_json",
  "tantivy",
  "tempfile",
  "thiserror 2.0.20",
- "tracing",
 ]
 
 [[package]]
@@ -1261,7 +1261,6 @@ dependencies = [
  "async-trait",
  "hex",
  "libc",
- "schemars",
  "serde",
  "serde_json",
  "sha2 0.11.0",

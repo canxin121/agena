@@ -2,8 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use agena_storage::MemoryType;
-use agena_storage::{MemoryError, MemoryRecord, MemoryRepository, NewMemory};
+use agena_storage::{
+    MemoryError, MemoryRecord, MemoryRepository, NewMemory, normalize_memory_name,
+};
 use agena_storage::{
     MemoryKind, MemoryMetadata, MemoryOrigin, MemoryRevision, MemoryScope, MemorySource,
     MemoryStatus, MemoryWriteOptions,
@@ -12,7 +13,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use agena_memory_index::{MemoryIndex, MemorySearchDocument, MemorySearchHit};
+use agena_memory_index::{MemoryIndex, MemoryIndexError, MemorySearchDocument, MemorySearchHit};
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 use agena_plugin_host::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, PluginError,
@@ -236,15 +237,12 @@ struct MemoryWriteInput {
     name: String,
     #[serde(default)]
     description: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    memory_type: Option<MemoryType>,
     content: String,
     /// Required when updating an existing record; returned by memory.get/write.
     #[serde(default)]
     expected_sha256: Option<String>,
-    /// Omit to preserve the existing kind; new records infer a useful default.
-    #[serde(default)]
-    kind: Option<MemoryKind>,
+    /// The canonical classification of this record.
+    kind: MemoryKind,
     /// Workspace knowledge or a checkpoint for the invoking session only.
     #[serde(default)]
     scope: Option<MemoryWriteScope>,
@@ -274,16 +272,16 @@ enum MemoryWriteStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_host::sdk::ToolInput)]
 #[input(
-    trim("name"),
+    trim("name", "expected_sha256"),
     trim_suffix("name", ".md"),
-    non_empty("name"),
+    non_empty("name", "expected_sha256"),
     forbid_substrings("name", "/", "\\")
 )]
 #[serde(deny_unknown_fields)]
 struct MemoryDeleteInput {
     name: String,
-    #[serde(default)]
-    expected_sha256: Option<String>,
+    /// The revision observed by the caller before requesting deletion.
+    expected_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -292,7 +290,6 @@ struct MemoryRecordOutput {
     name_truncated: bool,
     description: String,
     description_truncated: bool,
-    memory_type: Option<String>,
     file_name: String,
     body: String,
     body_range: MemoryBodyRange,
@@ -525,9 +522,10 @@ impl MemoryPlugin {
     async fn memory_path(&self, name: Option<&str>) -> SdkResult<PathBuf> {
         let store = MemoryStore::for_workspace(&self.workspace_root().await?);
         Ok(match name {
-            Some(name) => store
-                .dir()
-                .join(format!("{}.md", name.trim().trim_end_matches(".md"))),
+            Some(name) => store.dir().join(format!(
+                "{}.md",
+                normalize_memory_name(name).map_err(memory_error_to_plugin)?
+            )),
             None => store.dir().to_owned(),
         })
     }
@@ -632,19 +630,24 @@ impl MemoryPlugin {
             let mut matches = if query.trim().is_empty() || documents.is_empty() {
                 Vec::new()
             } else {
-                index
-                    .search_with_details(
-                        query.as_str(),
-                        limit + if interactive { 0 } else { MAX_CORE_MEMORIES },
+                let search_limit = limit + if interactive { 0 } else { MAX_CORE_MEMORIES };
+                let result = match index.search(query.as_str(), search_limit) {
+                    Err(MemoryIndexError::InvalidCache(reason)) => {
+                        tracing::warn!(target: "agena::memory", %reason, "rebuilding damaged memory cache from the authorized source snapshot");
+                        index
+                            .rebuild_documents(&documents)
+                            .and_then(|()| index.search(query.as_str(), search_limit))
+                    }
+                    result => result,
+                };
+                result.map_err(|error| {
+                    PluginError::internal(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "memory search failed",
+                            &error,
+                        ),
                     )
-                    .map_err(|error| {
-                        PluginError::internal(
-                            agena_failure::diagnostic::format_error_chain_with_context(
-                                "memory search failed",
-                                &error,
-                            ),
-                        )
-                    })?
+                })?
             };
             // Another process can synchronize this shared cache with a different
             // permission/session snapshot. Only expose bytes from this call's
@@ -656,7 +659,7 @@ impl MemoryPlugin {
                         && document.body == hit.document.body
                         && document.name == hit.document.name
                         && document.description == hit.document.description
-                        && document.memory_type == hit.document.memory_type
+                        && document.kind == hit.document.kind
                 })
             });
             let mut items = Vec::new();
@@ -668,10 +671,6 @@ impl MemoryPlugin {
                         let meta = &metadata[&document.id];
                         meta.status == MemoryStatus::Active
                             && (meta.kind == MemoryKind::Preference
-                                || matches!(
-                                    document.memory_type.as_deref(),
-                                    Some("user" | "feedback")
-                                )
                                 || (meta.kind == MemoryKind::Task
                                     && matches!(meta.scope, MemoryScope::Session { .. })))
                     })
@@ -788,7 +787,7 @@ impl MemoryPlugin {
             lines.push(format!(
                 "- {} [{}; {:?}; body lines {}–{}]: {}\n{}",
                 truncate_chars(&memory.name, MAX_MEMORY_DISPLAY_NAME_CHARS),
-                memory.memory_type.as_deref().unwrap_or("untyped"),
+                memory.kind.as_str(),
                 item.metadata.status,
                 item.hit.excerpt.start_line,
                 item.hit.excerpt.end_line,
@@ -957,9 +956,8 @@ impl MemoryPlugin {
         )
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
-        // The workspace memory switch also applies to raw memory.write calls,
-        // not just the conversational wrapper. Inspection and deletion remain
-        // available, and the authenticated operator can still correct records.
+        // Model writes follow the workspace memory policy. The authenticated
+        // operator can inspect, correct, and delete existing records.
         if !is_operator_memory_call() {
             let host = self
                 .host
@@ -1002,11 +1000,11 @@ impl MemoryPlugin {
                         "session-scoped memory requires an invoking session",
                     )
                 })?,
-                instance_id: Some(instance_id.clone().ok_or_else(|| {
+                instance_id: instance_id.clone().ok_or_else(|| {
                     PluginError::invalid_params(
                         "session-scoped memory requires the host's storage instance identity",
                     )
-                })?),
+                })?,
             }),
             None => None,
         };
@@ -1024,26 +1022,28 @@ impl MemoryPlugin {
             self.require_memory(Some(&replaced.name), agena_domain::PathKind::Write)
                 .await?;
         }
+        let source = match session_id {
+            Some(session_id) => Some(MemorySource {
+                session_id,
+                instance_id: instance_id.clone().ok_or_else(|| {
+                    PluginError::invalid_params(
+                        "memory provenance requires the host's storage instance identity",
+                    )
+                })?,
+                call_id: callback.and_then(|context| context.call_id.map(|id| id.to_string())),
+                entry_id: None,
+                task_id: None,
+            }),
+            None => None,
+        };
         let options = MemoryWriteOptions {
-            kind: input.kind,
             scope,
             status: input.status.map(|status| match status {
                 MemoryWriteStatus::Active => MemoryStatus::Active,
                 MemoryWriteStatus::Archived => MemoryStatus::Archived,
             }),
             importance: input.importance,
-            source: callback.and_then(|context| {
-                context
-                    .session_id
-                    .filter(|session_id| *session_id > 0)
-                    .map(|session_id| MemorySource {
-                        session_id: Some(session_id),
-                        instance_id: instance_id.clone(),
-                        call_id: context.call_id.map(|id| id.to_string()),
-                        entry_id: None,
-                        task_id: None,
-                    })
-            }),
+            source,
             supersedes: input.supersedes.clone(),
         };
         let workspace_root = self.workspace_root().await?.to_path_buf();
@@ -1052,7 +1052,7 @@ impl MemoryPlugin {
         let name = input.name.clone();
         let content = input.content.clone();
         let description = input.description.clone();
-        let memory_type = input.memory_type;
+        let kind = input.kind;
         let expected = input.expected_sha256.clone();
         // Keep this plugin's source snapshot and index synchronization ordered.
         // The store independently provides cross-process revision protection.
@@ -1076,13 +1076,8 @@ impl MemoryPlugin {
                     NewMemory {
                         name: name.clone(),
                         description: description.clone(),
-                        memory_type,
+                        kind,
                         body: content.clone(),
-                        index_line: Some(memory_index_line(
-                            name.as_str(),
-                            description.as_str(),
-                            content.as_str(),
-                        )),
                     },
                     expected.as_deref(),
                     options,
@@ -1149,16 +1144,13 @@ impl MemoryPlugin {
             let current = store.get(&name).map_err(memory_error_to_plugin)?;
             require_record_context(&current, session_id, instance_id.as_deref())?;
             store
-                .forget_checked(
-                    name.as_str(),
-                    expected.as_deref().or(Some(current.sha256.as_str())),
-                )
+                .forget_checked(name.as_str(), &expected)
                 .map_err(memory_error_to_plugin)?;
             Ok(ToolInvokeOutput::from_parts(
                 format!("Delete memory · {name}"),
                 format!("Deleted {name}"),
                 format!("Deleted memory '{}'.", name),
-                None,
+                Some(serde_json::json!({"name": name, "sha256": current.sha256, "deleted": true})),
                 std::collections::BTreeMap::new(),
                 Vec::new(),
             ))
@@ -1353,13 +1345,10 @@ fn memory_document_from_entry(entry: MemoryRecord) -> MemorySearchDocument {
     let id = entry.file_name.trim_end_matches(".md").to_string();
     let name = memory_name(&entry);
     let description = memory_description(&entry);
-    let memory_type = entry
-        .frontmatter
-        .r#type
-        .map(|kind| kind.label().to_string());
+    let kind = entry.metadata.kind;
     let path = entry.path.display().to_string();
     let body = entry.body;
-    MemorySearchDocument::new(id, name, description, memory_type, body, path)
+    MemorySearchDocument::new(id, name, description, kind, body, path)
 }
 
 fn memory_record_output(entry: &MemoryRecord, offset: usize, limit: usize) -> MemoryRecordOutput {
@@ -1380,10 +1369,6 @@ fn memory_record_output(entry: &MemoryRecord, offset: usize, limit: usize) -> Me
         name_truncated: name.chars().count() > MAX_MEMORY_DISPLAY_NAME_CHARS,
         description: truncate_chars(&description, MAX_MEMORY_DESCRIPTION_CHARS),
         description_truncated: description.chars().count() > MAX_MEMORY_DESCRIPTION_CHARS,
-        memory_type: entry
-            .frontmatter
-            .r#type
-            .map(|kind| kind.label().to_string()),
         file_name: entry.file_name.clone(),
         body,
         body_range: MemoryBodyRange {
@@ -1398,28 +1383,11 @@ fn memory_record_output(entry: &MemoryRecord, offset: usize, limit: usize) -> Me
 }
 
 fn memory_name(entry: &MemoryRecord) -> String {
-    if entry.frontmatter.name.trim().is_empty() {
-        entry.file_name.trim_end_matches(".md").to_string()
-    } else {
-        entry.frontmatter.name.trim().to_string()
-    }
+    entry.frontmatter.name.clone()
 }
 
 fn memory_description(entry: &MemoryRecord) -> String {
-    if entry.frontmatter.description.trim().is_empty() {
-        first_line(entry.body.as_str())
-    } else {
-        entry.frontmatter.description.trim().to_string()
-    }
-}
-
-fn first_line(content: &str) -> String {
-    content
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+    entry.frontmatter.description.clone()
 }
 
 fn format_memory_entry(entry: &MemoryRecordOutput) -> String {
@@ -1445,9 +1413,6 @@ fn format_memory_entry(entry: &MemoryRecordOutput) -> String {
             "Source matches current bytes: {}",
             entry.metadata.provenance_verified
         ));
-    }
-    if let Some(memory_type) = &entry.memory_type {
-        lines.push(format!("Type: {memory_type}"));
     }
     if !entry.description.is_empty() {
         lines.push(format!(
@@ -1502,11 +1467,7 @@ fn format_memory_list(entries: &[MemoryRecord]) -> String {
                 "- {} [{}]: {}",
                 truncate_chars(&memory_name(entry), MAX_MEMORY_DISPLAY_NAME_CHARS)
                     .replace(['\r', '\n'], " "),
-                entry
-                    .frontmatter
-                    .r#type
-                    .map(MemoryType::label)
-                    .unwrap_or("untyped"),
+                entry.metadata.kind.as_str(),
                 truncate_chars(&memory_description(entry), MAX_MEMORY_DESCRIPTION_CHARS)
                     .replace(['\r', '\n'], " "),
             )
@@ -1573,8 +1534,8 @@ fn memory_record_is_visible(
             && context.checkpoint_entry_id.is_some()
             && context.instance_id.is_some()
             && metadata.source.as_ref().is_some_and(|source| {
-                source.session_id == session_id
-                    && source.instance_id == context.instance_id
+                Some(source.session_id) == session_id
+                    && Some(source.instance_id.as_str()) == context.instance_id.as_deref()
                     && source.entry_id == context.checkpoint_entry_id
             });
     }
@@ -1599,7 +1560,6 @@ fn memory_navigation_output(entry: &MemoryRecord) -> serde_json::Value {
         "name": truncate_chars(&memory_name(entry), MAX_MEMORY_DISPLAY_NAME_CHARS),
         "id": entry.file_name.trim_end_matches(".md"),
         "description": truncate_chars(&memory_description(entry), MAX_MEMORY_DESCRIPTION_CHARS),
-        "memory_type": entry.frontmatter.r#type.map(MemoryType::label),
         "file_name": entry.file_name,
         "sha256": entry.sha256,
         "metadata": entry.metadata,
@@ -1613,7 +1573,6 @@ fn memory_search_output(item: &RecalledMemory) -> serde_json::Value {
         "id": doc.id,
         "name": truncate_chars(&doc.name, MAX_MEMORY_DISPLAY_NAME_CHARS),
         "description": truncate_chars(&doc.description, MAX_MEMORY_DESCRIPTION_CHARS),
-        "memory_type": doc.memory_type,
         "path": doc.path,
         "score": item.hit.score,
         "excerpt": item.hit.excerpt,
@@ -1730,9 +1689,7 @@ fn render_memory_block(item: &RecalledMemory, budget: usize) -> String {
         .as_ref()
         .map(|source| {
             let mut parts = Vec::new();
-            if let Some(id) = source.session_id {
-                parts.push(format!("session:{id}"));
-            }
+            parts.push(format!("session:{}", source.session_id));
             if let Some(id) = source.entry_id {
                 parts.push(format!("entry:{id}"));
             }
@@ -1780,27 +1737,6 @@ fn render_memory_block(item: &RecalledMemory, budget: usize) -> String {
         return String::new();
     }
     format!("{header}{body}\n")
-}
-
-fn truncate_body(body: &str, limit: usize) -> String {
-    let trimmed = body.trim();
-    if trimmed.len() <= limit {
-        return trimmed.to_string();
-    }
-    let mut end = limit;
-    while !trimmed.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}...", &trimmed[..end])
-}
-
-fn memory_index_line(name: &str, description: &str, content: &str) -> String {
-    let hook = if description.trim().is_empty() {
-        truncate_body(first_line(content).as_str(), 120)
-    } else {
-        truncate_body(description.trim(), 120)
-    };
-    format!("- [{name}]({name}.md) — {hook}")
 }
 
 async fn run_memory_blocking<T, F>(operation: F) -> SdkResult<T>

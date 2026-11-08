@@ -1,20 +1,20 @@
 use super::*;
-use crate::{MemoryKind, MemoryOrigin, MemoryRevision, MemorySource, MemoryType};
+use crate::{MemoryKind, MemoryOrigin, MemoryRevision, MemorySource};
 
 fn note(name: &str, body: &str) -> NewMemory {
     NewMemory {
         name: name.into(),
         description: "A project decision".into(),
-        memory_type: Some(MemoryType::Project),
+        kind: MemoryKind::Fact,
         body: body.into(),
-        index_line: Some(format!("- [{name}]({name}.md) — project decision")),
     }
 }
 
 fn source(entry_id: i64) -> MemoryWriteOptions {
     MemoryWriteOptions {
         source: Some(MemorySource {
-            session_id: Some(42),
+            instance_id: "runtime-a".into(),
+            session_id: 42,
             call_id: Some(format!("call-{entry_id}")),
             entry_id: Some(entry_id),
             ..MemorySource::default()
@@ -24,23 +24,205 @@ fn source(entry_id: i64) -> MemoryWriteOptions {
 }
 
 #[test]
-fn reads_legacy_documents_without_claiming_host_provenance() {
+fn nonpositive_source_and_scope_identities_cannot_publish() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(
-        dir.path().join("legacy.md"),
-        "---\nname: legacy\ndescription: 用户偏好\ntype: user\n---\n\n用中文回答。\n",
-    )
-    .unwrap();
     let store = MemoryStore::at(dir.path());
-    let record = store.get("legacy").unwrap();
-    assert_eq!(record.frontmatter.revision, None);
-    assert_eq!(record.metadata.kind, MemoryKind::Preference);
-    assert_eq!(record.metadata.origin, MemoryOrigin::External);
-    assert!(!record.metadata.provenance_verified);
-    assert!(record.is_active_for(Some(12)));
-    assert!(!record.metadata.id.is_empty());
+    for invalid_id in [-1, 0] {
+        let mut scope = source(1);
+        scope.scope = Some(MemoryScope::Session {
+            session_id: invalid_id,
+            instance_id: "runtime-a".into(),
+        });
+        let mut session = source(1);
+        session.source.as_mut().unwrap().session_id = invalid_id;
+        for (field, options) in [
+            ("scope", scope),
+            ("source-session", session),
+            ("source-entry", source(invalid_id)),
+        ] {
+            let name = format!("{field}-{invalid_id}");
+            let snapshot = store.write_snapshot(&name).unwrap();
+            assert!(
+                store
+                    .save_with_options(note(&name, "Invalid identity"), None, options.clone())
+                    .is_err(),
+                "explicit {field}={invalid_id} must be rejected"
+            );
+            assert!(
+                store
+                    .save_derived(note(&name, "Invalid identity"), &snapshot, options)
+                    .is_err(),
+                "derived {field}={invalid_id} must be rejected"
+            );
+            assert!(!store.resolve_path(&name).exists());
+        }
+    }
+    assert!(store.list().unwrap().is_empty());
+    assert!(!store.metadata_path().exists());
+    assert!(!dir.path().join(ENTRYPOINT_NAME).exists());
+    assert!(!dir.path().join(transaction::LOCK_NAME).exists());
+}
+
+#[test]
+fn rejects_legacy_or_incomplete_documents_without_creating_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::at(dir.path());
+    let documents = [
+        ("plain", "A note without a header.\n"),
+        ("empty", "---\n\n---\n\nMissing header fields.\n"),
+        (
+            "legacy",
+            "---\nname: legacy\ndescription: 用户偏好\ntype: user\n---\n\n用中文回答。\n",
+        ),
+        (
+            "missing-revision",
+            "---\nschema_version: 2\nname: missing-revision\ndescription: incomplete\n---\n\nNo revision.\n",
+        ),
+        (
+            "unregistered",
+            "---\nschema_version: 2\nname: unregistered\ndescription: unmanaged\nrevision: 1\n---\n\nNo lifecycle state.\n",
+        ),
+    ];
+    for (name, raw) in documents {
+        let path = dir.path().join(format!("{name}.md"));
+        fs::write(&path, raw).unwrap();
+        assert!(store.get(name).is_err(), "{name} must not become a memory");
+        assert!(store.write_snapshot(name).is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), raw);
+    }
+    assert!(store.list().unwrap().is_empty());
     assert!(!store.metadata_path().exists());
     assert!(!dir.path().join(transaction::LOCK_NAME).exists());
+}
+
+#[test]
+fn noncanonical_disk_names_cannot_alias_registered_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::at(dir.path());
+    let original = store
+        .save_with_options(note("foo", "Canonical source memory"), None, source(1))
+        .unwrap();
+    let original_raw = fs::read_to_string(&original.path).unwrap();
+    let state_bytes = fs::read(store.metadata_path()).unwrap();
+    let alias_path = dir.path().join("foo.md.md");
+    let alias_raw = format!(
+        "---\nschema_version: 2\nname: foo.md\ndescription: Alias\nrevision: {}\n---\n\nAlias content must not enter recall.\n",
+        original.frontmatter.revision
+    );
+    fs::write(&alias_path, &alias_raw).unwrap();
+    assert!(read_entry(&alias_path).is_err());
+
+    let listed = store.list().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].frontmatter.name, "foo");
+    assert_eq!(listed[0].file_name, "foo.md");
+    assert_eq!(listed[0].body, original.body);
+    assert_eq!(listed[0].sha256, original.sha256);
+    assert_eq!(listed[0].metadata, original.metadata);
+    assert_eq!(store.get("foo").unwrap().sha256, original.sha256);
+    assert_eq!(fs::read_to_string(&original.path).unwrap(), original_raw);
+    assert_eq!(fs::read(store.metadata_path()).unwrap(), state_bytes);
+    assert_eq!(fs::read_to_string(alias_path).unwrap(), alias_raw);
+}
+
+#[test]
+fn create_only_writes_and_kind_changes_require_the_current_revision() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::at(dir.path());
+    let first = store
+        .save_with_options(
+            note("decision", "Same body"),
+            None,
+            MemoryWriteOptions::default(),
+        )
+        .unwrap();
+    assert_eq!(first.frontmatter.schema_version, 2);
+    assert_eq!(first.frontmatter.revision, first.metadata.revision);
+    let changed = NewMemory {
+        kind: MemoryKind::Preference,
+        ..note("decision", "Same body")
+    };
+    assert!(
+        store
+            .save_with_options(changed.clone(), None, MemoryWriteOptions::default())
+            .is_err()
+    );
+    assert!(store.forget_checked("decision", "").is_err());
+    assert_eq!(store.get("decision").unwrap().sha256, first.sha256);
+    let second = store
+        .save_with_options(changed, Some(&first.sha256), MemoryWriteOptions::default())
+        .unwrap();
+    assert_eq!(second.metadata.kind, MemoryKind::Preference);
+    assert_eq!(
+        MemoryStore::at(dir.path())
+            .get("decision")
+            .unwrap()
+            .metadata
+            .kind,
+        MemoryKind::Preference
+    );
+    assert_ne!(first.sha256, second.sha256);
+}
+
+#[test]
+fn old_state_and_document_schema_versions_are_rejected_without_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::at(dir.path());
+    let first = store
+        .save_with_options(note("decision", "Current fact"), None, source(1))
+        .unwrap();
+    let state_bytes = fs::read(store.metadata_path()).unwrap();
+    let mut old_state: serde_json::Value = serde_json::from_slice(&state_bytes).unwrap();
+    assert_eq!(old_state["schema_version"], 2);
+    old_state["schema_version"] = serde_json::json!(1);
+    let unsupported = serde_json::to_vec(&old_state).unwrap();
+    fs::write(store.metadata_path(), &unsupported).unwrap();
+    assert!(store.get("decision").is_err());
+    assert!(
+        store
+            .save_with_options(note("decision", "Rejected"), Some(&first.sha256), source(2))
+            .is_err()
+    );
+    assert_eq!(fs::read(store.metadata_path()).unwrap(), unsupported);
+    fs::write(store.metadata_path(), state_bytes).unwrap();
+    let old_document = fs::read_to_string(&first.path)
+        .unwrap()
+        .replace("schema_version: 2", "schema_version: 1");
+    fs::write(&first.path, &old_document).unwrap();
+    assert!(store.get("decision").is_err());
+    assert!(store.write_snapshot("decision").is_err());
+    assert_eq!(fs::read_to_string(&first.path).unwrap(), old_document);
+}
+
+#[test]
+fn lifecycle_metadata_cannot_be_deserialized_by_filling_required_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryStore::at(dir.path());
+    let record = store
+        .save_with_options(note("decision", "Fact"), None, source(1))
+        .unwrap();
+    let full = serde_json::to_value(record.metadata).unwrap();
+    for key in [
+        "id",
+        "revision",
+        "kind",
+        "scope",
+        "status",
+        "origin",
+        "importance",
+        "created_at_ms",
+        "updated_at_ms",
+        "provenance_verified",
+        "source_suppressed",
+    ] {
+        let mut incomplete = full.clone();
+        incomplete.as_object_mut().unwrap().remove(key);
+        assert!(
+            serde_json::from_value::<MemoryMetadata>(incomplete).is_err(),
+            "missing {key} must be rejected"
+        );
+    }
+    assert!(serde_json::from_value::<MemoryMetadata>(full).is_ok());
 }
 
 #[test]
@@ -53,7 +235,7 @@ fn stamps_sources_and_metadata_changes_invalidate_old_sha() {
     assert_eq!(first.metadata.origin, MemoryOrigin::Explicit);
     assert!(first.metadata.provenance_verified);
     assert!(first.metadata.created_at_ms > 0);
-    assert_eq!(first.frontmatter.revision, Some(first.metadata.revision));
+    assert_eq!(first.frontmatter.revision, first.metadata.revision);
     assert_eq!(first.metadata.source.as_ref().unwrap().entry_id, Some(1));
     let mut options = source(2);
     options.importance = Some(90);
@@ -71,7 +253,11 @@ fn stamps_sources_and_metadata_changes_invalidate_old_sha() {
     assert_eq!(second.metadata.importance, 90);
     assert!(
         store
-            .save_checked(note("decision", "stale"), Some(&first.sha256))
+            .save_with_options(
+                note("decision", "stale"),
+                Some(&first.sha256),
+                MemoryWriteOptions::default()
+            )
             .is_err()
     );
     let reopened = MemoryStore::at(dir.path()).get("decision").unwrap();
@@ -102,26 +288,26 @@ fn correction_keeps_history_but_removes_old_note_from_current_index() {
         Some(new.metadata.id.as_str())
     );
     assert!(new.metadata.supersedes.contains(&history.metadata.id));
-    assert!(!history.is_active_for(Some(42)));
-    assert!(new.is_active_for(Some(42)));
+    assert!(!history.is_active_in_context(Some(42), Some("runtime-a")));
+    assert!(new.is_active_in_context(Some(42), Some("runtime-a")));
     assert_ne!(old.sha256, history.sha256);
     let index = store.index_lines().unwrap().join("\n");
     assert!(index.contains("(database.md)"));
     assert!(!index.contains("(old-database.md)"));
     assert_eq!(store.list().unwrap().len(), 2);
-    assert!(
-        store
-            .forget_checked("old-database", Some(&old.sha256))
-            .is_err()
-    );
+    assert!(store.forget_checked("old-database", &old.sha256).is_err());
 }
 
 #[test]
 fn failed_multi_record_correction_publishes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
-    let a = store.save_checked(note("a", "old A"), None).unwrap();
-    let b = store.save_checked(note("b", "old B"), None).unwrap();
+    let a = store
+        .save_with_options(note("a", "old A"), None, MemoryWriteOptions::default())
+        .unwrap();
+    let b = store
+        .save_with_options(note("b", "old B"), None, MemoryWriteOptions::default())
+        .unwrap();
     let before_index = store.index_lines().unwrap();
     let before_state = fs::read(store.metadata_path()).unwrap();
     let mut options = source(3);
@@ -154,15 +340,14 @@ fn archive_and_session_scope_are_enforced_without_losing_history() {
     let mut options = source(1);
     options.scope = Some(MemoryScope::Session {
         session_id: 42,
-        instance_id: None,
+        instance_id: "runtime-a".into(),
     });
-    options.kind = Some(MemoryKind::Task);
     let task = store
         .save_with_options(note("task", "Finish migration."), None, options)
         .unwrap();
-    assert!(task.is_active_for(Some(42)));
-    assert!(!task.is_active_for(Some(43)));
-    assert!(!task.is_active_for(None));
+    assert!(task.is_active_in_context(Some(42), Some("runtime-a")));
+    assert!(!task.is_active_in_context(Some(43), Some("runtime-a")));
+    assert!(!task.is_active_in_context(None, Some("runtime-a")));
     let mut archived = source(2);
     archived.status = Some(MemoryStatus::Archived);
     let task = store
@@ -172,7 +357,7 @@ fn archive_and_session_scope_are_enforced_without_losing_history() {
             archived,
         )
         .unwrap();
-    assert!(!task.is_active_for(Some(42)));
+    assert!(!task.is_active_in_context(Some(42), Some("runtime-a")));
     assert!(store.index_lines().unwrap().is_empty());
     assert!(store.get("task").unwrap().body.contains("migration"));
 }
@@ -217,9 +402,7 @@ fn forgotten_memory_stays_forgotten_after_reopen_and_fresh_snapshot() {
         .save_derived(note("episode", "Old summary"), &snapshot, source(1))
         .unwrap();
     let inflight = store.write_snapshot("episode").unwrap();
-    store
-        .forget_checked("episode", Some(&first.sha256))
-        .unwrap();
+    store.forget_checked("episode", &first.sha256).unwrap();
     assert!(
         store
             .save_derived(note("episode", "late summary"), &inflight, source(2))
@@ -326,32 +509,52 @@ fn store_generation_protects_snapshot_from_unrelated_new_correction() {
 }
 
 #[test]
-fn lost_metadata_or_renamed_managed_file_cannot_broaden_scope() {
+fn missing_ledger_or_unregistered_copy_is_rejected_without_importing() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let mut options = source(1);
     options.scope = Some(MemoryScope::Session {
         session_id: 42,
-        instance_id: None,
+        instance_id: "runtime-a".into(),
     });
     let task = store
         .save_with_options(note("task", "Private session state"), None, options)
         .unwrap();
-    fs::copy(&task.path, dir.path().join("renamed.md")).unwrap();
-    assert!(!store.get("renamed").unwrap().is_active_for(Some(99)));
+    let renamed = fs::read_to_string(&task.path)
+        .unwrap()
+        .replace("name: \"task\"", "name: \"renamed\"");
+    fs::write(dir.path().join("renamed.md"), renamed).unwrap();
+    assert!(store.get("renamed").is_err());
+    assert!(store.write_snapshot("renamed").is_err());
     fs::remove_file(store.metadata_path()).unwrap();
-    let unknown = store.get("task").unwrap();
-    assert_eq!(unknown.metadata.status, MemoryStatus::Archived);
-    assert!(!unknown.is_active_for(Some(99)));
-    assert!(!unknown.metadata.provenance_verified);
+    assert!(store.get("task").is_err());
+    assert!(
+        store
+            .save_with_options(
+                note("task", "Cannot import by overwriting"),
+                Some(&task.sha256),
+                MemoryWriteOptions::default()
+            )
+            .is_err()
+    );
+    assert!(
+        fs::read_to_string(&task.path)
+            .unwrap()
+            .contains("Private session state")
+    );
+    assert!(!store.metadata_path().exists());
 }
 
 #[test]
 fn checked_batch_delete_rejects_one_stale_revision_without_partial_deletion() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
-    let a = store.save_checked(note("a", "A"), None).unwrap();
-    let b = store.save_checked(note("b", "B"), None).unwrap();
+    let a = store
+        .save_with_options(note("a", "A"), None, MemoryWriteOptions::default())
+        .unwrap();
+    let b = store
+        .save_with_options(note("b", "B"), None, MemoryWriteOptions::default())
+        .unwrap();
     let index = store.index_lines().unwrap();
     let result = store.forget_many_checked(&[
         MemoryRevision {
@@ -390,13 +593,21 @@ fn metadata_corruption_fails_closed_without_overwriting_documents() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let first = store
-        .save_checked(note("decision", "Current fact"), None)
+        .save_with_options(
+            note("decision", "Current fact"),
+            None,
+            MemoryWriteOptions::default(),
+        )
         .unwrap();
     fs::write(store.metadata_path(), "not json").unwrap();
     assert!(store.get("decision").is_err());
     assert!(
         store
-            .save_checked(note("decision", "Wrong fact"), Some(&first.sha256))
+            .save_with_options(
+                note("decision", "Wrong fact"),
+                Some(&first.sha256),
+                MemoryWriteOptions::default()
+            )
             .is_err()
     );
     assert!(
@@ -411,7 +622,11 @@ fn filtered_listing_does_not_read_denied_records() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     store
-        .save_checked(note("allowed", "Visible fact"), None)
+        .save_with_options(
+            note("allowed", "Visible fact"),
+            None,
+            MemoryWriteOptions::default(),
+        )
         .unwrap();
     fs::write(dir.path().join("denied.md"), [0xff, 0xfe]).unwrap();
     let records = store
@@ -428,7 +643,7 @@ fn invalid_status_or_cross_scope_supersession_cannot_publish() {
     let mut options = source(1);
     options.scope = Some(MemoryScope::Session {
         session_id: 42,
-        instance_id: None,
+        instance_id: "runtime-a".into(),
     });
     let scoped = store
         .save_with_options(note("session-note", "Private task context"), None, options)
@@ -456,7 +671,12 @@ fn invalid_status_or_cross_scope_supersession_cannot_publish() {
             .save_with_options(note("invalid", "Missing replacement"), None, invalid)
             .is_err()
     );
-    assert!(store.get("session-note").unwrap().is_active_for(Some(42)));
+    assert!(
+        store
+            .get("session-note")
+            .unwrap()
+            .is_active_in_context(Some(42), Some("runtime-a"))
+    );
 }
 
 #[test]
@@ -464,23 +684,24 @@ fn instance_scoped_tasks_do_not_leak_across_database_resets() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let mut options = source(1);
-    options.source.as_mut().unwrap().instance_id = Some("runtime-a".into());
+    options.source.as_mut().unwrap().instance_id = "runtime-a".into();
     options.scope = Some(MemoryScope::Session {
         session_id: 42,
-        instance_id: Some("runtime-a".into()),
+        instance_id: "runtime-a".into(),
     });
-    options.kind = Some(MemoryKind::Task);
     let task = store
         .save_with_options(note("task", "State in runtime A"), None, options)
         .unwrap();
     assert!(task.is_active_in_context(Some(42), Some("runtime-a")));
     assert!(!task.is_active_in_context(Some(42), Some("runtime-b")));
-    assert!(!task.is_active_for(Some(42)));
+    assert!(!task.is_active_in_context(Some(42), None));
     assert!(!task.is_active_in_context(Some(43), Some("runtime-a")));
-    let legacy: MemoryScope =
-        serde_json::from_str(r#"{"kind":"session","session_id":42}"#).unwrap();
-    assert!(legacy.includes_context(Some(42), Some("runtime-a")));
-    assert!(legacy.includes_session(Some(42)));
+    assert!(serde_json::from_str::<MemoryScope>(r#"{"kind":"session","session_id":42}"#).is_err());
+    assert!(serde_json::from_str::<MemorySource>(r#"{"session_id":42,"entry_id":1}"#).is_err());
+    assert!(
+        serde_json::from_str::<MemorySource>(r#"{"instance_id":"runtime-a","entry_id":1}"#)
+            .is_err()
+    );
 }
 
 #[test]
@@ -488,13 +709,13 @@ fn derived_sources_cannot_move_to_another_runtime_instance() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let mut options = source(1);
-    options.source.as_mut().unwrap().instance_id = Some("runtime-a".into());
+    options.source.as_mut().unwrap().instance_id = "runtime-a".into();
     let snapshot = store.write_snapshot("episode").unwrap();
     let first = store
         .save_derived(note("episode", "Original instance"), &snapshot, options)
         .unwrap();
     let mut changed = source(2);
-    changed.source.as_mut().unwrap().instance_id = Some("runtime-b".into());
+    changed.source.as_mut().unwrap().instance_id = "runtime-b".into();
     let snapshot = store.write_snapshot("episode").unwrap();
     assert!(
         store
@@ -535,7 +756,11 @@ fn authorized_recovery_restores_document_index_and_lifecycle_state_together() {
     assert!(reopened.ensure_index().is_err());
     assert!(
         reopened
-            .save(note("new", "must not recover implicitly"))
+            .save_with_options(
+                note("new", "must not recover implicitly"),
+                None,
+                MemoryWriteOptions::default()
+            )
             .is_err()
     );
     let approved = reopened.pending_recovery_paths().unwrap();
@@ -566,12 +791,11 @@ fn forgotten_sources_suppress_derived_notes_across_names_and_restarts() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let mut options = source(1);
-    options.source.as_mut().unwrap().instance_id = Some("runtime-a".into());
+    options.source.as_mut().unwrap().instance_id = "runtime-a".into();
     let forgotten_source = options.source.clone().unwrap();
     let fact = store
         .save_with_options(note("private-fact", "User fact"), None, options.clone())
         .unwrap();
-    options.kind = Some(MemoryKind::Episode);
     let snapshot = store.write_snapshot("episode").unwrap();
     store
         .save_derived(
@@ -582,12 +806,10 @@ fn forgotten_sources_suppress_derived_notes_across_names_and_restarts() {
         .unwrap();
     let before_forget = store.write_snapshot("renamed-episode").unwrap();
 
-    store
-        .forget_checked("private-fact", Some(&fact.sha256))
-        .unwrap();
+    store.forget_checked("private-fact", &fact.sha256).unwrap();
     let hidden = store.get("episode").unwrap();
     assert!(hidden.metadata.source_suppressed);
-    assert!(!hidden.is_active_for(Some(42)));
+    assert!(!hidden.is_active_in_context(Some(42), Some("runtime-a")));
     assert_eq!(hidden.metadata.status, MemoryStatus::Archived);
     assert!(
         !store
@@ -627,11 +849,11 @@ fn forgotten_sources_suppress_derived_notes_across_names_and_restarts() {
         )
         .unwrap();
     assert!(!explicit.metadata.source_suppressed);
-    assert!(explicit.is_active_for(Some(42)));
+    assert!(explicit.is_active_in_context(Some(42), Some("runtime-a")));
     assert!(reopened.source_is_suppressed(&forgotten_source).unwrap());
 
     let mut other_instance = options;
-    other_instance.source.as_mut().unwrap().instance_id = Some("runtime-b".into());
+    other_instance.source.as_mut().unwrap().instance_id = "runtime-b".into();
     let fresh = reopened.write_snapshot("other-instance").unwrap();
     assert!(
         reopened
@@ -641,7 +863,7 @@ fn forgotten_sources_suppress_derived_notes_across_names_and_restarts() {
                 other_instance
             )
             .unwrap()
-            .is_active_for(Some(42))
+            .is_active_in_context(Some(42), Some("runtime-a"))
     );
 }
 
@@ -650,7 +872,7 @@ fn externally_touching_suppressed_derived_file_does_not_restore_model_visibility
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let mut options = source(1);
-    options.source.as_mut().unwrap().instance_id = Some("runtime-a".into());
+    options.source.as_mut().unwrap().instance_id = "runtime-a".into();
     let fact = store
         .save_with_options(note("fact", "Forget this"), None, options.clone())
         .unwrap();
@@ -662,7 +884,7 @@ fn externally_touching_suppressed_derived_file_does_not_restore_model_visibility
             options,
         )
         .unwrap();
-    store.forget_checked("fact", Some(&fact.sha256)).unwrap();
+    store.forget_checked("fact", &fact.sha256).unwrap();
     let raw = fs::read_to_string(&episode.path).unwrap();
     fs::write(&episode.path, format!("{raw}\n")).unwrap();
     let external = MemoryStore::at(dir.path()).get("episode").unwrap();
@@ -670,7 +892,7 @@ fn externally_touching_suppressed_derived_file_does_not_restore_model_visibility
     assert!(external.metadata.source.is_none());
     assert!(!external.metadata.provenance_verified);
     assert!(external.metadata.source_suppressed);
-    assert!(!external.is_active_for(Some(42)));
+    assert!(!external.is_active_in_context(Some(42), Some("runtime-a")));
 
     let reviewed = store
         .save_with_options(
@@ -684,7 +906,7 @@ fn externally_touching_suppressed_derived_file_does_not_restore_model_visibility
         .unwrap();
     assert_eq!(reviewed.metadata.origin, MemoryOrigin::Explicit);
     assert!(!store.get("episode").unwrap().metadata.source_suppressed);
-    assert!(reviewed.is_active_for(Some(42)));
+    assert!(reviewed.is_active_in_context(Some(42), Some("runtime-a")));
 }
 
 #[test]
@@ -692,7 +914,7 @@ fn explicit_edits_preserve_prior_sources_for_durable_forget() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryStore::at(dir.path());
     let mut a = source(1);
-    a.source.as_mut().unwrap().instance_id = Some("runtime-a".into());
+    a.source.as_mut().unwrap().instance_id = "runtime-a".into();
     let first = store
         .save_with_options(note("fact", "Original fact"), None, a.clone())
         .unwrap();
@@ -705,7 +927,7 @@ fn explicit_edits_preserve_prior_sources_for_durable_forget() {
         )
         .unwrap();
     let mut b = a.clone();
-    b.source.as_mut().unwrap().session_id = Some(43);
+    b.source.as_mut().unwrap().session_id = 43;
     let edited = store
         .save_with_options(
             note("fact", "Corrected from another session"),
@@ -723,9 +945,10 @@ fn explicit_edits_preserve_prior_sources_for_durable_forget() {
         .unwrap();
     // Operator edits intentionally clear the current text's source attribution.
     let manual = store
-        .save_checked(
+        .save_with_options(
             note("fact", "User edited this in the UI"),
             Some(&edited.sha256),
+            MemoryWriteOptions::default(),
         )
         .unwrap();
     assert!(manual.metadata.source.is_none());
@@ -811,7 +1034,11 @@ fn lifecycle_and_lock_symlinks_are_never_followed() {
     let store = MemoryStore::at(dir.path());
     symlink(outside.path(), store.metadata_path()).unwrap();
     assert!(store.list().is_err());
-    assert!(store.save_checked(note("note", "bad"), None).is_err());
+    assert!(
+        store
+            .save_with_options(note("note", "bad"), None, MemoryWriteOptions::default())
+            .is_err()
+    );
     assert_eq!(fs::read_to_string(outside.path()).unwrap(), "private bytes");
     fs::remove_file(store.metadata_path()).unwrap();
     fs::remove_file(dir.path().join(transaction::LOCK_NAME)).unwrap();

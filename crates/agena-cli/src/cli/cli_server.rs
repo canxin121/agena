@@ -24,10 +24,10 @@ use super::{
     ReviewArgs, SessionDetail, SessionForkOutput, SessionListArgs, SessionListOutput,
     SessionListView, SessionOutput, SessionsCommand, SessionsSubcommand, ToolDescriptor, UsageArgs,
     async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
-    format_debug_session_output, format_plugin_logs_output, memory_type_label,
-    normalize_login_provider, normalized_mcp_server_name, paginate_session_summaries,
-    permission_rule_output, prompt_browser_login, prompt_device_login, render_serialized,
-    review_prompt, session_summary_from_resource, title_from_prompt, usage_stats_query_from_args,
+    format_debug_session_output, format_plugin_logs_output, normalize_login_provider,
+    normalized_mcp_server_name, paginate_session_summaries, permission_rule_output,
+    prompt_browser_login, prompt_device_login, render_serialized, review_prompt,
+    session_summary_from_resource, title_from_prompt, usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -681,7 +681,8 @@ impl AgenaCli {
                         file_name: memory.file_name,
                         name: memory.name,
                         description: memory.description,
-                        memory_type: memory_type_label(memory.memory_type),
+                        metadata: memory.metadata,
+                        sha256: memory.sha256,
                         path: memory.path,
                     })
                     .collect::<Vec<_>>();
@@ -695,8 +696,17 @@ impl AgenaCli {
                 )
             }
             MemorySubcommand::Forget(args) => {
+                let memory: MemoryResource = decode_server_resource(
+                    client
+                        .get_memory(args.name.as_str())
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to read memory before deletion", error)
+                        })?,
+                    "memory",
+                )?;
                 client
-                    .delete_memory(args.name.as_str())
+                    .delete_memory(args.name.as_str(), &memory.sha256)
                     .await
                     .map_err(|error| {
                         client_error("failed to forget memory through server", error)

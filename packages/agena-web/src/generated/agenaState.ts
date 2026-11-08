@@ -115,8 +115,7 @@ export type AdapterKind = 'channel' | 'event_source'
 export type AssistantMemory = {
   body: string
   description: string
-  memory_type?: string | null
-  metadata?: MemoryMetadata
+  metadata: MemoryMetadata
   name: string
   sha256: string
   truncated: boolean
@@ -455,20 +454,20 @@ export type IntegrationSpec = {
 export type MemoryKind = 'fact' | 'preference' | 'episode' | 'procedure' | 'task'
 
 export type MemoryMetadata = {
-  kind?: MemoryKind
-  created_at_ms?: number
-  id?: string
-  importance?: number
-  origin?: MemoryOrigin
-  provenance_verified?: boolean
-  revision?: number
-  scope?: MemoryScope
+  kind: MemoryKind
+  created_at_ms: number
+  id: string
+  importance: number
+  origin: MemoryOrigin
+  provenance_verified: boolean
+  revision: number
+  scope: MemoryScope
   source?: MemorySource
-  source_suppressed?: boolean
-  status?: MemoryStatus
+  source_suppressed: boolean
+  status: MemoryStatus
   superseded_by?: string | null
   supersedes?: string[]
-  updated_at_ms?: number
+  updated_at_ms: number
 }
 
 /** Who last changed these bytes; only intact Derived records may be auto-updated. */
@@ -479,7 +478,7 @@ export type MemoryScope = {
   kind: 'workspace'
 } | {
   kind: 'session'
-  instance_id?: string | null
+  instance_id: string
   session_id: number
 }
 
@@ -487,8 +486,8 @@ export type MemoryScope = {
 export type MemorySource = {
   call_id?: string | null
   entry_id?: number | null
-  instance_id?: string | null
-  session_id?: number | null
+  instance_id: string
+  session_id: number
   task_id?: string | null
 }
 
@@ -636,10 +635,10 @@ export type AssistantUpdate = {
 }
 
 export type AssistantMemoryUpdate = {
+  kind?: MemoryKind
   body?: string | null
   description?: string | null
   expected_sha256?: string | null
-  memory_type?: string | null
   name: string
 }
 

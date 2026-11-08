@@ -171,9 +171,11 @@ async fn memory_record_and_index_denials_use_the_invoking_workspace() -> TestRes
             let initial_memory = layout.memory_dir(case.workspace());
             assert_ne!(memory, initial_memory);
             call(
-                &user, "memory.write",
-                json!({"name":"permission-seed","content":"existing-memory-marker","memory_type":"project"}),
-            ).await?;
+                &user,
+                "memory.write",
+                json!({"name":"permission-seed","content":"existing-memory-marker","kind":"fact"}),
+            )
+            .await?;
             // The product was started in case.workspace(), but this session
             // belongs to a distinct workspace resolved through the public API.
             ensure!(memory.join("permission-seed.md").is_file());
@@ -185,7 +187,7 @@ async fn memory_record_and_index_denials_use_the_invoking_workspace() -> TestRes
             path_rules(&user, &[(memory.join("denied-record.md"), "allow", "deny")]).await?;
             let record = user.call_tool(
                 "memory.write",
-                json!({"name":"denied-record","content":"forbidden-record-marker"}),
+                json!({"name":"denied-record","kind":"fact","content":"forbidden-record-marker"}),
             ).await?;
             failure(&record, ModelFeedbackKind::PermissionDenied)?;
             ensure!(!memory.join("denied-record.md").exists());
@@ -194,14 +196,19 @@ async fn memory_record_and_index_denials_use_the_invoking_workspace() -> TestRes
             // The record path is writable again. Refusing just its shared index
             // must still happen before any new record is created.
             path_rules(&user, &[(index.clone(), "allow", "deny")]).await?;
-            let index_denied = user.call_tool(
-                "memory.write",
-                json!({"name":"denied-index","content":"forbidden-index-marker"}),
-            ).await?;
+            let index_denied = user
+                .call_tool(
+                    "memory.write",
+                    json!({"name":"denied-index","kind":"fact","content":"forbidden-index-marker"}),
+                )
+                .await?;
             failure(&index_denied, ModelFeedbackKind::PermissionDenied)?;
             ensure!(!memory.join("denied-index.md").exists());
             assert_eq!(tokio::fs::read(&index).await?, before);
-            assert_eq!(tokio::fs::read(memory.join("permission-seed.md")).await?, seed);
+            assert_eq!(
+                tokio::fs::read(memory.join("permission-seed.md")).await?,
+                seed
+            );
             // A mistakenly initialized/global store must not bypass the exact
             // workspace rules above and leave a second successful record.
             assert_no_named_file(&case.paths().data_dir, "denied-record.md").await?;

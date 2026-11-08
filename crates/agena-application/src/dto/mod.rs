@@ -3,8 +3,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-use agena_storage::MemoryType;
-
 mod access;
 mod marketplace;
 mod memory;

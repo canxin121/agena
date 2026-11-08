@@ -21,6 +21,7 @@ mod tests;
 mod transaction;
 
 const MAX_MEMORY_BYTES: usize = 8 * 1024 * 1024;
+const MEMORY_SCHEMA_VERSION: u32 = 2;
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 static MEMORY_FILE_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -75,7 +76,8 @@ fn read_text(path: &Path) -> MemoryResult<String> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error).into())
 }
 
-fn canonical_name(name: &str) -> MemoryResult<&str> {
+/// Normalize one memory name using the shared storage, tool, and management API rules.
+pub fn normalize_memory_name(name: &str) -> MemoryResult<&str> {
     let name = name.trim().trim_end_matches(".md");
     if name.is_empty()
         || name.eq_ignore_ascii_case("MEMORY")
@@ -92,6 +94,15 @@ fn canonical_name(name: &str) -> MemoryResult<&str> {
 
 fn refers_to(line: &str, name: &str) -> bool {
     line.contains(&format!("({name}.md)")) || line.contains(&format!("(./{name}.md)"))
+}
+
+/// A parsed document becomes a public record only after loading its ledger metadata.
+struct MemoryDocument {
+    sha256: String,
+    file_name: String,
+    path: PathBuf,
+    frontmatter: MemoryFrontmatter,
+    body: String,
 }
 
 #[derive(Debug, Clone)]
@@ -211,7 +222,7 @@ impl MemoryStore {
         })
     }
 
-    /// Includes inactive history. Retrieval callers filter with is_active_for.
+    /// Includes inactive history. Retrieval callers filter with is_active_in_context.
     pub fn list(&self) -> MemoryResult<Vec<MemoryRecord>> {
         self.list_filtered(|_| true)
     }
@@ -233,11 +244,8 @@ impl MemoryStore {
                 if !is_memory_file(&path) || !allowed(&path) {
                     continue;
                 }
-                match read_entry(&path) {
-                    Ok(mut entry) => {
-                        state.attach(&mut entry);
-                        entries.push(entry);
-                    }
+                match read_entry(&path).and_then(|entry| state.attach(entry)) {
+                    Ok(entry) => entries.push(entry),
                     Err(error) => {
                         tracing::warn!(target: "agena::memory", "skipping memory file {}: {error}", path.display())
                     }
@@ -249,14 +257,11 @@ impl MemoryStore {
     }
 
     pub fn get(&self, name: &str) -> MemoryResult<MemoryRecord> {
-        let name = canonical_name(name)?;
+        let name = normalize_memory_name(name)?;
         self.read_locked(|| {
             let state = state::MemoryState::read(&self.dir)?;
-            let mut record = self
-                .read_optional(name)?
-                .ok_or_else(|| MemoryError::NotFound(name.to_owned()))?;
-            state.attach(&mut record);
-            Ok(record)
+            self.read_optional(name, &state)?
+                .ok_or_else(|| MemoryError::NotFound(name.to_owned()))
         })
     }
 
@@ -276,11 +281,12 @@ impl MemoryStore {
     }
 
     pub fn write_snapshot(&self, name: &str) -> MemoryResult<MemoryWriteSnapshot> {
-        let name = canonical_name(name)?.to_owned();
+        let name = normalize_memory_name(name)?.to_owned();
         self.read_locked(|| {
             let state = state::MemoryState::read(&self.dir)?;
+            let previous = self.read_optional(&name, &state)?;
             Ok(MemoryWriteSnapshot {
-                expected_sha256: self.read_optional(&name)?.map(|record| record.sha256),
+                expected_sha256: previous.map(|record| record.sha256),
                 is_tombstoned: state.tombstones.contains_key(&name),
                 generation: state.generation,
                 store_key: self.store_key(),
@@ -289,19 +295,14 @@ impl MemoryStore {
         })
     }
 
-    pub fn forget(&self, name: &str) -> MemoryResult<()> {
-        self.forget_checked(name, None)
-    }
-
-    pub fn forget_checked(&self, name: &str, expected: Option<&str>) -> MemoryResult<()> {
-        let name = canonical_name(name)?.to_owned();
+    pub fn forget_checked(&self, name: &str, expected: &str) -> MemoryResult<()> {
+        let name = normalize_memory_name(name)?.to_owned();
         self.write_locked(|| {
             let mut state = state::MemoryState::read(&self.dir)?;
-            let mut previous = self
-                .read_optional(&name)?
+            let previous = self
+                .read_optional(&name, &state)?
                 .ok_or_else(|| MemoryError::NotFound(name.clone()))?;
-            state.attach(&mut previous);
-            check_revision(Some(&previous), expected, false)?;
+            check_revision(Some(&previous), Some(expected))?;
             let generation = state.advance()?;
             let source = previous.metadata.source.clone().or_else(|| {
                 state
@@ -349,15 +350,14 @@ impl MemoryStore {
             let mut next_index = self.read_index()?;
             let mut total_bytes = 0usize;
             for requested in records {
-                let name = canonical_name(&requested.name)?;
+                let name = normalize_memory_name(&requested.name)?;
                 if !names.insert(name.to_owned()) {
                     return Err(invalid("duplicate memory deletion"));
                 }
-                let mut previous = self
-                    .read_optional(name)?
+                let previous = self
+                    .read_optional(name, &state)?
                     .ok_or_else(|| MemoryError::NotFound(name.to_owned()))?;
-                state.attach(&mut previous);
-                check_revision(Some(&previous), Some(&requested.sha256), true)?;
+                check_revision(Some(&previous), Some(&requested.sha256))?;
                 total_bytes = total_bytes.saturating_add(previous.body.len());
                 if total_bytes > transaction::MAX_JOURNAL_BYTES / 2 {
                     return Err(invalid(
@@ -394,19 +394,6 @@ impl MemoryStore {
         })
     }
 
-    pub fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord> {
-        self.save_inner(entry, None, false, MemoryWriteOptions::default(), None)
-    }
-
-    /// Tool-facing create-or-CAS-update. Existing records require a revision.
-    pub fn save_checked(
-        &self,
-        entry: NewMemory,
-        expected: Option<&str>,
-    ) -> MemoryResult<MemoryRecord> {
-        self.save_with_options(entry, expected, MemoryWriteOptions::default())
-    }
-
     /// Explicit update, with host provenance and optional checked supersession.
     pub fn save_with_options(
         &self,
@@ -414,7 +401,7 @@ impl MemoryStore {
         expected: Option<&str>,
         options: MemoryWriteOptions,
     ) -> MemoryResult<MemoryRecord> {
-        self.save_inner(entry, expected, true, options, None)
+        self.save_inner(entry, expected, options, None)
     }
 
     /// Background writes cannot recreate forgotten records or overwrite a
@@ -428,7 +415,6 @@ impl MemoryStore {
         self.save_inner(
             entry,
             snapshot.expected_sha256.as_deref(),
-            true,
             options,
             Some(snapshot),
         )
@@ -438,18 +424,14 @@ impl MemoryStore {
         &self,
         entry: NewMemory,
         expected: Option<&str>,
-        guarded: bool,
         options: MemoryWriteOptions,
         derived: Option<&MemoryWriteSnapshot>,
     ) -> MemoryResult<MemoryRecord> {
-        let name = canonical_name(&entry.name)?.to_owned();
+        let name = normalize_memory_name(&entry.name)?.to_owned();
         validate_options(&options)?;
         self.write_locked(|| {
             let mut state = state::MemoryState::read(&self.dir)?;
-            let mut previous = self.read_optional(&name)?;
-            if let Some(record) = previous.as_mut() {
-                state.attach(record);
-            }
+            let previous = self.read_optional(&name, &state)?;
             if let Some(snapshot) = derived {
                 if snapshot.name != name || snapshot.store_key != self.store_key() {
                     return Err(invalid("memory snapshot belongs to a different record or store"));
@@ -464,7 +446,7 @@ impl MemoryStore {
                     return Err(invalid("background extraction cannot supersede other memories"));
                 }
                 let source = options.source.as_ref()
-                    .filter(|source| source.session_id.is_some() && source.entry_id.is_some())
+                    .filter(|source| source.entry_id.is_some())
                     .ok_or_else(|| invalid("derived memory requires a source session and durable entry"))?;
                 if state.source_is_suppressed(source) {
                     return Err(invalid("forgotten source conversation cannot generate derived memories"));
@@ -485,33 +467,27 @@ impl MemoryStore {
                                 return Err(invalid("derived memory source watermark cannot move backward"));
                             }
                             if new_entry == old_entry {
-                                check_revision(previous.as_ref(), expected, guarded)?;
+                                check_revision(previous.as_ref(), expected)?;
                                 return Ok(record.clone());
                             }
                         }
                     }
                 }
             }
-            check_revision(previous.as_ref(), expected, guarded)?;
+            check_revision(previous.as_ref(), expected)?;
             let generation = state.advance()?;
             let now = state::now_ms();
             let mut metadata = previous.as_ref().map(|record| record.metadata.clone())
                 .unwrap_or_else(|| MemoryMetadata {
                     id: state::memory_id(&self.resolve_path(&name)),
-                    kind: match entry.memory_type {
-                        Some(crate::MemoryType::User | crate::MemoryType::Feedback) => crate::MemoryKind::Preference,
-                        _ => crate::MemoryKind::Fact,
-                    },
+                    kind: entry.kind,
                     created_at_ms: now,
                     ..MemoryMetadata::default()
                 });
-            if metadata.created_at_ms == 0 {
-                metadata.created_at_ms = now;
-            }
             metadata.revision = generation;
             metadata.updated_at_ms = now;
             metadata.origin = if derived.is_some() { MemoryOrigin::Derived } else { MemoryOrigin::Explicit };
-            if let Some(kind) = options.kind { metadata.kind = kind; }
+            metadata.kind = entry.kind;
             if let Some(scope) = options.scope.clone() { metadata.scope = scope; }
             if let Some(status) = options.status {
                 metadata.status = status;
@@ -520,14 +496,13 @@ impl MemoryStore {
                 }
             }
             if let Some(importance) = options.importance { metadata.importance = importance; }
-            metadata.source = options.source.clone().filter(source_has_identity);
+            metadata.source = options.source.clone();
             metadata.provenance_verified = metadata.source.is_some();
             metadata.source_suppressed = false;
             if let MemoryScope::Session { session_id, instance_id } = &metadata.scope
                 && derived.is_some()
                 && metadata.source.as_ref().is_none_or(|source| {
-                    source.session_id != Some(*session_id)
-                        || instance_id.as_ref().is_some_and(|id| source.instance_id.as_ref() != Some(id))
+                    source.session_id != *session_id || source.instance_id != *instance_id
                 })
             {
                 return Err(invalid("session-scoped derived memory must cite that session and instance"));
@@ -536,14 +511,13 @@ impl MemoryStore {
             let mut next_index = index_without(&self.read_index()?, &name);
             let mut superseded_names = BTreeSet::new();
             for replaced in &options.supersedes {
-                let old_name = canonical_name(&replaced.name)?;
+                let old_name = normalize_memory_name(&replaced.name)?;
                 if old_name == name || !superseded_names.insert(old_name.to_owned()) {
                     return Err(invalid("cannot supersede the same record or duplicate a supersession"));
                 }
-                let mut old = self.read_optional(old_name)?
+                let mut old = self.read_optional(old_name, &state)?
                     .ok_or_else(|| MemoryError::NotFound(old_name.into()))?;
-                state.attach(&mut old);
-                check_revision(Some(&old), Some(&replaced.sha256), true)?;
+                check_revision(Some(&old), Some(&replaced.sha256))?;
                 if old.metadata.scope != metadata.scope {
                     return Err(invalid("superseded memory must have the same scope"));
                 }
@@ -562,9 +536,8 @@ impl MemoryStore {
                 let old_input = NewMemory {
                     name: old_name.into(),
                     description: old.frontmatter.description.clone(),
-                    memory_type: old.frontmatter.r#type,
+                    kind: old.metadata.kind,
                     body: old.body.clone(),
-                    index_line: None,
                 };
                 let (old, raw) = render_record(&old.path, &old_input, old.metadata)?;
                 changes.push((old.path.clone(), Some(raw)));
@@ -574,14 +547,14 @@ impl MemoryStore {
             let path = self.resolve_path(&name);
             let (record, raw) = render_record(&path, &entry, metadata)?;
             if record.metadata.status == MemoryStatus::Active {
-                let line = entry.index_line.as_deref()
-                    .map(|line| line.lines().next().unwrap_or_default().trim().chars().take(1024).collect::<String>())
-                    .filter(|line| !line.is_empty())
-                    .unwrap_or_else(|| {
-                        let description = entry.description.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let description: String = description.chars().take(240).collect();
-                        format!("- [{name}]({name}.md) — {description}")
-                    });
+                let label = if entry.description.trim().is_empty() {
+                    entry.body.lines().find(|line| !line.trim().is_empty()).unwrap_or("")
+                } else {
+                    &entry.description
+                };
+                let description = label.split_whitespace().collect::<Vec<_>>().join(" ");
+                let description: String = description.chars().take(240).collect();
+                let line = format!("- [{name}]({name}.md) — {description}");
                 next_index.push_str(&line);
                 next_index.push('\n');
             }
@@ -603,12 +576,18 @@ impl MemoryStore {
             .join(format!("{}.md", name.trim_end_matches(".md")))
     }
 
-    fn read_optional(&self, name: &str) -> MemoryResult<Option<MemoryRecord>> {
+    fn read_optional(
+        &self,
+        name: &str,
+        state: &state::MemoryState,
+    ) -> MemoryResult<Option<MemoryRecord>> {
         let path = self.resolve_path(name);
         match fs::symlink_metadata(&path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
-            Ok(_) => read_entry(&path).map(Some),
+            Ok(_) => read_entry(&path)
+                .and_then(|entry| state.attach(entry))
+                .map(Some),
         }
     }
 
@@ -648,28 +627,20 @@ impl MemoryRepository for MemoryStore {
     fn index_lines(&self) -> MemoryResult<Vec<String>> {
         Self::index_lines(self)
     }
-    fn forget(&self, name: &str) -> MemoryResult<()> {
-        Self::forget(self, name)
+    fn save_with_options(
+        &self,
+        entry: NewMemory,
+        expected: Option<&str>,
+        options: MemoryWriteOptions,
+    ) -> MemoryResult<MemoryRecord> {
+        Self::save_with_options(self, entry, expected, options)
     }
-    fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord> {
-        Self::save(self, entry)
-    }
-    fn save_checked(&self, entry: NewMemory, expected: Option<&str>) -> MemoryResult<MemoryRecord> {
-        Self::save_checked(self, entry, expected)
-    }
-    fn forget_checked(&self, name: &str, expected: Option<&str>) -> MemoryResult<()> {
+    fn forget_checked(&self, name: &str, expected: &str) -> MemoryResult<()> {
         Self::forget_checked(self, name, expected)
     }
     fn forget_many_checked(&self, records: &[crate::MemoryRevision]) -> MemoryResult<()> {
         Self::forget_many_checked(self, records)
     }
-}
-
-fn source_has_identity(source: &crate::MemorySource) -> bool {
-    source.session_id.is_some()
-        || source.call_id.is_some()
-        || source.entry_id.is_some()
-        || source.task_id.is_some()
 }
 
 fn validate_options(options: &MemoryWriteOptions) -> MemoryResult<()> {
@@ -690,20 +661,15 @@ fn validate_options(options: &MemoryWriteOptions) -> MemoryResult<()> {
         session_id,
         instance_id,
     }) = &options.scope
-        && (*session_id < 0
-            || instance_id
-                .as_ref()
-                .is_some_and(|id| id.trim().is_empty() || id.len() > 256))
+        && (*session_id <= 0 || instance_id.trim().is_empty() || instance_id.len() > 256)
     {
         return Err(invalid("invalid memory session scope or runtime instance"));
     }
     if let Some(source) = options.source.as_ref()
-        && (source.session_id.is_some_and(|value| value < 0)
-            || source.entry_id.is_some_and(|value| value < 0)
-            || source
-                .instance_id
-                .as_ref()
-                .is_some_and(|value| value.trim().is_empty() || value.len() > 256)
+        && (source.session_id <= 0
+            || source.entry_id.is_some_and(|value| value <= 0)
+            || source.instance_id.trim().is_empty()
+            || source.instance_id.len() > 256
             || source
                 .call_id
                 .as_ref()
@@ -718,15 +684,9 @@ fn validate_options(options: &MemoryWriteOptions) -> MemoryResult<()> {
     Ok(())
 }
 
-fn check_revision(
-    previous: Option<&MemoryRecord>,
-    expected: Option<&str>,
-    required: bool,
-) -> MemoryResult<()> {
+fn check_revision(previous: Option<&MemoryRecord>, expected: Option<&str>) -> MemoryResult<()> {
     if let Some(previous) = previous {
-        if expected.is_some_and(|value| !value.eq_ignore_ascii_case(&previous.sha256))
-            || (required && expected.is_none())
-        {
+        if expected.is_none_or(|value| !value.eq_ignore_ascii_case(&previous.sha256)) {
             return Err(invalid(format!(
                 "memory revision conflict: read the record and supply expected_sha256={}",
                 previous.sha256
@@ -757,18 +717,13 @@ fn render_record(
     entry: &NewMemory,
     metadata: MemoryMetadata,
 ) -> MemoryResult<(MemoryRecord, Vec<u8>)> {
-    let name = canonical_name(&entry.name)?;
-    let mut raw = format!("---\nname: {}\n", yaml_escape(name));
-    if !entry.description.trim().is_empty() {
-        raw.push_str(&format!(
-            "description: {}\n",
-            yaml_escape(entry.description.trim())
-        ));
-    }
-    if let Some(kind) = entry.memory_type {
-        raw.push_str(&format!("type: {}\n", kind.label()));
-    }
-    raw.push_str(&format!("revision: {}\n---\n\n", metadata.revision));
+    let name = normalize_memory_name(&entry.name)?;
+    let mut raw = format!(
+        "---\nschema_version: {MEMORY_SCHEMA_VERSION}\nname: {}\ndescription: {}\nrevision: {}\n---\n\n",
+        yaml_escape(name),
+        yaml_escape(entry.description.trim()),
+        metadata.revision,
+    );
     raw.push_str(entry.body.trim_end());
     raw.push('\n');
     if raw.len() > MAX_MEMORY_BYTES {
@@ -789,14 +744,14 @@ fn render_record(
     ))
 }
 
-fn read_entry(path: &Path) -> MemoryResult<MemoryRecord> {
+fn read_entry(path: &Path) -> MemoryResult<MemoryDocument> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return Err(invalid("memory record is not a regular file"));
     }
     let raw = read_text(path)?;
     let (frontmatter, body) = parse_frontmatter(&raw, path)?;
-    Ok(MemoryRecord {
+    Ok(MemoryDocument {
         file_name: path
             .file_name()
             .and_then(|s| s.to_str())
@@ -806,14 +761,16 @@ fn read_entry(path: &Path) -> MemoryResult<MemoryRecord> {
         frontmatter,
         body,
         sha256: hex::encode(Sha256::digest(raw.as_bytes())),
-        metadata: MemoryMetadata::default(),
     })
 }
 
 fn parse_frontmatter(raw: &str, path: &Path) -> MemoryResult<(MemoryFrontmatter, String)> {
     let normalized = raw.replace("\r\n", "\n");
     let Some(stripped) = normalized.strip_prefix("---\n") else {
-        return Ok((MemoryFrontmatter::default(), normalized.trim().to_string()));
+        return Err(MemoryError::Malformed {
+            path: path.to_path_buf(),
+            message: "memory document requires current-format frontmatter".into(),
+        });
     };
     let Some(end) = stripped
         .find("\n---")
@@ -826,14 +783,22 @@ fn parse_frontmatter(raw: &str, path: &Path) -> MemoryResult<(MemoryFrontmatter,
     };
     let yaml = &stripped[..end];
     let body = stripped[end + 4..].trim_start_matches('\n').to_string();
-    Ok((
-        if yaml.trim().is_empty() {
-            MemoryFrontmatter::default()
-        } else {
-            serde_yaml::from_str(yaml)?
-        },
-        body,
-    ))
+    let frontmatter: MemoryFrontmatter = serde_yaml::from_str(yaml)?;
+    if frontmatter.schema_version != MEMORY_SCHEMA_VERSION || frontmatter.revision == 0 {
+        return Err(MemoryError::Malformed {
+            path: path.to_path_buf(),
+            message: "unsupported memory document schema or invalid revision".into(),
+        });
+    }
+    if normalize_memory_name(&frontmatter.name).ok() != Some(frontmatter.name.as_str())
+        || path.file_stem().and_then(|stem| stem.to_str()) != Some(frontmatter.name.as_str())
+    {
+        return Err(MemoryError::Malformed {
+            path: path.to_path_buf(),
+            message: "memory document name must be canonical and match its file name".into(),
+        });
+    }
+    Ok((frontmatter, body))
 }
 
 fn is_memory_file(path: &Path) -> bool {

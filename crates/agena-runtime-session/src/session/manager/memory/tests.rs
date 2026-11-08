@@ -381,7 +381,7 @@ async fn idle_worker_coalesces_and_persists_source_backed_episode() {
     assert_eq!(episode.metadata.scope, MemoryScope::Workspace);
     assert_eq!(
         episode.metadata.source.as_ref().unwrap().session_id,
-        Some(fixture.session.get())
+        fixture.session.get()
     );
     assert!(episode.metadata.source.as_ref().unwrap().entry_id.is_some());
     assert!(episode.body.contains("entries"));
@@ -506,7 +506,7 @@ async fn forgotten_episode_is_not_resurrected_by_in_flight_or_future_extraction(
     let record = fixture.store.get(&fixture.episode_name()).unwrap();
     fixture
         .store
-        .forget_checked(&fixture.episode_name(), Some(&record.sha256))
+        .forget_checked(&fixture.episode_name(), &record.sha256)
         .unwrap();
     fixture.control.release.notify_one();
     assert_eq!(
@@ -640,20 +640,18 @@ async fn older_cited_decisions_are_rehydrated_outside_the_recent_message_window(
             NewMemory {
                 name: name.clone(),
                 description: "Earlier decision".into(),
-                memory_type: Some(MemoryType::Project),
+                kind: MemoryKind::Episode,
                 body: format!(
                     "- Keep PostgreSQL [session {}; entries {}]\n",
                     fixture.session.get(),
                     decision.get()
                 ),
-                index_line: None,
             },
             &snapshot,
             MemoryWriteOptions {
-                kind: Some(MemoryKind::Episode),
                 source: Some(MemorySource {
-                    session_id: Some(fixture.session.get()),
-                    instance_id: Some(fixture.manager.memory_instance_id().to_owned()),
+                    session_id: fixture.session.get(),
+                    instance_id: fixture.manager.memory_instance_id().to_owned(),
                     entry_id: Some(decision.get()),
                     ..Default::default()
                 }),
@@ -868,13 +866,16 @@ async fn unrelated_memory_mutation_retries_fresh_evidence_without_losing_episode
         .unwrap();
     fixture
         .store
-        .save(NewMemory {
-            name: "unrelated-project-fact".into(),
-            description: "Explicit user correction elsewhere".into(),
-            memory_type: Some(MemoryType::Project),
-            body: "Use the updated build command.".into(),
-            index_line: None,
-        })
+        .save_with_options(
+            NewMemory {
+                name: "unrelated-project-fact".into(),
+                description: "Explicit user correction elsewhere".into(),
+                kind: MemoryKind::Fact,
+                body: "Use the updated build command.".into(),
+            },
+            None,
+            Default::default(),
+        )
         .unwrap();
     fixture.control.pause.store(false, Ordering::SeqCst);
     fixture.control.release.notify_one();
@@ -1129,8 +1130,8 @@ async fn durable_source_suppression_blocks_new_names_outside_recent_history() {
     let fixture = Fixture::new(true, 1, Default::default()).await;
     let entry = fixture.message("暂存数据库选型，之后可能撤销").await;
     let source = MemorySource {
-        session_id: Some(fixture.session.get()),
-        instance_id: Some(fixture.manager.memory_instance_id().to_owned()),
+        session_id: fixture.session.get(),
+        instance_id: fixture.manager.memory_instance_id().to_owned(),
         entry_id: Some(entry.get()),
         ..Default::default()
     };
@@ -1140,9 +1141,8 @@ async fn durable_source_suppression_blocks_new_names_outside_recent_history() {
             NewMemory {
                 name: "explicit-database-choice".into(),
                 description: "A decision the user later removed".into(),
-                memory_type: Some(MemoryType::Project),
+                kind: MemoryKind::Fact,
                 body: "Use PostgreSQL for this project.".into(),
-                index_line: None,
             },
             None,
             MemoryWriteOptions {
@@ -1153,7 +1153,7 @@ async fn durable_source_suppression_blocks_new_names_outside_recent_history() {
         .unwrap();
     fixture
         .store
-        .forget_checked("explicit-database-choice", Some(&original.sha256))
+        .forget_checked("explicit-database-choice", &original.sha256)
         .unwrap();
     // The deletion can come from UI and need not appear as a transcript tool.
     // Even after every old entry leaves the bounded recent window, its source
@@ -1181,13 +1181,16 @@ async fn pending_memory_recovery_authorizes_every_actual_target_before_mutation(
         fixture.message("需要恢复之前的持久记录").await;
         let original = fixture
             .store
-            .save(NewMemory {
-                name: "recoverable-note".into(),
-                description: "Previously committed note".into(),
-                memory_type: Some(MemoryType::Project),
-                body: "The committed version must survive interruption.".into(),
-                index_line: None,
-            })
+            .save_with_options(
+                NewMemory {
+                    name: "recoverable-note".into(),
+                    description: "Previously committed note".into(),
+                    kind: MemoryKind::Fact,
+                    body: "The committed version must survive interruption.".into(),
+                },
+                None,
+                Default::default(),
+            )
             .unwrap();
         let journal = serde_json::json!({
             "schema_version": 1,
@@ -1269,15 +1272,14 @@ async fn forget_known_source(fixture: &Fixture, source_session: SessionId, entry
             NewMemory {
                 name: "parent-source-fact".into(),
                 description: "Parent decision subsequently forgotten".into(),
-                memory_type: Some(MemoryType::Project),
+                kind: MemoryKind::Fact,
                 body: "Earlier parent task selected PostgreSQL.".into(),
-                index_line: None,
             },
             None,
             MemoryWriteOptions {
                 source: Some(MemorySource {
-                    session_id: Some(source_session.get()),
-                    instance_id: Some(fixture.manager.memory_instance_id().to_owned()),
+                    session_id: source_session.get(),
+                    instance_id: fixture.manager.memory_instance_id().to_owned(),
                     entry_id: Some(entry.get()),
                     ..Default::default()
                 }),
@@ -1287,7 +1289,7 @@ async fn forget_known_source(fixture: &Fixture, source_session: SessionId, entry
         .unwrap();
     fixture
         .store
-        .forget_checked("parent-source-fact", Some(&record.sha256))
+        .forget_checked("parent-source-fact", &record.sha256)
         .unwrap();
 }
 
@@ -1493,7 +1495,7 @@ async fn independent_children_and_empty_rewinds_keep_own_learning_available() {
                 .source
                 .unwrap()
                 .session_id,
-            Some(fixture.session.get())
+            fixture.session.get()
         );
     }
 }

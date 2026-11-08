@@ -7,7 +7,7 @@ use super::*;
 use agena_domain::{AccessKind, ContentKind, PermissionDecision};
 use agena_storage::{
     MemoryKind, MemoryOrigin, MemoryRecord, MemoryScope, MemorySource, MemoryStatus, MemoryStore,
-    MemoryType, MemoryWriteOptions, MemoryWriteSnapshot, NewMemory,
+    MemoryWriteOptions, MemoryWriteSnapshot, NewMemory,
 };
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -468,8 +468,8 @@ impl SessionManager {
         store: &MemoryStore,
     ) -> Result<bool, AppError> {
         let source = MemorySource {
-            session_id: Some(session.get()),
-            instance_id: Some(self.memory_instance_id().to_owned()),
+            session_id: session.get(),
+            instance_id: self.memory_instance_id().to_owned(),
             ..Default::default()
         };
         let store = store.clone();
@@ -544,7 +544,7 @@ impl SessionManager {
         };
         if previous.as_ref().is_some_and(|record| {
             record.metadata.source.as_ref().is_some_and(|source| {
-                source.session_id == Some(session.get())
+                source.session_id == session.get()
                     && source
                         .entry_id
                         .is_some_and(|id| id >= context.watermark.get())
@@ -621,19 +621,14 @@ impl SessionManager {
         let entry = NewMemory {
             name: name.clone(),
             description: description.clone(),
-            memory_type: Some(MemoryType::Project),
+            kind: MemoryKind::Episode,
             body,
-            index_line: Some(format!(
-                "- [{name}]({name}.md) — {}",
-                description.replace(['\r', '\n'], " ")
-            )),
         };
         let options = MemoryWriteOptions {
-            kind: Some(MemoryKind::Episode),
             scope: Some(MemoryScope::Workspace),
             source: Some(MemorySource {
-                session_id: Some(session.get()),
-                instance_id: Some(self.memory_instance_id().to_owned()),
+                session_id: session.get(),
+                instance_id: self.memory_instance_id().to_owned(),
                 entry_id: Some(context.watermark.get()),
                 task_id: Some(format!(
                     "instance:{}:session:{}",
@@ -698,7 +693,7 @@ impl SessionManager {
             || previous.as_ref().is_some_and(|record| {
                 !writable_derived(record)
                     || record.metadata.source.as_ref().is_some_and(|source| {
-                        source.session_id == Some(session.get())
+                        source.session_id == session.get()
                             && source.entry_id == Some(checkpoint.get())
                     })
             })
@@ -768,14 +763,13 @@ impl SessionManager {
             return Ok(MaintenanceOutcome::Complete);
         }
         let options = MemoryWriteOptions {
-            kind: Some(MemoryKind::Task),
             scope: Some(MemoryScope::Session {
                 session_id: session.get(),
-                instance_id: Some(self.memory_instance_id().to_owned()),
+                instance_id: self.memory_instance_id().to_owned(),
             }),
             source: Some(MemorySource {
-                session_id: Some(session.get()),
-                instance_id: Some(self.memory_instance_id().to_owned()),
+                session_id: session.get(),
+                instance_id: self.memory_instance_id().to_owned(),
                 entry_id: Some(checkpoint.get()),
                 task_id: Some(format!(
                     "instance:{}:session:{}",
@@ -791,12 +785,8 @@ impl SessionManager {
             NewMemory {
                 name: name.clone(),
                 description: "Current task checkpoint; read for this session's continuation".into(),
-                memory_type: Some(MemoryType::Project),
+                kind: MemoryKind::Task,
                 body,
-                index_line: Some(format!(
-                    "- [{name}]({name}.md) — Current task checkpoint for session {}",
-                    session.get()
-                )),
             },
             snapshot,
             options,

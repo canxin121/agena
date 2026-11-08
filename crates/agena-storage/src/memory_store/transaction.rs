@@ -114,7 +114,7 @@ fn valid_target(name: &str) -> bool {
         return true;
     }
     name.strip_suffix(".md")
-        .is_some_and(|base| canonical_name(base).is_ok_and(|valid| valid == base))
+        .is_some_and(|base| normalize_memory_name(base).is_ok_and(|valid| valid == base))
 }
 
 fn target_name(dir: &Path, path: &Path) -> MemoryResult<String> {

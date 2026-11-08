@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
-use agena_storage::{MemoryRepository, MemoryRevision};
+use agena_storage::{MemoryRepository, MemoryRevision, MemoryWriteOptions, normalize_memory_name};
 
 impl ApplicationService {
     pub fn memory_directory(&self) -> std::path::PathBuf {
@@ -15,19 +15,11 @@ impl ApplicationService {
     }
 
     pub fn memory_entry_path(&self, name: &str) -> ApplicationResult<std::path::PathBuf> {
-        let name = validate_memory_name(name)?;
+        let name = normalize_memory_name(name).map_err(memory_api_error)?;
         recover_operator_memory(self.memory_repository.as_ref())?;
         self.memory_repository
             .get(name)
             .map(|record| record.path)
-            .map_err(memory_api_error)
-    }
-
-    pub fn forget_memory(&self, name: &str) -> ApplicationResult<()> {
-        let name = validate_memory_name(name)?;
-        recover_operator_memory(self.memory_repository.as_ref())?;
-        self.memory_repository
-            .forget(name)
             .map_err(memory_api_error)
     }
 
@@ -38,7 +30,7 @@ impl ApplicationService {
     }
 
     pub fn get_memory(&self, name: &str) -> ApplicationResult<MemoryResource> {
-        let name = validate_memory_name(name)?;
+        let name = normalize_memory_name(name).map_err(memory_api_error)?;
         recover_operator_memory(self.memory_repository.as_ref())?;
         self.memory_repository
             .get(name)
@@ -54,28 +46,16 @@ impl ApplicationService {
         save_memory_record(self.memory_repository.as_ref(), name, request)
     }
 
-    pub fn delete_memory(&self, name: &str) -> ApplicationResult<MemoryResource> {
-        self.delete_memory_checked(name, None)
-    }
-
-    pub fn delete_memory_checked(
+    pub fn delete_memory(
         &self,
         name: &str,
-        expected: Option<&str>,
+        expected_sha256: &str,
     ) -> ApplicationResult<MemoryResource> {
-        delete_memory_record(self.memory_repository.as_ref(), name, expected)
+        delete_memory_record(self.memory_repository.as_ref(), name, expected_sha256)
     }
 
-    pub fn delete_memories(&self, names: &[String]) -> ApplicationResult<Vec<String>> {
-        self.delete_memories_checked(names, &BTreeMap::new())
-    }
-
-    pub fn delete_memories_checked(
-        &self,
-        names: &[String],
-        expected: &BTreeMap<String, String>,
-    ) -> ApplicationResult<Vec<String>> {
-        delete_memory_records(self.memory_repository.as_ref(), names, expected)
+    pub fn delete_memories(&self, records: &[MemoryRevision]) -> ApplicationResult<Vec<String>> {
+        delete_memory_records(self.memory_repository.as_ref(), records)
     }
 }
 
@@ -93,138 +73,85 @@ fn save_memory_record(
     name: &str,
     request: MemoryWriteRequest,
 ) -> ApplicationResult<MemoryResource> {
-    let name = validate_memory_name(name)?.to_string();
+    let name = normalize_memory_name(name)
+        .map_err(memory_api_error)?
+        .to_string();
     if request.body.trim().is_empty() {
         return Err(ApplicationError::bad_request("memory body is required"));
     }
-    let description = request.description.trim().to_string();
-    let label = if description.is_empty() {
-        request
-            .body
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .unwrap_or("memory")
-            .trim()
-    } else {
-        description.as_str()
-    };
-    let index_label = label.replace(['\r', '\n'], " ");
     let entry = NewMemory {
-        name: name.clone(),
-        description,
-        memory_type: request.memory_type,
+        name,
+        description: request.description.trim().to_string(),
+        kind: request.kind,
         body: request.body,
-        index_line: Some(format!("- [{name}]({name}.md) — {index_label}")),
     };
     recover_operator_memory(repository)?;
-    let result = match request.expected_sha256.as_deref() {
-        Some(expected) => repository.save_checked(entry, Some(expected.trim())),
-        // Older clients retain their existing write contract.
-        None => repository.save(entry),
-    };
-    result.map(memory_resource).map_err(memory_api_error)
+    repository
+        .save_with_options(
+            entry,
+            request.expected_sha256.as_deref().map(str::trim),
+            MemoryWriteOptions::default(),
+        )
+        .map(memory_resource)
+        .map_err(memory_api_error)
 }
 
 fn delete_memory_record(
     repository: &dyn MemoryRepository,
     name: &str,
-    expected: Option<&str>,
+    expected: &str,
 ) -> ApplicationResult<MemoryResource> {
-    let name = validate_memory_name(name)?;
+    let name = normalize_memory_name(name).map_err(memory_api_error)?;
     recover_operator_memory(repository)?;
     let existing = repository.get(name).map_err(memory_api_error)?;
-    // Even a legacy call protects the record observed by this operation from
-    // another writer arriving between the read and the delete.
     repository
-        .forget_checked(name, Some(expected.unwrap_or(&existing.sha256).trim()))
+        .forget_checked(name, expected.trim())
         .map_err(memory_api_error)?;
     Ok(memory_resource(existing))
 }
 
 fn delete_memory_records(
     repository: &dyn MemoryRepository,
-    names: &[String],
-    expected: &BTreeMap<String, String>,
+    records: &[MemoryRevision],
 ) -> ApplicationResult<Vec<String>> {
-    if names.is_empty() || names.len() > 1000 || expected.len() > 1000 {
+    if records.is_empty() || records.len() > 1000 {
         return Err(ApplicationError::bad_request(
             "select between 1 and 1000 memory entries",
         ));
     }
     let mut seen = HashSet::new();
-    let mut normalized = Vec::with_capacity(names.len());
-    for name in names {
-        let name = validate_memory_name(name)?.to_owned();
-        if seen.insert(name.clone()) {
-            normalized.push(name);
+    let mut selected = Vec::with_capacity(records.len());
+    for record in records {
+        let name = normalize_memory_name(&record.name)
+            .map_err(memory_api_error)?
+            .to_owned();
+        if !seen.insert(name.clone()) {
+            return Err(ApplicationError::bad_request("duplicate memory deletion"));
         }
-    }
-    let mut revisions = BTreeMap::new();
-    for (name, sha256) in expected {
-        let name = validate_memory_name(name)?.to_owned();
-        if !seen.contains(&name) || revisions.insert(name, sha256.trim()).is_some() {
+        if record.sha256.trim().is_empty() {
             return Err(ApplicationError::bad_request(
-                "memory revisions must match the selected entries",
-            ));
-        }
-    }
-    recover_operator_memory(repository)?;
-    let mut selected = Vec::with_capacity(normalized.len());
-    let mut deleted = Vec::with_capacity(normalized.len());
-    for name in normalized {
-        let record = repository.get(&name).map_err(memory_api_error)?;
-        let expected_sha = revisions.get(&name).copied().unwrap_or(&record.sha256);
-        if !expected_sha.eq_ignore_ascii_case(&record.sha256) {
-            return Err(ApplicationError::conflict(
-                "The memory changed. Reload the latest version before editing or deleting.",
+                "every deletion requires its observed sha256",
             ));
         }
         selected.push(MemoryRevision {
-            name: name.clone(),
-            sha256: record.sha256,
-        });
-        let display_name = record.frontmatter.name.trim();
-        deleted.push(if display_name.is_empty() {
-            name
-        } else {
-            display_name.to_owned()
+            name,
+            sha256: record.sha256.trim().to_owned(),
         });
     }
-    // Recheck every revision and delete the entire selection in one transaction.
+    recover_operator_memory(repository)?;
+    // Validate the caller's complete revision set and delete atomically.
     repository
         .forget_many_checked(&selected)
         .map_err(memory_api_error)?;
-    Ok(deleted)
-}
-
-fn validate_memory_name(name: &str) -> ApplicationResult<&str> {
-    let normalized = name.trim().trim_end_matches(".md");
-    if normalized.is_empty()
-        || normalized == "MEMORY"
-        || normalized.len() > 128
-        || !normalized.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
-        })
-    {
-        return Err(ApplicationError::bad_request(
-            "memory names must use 1-128 letters, numbers, dots, dashes, or underscores",
-        ));
-    }
-    Ok(normalized)
+    Ok(selected.into_iter().map(|record| record.name).collect())
 }
 
 fn memory_resource(record: MemoryRecord) -> MemoryResource {
-    let name = record.frontmatter.name.trim().to_string();
     MemoryResource {
-        name: if name.is_empty() {
-            record.file_name.trim_end_matches(".md").to_string()
-        } else {
-            name
-        },
+        name: record.frontmatter.name,
         file_name: record.file_name,
         path: record.path.display().to_string(),
         description: record.frontmatter.description,
-        memory_type: record.frontmatter.r#type,
         body: record.body,
         sha256: record.sha256,
         metadata: record.metadata,
@@ -266,15 +193,138 @@ mod tests {
     use super::*;
     use agena_failure::FailureCategory;
     use agena_storage::MemoryStore;
+    use serde_json::json;
 
     fn request(body: &str, expected: Option<&str>) -> MemoryWriteRequest {
-        serde_json::from_value(serde_json::json!({
+        serde_json::from_value(json!({
             "description": "Project decision",
-            "memory_type": "project",
+            "kind": "fact",
             "body": body,
             "expected_sha256": expected,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn memory_api_manages_storage_created_unicode_and_long_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::at(dir.path());
+        for name in ["项目 偏好".to_owned(), "x".repeat(129)] {
+            let initial = store
+                .save_with_options(
+                    NewMemory {
+                        name: name.clone(),
+                        description: "Created through the shared storage".into(),
+                        kind: agena_domain::MemoryKind::Fact,
+                        body: "Original".into(),
+                    },
+                    None,
+                    MemoryWriteOptions::default(),
+                )
+                .unwrap();
+            let updated = save_memory_record(
+                &store,
+                &format!(" {name}.md "),
+                request("Corrected through management", Some(&initial.sha256)),
+            )
+            .unwrap();
+            assert_eq!(updated.name, name);
+            assert_eq!(updated.path, initial.path.display().to_string());
+            assert_eq!(updated.body.trim_end(), "Corrected through management");
+            assert_eq!(store.get(&name).unwrap().sha256, updated.sha256);
+            assert_eq!(store.list().unwrap().len(), 1);
+
+            let deleted =
+                delete_memory_record(&store, &format!("{name}.md.md"), &updated.sha256).unwrap();
+            assert_eq!(deleted.name, name);
+            assert_eq!(deleted.sha256, updated.sha256);
+            assert!(store.list().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn memory_api_rejects_unsafe_and_reserved_names_before_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::at(dir.path());
+        let original = save_memory_record(&store, "safe", request("Preserve this", None)).unwrap();
+        let state_bytes = std::fs::read(store.metadata_path()).unwrap();
+        for name in [
+            String::new(),
+            ".".to_owned(),
+            "..".to_owned(),
+            "MEMORY".to_owned(),
+            "memory.md".to_owned(),
+            "../outside".to_owned(),
+            "folder/note".to_owned(),
+            r"folder\note".to_owned(),
+            "foo\nbar".to_owned(),
+            "x".repeat(256),
+        ] {
+            assert!(
+                save_memory_record(&store, &name, request("Invalid target", None)).is_err(),
+                "{name:?} must not be writable"
+            );
+            assert!(
+                delete_memory_record(&store, &name, &original.sha256).is_err(),
+                "{name:?} must not be deletable"
+            );
+            assert!(
+                delete_memory_records(
+                    &store,
+                    &[
+                        MemoryRevision {
+                            name: "safe".into(),
+                            sha256: original.sha256.clone(),
+                        },
+                        MemoryRevision {
+                            name: name.clone(),
+                            sha256: original.sha256.clone(),
+                        },
+                    ],
+                )
+                .is_err(),
+                "{name:?} must reject the whole batch"
+            );
+        }
+        assert_eq!(store.list().unwrap().len(), 1);
+        assert_eq!(store.get("safe").unwrap().sha256, original.sha256);
+        assert_eq!(std::fs::read(store.metadata_path()).unwrap(), state_bytes);
+    }
+
+    #[test]
+    fn memory_api_bulk_rejects_normalized_aliases_before_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::at(dir.path());
+        let original =
+            save_memory_record(&store, "项目 决策", request("Canonical record", None)).unwrap();
+        let other = save_memory_record(&store, "other", request("Preserve other", None)).unwrap();
+        let state_bytes = std::fs::read(store.metadata_path()).unwrap();
+        let error = delete_memory_records(
+            &store,
+            &[
+                MemoryRevision {
+                    name: "other".into(),
+                    sha256: other.sha256.clone(),
+                },
+                MemoryRevision {
+                    name: " 项目 决策.md ".into(),
+                    sha256: original.sha256.clone(),
+                },
+                MemoryRevision {
+                    name: "项目 决策.md.md".into(),
+                    sha256: original.sha256.clone(),
+                },
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("duplicate memory deletion"),
+            "{error}"
+        );
+        assert_eq!(store.list().unwrap().len(), 2);
+        assert_eq!(store.get("项目 决策").unwrap().sha256, original.sha256);
+        assert_eq!(store.get("other").unwrap().sha256, other.sha256);
+        assert_eq!(std::fs::read(store.metadata_path()).unwrap(), state_bytes);
     }
 
     #[test]
@@ -291,34 +341,52 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(stale.failure.category, FailureCategory::Conflict);
-        assert!(delete_memory_record(&store, "decision", Some(&first.sha256)).is_err());
+        assert!(delete_memory_record(&store, "decision", &first.sha256).is_err());
         assert_eq!(store.get("decision").unwrap().sha256, current.sha256);
         let wire = serde_json::to_value(&current).unwrap();
         assert_eq!(wire["sha256"], current.sha256);
+        assert_eq!(wire["metadata"]["kind"], "fact");
         assert_eq!(wire["metadata"]["status"], "active");
         assert_eq!(wire["metadata"]["origin"], "explicit");
         assert!(wire["metadata"]["updated_at_ms"].as_i64().unwrap() > 0);
-        delete_memory_record(&store, "decision", Some(&current.sha256)).unwrap();
+        assert!(wire.get("memory_type").is_none());
+        delete_memory_record(&store, "decision", &current.sha256).unwrap();
         assert!(store.get("decision").is_err());
     }
 
     #[test]
-    fn memory_api_old_requests_remain_compatible() {
+    fn memory_api_create_only_cannot_overwrite_and_deleted_fields_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemoryStore::at(dir.path());
-        let first: MemoryWriteRequest =
-            serde_json::from_value(serde_json::json!({"body":"First"})).unwrap();
-        let second: MemoryWriteRequest =
-            serde_json::from_value(serde_json::json!({"body":"Second"})).unwrap();
-        save_memory_record(&store, "legacy", first).unwrap();
+        let first = save_memory_record(&store, "decision", request("First", None)).unwrap();
+        let error = save_memory_record(
+            &store,
+            "decision",
+            request("Overwrite without reading", None),
+        )
+        .unwrap_err();
+        assert_eq!(error.failure.category, FailureCategory::Conflict);
+        assert_eq!(store.get("decision").unwrap().sha256, first.sha256);
+        assert!(delete_memory_record(&store, "decision", "").is_err());
         assert!(
-            save_memory_record(&store, "legacy", second)
-                .unwrap()
-                .body
-                .contains("Second")
+            serde_json::from_value::<MemoryWriteRequest>(json!({"body":"Missing classification"}))
+                .is_err()
         );
-        delete_memory_record(&store, "legacy", None).unwrap();
-        assert!(store.list().unwrap().is_empty());
+        assert!(
+            serde_json::from_value::<MemoryWriteRequest>(
+                json!({"body":"Old classification","memory_type":"user"})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<MemoryWriteRequest>(
+                json!({"body":"Mixed schema","kind":"preference","memory_type":"user"})
+            )
+            .is_err()
+        );
+        let mut response = serde_json::to_value(&first).unwrap();
+        response.as_object_mut().unwrap().remove("metadata");
+        assert!(serde_json::from_value::<MemoryResource>(response).is_err());
     }
 
     #[test]
@@ -329,17 +397,48 @@ mod tests {
         let b = save_memory_record(&store, "b", request("B", None)).unwrap();
         let current =
             save_memory_record(&store, "b", request("Updated B", Some(&b.sha256))).unwrap();
-        let names = vec!["a".into(), "b".into()];
-        let mut revisions =
-            BTreeMap::from([("a".into(), a.sha256.clone()), ("b".into(), b.sha256)]);
-        let stale = delete_memory_records(&store, &names, &revisions).unwrap_err();
+        let mut revisions = vec![
+            MemoryRevision {
+                name: "a".into(),
+                sha256: a.sha256,
+            },
+            MemoryRevision {
+                name: "b".into(),
+                sha256: b.sha256,
+            },
+        ];
+        let stale = delete_memory_records(&store, &revisions).unwrap_err();
         assert_eq!(stale.failure.category, FailureCategory::Conflict);
         assert_eq!(store.list().unwrap().len(), 2);
-        revisions.insert("b".into(), current.sha256);
+        revisions[1].sha256 = current.sha256;
         assert_eq!(
-            delete_memory_records(&store, &names, &revisions).unwrap(),
-            names
+            delete_memory_records(&store, &revisions).unwrap(),
+            vec!["a", "b"]
         );
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn memory_api_bulk_requires_each_revision_and_rejects_duplicates_before_mutation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::at(dir.path());
+        let a = save_memory_record(&store, "a", request("A", None)).unwrap();
+        let b = save_memory_record(&store, "b", request("B", None)).unwrap();
+        let revisions = vec![
+            MemoryRevision {
+                name: "a".into(),
+                sha256: a.sha256.clone(),
+            },
+            MemoryRevision {
+                name: "b".into(),
+                sha256: String::new(),
+            },
+        ];
+        assert!(delete_memory_records(&store, &revisions).is_err());
+        assert!(
+            delete_memory_records(&store, &[revisions[0].clone(), revisions[0].clone()]).is_err()
+        );
+        assert_eq!(store.get("a").unwrap().sha256, a.sha256);
+        assert_eq!(store.get("b").unwrap().sha256, b.sha256);
     }
 }

@@ -1,6 +1,6 @@
 use super::{SuperagentRuntime, runtime_error};
 use agena_plugin_sdk::host_api::{CompanionAction, CompanionRequest};
-use agena_storage::{MemoryStore, MemoryType, NewMemory};
+use agena_storage::{MemoryStore, NewMemory, normalize_memory_name};
 use agena_superagent::*;
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -15,7 +15,6 @@ fn memory_view(record: agena_storage::MemoryRecord) -> AssistantMemory {
     AssistantMemory {
         name: record.frontmatter.name,
         description: record.frontmatter.description,
-        memory_type: record.frontmatter.r#type.map(|t| t.label().into()),
         body: record.body[..end].into(),
         sha256: record.sha256,
         truncated,
@@ -36,18 +35,6 @@ fn memory_error(e: agena_storage::MemoryError) -> Error {
         _ => Error::Storage(e.to_string()),
     }
 }
-fn memory_kind(value: Option<&str>) -> Result<Option<MemoryType>> {
-    Ok(match value {
-        None => None,
-        Some("user") => Some(MemoryType::User),
-        Some("feedback") => Some(MemoryType::Feedback),
-        Some("project") => Some(MemoryType::Project),
-        Some("reference") => Some(MemoryType::Reference),
-        Some("other") => Some(MemoryType::Other),
-        _ => return Err(Error::Invalid("unknown memory type")),
-    })
-}
-
 impl SuperagentRuntime {
     async fn require_companion_owner(&self, source: i64) -> Result<()> {
         let manager = self.manager()?;
@@ -186,16 +173,17 @@ impl SuperagentRuntime {
     ) -> Result<Option<AssistantMemory>> {
         self.require_companion_owner(source).await?;
         let (_, root) = self.assistant_scope(source).await?;
-        if update.name.trim().is_empty()
-            || update.name.len() > 128
-            || update
-                .body
-                .as_ref()
-                .is_some_and(|b| b.trim().is_empty() || b.len() > 16 * 1024)
+        normalize_memory_name(&update.name).map_err(memory_error)?;
+        if update
+            .body
+            .as_ref()
+            .is_some_and(|body| body.trim().is_empty() || body.len() > 16 * 1024)
         {
-            return Err(Error::Invalid("memory name/body is empty or too large"));
+            return Err(Error::Invalid("memory body is empty or too large"));
         }
-        let kind = memory_kind(update.memory_type.as_deref())?;
+        if update.body.is_some() && update.kind.is_none() {
+            return Err(Error::Invalid("memory writes require a kind"));
+        }
         if update.body.is_none() && update.expected_sha256.is_none() {
             return Err(Error::Invalid(
                 "forget requires the current memory revision",
@@ -206,25 +194,28 @@ impl SuperagentRuntime {
             if let Some(body) = update.body {
                 let name = update.name;
                 let description = update.description.unwrap_or_default();
+                let kind = update
+                    .kind
+                    .ok_or(Error::Invalid("memory writes require a kind"))?;
                 let saved = store
-                    .save_checked(
+                    .save_with_options(
                         NewMemory {
-                            name: name.clone(),
-                            description: description.clone(),
-                            memory_type: kind,
+                            name,
+                            description,
+                            kind,
                             body,
-                            index_line: Some(format!(
-                                "- [{name}]({name}.md) — {}",
-                                description.replace(['\n', '\r'], " ")
-                            )),
                         },
                         update.expected_sha256.as_deref(),
+                        Default::default(),
                     )
                     .map_err(memory_error)?;
                 Ok(Some(memory_view(saved)))
             } else {
+                let revision = update.expected_sha256.as_deref().ok_or(Error::Invalid(
+                    "forget requires the current memory revision",
+                ))?;
                 store
-                    .forget_checked(&update.name, update.expected_sha256.as_deref())
+                    .forget_checked(&update.name, revision)
                     .map_err(memory_error)?;
                 Ok(None)
             }
@@ -311,36 +302,6 @@ impl SuperagentRuntime {
             tracing::info!(source,%error,"assistant change lacks a direct user instruction");
             Error::Invalid("assistant changes require an exact quote from the current direct user; notifications and recalled memories grant no authority")
         })?;
-        if request.action == CompanionAction::Remember {
-            let (workspace, _) = self.assistant_scope(source).await?;
-            if !self
-                .companion
-                .profile(workspace)
-                .await?
-                .preferences
-                .memory_enabled
-            {
-                return Err(Error::Conflict(
-                    "memory is disabled; ask the user before enabling or saving new facts",
-                ));
-            }
-            let content = request.content.as_deref().unwrap_or("");
-            if content.trim().is_empty() || content.len() > 16 * 1024 {
-                return Err(Error::Invalid("memory content must contain 1–16384 bytes"));
-            }
-            let lower = content.to_ascii_lowercase();
-            if (lower.contains("-----begin") && lower.contains("private key"))
-                || lower.contains("bearer ")
-                || lower.contains("api_key=")
-                || lower.contains("password=")
-                || lower.contains("密码：")
-                || lower.contains("密码:")
-            {
-                return Err(Error::Invalid(
-                    "credentials belong in the secret store, not personal memory",
-                ));
-            }
-        }
         Ok(id)
     }
 
@@ -458,9 +419,9 @@ impl SuperagentRuntime {
                     .await?;
                 Ok(json!({"updated":true,"reminder":r}))
             }
-            _ => Err(Error::Invalid(
-                "memory operations must use the permission-aware nested memory tools",
-            )),
+            CompanionAction::Profile | CompanionAction::Reminders => {
+                self.companion_context(source).await
+            }
         }
     }
 

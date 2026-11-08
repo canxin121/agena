@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::*;
-use crate::{MemoryKind, MemoryMetadata, MemoryOrigin, MemorySource, MemoryStatus, MemoryType};
+use crate::{MemoryMetadata, MemoryOrigin, MemorySource, MemoryStatus};
 
 pub(super) const STATE_NAME: &str = ".memory-state.json";
 
@@ -44,7 +44,7 @@ pub(super) struct MemoryState {
 impl Default for MemoryState {
     fn default() -> Self {
         Self {
-            schema_version: 1,
+            schema_version: MEMORY_SCHEMA_VERSION,
             generation: 0,
             records: BTreeMap::new(),
             tombstones: BTreeMap::new(),
@@ -67,7 +67,7 @@ impl MemoryState {
                 message: format!("invalid lifecycle state: {error}"),
             }
         })?;
-        if state.schema_version != 1 {
+        if state.schema_version != MEMORY_SCHEMA_VERSION {
             return Err(MemoryError::Malformed {
                 path,
                 message: format!("unsupported memory state version {}", state.schema_version),
@@ -92,30 +92,18 @@ impl MemoryState {
         Ok(self.generation)
     }
 
-    pub fn attach(&self, record: &mut MemoryRecord) {
-        let name = record.file_name.trim_end_matches(".md");
-        let mut metadata = self
+    pub fn attach(&self, record: MemoryDocument) -> MemoryResult<MemoryRecord> {
+        let name = record.frontmatter.name.as_str();
+        let stored = self
             .records
             .get(name)
-            .map(|stored| stored.metadata.clone())
-            .unwrap_or_else(|| MemoryMetadata {
-                id: memory_id(&record.path),
-                kind: match record.frontmatter.r#type {
-                    Some(MemoryType::User | MemoryType::Feedback) => MemoryKind::Preference,
-                    _ => MemoryKind::Fact,
-                },
-                ..MemoryMetadata::default()
-            });
-        let intact = self.records.get(name).is_some_and(|stored| {
-            stored.sha256 == record.sha256
-                && record.frontmatter.revision == Some(stored.metadata.revision)
-        });
-        if !self.records.contains_key(name) && record.frontmatter.revision.is_some() {
-            // A renamed managed file or lost sidecar cannot silently broaden a
-            // session-only note into workspace-wide knowledge. Explicit review
-            // can reactivate it with an appropriate scope.
-            metadata.status = MemoryStatus::Archived;
-        }
+            .ok_or_else(|| MemoryError::Malformed {
+                path: record.path.clone(),
+                message: "memory document is not registered in the current lifecycle state".into(),
+            })?;
+        let mut metadata = stored.metadata.clone();
+        let intact = stored.sha256 == record.sha256
+            && record.frontmatter.revision == stored.metadata.revision;
         if !intact {
             // Preserve host-controlled scope/status, but do not attribute edited
             // bytes to the source that supported an earlier revision.
@@ -137,19 +125,24 @@ impl MemoryState {
         // Changing bytes revokes attribution, but cannot release an automatic
         // note from a durable forget. Only an explicit host write changes its
         // stored origin to user-controlled.
-        metadata.source_suppressed = self.records.get(name).is_some_and(|stored| {
-            stored.metadata.origin == MemoryOrigin::Derived
-                && stored
-                    .metadata
-                    .source
-                    .iter()
-                    .chain(stored.source_history.iter())
-                    .any(|source| self.source_is_suppressed(source))
-        });
+        metadata.source_suppressed = stored.metadata.origin == MemoryOrigin::Derived
+            && stored
+                .metadata
+                .source
+                .iter()
+                .chain(stored.source_history.iter())
+                .any(|source| self.source_is_suppressed(source));
         if metadata.source_suppressed {
             metadata.status = MemoryStatus::Archived;
         }
-        record.metadata = metadata;
+        Ok(MemoryRecord {
+            sha256: record.sha256,
+            file_name: record.file_name,
+            path: record.path,
+            frontmatter: record.frontmatter,
+            body: record.body,
+            metadata,
+        })
     }
 
     pub fn source_is_suppressed(&self, source: &MemorySource) -> bool {
@@ -165,8 +158,6 @@ impl MemoryState {
 
     pub fn suppress_source(&mut self, source: Option<&MemorySource>) {
         if let Some(source) = source
-            && source.instance_id.is_some()
-            && source.session_id.is_some()
             && !self
                 .suppressed_sources
                 .iter()
@@ -223,11 +214,9 @@ impl MemoryState {
             .into_iter()
             .chain(record.metadata.source.as_ref())
         {
-            if source.instance_id.is_some()
-                && source.session_id.is_some()
-                && !source_history
-                    .iter()
-                    .any(|old| same_source_session(old, source))
+            if !source_history
+                .iter()
+                .any(|old| same_source_session(old, source))
             {
                 source_history.push(source.clone());
             }
@@ -244,10 +233,7 @@ impl MemoryState {
 }
 
 fn same_source_session(a: &MemorySource, b: &MemorySource) -> bool {
-    a.instance_id.is_some()
-        && a.session_id.is_some()
-        && a.instance_id == b.instance_id
-        && a.session_id == b.session_id
+    a.instance_id == b.instance_id && a.session_id == b.session_id
 }
 
 pub(super) fn memory_id(path: &Path) -> String {

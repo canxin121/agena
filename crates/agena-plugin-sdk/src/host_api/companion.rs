@@ -6,10 +6,6 @@ use serde::{Deserialize, Serialize};
 pub enum CompanionAction {
     Profile,
     Configure,
-    Memories,
-    Recall,
-    Remember,
-    Forget,
     Remind,
     Reminders,
     PauseReminder,
@@ -29,23 +25,38 @@ pub struct CompanionRequest {
     pub expected_revision: Option<i64>,
     #[serde(default)]
     pub patch: Option<AssistantPatch>,
-    /// Stable descriptive memory key, not a path. Use recall before corrections.
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub description: Option<String>,
-    /// user / feedback / project / reference / other. Personal preferences use user.
-    #[serde(default)]
-    pub memory_type: Option<String>,
-    /// Revision returned by memory recall. Required for correction/deletion.
-    #[serde(default)]
-    pub expected_sha256: Option<String>,
-    #[serde(default)]
-    pub query: Option<String>,
     #[serde(default)]
     pub reminder: Option<ReminderSpec>,
     #[serde(default)]
     pub reminder_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn companion_rejects_memory_actions_and_fields() {
+        for action in ["memories", "recall", "remember", "forget"] {
+            assert!(
+                serde_json::from_value::<CompanionRequest>(serde_json::json!({"action": action}))
+                    .is_err()
+            );
+        }
+        for field in [
+            "name",
+            "content",
+            "description",
+            "memory_type",
+            "expected_sha256",
+            "query",
+        ] {
+            let mut request = serde_json::json!({"action": "profile"});
+            request[field] = serde_json::json!("old-memory-input");
+            assert!(serde_json::from_value::<CompanionRequest>(request).is_err());
+        }
+        let request: CompanionRequest =
+            serde_json::from_value(serde_json::json!({"action": "profile"})).unwrap();
+        assert_eq!(request.action, CompanionAction::Profile);
+    }
 }

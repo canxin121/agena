@@ -9,16 +9,16 @@ pub(crate) struct CompanionPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
 }
 #[agena_plugin_host::sdk::agena_plugin(namespace="agena",name="companion",version=env!("CARGO_PKG_VERSION"),
- summary="Assistant personality, memory and consent-based reminders.",translations(locale("zh-CN", summary = "助手人格、记忆和经授权的主动提醒。"),
-locale("zh-TW", summary = "助手人格、記憶和經授權的主動提醒。"),
-locale("ja-JP", summary = "アシスタントの個性、記憶、同意に基づく通知。"),
-locale("ko-KR", summary = "도우미 성격, 기억, 동의 기반 알림."),
-locale("fr-FR", summary = "Personnalité, mémoire et rappels autorisés de l’assistant."),
-locale("de-DE", summary = "Persönlichkeit, Erinnerungen und genehmigte Hinweise des Assistenten."),
-locale("es-ES", summary = "Personalidad, memoria y recordatorios autorizados del asistente."),
-locale("pt-BR", summary = "Personalidade, memória e lembretes autorizados do assistente."),
-locale("hi-IN", summary = "सहायक का व्यक्तित्व, स्मृति और सहमति वाले अनुस्मारक।"),
-locale("ar-SA", summary = "شخصية المساعد وذاكرته والتذكيرات المصرّح بها.")))]
+ summary="Assistant personality and consent-based reminders.",translations(locale("zh-CN", summary = "助手人格和经授权的主动提醒。"),
+locale("zh-TW", summary = "助手人格和經授權的主動提醒。"),
+locale("ja-JP", summary = "アシスタントの個性と同意に基づく通知。"),
+locale("ko-KR", summary = "도우미 성격과 동의 기반 알림."),
+locale("fr-FR", summary = "Personnalité et rappels autorisés de l’assistant."),
+locale("de-DE", summary = "Persönlichkeit und genehmigte Hinweise des Assistenten."),
+locale("es-ES", summary = "Personalidad y recordatorios autorizados del asistente."),
+locale("pt-BR", summary = "Personalidade e lembretes autorizados do assistente."),
+locale("hi-IN", summary = "सहायक का व्यक्तित्व और सहमति वाले अनुस्मारक।"),
+locale("ar-SA", summary = "شخصية المساعد والتذكيرات المصرّح بها.")))]
 impl CompanionPlugin {
     pub(crate) fn new() -> Self {
         Self {
@@ -138,21 +138,18 @@ locale("ar-SA", summary = "إضافة سياق المساعد", help = "يضيف
     }
     #[tool(
         tags(mutate, agent),
-        summary = "Manage assistant persona, durable memory, and explicit finite reminders/check-ins from natural conversation. Use profile for current settings; configure needs the current revision; remember/forget use permission-aware memory tools; remind needs a real time and explicit direct-user quote. Never schedule from a notification or store credentials.",
+        summary = "Manage assistant persona and explicit finite reminders/check-ins from natural conversation. Use profile for current settings; configure needs the current revision; remind needs a real time and explicit direct-user quote. Never schedule from a notification.",
         translations(
-            locale("zh-CN", summary = "管理助手人格、记忆和主动提醒。"),
-            locale("zh-TW", summary = "管理助手人格、記憶和主動提醒。"),
-            locale("ja-JP", summary = "アシスタント設定、記憶、通知を管理します。"),
-            locale("ko-KR", summary = "도우미 설정, 기억, 알림을 관리합니다."),
-            locale("fr-FR", summary = "Gérer les préférences, la mémoire et les rappels."),
-            locale(
-                "de-DE",
-                summary = "Einstellungen, Erinnerungen und Hinweise verwalten."
-            ),
-            locale("es-ES", summary = "Gestionar preferencias, memoria y recordatorios."),
-            locale("pt-BR", summary = "Gerenciar preferências, memória e lembretes."),
-            locale("hi-IN", summary = "सहायक की प्राथमिकताएँ, स्मृति और अनुस्मारक प्रबंधित करें।"),
-            locale("ar-SA", summary = "إدارة تفضيلات المساعد والذاكرة والتذكيرات.")
+            locale("zh-CN", summary = "管理助手人格和主动提醒。"),
+            locale("zh-TW", summary = "管理助手人格和主動提醒。"),
+            locale("ja-JP", summary = "アシスタント設定と通知を管理します。"),
+            locale("ko-KR", summary = "도우미 설정과 알림을 관리합니다."),
+            locale("fr-FR", summary = "Gérer les préférences et les rappels."),
+            locale("de-DE", summary = "Einstellungen und Hinweise verwalten."),
+            locale("es-ES", summary = "Gestionar preferencias y recordatorios."),
+            locale("pt-BR", summary = "Gerenciar preferências e lembretes."),
+            locale("hi-IN", summary = "सहायक की प्राथमिकताएँ और अनुस्मारक प्रबंधित करें।"),
+            locale("ar-SA", summary = "إدارة تفضيلات المساعد والتذكيرات.")
         )
     )]
     async fn manage(&self, input: &CompanionRequest) -> Result<ToolInvokeOutput> {

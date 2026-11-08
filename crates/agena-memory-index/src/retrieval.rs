@@ -251,7 +251,7 @@ fn bounded_unique(terms: Vec<String>, limit: usize) -> Vec<String> {
     unique
 }
 
-/// The same word boundaries are used by the index, portable search and snippet
+/// The same word boundaries are used by the index and snippet
 /// selector. In particular, 数据库PostgreSQL contains two lexical words.
 pub(crate) struct WordSpans<'a> {
     chars: Peekable<CharIndices<'a>>,

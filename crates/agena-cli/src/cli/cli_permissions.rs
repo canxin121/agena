@@ -1,11 +1,6 @@
 use agena_application::dto::{PermissionMode as PermissionModeResource, PermissionRuleResource};
-use agena_storage::MemoryType;
 
 use super::{AppError, PermissionRuleOutput};
-
-pub(super) fn memory_type_label(memory_type: Option<MemoryType>) -> Option<String> {
-    memory_type.map(|value| value.label().to_string())
-}
 
 pub(super) fn permission_rule_output(
     rule: PermissionRuleResource,

@@ -14,7 +14,8 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { apiJson, ApiError } from '../../lib/api'
 import MemoryMetadataView from '@/components/MemoryMetadataView.vue'
-import type { MemoryMetadata } from '@/generated/agenaState'
+import type { MemoryKind, MemoryMetadata } from '@/generated/agenaState'
+import { isMemoryKind, memoryBatchDeleteRequest, memoryRevision, memoryWriteRequest } from '@/lib/memoryRequests'
 import { useToastsStore } from '../../stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneRead } from '@/composables/usePaneRead'
@@ -22,20 +23,19 @@ import { usePaneRead } from '@/composables/usePaneRead'
 const MEMORY_DELETE_BATCH_SIZE = 1_000
 
 type MemoryItem = {
-  name?: string
-  file_name?: string
-  path?: string
-  description?: string
-  memory_type?: string
-  body?: string
-  sha256?: string
-  metadata?: MemoryMetadata
+  name: string
+  file_name: string
+  path: string
+  description: string
+  body: string
+  sha256: string
+  metadata: MemoryMetadata
 }
 
 type MemoriesOverview = {
-  workspace_root?: string
-  directory?: string
-  items?: MemoryItem[]
+  workspace_root: string
+  directory: string
+  items: MemoryItem[]
 }
 
 const toasts = useToastsStore()
@@ -48,7 +48,7 @@ const selectedName = ref<string | null>(null)
 const selectedMemoryNames = ref<Set<string>>(new Set())
 const editName = ref('')
 const editDescription = ref('')
-const editMemoryType = ref('')
+const editKind = ref<MemoryKind>('fact')
 const editBody = ref('')
 const editBusy = ref(false)
 const editError = ref('')
@@ -60,38 +60,43 @@ const dirty = computed(() =>
   Boolean(
     selectedName.value &&
     originalMemory.value &&
-    (editDescription.value !== (originalMemory.value.description ?? '') ||
-      editMemoryType.value !== (originalMemory.value.memory_type ?? '') ||
-      editBody.value !== (originalMemory.value.body ?? '')),
+    (editDescription.value !== originalMemory.value.description ||
+      editKind.value !== originalMemory.value.metadata.kind ||
+      editBody.value !== originalMemory.value.body),
   ),
 )
 
-const memoryTypeOptions = computed(() => [
-  { value: 'user', label: st('User'), description: st('Stable user preferences and personal context.') },
-  { value: 'feedback', label: st('Feedback'), description: st('Corrections and feedback from prior work.') },
-  { value: 'project', label: st('Project'), description: st('Project-specific facts and conventions.') },
-  { value: 'reference', label: st('Reference'), description: st('Reusable reference information.') },
-  { value: 'other', label: st('Other'), description: st('Memory that does not fit another category.') },
+const memoryKindOptions = computed(() => [
+  { value: 'fact', label: st('Fact'), description: st('Facts and decisions relevant to future work.') },
+  {
+    value: 'preference',
+    label: st('Preference'),
+    description: st('Stable preferences for how the agent should work.'),
+  },
+  { value: 'episode', label: st('Episode'), description: st('Outcomes and lessons from completed work.') },
+  { value: 'procedure', label: st('Procedure'), description: st('Reusable steps for recurring tasks.') },
+  { value: 'task', label: st('Task'), description: st('Current goals, progress, and next actions.') },
 ])
+
+function setMemoryKind(kind: string) {
+  if (isMemoryKind(kind)) editKind.value = kind
+}
 
 const sortedItems = computed(() =>
   [...items.value].sort((a, b) => {
-    const rank = (item: MemoryItem) => (item.metadata?.status && item.metadata.status !== 'active' ? 1 : 0)
-    return (
-      rank(a) - rank(b) ||
-      (b.metadata?.updated_at_ms ?? 0) - (a.metadata?.updated_at_ms ?? 0) ||
-      String(a.name || '').localeCompare(String(b.name || ''))
-    )
+    const rank = (item: MemoryItem) => (item.metadata.status === 'active' ? 0 : 1)
+    return rank(a) - rank(b) || b.metadata.updated_at_ms - a.metadata.updated_at_ms || a.name.localeCompare(b.name)
   }),
 )
-const selectableItems = computed(() => sortedItems.value.filter((item) => memoryName(item)))
+const selectableItems = sortedItems
 const filteredItems = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
   return sortedItems.value.filter(
-    (item) => !query || [memoryName(item), item.description, item.memory_type].join(' ').toLowerCase().includes(query),
+    (item) =>
+      !query || [memoryName(item), item.description, item.metadata.kind].join(' ').toLowerCase().includes(query),
   )
 })
-const visibleSelectableItems = computed(() => filteredItems.value.filter((item) => memoryName(item)))
+const visibleSelectableItems = filteredItems
 const selectedItems = computed(() =>
   selectableItems.value.filter((item) => selectedMemoryNames.value.has(memoryName(item))),
 )
@@ -102,9 +107,7 @@ const allMemoriesSelected = computed(
 )
 
 function memoryName(item: MemoryItem): string {
-  return String(item.file_name || item.name || '')
-    .trim()
-    .replace(/\.md$/i, '')
+  return item.file_name.replace(/\.md$/, '')
 }
 
 watch(selectableItems, (available) => {
@@ -138,11 +141,11 @@ async function selectMemory(item: MemoryItem) {
   if (!(await canLeave())) return
   editConflict.value = false
   originalMemory.value = { ...item }
-  selectedName.value = memoryName(item) || null
-  editName.value = item.name ?? item.file_name ?? ''
-  editDescription.value = item.description ?? ''
-  editMemoryType.value = item.memory_type ?? ''
-  editBody.value = item.body ?? ''
+  selectedName.value = memoryName(item)
+  editName.value = item.name
+  editDescription.value = item.description
+  editKind.value = item.metadata.kind
+  editBody.value = item.body
   editError.value = ''
   await nextTick()
   if (window.matchMedia('(max-width: 1279px)').matches)
@@ -150,37 +153,27 @@ async function selectMemory(item: MemoryItem) {
 }
 
 const { loading, error, refresh } = usePaneRead(
-  async (signal) => {
-    const overview = await apiJson<MemoriesOverview>('/api/v1/memories/overview', { signal })
-    let items = Array.isArray(overview?.items) ? overview.items : []
-    if (!items.length) {
-      const flat = await apiJson<MemoryItem[]>('/api/v1/memories', { signal }).catch(() => null)
-      if (Array.isArray(flat)) items = flat
-    }
-    return { overview, items }
-  },
-  ({ overview, items: next }) => {
-    workspaceRoot.value = overview?.workspace_root ?? ''
-    directory.value = overview?.directory ?? ''
-    items.value = next
+  (signal) => apiJson<MemoriesOverview>('/api/v1/memories/overview', { signal }),
+  (overview) => {
+    workspaceRoot.value = overview.workspace_root
+    directory.value = overview.directory
+    items.value = overview.items
   },
 )
 
 async function saveSelected() {
   const name = selectedName.value
-  if (!name || editBusy.value || editConflict.value) return
+  const original = originalMemory.value
+  if (!name || !original || editBusy.value || editConflict.value) return
   editBusy.value = true
   editError.value = ''
   try {
     await apiJson(`/api/v1/memories/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        description: editDescription.value.trim(),
-        memory_type: editMemoryType.value.trim() || null,
-        body: editBody.value,
-        expected_sha256: originalMemory.value?.sha256 || undefined,
-      }),
+      body: JSON.stringify(
+        memoryWriteRequest(editKind.value, editBody.value, editDescription.value.trim(), original.sha256),
+      ),
     })
     toasts.push('success', st('Memory updated'))
     selectedName.value = null
@@ -201,12 +194,12 @@ async function saveSelected() {
 
 async function deleteSelected() {
   const name = selectedName.value
-  if (!name || editBusy.value || editConflict.value) return
+  const original = originalMemory.value
+  if (!name || !original || editBusy.value || editConflict.value) return
   editBusy.value = true
   editError.value = ''
   try {
-    const expected = originalMemory.value?.sha256
-    const query = expected ? `?expected_sha256=${encodeURIComponent(expected)}` : ''
+    const query = `?expected_sha256=${encodeURIComponent(memoryRevision(original.sha256))}`
     await apiJson(`/api/v1/memories/${encodeURIComponent(name)}${query}`, { method: 'DELETE' })
     toasts.push('success', st('Memory deleted'))
     selectedName.value = null
@@ -230,27 +223,21 @@ async function deleteSelected() {
 }
 
 async function deleteSelectedMemories() {
-  const names = [...new Set(selectedItems.value.map(memoryName))]
-  if (!names.length || editBusy.value) return
+  const records = selectedItems.value.map((item) => ({ name: memoryName(item), sha256: item.sha256 }))
+  const names = records.map((record) => record.name)
+  if (!records.length || editBusy.value) return
   editBusy.value = true
   editError.value = ''
   try {
     let deletedCount = 0
-    for (let offset = 0; offset < names.length; offset += MEMORY_DELETE_BATCH_SIZE) {
-      const batch = names.slice(offset, offset + MEMORY_DELETE_BATCH_SIZE)
+    for (let offset = 0; offset < records.length; offset += MEMORY_DELETE_BATCH_SIZE) {
+      const batch = records.slice(offset, offset + MEMORY_DELETE_BATCH_SIZE)
       const deleted = await apiJson<string[]>('/api/v1/memories/batch-delete', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          names: batch,
-          expected_sha256: Object.fromEntries(
-            selectedItems.value
-              .filter((item) => batch.includes(memoryName(item)) && item.sha256)
-              .map((item) => [memoryName(item), item.sha256]),
-          ),
-        }),
+        body: JSON.stringify(memoryBatchDeleteRequest(batch)),
       })
-      deletedCount += Array.isArray(deleted) ? deleted.length : batch.length
+      deletedCount += deleted.length
     }
     if (selectedName.value && names.includes(selectedName.value)) selectedName.value = null
     clearMemorySelection()
@@ -281,9 +268,9 @@ async function reloadSelected() {
     const latest = await apiJson<MemoryItem>(`/api/v1/memories/${encodeURIComponent(name)}`)
     items.value = items.value.map((item) => (memoryName(item) === name ? latest : item))
     originalMemory.value = { ...latest }
-    editDescription.value = latest.description ?? ''
-    editMemoryType.value = latest.memory_type ?? ''
-    editBody.value = latest.body ?? ''
+    editDescription.value = latest.description
+    editKind.value = latest.metadata.kind
+    editBody.value = latest.body
     editError.value = ''
     editConflict.value = false
   } catch (err) {
@@ -303,9 +290,9 @@ async function reloadSelected() {
 
 function discardDraft() {
   if (!originalMemory.value) return
-  editDescription.value = originalMemory.value.description ?? ''
-  editMemoryType.value = originalMemory.value.memory_type ?? ''
-  editBody.value = originalMemory.value.body ?? ''
+  editDescription.value = originalMemory.value.description
+  editKind.value = originalMemory.value.metadata.kind
+  editBody.value = originalMemory.value.body
   editError.value = ''
 }
 async function canLeave() {
@@ -410,7 +397,7 @@ defineExpose({ refresh })
       <div v-else class="space-y-2" :class="selectedName ? 'xl:max-h-[36rem] xl:overflow-y-auto' : ''">
         <div
           v-for="item in filteredItems"
-          :key="memoryName(item) || item.path"
+          :key="memoryName(item)"
           class="flex min-w-0 items-start gap-3 rounded-lg border p-3 transition-colors"
           :class="
             selectedName === memoryName(item)
@@ -419,7 +406,6 @@ defineExpose({ refresh })
           "
         >
           <input
-            v-if="memoryName(item)"
             type="checkbox"
             class="mt-1 shrink-0"
             :aria-label="memoryName(item)"
@@ -435,16 +421,7 @@ defineExpose({ refresh })
             @click="selectMemory(item)"
           >
             <span class="flex flex-wrap items-center gap-2"
-              ><span class="min-w-0 max-w-full break-words text-sm font-semibold">{{
-                item.name ?? item.file_name ?? item.path
-              }}</span
-              ><span
-                v-if="item.memory_type"
-                class="max-w-full break-words rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                >{{
-                  memoryTypeOptions.find((option) => option.value === item.memory_type)?.label || item.memory_type
-                }}</span
-              ></span
+              ><span class="min-w-0 max-w-full break-words text-sm font-semibold">{{ item.name }}</span></span
             >
             <span
               v-if="item.description"
@@ -473,7 +450,7 @@ defineExpose({ refresh })
         </dl>
       </details>
     </SettingsCard>
-    <div v-if="selectedName" ref="editorElement" class="min-w-0 scroll-mt-4">
+    <div v-if="selectedName && originalMemory" ref="editorElement" class="min-w-0 scroll-mt-4">
       <SettingsCard :title="$st('Edit memory')" :icon="RiEditLine">
         <template #actions
           ><Button variant="ghost" size="sm" :disabled="editBusy" @click="closeEditor">{{
@@ -481,21 +458,21 @@ defineExpose({ refresh })
           }}</Button></template
         >
         <div class="space-y-4">
-          <MemoryMetadataView :metadata="originalMemory?.metadata" />
+          <MemoryMetadataView :metadata="originalMemory.metadata" />
           <div class="grid gap-3 sm:grid-cols-2">
             <label class="min-w-0 space-y-2"
               ><span class="block text-xs font-medium text-muted-foreground">{{ $st('Name') }}</span
               ><Input :model-value="editName" disabled class="font-mono text-sm"
             /></label>
             <div class="min-w-0 space-y-2">
-              <div class="text-xs font-medium text-muted-foreground">{{ $st('Type') }}</div>
+              <div class="text-xs font-medium text-muted-foreground">{{ $st('Memory category') }}</div>
               <OptionPicker
-                v-model="editMemoryType"
-                :options="memoryTypeOptions"
-                :title="$st('Memory type')"
-                :empty-label="$st('Unclassified')"
-                :include-empty="true"
+                :model-value="editKind"
+                :options="memoryKindOptions"
+                :title="$st('Memory category')"
+                :include-empty="false"
                 :disabled="editBusy"
+                @update:model-value="setMemoryKind"
               />
             </div>
           </div>

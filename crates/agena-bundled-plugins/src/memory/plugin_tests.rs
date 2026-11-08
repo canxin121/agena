@@ -162,7 +162,7 @@ async fn unavailable_workspace_policy_blocks_writes_and_automatic_recall() {
     let dir = tempfile::tempdir().unwrap();
     let (plugin, host) = recovery_test_plugin(dir.path(), true);
     let input: MemoryWriteInput = serde_json::from_value(json!({
-        "name": "must-not-write", "content": "unknown policy must not enable memory"
+        "name": "must-not-write", "kind": "fact", "content": "unknown policy must not enable memory"
     }))
     .unwrap();
     assert!(plugin.invoke_write(&input).await.is_err());
@@ -197,7 +197,7 @@ async fn operator_calls_keep_their_authorized_workspace_without_a_kernel_session
         assert_eq!(plugin.workspace_root().await.unwrap(), root);
         assert!(current_memory_session_id().is_none());
         let input: MemoryWriteInput = serde_json::from_value(json!({
-            "name": "operator-note", "content": "an explicitly controlled operator note"
+            "name": "operator-note", "kind": "fact", "content": "an explicitly controlled operator note"
         }))
         .unwrap();
         let error = plugin.invoke_write(&input).await.unwrap_err();
@@ -216,10 +216,10 @@ fn stored_record(body: String) -> MemoryRecord {
         file_name: "paged-record.md".to_string(),
         path: PathBuf::from("/isolated/paged-record.md"),
         frontmatter: agena_storage::MemoryFrontmatter {
+            schema_version: 2,
             name: "paged-record".to_string(),
             description: "A persisted memory".to_string(),
-            r#type: Some(MemoryType::Project),
-            revision: Some(1),
+            revision: 1,
         },
         body,
         metadata: MemoryMetadata::default(),
@@ -231,14 +231,11 @@ fn recalled(name: &str, body: String, reason: &'static str, query: &str) -> Reca
         name.to_string(),
         name.to_string(),
         String::new(),
-        Some(
-            if reason == "core_preference" {
-                "user"
-            } else {
-                "project"
-            }
-            .to_string(),
-        ),
+        if reason == "core_preference" {
+            MemoryKind::Preference
+        } else {
+            MemoryKind::Fact
+        },
         body,
         format!("/isolated/{name}.md"),
     );
@@ -267,7 +264,31 @@ fn recalled(name: &str, body: String, reason: &'static str, query: &str) -> Reca
 }
 
 #[test]
-fn legacy_settings_gain_bounded_defaults_and_invalid_budgets_are_rejected() {
+fn memory_inputs_require_canonical_kind_and_observed_delete_revision() {
+    let create = json!({"name":"note", "content":"durable knowledge", "kind":"fact"});
+    let input: MemoryWriteInput = serde_json::from_value(create.clone()).unwrap();
+    assert_eq!(input.kind, MemoryKind::Fact);
+    assert!(input.expected_sha256.is_none());
+    for invalid in [
+        json!({"name":"note", "content":"missing kind"}),
+        json!({"name":"note", "content":"old kind", "memory_type":"project"}),
+        json!({"name":"note", "content":"old field", "kind":"fact", "memory_type":"project"}),
+        json!({"name":"note", "content":"old value", "kind":"project"}),
+    ] {
+        assert!(serde_json::from_value::<MemoryWriteInput>(invalid).is_err());
+    }
+    assert!(serde_json::from_value::<MemoryDeleteInput>(json!({"name":"note"})).is_err());
+    assert!(
+        serde_json::from_value::<MemoryDeleteInput>(json!({"name":"note", "expected_sha256":null}))
+            .is_err()
+    );
+    let deleted: MemoryDeleteInput =
+        serde_json::from_value(json!({"name":"note", "expected_sha256":"ab".repeat(32)})).unwrap();
+    assert_eq!(deleted.expected_sha256, "ab".repeat(32));
+}
+
+#[test]
+fn omitted_settings_use_bounded_defaults_and_invalid_budgets_are_rejected() {
     let config =
         parse_memory_config(json!({"retrieval":{"enabled":true,"limit":3,"min_query_chars":8}}))
             .unwrap();
@@ -408,7 +429,7 @@ fn suppressed_sources_stay_hidden_even_in_history_and_direct_reads() {
     assert!(require_model_record_read(&record, Some(1), None).is_ok());
     record.metadata.scope = MemoryScope::Session {
         session_id: 2,
-        instance_id: Some("other".to_string()),
+        instance_id: "other".to_string(),
     };
     assert!(!memory_record_is_visible(&record, Some(1), &context, true));
     assert!(require_model_record_read(&record, Some(1), None).is_err());
@@ -422,11 +443,11 @@ fn derived_task_projection_must_match_current_host_checkpoint() {
     record.metadata.provenance_verified = true;
     record.metadata.scope = MemoryScope::Session {
         session_id: 7,
-        instance_id: Some("database-a".to_string()),
+        instance_id: "database-a".to_string(),
     };
     record.metadata.source = Some(MemorySource {
-        session_id: Some(7),
-        instance_id: Some("database-a".to_string()),
+        session_id: 7,
+        instance_id: "database-a".to_string(),
         entry_id: Some(42),
         ..Default::default()
     });
@@ -492,7 +513,7 @@ fn memory_get_pages_single_line_cjk_without_loss_and_keeps_full_record_revision(
 }
 
 #[test]
-fn small_record_fields_stay_compatible_and_large_write_echo_is_paged() {
+fn record_output_uses_canonical_metadata_and_large_write_echo_is_paged() {
     let small = stored_record("完整的小记忆".to_string());
     let output = memory_record_output(&small, 0, DEFAULT_MEMORY_GET_CHARS);
     let payload = serde_json::to_value(&output).unwrap();
@@ -500,7 +521,8 @@ fn small_record_fields_stay_compatible_and_large_write_echo_is_paged() {
     assert_eq!(payload["file_name"], "paged-record.md");
     assert_eq!(payload["body"], small.body);
     assert_eq!(payload["sha256"], small.sha256);
-    assert_eq!(payload["memory_type"], "project");
+    assert_eq!(payload["metadata"]["kind"], "fact");
+    assert!(payload.get("memory_type").is_none());
     assert!(payload["body_range"]["next_offset"].is_null());
     assert!(body_page_note(&output).is_empty());
 

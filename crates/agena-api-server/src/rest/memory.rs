@@ -1,13 +1,13 @@
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryBatchDeleteRequest {
-    pub names: Vec<String>,
-    #[serde(default)]
-    pub expected_sha256: std::collections::BTreeMap<String, String>,
+    pub records: Vec<agena_domain::MemoryRevision>,
 }
 
-#[derive(Default, serde::Deserialize)]
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryDeleteQuery {
-    pub expected_sha256: Option<String>,
+    pub expected_sha256: String,
 }
 
 pub async fn list_memories(
@@ -95,10 +95,7 @@ pub async fn delete_memory(
     json_http(async {
         state
             .application()
-            .run_blocking(move |app| {
-                app.service()
-                    .delete_memory_checked(&name, query.expected_sha256.as_deref())
-            })
+            .run_blocking(move |app| app.service().delete_memory(&name, &query.expected_sha256))
             .await?
     })
     .await
@@ -108,12 +105,10 @@ pub async fn delete_memories(
     State(state): State<AppState>,
     Json(request): Json<MemoryBatchDeleteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let names = request.names;
-    let expected = request.expected_sha256;
     json_http(async move {
         state
             .application()
-            .run_blocking(move |app| app.service().delete_memories_checked(&names, &expected))
+            .run_blocking(move |app| app.service().delete_memories(&request.records))
             .await?
     })
     .await

@@ -2042,11 +2042,17 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    pub async fn delete_memory(&self, name: &str) -> Result<serde_json::Value, ClientError> {
+    pub async fn delete_memory(
+        &self,
+        name: &str,
+        expected_sha256: &str,
+    ) -> Result<serde_json::Value, ClientError> {
         let mut url = self.endpoint("/api/v1/memories");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
             .push(name);
+        url.query_pairs_mut()
+            .append_pair("expected_sha256", expected_sha256);
         let response = self
             .send_request(reqwest::Method::DELETE, url, None, None)
             .await?;

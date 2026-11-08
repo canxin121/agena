@@ -209,8 +209,8 @@ async fn assistant_ui(terminal: bool) -> TestResult {
             model.expect(RequestMatch::tool_output("ui-persona")).after(&persona).check_tool_output_contains("ui-persona", "saved")
                 .reply(Reply::text("阿林，已经保存这个称呼。assistant-ui-persona-saved"));
             let memory = model.expect(RequestMatch::user_text("记住我希望报告先给结论"))
-                .reply(Reply::tool_call("ui-memory", "companion.manage", json!({"action":"remember","user_quote":"记住我希望报告先给结论","name":"ui-report-style","content":"assistant-ui-memory-original: put the conclusion first","description":"Report preferences","memory_type":"user"})));
-            model.expect(RequestMatch::tool_output("ui-memory")).after(&memory).check_tool_output_contains("ui-memory", "Saved memory")
+                .reply(Reply::tool_call("ui-memory", "memory.write", json!({"name":"ui-report-style","content":"assistant-ui-memory-original: put the conclusion first","description":"Report preferences","kind":"preference"})));
+            model.expect(RequestMatch::tool_output("ui-memory")).after(&memory).check_tool_output_contains("ui-memory", "assistant-ui-memory-original")
                 .reply(Reply::text("已经保存报告偏好。assistant-ui-memory-saved"));
             let reminder = model.expect(RequestMatch::user_text("两秒后提醒我核对结果"))
                 .reply(Reply::tool_call("ui-reminder", "companion.manage", json!({"action":"remind","user_quote":"两秒后提醒我核对结果","reminder":{"text":"assistant-ui-due-contact","after_seconds":2}})));

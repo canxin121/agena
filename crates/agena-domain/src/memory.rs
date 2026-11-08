@@ -17,6 +17,18 @@ pub enum MemoryKind {
     Task,
 }
 
+impl MemoryKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Fact => "fact",
+            Self::Preference => "preference",
+            Self::Episode => "episode",
+            Self::Procedure => "procedure",
+            Self::Task => "task",
+        }
+    }
+}
+
 /// Scope always remains inside the owning workspace's permission boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -25,28 +37,18 @@ pub enum MemoryScope {
     Workspace,
     Session {
         session_id: i64,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        instance_id: Option<String>,
+        instance_id: String,
     },
 }
 
 impl MemoryScope {
-    pub fn includes_session(&self, session_id: Option<i64>) -> bool {
-        self.includes_context(session_id, None)
-    }
-
     pub fn includes_context(&self, session_id: Option<i64>, instance_id: Option<&str>) -> bool {
         match self {
             Self::Workspace => true,
             Self::Session {
                 session_id: owner,
                 instance_id: owner_instance,
-            } => {
-                session_id == Some(*owner)
-                    && owner_instance
-                        .as_deref()
-                        .is_none_or(|owner| instance_id == Some(owner))
-            }
+            } => session_id == Some(*owner) && instance_id == Some(owner_instance.as_str()),
         }
     }
 }
@@ -72,13 +74,11 @@ pub enum MemoryOrigin {
 
 /// Supplied by the runtime from its authenticated callback/event context.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct MemorySource {
     /// Durable runtime/database identity; session and entry IDs are local to it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instance_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
+    pub instance_id: String,
+    pub session_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
     /// Last durable source entry included in this note.
@@ -89,7 +89,7 @@ pub struct MemorySource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryMetadata {
     pub id: String,
     /// Monotonic store revision, also written into the document frontmatter.
@@ -104,7 +104,7 @@ pub struct MemoryMetadata {
     pub updated_at_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<MemorySource>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supersedes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,

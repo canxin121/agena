@@ -24,7 +24,6 @@ use std::pin::Pin;
 
 use agena_domain::{PermissionMode, PermissionScope};
 use async_trait::async_trait;
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 mod memory_metadata;
@@ -33,7 +32,7 @@ pub use memory_metadata::{
     MemoryStatus, MemoryWriteOptions, MemoryWriteSnapshot,
 };
 mod memory_store;
-pub use memory_store::MemoryStore;
+pub use memory_store::{MemoryStore, normalize_memory_name};
 
 pub mod backend;
 pub mod instance_state;
@@ -175,42 +174,15 @@ pub struct PersistedPermissionRule {
     pub revoked_by: Option<String>,
 }
 
-/// Classification stored in a persistent memory document's frontmatter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MemoryType {
-    User,
-    Feedback,
-    Project,
-    Reference,
-    Other,
-}
-
-impl MemoryType {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Feedback => "feedback",
-            Self::Project => "project",
-            Self::Reference => "reference",
-            Self::Other => "other",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-/// Parsed frontmatter of a memory document.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Required header of a current-format memory document.
 pub struct MemoryFrontmatter {
-    #[serde(default)]
+    pub schema_version: u32,
     pub name: String,
-    #[serde(default)]
     pub description: String,
-    #[serde(default)]
-    pub r#type: Option<MemoryType>,
     /// Host revision makes metadata-only updates visible to document SHA checks.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub revision: Option<u64>,
+    pub revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -250,11 +222,14 @@ pub trait MemoryRepository: Send + Sync {
     fn list(&self) -> MemoryResult<Vec<MemoryRecord>>;
     fn get(&self, name: &str) -> MemoryResult<MemoryRecord>;
     fn index_lines(&self) -> MemoryResult<Vec<String>>;
-    fn forget(&self, name: &str) -> MemoryResult<()>;
-    fn forget_checked(&self, name: &str, expected: Option<&str>) -> MemoryResult<()>;
+    fn forget_checked(&self, name: &str, expected: &str) -> MemoryResult<()>;
     fn forget_many_checked(&self, records: &[MemoryRevision]) -> MemoryResult<()>;
-    fn save(&self, entry: NewMemory) -> MemoryResult<MemoryRecord>;
-    fn save_checked(&self, entry: NewMemory, expected: Option<&str>) -> MemoryResult<MemoryRecord>;
+    fn save_with_options(
+        &self,
+        entry: NewMemory,
+        expected: Option<&str>,
+        options: MemoryWriteOptions,
+    ) -> MemoryResult<MemoryRecord>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -521,7 +496,6 @@ impl MemoryDir {
 pub struct NewMemory {
     pub name: String,
     pub description: String,
-    pub memory_type: Option<MemoryType>,
+    pub kind: MemoryKind,
     pub body: String,
-    pub index_line: Option<String>,
 }

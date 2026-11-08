@@ -717,54 +717,11 @@ impl HostClient for RuntimeHostClient {
         &self,
         request: agena_plugin_sdk::host_api::CompanionRequest,
     ) -> Result<serde_json::Value, PluginError> {
-        use agena_plugin_sdk::host_api::CompanionAction as A;
         let (source, call) = self.callback_session_and_call()?;
         let service = self
             .runtime()?
             .conversation_work_service()
             .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
-        let memory = match request.action {
-            A::Memories => Some(("memory.list", serde_json::json!({"limit":20}))),
-            A::Recall => Some(if let Some(name) = &request.name {
-                ("memory.get", serde_json::json!({"name":name}))
-            } else {
-                (
-                    "memory.search",
-                    serde_json::json!({"query":request.query.as_deref().unwrap_or(""),"limit":5}),
-                )
-            }),
-            A::Remember | A::Forget => {
-                service
-                    .authorize_companion(source, call, &request)
-                    .await
-                    .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-                let name = request
-                    .name
-                    .as_deref()
-                    .ok_or_else(|| PluginError::invalid_params("memory name is required"))?;
-                if request.action == A::Remember {
-                    Some((
-                        "memory.write",
-                        serde_json::json!({"name":name,"content":request.content,"description":request.description.clone().unwrap_or_default(),"memory_type":request.memory_type.as_deref().unwrap_or("user"),"expected_sha256":request.expected_sha256}),
-                    ))
-                } else {
-                    if request.expected_sha256.is_none() {
-                        return Err(PluginError::invalid_params(
-                            "recall the current memory before forgetting; expected_sha256 is required",
-                        ));
-                    }
-                    Some((
-                        "memory.delete",
-                        serde_json::json!({"name":name,"expected_sha256":request.expected_sha256}),
-                    ))
-                }
-            }
-            _ => None,
-        };
-        if let Some((tool, input)) = memory {
-            let output = self.invoke_tool(tool.into(), input).await?;
-            return serde_json::to_value(output).map_err(|e| PluginError::internal_error(&e));
-        }
         service
             .companion_operation(source, call, request)
             .await

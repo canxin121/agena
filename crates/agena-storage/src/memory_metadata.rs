@@ -9,7 +9,6 @@ pub use agena_domain::{
 /// Source provenance always describes this write and is cleared when omitted.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryWriteOptions {
-    pub kind: Option<MemoryKind>,
     pub scope: Option<MemoryScope>,
     pub status: Option<MemoryStatus>,
     pub importance: Option<u8>,
@@ -30,10 +29,6 @@ pub struct MemoryWriteSnapshot {
 
 impl crate::MemoryRecord {
     /// History remains available through get/list even when it is inactive.
-    pub fn is_active_for(&self, session_id: Option<i64>) -> bool {
-        self.is_active_in_context(session_id, None)
-    }
-
     pub fn is_active_in_context(&self, session_id: Option<i64>, instance_id: Option<&str>) -> bool {
         self.metadata.status == MemoryStatus::Active
             && !self.metadata.source_suppressed

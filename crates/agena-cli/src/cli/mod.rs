@@ -1665,8 +1665,8 @@ struct MemorySummaryOutput {
     file_name: String,
     name: String,
     description: String,
-    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
-    memory_type: Option<String>,
+    metadata: agena_domain::MemoryMetadata,
+    sha256: String,
     path: String,
 }
 

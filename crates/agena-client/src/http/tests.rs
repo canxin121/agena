@@ -1109,3 +1109,20 @@ async fn exact_attempt_cancel_sends_generation_and_preserves_mismatch_outcome() 
         "DELETE /api/v1/sessions/7/executions/{execution}/attempts/2 ",
     )));
 }
+
+#[tokio::test]
+async fn memory_delete_sends_the_observed_revision() {
+    let server = Fixture::new("127.0.0.1:0", "memory", Some("{}")).await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    let revision = "a".repeat(64);
+    client
+        .delete_memory("report-style", &revision)
+        .await
+        .unwrap();
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].lines().next().unwrap(),
+        format!("DELETE /api/v1/memories/report-style?expected_sha256={revision} HTTP/1.1")
+    );
+}

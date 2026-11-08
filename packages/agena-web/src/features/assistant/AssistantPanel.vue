@@ -6,6 +6,7 @@ import Dialog from '@/components/ui/Dialog.vue'
 import MemoryMetadataView from '@/components/MemoryMetadataView.vue'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { assistantApi, type AssistantSnapshot, type AssistantMemory, type Reminder } from '@/lib/assistantApi'
+import { assistantMemoryRequest } from '@/lib/memoryRequests'
 import type { AssistantPreferences, AssistantUpdate } from '@/generated/agenaState'
 import { minuteText, parseMinute, validPreferences, profileChanged, preferencePatch } from './profileForm'
 
@@ -123,13 +124,18 @@ async function saveMemory() {
   busy.value = true
   error.value = ''
   try {
-    await assistantApi.memory(props.source, {
-      name: form.original.name,
-      body: form.remove ? null : form.body,
-      description: form.description,
-      memory_type: form.original.memory_type,
-      expected_sha256: form.original.sha256,
-    })
+    await assistantApi.memory(
+      props.source,
+      assistantMemoryRequest(
+        form.original,
+        form.remove
+          ? null
+          : {
+              body: form.body,
+              description: form.description,
+            },
+      ),
+    )
     memoryForm.value = null
     notice.value = String(t('assistant.saved'))
   } catch (e) {
@@ -333,7 +339,7 @@ onBeforeUnmount(() => {
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="font-medium break-all">{{ memory.name }}</h2>
-              <p class="mt-1 text-xs text-muted-foreground">{{ memory.memory_type }} · {{ memory.description }}</p>
+              <p class="mt-1 text-xs text-muted-foreground">{{ memory.description }}</p>
               <MemoryMetadataView :metadata="memory.metadata" :timezone="snapshot.profile.preferences.timezone" />
             </div>
             <div class="flex gap-2">

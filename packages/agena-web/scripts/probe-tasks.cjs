@@ -433,9 +433,16 @@ async function main() {
       const future = state.reminders.find((r) => r.state === 'active')
       assert(future, 'future reminder')
       await cdp.click('[data-testid="chat-assistant"]')
+      // The panel shell renders before its asynchronous profile request settles.
+      // Wait for the visible form and completed initial load before reading values.
       await wait(
-        () => cdp.evaluate(`Boolean(document.querySelector('[data-testid="assistant-panel"]'))`),
-        'assistant workbench',
+        () =>
+          cdp.evaluate(`(() => {
+            const name = document.querySelector('[data-testid="assistant-name"]');
+            const refresh = document.querySelector('[data-testid="assistant-refresh"]');
+            return Boolean(name?.getClientRects().length && refresh && !refresh.disabled);
+          })()`),
+        'loaded assistant profile',
       )
       assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="assistant-name"]').value`), '小鱼')
       // Hold a real GET snapshot from before the edit. A late refresh must

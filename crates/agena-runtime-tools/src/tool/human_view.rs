@@ -3583,10 +3583,51 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
+    fn memory_field<'a>(
+        object: &'a serde_json::Map<String, Value>,
+        key: &str,
+    ) -> Option<&'a Value> {
+        match key.split_once('.') {
+            Some((parent, field)) => object.get(parent)?.as_object()?.get(field),
+            None => object.get(key),
+        }
+    }
+
+    fn memory_text(object: &serde_json::Map<String, Value>, key: &str) -> String {
+        Self::memory_field(object, key)
+            .filter(|value| !value.is_null())
+            .map(Self::generic_field_value)
+            .unwrap_or_default()
+    }
+
+    fn memory_table(id: &str, values: &[Value], columns: &[(&str, &str)]) -> Option<ViewBlock> {
+        if values.is_empty() || values.iter().any(|value| !value.is_object()) {
+            return None;
+        }
+        let rows = values
+            .iter()
+            .take(Self::GENERIC_MAX_ROWS)
+            .filter_map(Value::as_object)
+            .map(|object| {
+                columns
+                    .iter()
+                    .map(|(key, _)| {
+                        Self::memory_field(object, key)
+                            .map(Self::bounded_generic_value)
+                            .unwrap_or(Value::Null)
+                    })
+                    .collect()
+            })
+            .collect();
+        Self::table_block(id, columns.iter().map(|(_, label)| *label).collect(), rows)
+    }
+
     fn specific_memory_blocks(
         key: &str,
         object: &serde_json::Map<String, Value>,
     ) -> Vec<ViewBlock> {
+        // Revision hashes stay in the machine payload; the human projection
+        // follows the shared rule that omits technical identifiers.
         let mut blocks = Vec::new();
         match key {
             "memory.search" => {
@@ -3600,18 +3641,15 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
                 if let Some(results) = Self::object_array(object, "results")
-                    && let Some(table) = Self::scalar_table(
+                    && let Some(table) = Self::memory_table(
                         "memory-results",
-                        "Matching memories",
                         results,
                         &[
-                            ("id", "ID"),
                             ("name", "Name"),
-                            ("memory_type", "Type"),
-                            ("score", "Score"),
-                            ("description", "Description"),
-                            ("snippet", "Snippet"),
-                            ("path", "Path"),
+                            ("metadata.kind", "Kind"),
+                            ("metadata.scope", "Scope"),
+                            ("metadata.status", "Status"),
+                            ("excerpt.text", "Excerpt"),
                         ],
                     )
                 {
@@ -3644,19 +3682,15 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
                 if let Some(memories) = Self::object_array(object, "memories")
-                    && let Some(table) = Self::scalar_table(
+                    && let Some(table) = Self::memory_table(
                         "memories",
-                        "Memory records",
                         memories,
                         &[
-                            ("id", "ID"),
                             ("name", "Name"),
-                            ("memory_type", "Type"),
+                            ("metadata.kind", "Kind"),
+                            ("metadata.scope", "Scope"),
+                            ("metadata.status", "Status"),
                             ("description", "Description"),
-                            ("file_name", "File"),
-                            ("size", "Size"),
-                            ("path", "Path"),
-                            ("content_hash", "Hash"),
                         ],
                     )
                 {
@@ -3684,11 +3718,11 @@ impl BuiltinHumanRenderer {
             "memory.get" => {
                 let fields = [
                     ("Name", Self::object_text(object, "name")),
-                    ("Type", Self::object_text(object, "memory_type")),
+                    ("Kind", Self::memory_text(object, "metadata.kind")),
+                    ("Scope", Self::memory_text(object, "metadata.scope")),
+                    ("Status", Self::memory_text(object, "metadata.status")),
                     ("Description", Self::object_text(object, "description")),
                     ("File", Self::object_text(object, "file_name")),
-                    ("Path", Self::object_text(object, "path")),
-                    ("Hash", Self::object_text(object, "content_hash")),
                 ];
                 if let Some(block) =
                     Self::details_block_if_nonempty("memory-meta", "Memory", &fields)
@@ -3705,13 +3739,11 @@ impl BuiltinHumanRenderer {
             "memory.write" => {
                 let fields = [
                     ("Name", Self::object_text(object, "name")),
-                    ("Type", Self::object_text(object, "memory_type")),
+                    ("Kind", Self::memory_text(object, "metadata.kind")),
+                    ("Scope", Self::memory_text(object, "metadata.scope")),
+                    ("Status", Self::memory_text(object, "metadata.status")),
                     ("Description", Self::object_text(object, "description")),
                     ("File", Self::object_text(object, "file_name")),
-                    ("Path", Self::object_text(object, "path")),
-                    ("Hash", Self::object_text(object, "content_hash")),
-                    ("Saved", Self::object_text(object, "saved")),
-                    ("Bytes", Self::object_text(object, "bytes")),
                 ];
                 if let Some(block) =
                     Self::details_block_if_nonempty("memory-write", "Memory saved", &fields)
@@ -3733,14 +3765,7 @@ impl BuiltinHumanRenderer {
             "memory.delete" => {
                 let fields = [
                     ("Name", Self::object_text(object, "name")),
-                    (
-                        "Removed",
-                        if object.get("removed").is_some() {
-                            Self::object_text(object, "removed")
-                        } else {
-                            Self::object_text(object, "deleted")
-                        },
-                    ),
+                    ("Deleted", Self::object_text(object, "deleted")),
                 ];
                 if let Some(block) =
                     Self::details_block_if_nonempty("memory-delete", "Memory deletion", &fields)
@@ -3749,10 +3774,7 @@ impl BuiltinHumanRenderer {
                 } else {
                     blocks.push(Self::markdown_block(
                         "memory-delete",
-                        object
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or("### Memory deletion\nNo deletion details returned."),
+                        "### Memory deletion\nNo deletion details returned.",
                     ));
                 }
             }
@@ -5110,16 +5132,6 @@ impl BuiltinHumanRenderer {
     fn specific_tool_blocks(tool_name: &str, raw: &RawOutput) -> Vec<ViewBlock> {
         let key = agena_tool::normalized_tool_identity(tool_name);
         let Some(object) = Self::specific_result_object(raw) else {
-            if key == "memory.delete" {
-                return vec![Self::markdown_block(
-                    "memory-delete",
-                    if raw.text_content().trim().is_empty() {
-                        "### Memory deletion\nNo deletion details returned.".to_owned()
-                    } else {
-                        format!("### Memory deletion\n{}", raw.text_content().trim())
-                    },
-                )];
-            }
             if raw.text_content().trim().is_empty() {
                 return vec![Self::empty_state_block(&key)];
             }
@@ -6582,5 +6594,105 @@ mod file_search_projection_tests {
                 && text.contains("a.rs")
                 && text.contains("Results truncated")
         }));
+    }
+}
+
+#[cfg(test)]
+mod memory_contract_tests {
+    use super::*;
+
+    fn project(tool: &str, value: Value) -> Vec<ViewBlock> {
+        BuiltinHumanRenderer::specific_memory_blocks(tool, value.as_object().unwrap())
+    }
+
+    #[test]
+    fn memory_record_view_uses_lifecycle_metadata_and_omits_technical_revisions() {
+        let sha256 = "ab".repeat(32);
+        for tool in ["memory.get", "memory.write"] {
+            let blocks = project(
+                tool,
+                json!({
+                    "name": "report-style",
+                    "body": "Lead with the conclusion.",
+                    "metadata": {
+                        "kind": "preference",
+                        "scope": {"kind": "workspace"},
+                        "status": "active"
+                    },
+                    "sha256": sha256,
+                    "memory_type": "obsolete-type",
+                    "content_hash": "obsolete-sha"
+                }),
+            );
+            let display = serde_json::to_string(&blocks).unwrap();
+            assert!(display.contains("preference"));
+            assert!(display.contains("workspace"));
+            assert!(display.contains("active"));
+            assert!(!display.contains(&sha256));
+            assert!(!display.contains("SHA-256"));
+            assert!(!display.contains("obsolete-type"));
+            assert!(!display.contains("obsolete-sha"));
+        }
+    }
+
+    #[test]
+    fn memory_tables_read_nested_metadata_and_search_excerpts() {
+        let record = json!({
+            "name": "report-style",
+            "description": "Report preference",
+            "metadata": {
+                "kind": "preference",
+                "scope": {"kind": "workspace"},
+                "status": "active"
+            },
+            "excerpt": {
+                "text": "Lead with the conclusion.",
+                "start_line": 7,
+                "end_line": 7
+            },
+            "read": {"name": "report-style"},
+            "sha256": "current-sha"
+        });
+        for (tool, records) in [("memory.search", "results"), ("memory.list", "memories")] {
+            let mut payload = json!({});
+            payload[records] = json!([record.clone()]);
+            let blocks = project(tool, payload);
+            let (columns, rows) = blocks
+                .iter()
+                .find_map(|block| match block {
+                    ViewBlock::Table { columns, rows, .. } => Some((columns, rows)),
+                    _ => None,
+                })
+                .unwrap();
+            let kind = columns.iter().position(|column| column == "Kind").unwrap();
+            assert_eq!(rows[0][kind], json!("preference"));
+            if tool == "memory.search" {
+                let excerpt = columns
+                    .iter()
+                    .position(|column| column == "Excerpt")
+                    .unwrap();
+                assert_eq!(rows[0][excerpt], json!("Lead with the conclusion."));
+            }
+            assert!(!columns.iter().any(|column| column == "SHA-256"));
+        }
+    }
+
+    #[test]
+    fn memory_delete_view_uses_the_current_deleted_field() {
+        let blocks = project(
+            "memory.delete",
+            json!({
+                "name": "report-style",
+                "deleted": true,
+                "sha256": "deleted-sha",
+                "removed": "obsolete-deletion-field"
+            }),
+        );
+        let display = serde_json::to_string(&blocks).unwrap();
+        assert!(display.contains("report-style"));
+        assert!(display.contains("Deleted"));
+        assert!(display.contains("true"));
+        assert!(!display.contains("deleted-sha"));
+        assert!(!display.contains("obsolete-deletion-field"));
     }
 }

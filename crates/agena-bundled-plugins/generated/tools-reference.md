@@ -19,7 +19,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
-- [`agena.companion`](#agenacompanion) — Assistant personality, memory and consent-based reminders. (1 tools)
+- [`agena.companion`](#agenacompanion) — Assistant personality and consent-based reminders. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
@@ -8818,11 +8818,11 @@ Declare the built-in commands every Agena client renders locally, and project sk
 
 **Version** `0.1.0` · **Tools** 1
 
-Assistant personality, memory and consent-based reminders.
+Assistant personality and consent-based reminders.
 
 ### manage
 
-`agena.companion.manage` · **Summary**: Manage assistant persona, durable memory, and explicit finite reminders/check-ins from natural conversation. Use profile for current settings; configure needs the current revision; remember/forget use permission-aware memory tools; remind needs a real time and explicit direct-user quote. Never schedule from a notification or store credentials.
+`agena.companion.manage` · **Summary**: Manage assistant persona and explicit finite reminders/check-ins from natural conversation. Use profile for current settings; configure needs the current revision; remind needs a real time and explicit direct-user quote. Never schedule from a notification.
 
 **Tags**: `mutate` `agent`
 
@@ -8832,14 +8832,8 @@ Assistant personality, memory and consent-based reminders.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `action` | `CompanionAction` | ✓ | — |  |
-| `content` | `string / null` | — | `null` |  |
-| `description` | `string / null` | — | `null` |  |
 | `expected_revision` | `integer / null` | — | `null` | Current profile/reminder revision from live context; never guess it. |
-| `expected_sha256` | `string / null` | — | `null` | Revision returned by memory recall. Required for correction/deletion. |
-| `memory_type` | `string / null` | — | `null` | user / feedback / project / reference / other. Personal preferences use user. |
-| `name` | `string / null` | — | `null` | Stable descriptive memory key, not a path. Use recall before corrections. |
 | `patch` | `AssistantPatch / null` | — | `null` |  |
-| `query` | `string / null` | — | `null` |  |
 | `reminder` | `ReminderSpec / null` | — | `null` |  |
 | `reminder_id` | `string / null` | — | `null` |  |
 | `user_quote` | `string / null` | — | `null` | Exact quote from the CURRENT direct user message. Required for writes. |
@@ -8973,10 +8967,6 @@ Assistant personality, memory and consent-based reminders.
       "enum": [
         "profile",
         "configure",
-        "memories",
-        "recall",
-        "remember",
-        "forget",
         "remind",
         "reminders",
         "pause_reminder",
@@ -9050,22 +9040,6 @@ Assistant personality, memory and consent-based reminders.
     "action": {
       "$ref": "#/$defs/CompanionAction"
     },
-    "content": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "description": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
     "expected_revision": {
       "default": null,
       "description": "Current profile/reminder revision from live context; never guess it.",
@@ -9075,33 +9049,6 @@ Assistant personality, memory and consent-based reminders.
         "null"
       ],
       "x-agena-order": "000002"
-    },
-    "expected_sha256": {
-      "default": null,
-      "description": "Revision returned by memory recall. Required for correction/deletion.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000008"
-    },
-    "memory_type": {
-      "default": null,
-      "description": "user / feedback / project / reference / other. Personal preferences use user.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000007"
-    },
-    "name": {
-      "default": null,
-      "description": "Stable descriptive memory key, not a path. Use recall before corrections.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
     },
     "patch": {
       "anyOf": [
@@ -9115,14 +9062,6 @@ Assistant personality, memory and consent-based reminders.
       "default": null,
       "x-agena-order": "000003"
     },
-    "query": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000009"
-    },
     "reminder": {
       "anyOf": [
         {
@@ -9133,7 +9072,7 @@ Assistant personality, memory and consent-based reminders.
         }
       ],
       "default": null,
-      "x-agena-order": "000010"
+      "x-agena-order": "000004"
     },
     "reminder_id": {
       "default": null,
@@ -9141,7 +9080,7 @@ Assistant personality, memory and consent-based reminders.
         "string",
         "null"
       ],
-      "x-agena-order": "000011"
+      "x-agena-order": "000005"
     },
     "user_quote": {
       "default": null,
@@ -19400,7 +19339,7 @@ Persistent memory with searchable retrieval and write tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `expected_sha256` | `string / null` | — | `null` |  |
+| `expected_sha256` | `string` | ✓ | — | The revision observed by the caller before requesting deletion. |
 | `name` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -19447,16 +19386,62 @@ Persistent memory with searchable retrieval and write tools.
           "name"
         ],
         "type": "object"
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "properties": {
+                "expected_sha256": {}
+              },
+              "required": [
+                "expected_sha256"
+              ],
+              "type": "object"
+            }
+          },
+          {
+            "properties": {
+              "expected_sha256": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+                    "type": "string"
+                  },
+                  {
+                    "maxItems": 0,
+                    "type": "array"
+                  },
+                  {
+                    "maxProperties": 0,
+                    "properties": {},
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "expected_sha256"
+            ],
+            "type": "object"
+          }
+        ]
       }
     ]
   },
   "properties": {
     "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
+      "description": "The revision observed by the caller before requesting deletion.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": "string",
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "name": {
@@ -19471,7 +19456,8 @@ Persistent memory with searchable retrieval and write tools.
     }
   },
   "required": [
-    "name"
+    "name",
+    "expected_sha256"
   ],
   "type": "object",
   "x-agena-relations": [
@@ -19740,8 +19726,7 @@ Persistent memory with searchable retrieval and write tools.
 | `description` | `string` | — | `` |  |
 | `expected_sha256` | `string / null` | — | `null` | Required when updating an existing record; returned by memory.get/write. |
 | `importance` | `integer / null` | — | `null` | Relative importance (0–100), not confidence in factual truth. |
-| `kind` | `MemoryKind / null` | — | `null` | Omit to preserve the existing kind; new records infer a useful default. |
-| `memory_type` | `MemoryType / null` | — | — |  |
+| `kind` | `MemoryKind` | ✓ | — | The canonical classification of this record. |
 | `name` | `string` | ✓ | — |  |
 | `scope` | `MemoryWriteScope / null` | — | `null` | Workspace knowledge or a checkpoint for the invoking session only. |
 | `status` | `MemoryWriteStatus / null` | — | `null` |  |
@@ -19752,6 +19737,7 @@ Persistent memory with searchable retrieval and write tools.
 {
   "$defs": {
     "MemoryKind": {
+      "description": "The canonical classification of this record.",
       "enum": [
         "fact",
         "preference",
@@ -19759,7 +19745,8 @@ Persistent memory with searchable retrieval and write tools.
         "procedure",
         "task"
       ],
-      "type": "string"
+      "type": "string",
+      "x-agena-order": "000004"
     },
     "MemoryRevision": {
       "additionalProperties": false,
@@ -19776,17 +19763,6 @@ Persistent memory with searchable retrieval and write tools.
         "sha256"
       ],
       "type": "object"
-    },
-    "MemoryType": {
-      "description": "Classification stored in a persistent memory document's frontmatter.",
-      "enum": [
-        "user",
-        "feedback",
-        "project",
-        "reference",
-        "other"
-      ],
-      "type": "string"
     },
     "MemoryWriteScope": {
       "enum": [
@@ -19900,7 +19876,7 @@ Persistent memory with searchable retrieval and write tools.
       },
       "type": "string",
       "x-agena-non-empty": true,
-      "x-agena-order": "000003"
+      "x-agena-order": "000002"
     },
     "description": {
       "default": "",
@@ -19915,7 +19891,7 @@ Persistent memory with searchable retrieval and write tools.
         "string",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000003"
     },
     "importance": {
       "default": null,
@@ -19927,31 +19903,11 @@ Persistent memory with searchable retrieval and write tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000008"
+      "x-agena-order": "000007"
     },
     "kind": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/MemoryKind"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "description": "Omit to preserve the existing kind; new records infer a useful default.",
-      "x-agena-order": "000005"
-    },
-    "memory_type": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/MemoryType"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "x-agena-order": "000002"
+      "$ref": "#/$defs/MemoryKind",
+      "description": "The canonical classification of this record."
     },
     "name": {
       "minLength": 1,
@@ -19974,7 +19930,7 @@ Persistent memory with searchable retrieval and write tools.
       ],
       "default": null,
       "description": "Workspace knowledge or a checkpoint for the invoking session only.",
-      "x-agena-order": "000006"
+      "x-agena-order": "000005"
     },
     "status": {
       "anyOf": [
@@ -19986,7 +19942,7 @@ Persistent memory with searchable retrieval and write tools.
         }
       ],
       "default": null,
-      "x-agena-order": "000007"
+      "x-agena-order": "000006"
     },
     "supersedes": {
       "default": [],
@@ -19995,12 +19951,13 @@ Persistent memory with searchable retrieval and write tools.
         "$ref": "#/$defs/MemoryRevision"
       },
       "type": "array",
-      "x-agena-order": "000009"
+      "x-agena-order": "000008"
     }
   },
   "required": [
     "name",
-    "content"
+    "content",
+    "kind"
   ],
   "type": "object",
   "x-agena-relations": [

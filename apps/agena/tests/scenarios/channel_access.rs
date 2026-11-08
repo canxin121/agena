@@ -208,7 +208,7 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
                         name: "instance-private".into(),
                         body: Some("INSTANCE-PRIVATE-MEMORY-719a".into()),
                         description: Some("private".into()),
-                        memory_type: Some("user".into()),
+                        kind: Some(agena_domain::MemoryKind::Preference),
                         expected_sha256: None,
                     },
                 )
@@ -525,8 +525,8 @@ async fn private_memory_is_scoped_and_task_workers_inherit_channel_tool_limits()
         p.grants.insert(ChannelRole::Operator,ChannelGrant{background_work:true,..Default::default()});
         let b=bind(&source,"private-memory",p.clone()).await?;
         let remember=model.expect(RequestMatch::user_text("记住我的私人报告偏好"))
-            .reply(Reply::tool_call("alice-memory","companion.manage",json!({"action":"remember","user_quote":"记住我的私人报告偏好","name":"private-style","content":"ALICE-ONLY-MEMORY-cb28: conclusions first","memory_type":"user"})));
-        model.expect(RequestMatch::tool_output("alice-memory")).after(&remember).check_tool_output_contains("alice-memory","Saved memory").reply(Reply::text("alice-private-memory-saved"));
+            .reply(Reply::tool_call("alice-memory","memory.write",json!({"name":"private-style","content":"ALICE-ONLY-MEMORY-cb28: conclusions first","kind":"preference"})));
+        model.expect(RequestMatch::tool_output("alice-memory")).after(&remember).check_tool_output_contains("alice-memory","ALICE-ONLY-MEMORY-cb28").reply(Reply::text("alice-private-memory-saved"));
         message(&case,&p,"remember","alice",Some("private-thread"),"记住我的私人报告偏好").await?;reply(&replies,"alice-private-memory-saved").await?;
         model.expect(RequestMatch::user_text("bob-no-memory-check")).check(|r|{ensure!(!r.body.to_string().contains("ALICE-ONLY-MEMORY-cb28"));Ok(())}).reply(Reply::text("bob-no-memory-ack"));
         message(&case,&p,"bob-check","bob",Some("private-thread"),"bob-no-memory-check").await?;reply(&replies,"bob-no-memory-ack").await?;

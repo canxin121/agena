@@ -382,7 +382,7 @@ impl App {
                                         name: memory.name,
                                         body: Some(edit.editor.text().into()),
                                         description: Some(memory.description),
-                                        memory_type: memory.memory_type,
+                                        kind: Some(memory.metadata.kind),
                                         expected_sha256: Some(memory.sha256),
                                     },
                                 )
@@ -397,7 +397,7 @@ impl App {
                                         name: memory.name,
                                         body: None,
                                         description: None,
-                                        memory_type: None,
+                                        kind: None,
                                         expected_sha256: Some(memory.sha256),
                                     },
                                 )
@@ -719,11 +719,7 @@ fn render(frame: &mut Frame, area: Rect, state: &AssistantState, i18n: &agena_tu
                     .iter()
                     .map(|m| {
                         ListItem::new(vec![
-                            Line::from(format!(
-                                "{} · {}",
-                                m.name,
-                                m.memory_type.as_deref().unwrap_or("")
-                            )),
+                            Line::from(format!("{} · {}", m.name, m.metadata.kind.as_str())),
                             Line::from(m.body.lines().next().unwrap_or("")),
                         ])
                     })

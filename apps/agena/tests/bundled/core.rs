@@ -509,7 +509,7 @@ async fn memory_persists_and_honors_retrieval_settings() -> TestResult {
                 "memory.write",
                 json!({
                     "name":NAME,"description":"Memory regression fixture.",
-                    "memory_type":"project","content":FIRST
+                    "kind":"fact","content":FIRST
                 }),
             )
             .await?;
@@ -517,7 +517,24 @@ async fn memory_persists_and_honors_retrieval_settings() -> TestResult {
             assert_eq!(created.data()?["file_name"], "testkitmemoryalpha.md");
             let opened = call(&user, "memory.get", json!({"name":NAME})).await?;
             opened.assert_text_contains("durable-memory-first-marker")?;
-            assert_eq!(opened.data()?["memory_type"], "project");
+            assert_eq!(opened.data()?["metadata"]["kind"], "fact");
+            ensure!(opened.data()?.get("memory_type").is_none());
+            let unversioned = user.call_tool(
+                "memory.write",
+                json!({"name":NAME,"kind":"fact","content":"unversioned-overwrite"}),
+            ).await?;
+            unversioned.assert_failed()?;
+            unversioned.assert_text_contains(&format!("expected_sha256={revision}"))?;
+            let unchanged = call(&user, "memory.get", json!({"name":NAME})).await?;
+            assert_eq!(unchanged.data()?["sha256"], revision);
+            unchanged.assert_text_contains("durable-memory-first-marker")?;
+            for invalid in [
+                json!({"name":"old-input","content":"missing kind"}),
+                json!({"name":"old-input","content":"old field","memory_type":"project"}),
+                json!({"name":"old-input","content":"old field","kind":"fact","memory_type":"project"}),
+            ] {
+                user.call_tool("memory.write", invalid).await?.assert_failed()?;
+            }
             let search = call(&user, "memory.search", json!({"query":NAME,"limit":3})).await?;
             ensure!(
                 search.data()?["results"]
@@ -532,13 +549,13 @@ async fn memory_persists_and_honors_retrieval_settings() -> TestResult {
                 "memory.write",
                 json!({
                     "name":NAME,"description":"Memory regression fixture.",
-                    "content":SECOND,"memory_type":"project","expected_sha256":revision
+                    "content":SECOND,"kind":"fact","expected_sha256":revision
                 }),
             )
             .await?;
             user.call_tool(
                 "memory.write",
-                json!({"name":NAME,"content":"stale-memory-overwrite","expected_sha256":revision}),
+                json!({"name":NAME,"kind":"fact","content":"stale-memory-overwrite","expected_sha256":revision}),
             )
             .await?
             .assert_failed()?;
@@ -608,7 +625,18 @@ async fn memory_persists_and_honors_retrieval_settings() -> TestResult {
                 .await?
                 .assert_assistant_text("memory-retrieval-enabled")?;
 
-            call(&with_retrieval, "memory.delete", json!({"name":NAME})).await?;
+            with_retrieval
+                .call_tool("memory.delete", json!({"name":NAME}))
+                .await?
+                .assert_failed()?;
+            let current = call(&with_retrieval, "memory.get", json!({"name":NAME})).await?;
+            let deleted = call(
+                &with_retrieval,
+                "memory.delete",
+                json!({"name":NAME,"expected_sha256":current.data()?["sha256"]}),
+            ).await?;
+            assert_eq!(deleted.data()?["deleted"], true);
+            assert_eq!(deleted.data()?["sha256"], current.data()?["sha256"]);
             with_retrieval
                 .call_tool("memory.get", json!({"name":NAME}))
                 .await?

@@ -6,7 +6,6 @@ import { useI18n } from 'vue-i18n'
 
 import { useBotConversation } from './chat/useBotConversation'
 import ChatPageView from './chat/ChatPageView.vue'
-import BotControls from './chat/BotControls.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
 import { deferKeyboardFocus } from '@/lib/deferredKeyboardFocus'
@@ -24,6 +23,7 @@ import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
+import { useBotsStore } from '@/stores/bots'
 
 import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments'
 import {
@@ -132,17 +132,17 @@ const activity = useSessionActivityStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const toasts = useToastsStore()
+const bots = useBotsStore()
 const { t } = useI18n()
 const bot = useBotConversation()
-const botControls = ref<InstanceType<typeof BotControls> | null>(null)
 const openBotEditor = () => {
-  void botControls.value?.edit()
+  if (bot.botId.value) bots.open('edit', bot.botId.value)
 }
 watch(
   [bot.ready, () => route.query.editPersona],
   async ([ready, edit]) => {
     if (!ready || !bot.isBot.value || edit !== '1') return
-    await botControls.value?.edit()
+    openBotEditor()
     if (route.path !== '/bot' || route.query.editPersona !== '1') return
     const { editPersona: _edit, ...query } = route.query
     await router.replace({ path: '/bot', query })
@@ -2131,7 +2131,9 @@ async function sendReady(sid: string | null) {
     // placeholder per inline attachment, so the transcript renders the
     // attachments together above the text the user actually typed.
     const parts: JsonValue[] = []
-    const workspace = filesSnapshot.some((file) => file.composerKind !== 'skill_ref' && !file.composerNode && !file.url && !!file.serverPath)
+    const workspace = filesSnapshot.some(
+      (file) => file.composerKind !== 'skill_ref' && !file.composerNode && !file.url && !!file.serverPath,
+    )
       ? await chat.resolveSessionWorkspace(sid)
       : null
     const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
@@ -2582,19 +2584,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <div v-if="bot.isBot.value" class="shrink-0 border-b border-border/70 bg-background/95 px-3 py-2 sm:px-4">
-      <div class="mx-auto w-full max-w-4xl">
-        <BotControls
-          ref="botControls"
-          :bot-id="bot.botId.value"
-          :name="bot.name.value"
-          :disabled="!bot.ready.value"
-          @select="bot.select"
-          @updated="bot.updateProfile"
-          @unavailable="bot.retry"
-        />
-      </div>
-    </div>
     <ChatPageView v-if="bot.ready.value" :ctx="viewCtx" />
     <section
       v-else

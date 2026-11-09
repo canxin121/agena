@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line, RiFolder6Line } from '@remixicon/vue'
+import { RiRobot2Line, RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
 import { computed, defineAsyncComponent, isRef, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -104,6 +104,7 @@ const {
   revertBusyMessageId,
   isBot,
   botName,
+  openBotEditor,
   openBotProjects,
   fillBotSuggestion,
   sessionEnded,
@@ -405,14 +406,13 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
         <div class="relative flex h-full min-h-0 flex-col" data-vim-chat-surface="true">
           <header class="shrink-0 border-b border-border/70 bg-background/92 backdrop-blur">
             <div class="chat-message-column flex min-h-10 items-center gap-3 py-1">
-              <div v-if="!isBot" class="min-w-0 flex-1">
+              <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 truncate text-sm font-semibold">
                   <RiRobot2Line v-if="isBot" class="h-4 w-4 shrink-0 text-primary" />
-                  {{
-                    isBot
-                      ? botName
-                      : sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat'))
-                  }}
+                  <span v-if="isBot" data-testid="bot-name" class="truncate">{{ botName }}</span>
+                  <span v-else class="truncate">{{
+                    sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat'))
+                  }}</span>
                 </div>
                 <div v-if="isBot" class="text-[11px] leading-4 text-muted-foreground">{{ t('bot.sidebarHint') }}</div>
                 <div v-else-if="sessionDirectory" class="truncate font-mono text-[10px] text-muted-foreground">
@@ -434,6 +434,15 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   >
                 </template>
                 <template v-if="isBot">
+                  <IconButton
+                    data-testid="bot-settings"
+                    class="h-6 w-6"
+                    :tooltip="String(t('bot.settings'))"
+                    :aria-label="String(t('bot.settings'))"
+                    :is-touch-pointer="ui.isTouchPointer"
+                    @click="openBotEditor"
+                    ><RiSettings3Line class="h-3.5 w-3.5"
+                  /></IconButton>
                   <IconButton
                     class="h-9 w-9"
                     :tooltip="String(t('bot.projects'))"

@@ -25,7 +25,7 @@ def check(path:str,required:tuple[str,...]=(),forbidden:tuple[str,...]=()):
 check('crates/agena-assistant/src/bot.rs',
       (r'pub struct BotPersona\s*\{\s*pub instructions: String,\s*\}',
        r'\#\[serde\(deny_unknown_fields\)\]\s*pub struct BotPersona',
-       r'if self\.instructions\.len\(\) > 4096'),
+       r'if self\.instructions\.len\(\) > MAX_BOT_INSTRUCTIONS_BYTES'),
       (r'AssistantPreferences', r'AssistantTone', r'address_user:', r'\blanguage:'))
 check('packages/agena-web/src/generated/agenaState.ts',
       (r'export type BotPersona\s*=\s*\{\s*instructions: string\s*\}',))
@@ -33,7 +33,7 @@ check('packages/agena-web/src/lib/bots.ts',
       (r'emptyBotPersona\s*=.*\{\s*instructions:',),
       (r'address_user:',r'\btone:',r'\blanguage:'))
 for file in ('packages/agena-web/src/features/bots/BotManagerHost.vue',
-             'packages/agena-web/src/features/bots/SidebarBots.vue',
+             'packages/agena-web/src/layout/BotSidebar.vue',
              'crates/agena-tui-app/src/app_bot.rs',
              'crates/agena-tui-app/src/app_bot/render.rs'):
     check(file,forbidden=(r'persona\.address_user',r'persona\.tone',r'persona\.language',
@@ -48,4 +48,4 @@ check('crates/agena-runtime/src/runtime/assistant/companion.rs',
 if errors:
     print('\n'.join(errors),file=sys.stderr)
     raise SystemExit(1)
-print('Bot persona contract audit passed: only instructions (4096 UTF-8 bytes), no removed form fields.')
+print('Bot persona contract audit passed: only instructions (bounded by MAX_BOT_INSTRUCTIONS_BYTES), no removed form fields.')

@@ -21,7 +21,7 @@ export default {
   "nameHint": "e.g. Atlas or Writing partner",
   "instructions": "Additional system instructions (optional)",
   "instructionsNotSet": "No additional system instructions set",
-  "instructionsCount": "{count} / {max} bytes",
+  "instructionsCount": "Using {count} bytes (max {max}). The real limit is the selected model’s context window; if the prompt is too large, the conversation reports it.",
   "reload": "Reload saved profile (discard edits)",
   "archive": "Archive Bot",
   "archiveHint": "Archiving preserves this Bot’s conversation history and profile. It removes the Bot from the active list and revokes its project management access. It does not delete the conversation.",

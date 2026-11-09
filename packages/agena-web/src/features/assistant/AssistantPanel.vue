@@ -263,7 +263,7 @@ onBeforeUnmount(() => {
             }}<input v-model="draft.language" placeholder="auto / 中文 / English" maxlength="32"
           /></label>
           <label class="assistant-field sm:col-span-2"
-            >{{ t('assistant.instructions') }}<textarea v-model="draft.instructions" rows="4" maxlength="4096" />
+            >{{ t('assistant.instructions') }}<textarea v-model="draft.instructions" rows="4" />
           </label>
           <label class="flex items-center gap-2 text-sm"
             ><input type="checkbox" v-model="draft.memory_enabled" data-testid="assistant-memory-enabled" />{{

@@ -325,6 +325,7 @@ dependencies = [
 name = "agena-bundled-plugins"
 version = "0.1.0"
 dependencies = [
+ "agena-assistant",
  "agena-async",
  "agena-domain",
  "agena-failure",

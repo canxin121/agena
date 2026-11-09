@@ -956,3 +956,53 @@ async fn archive_refuses_native_background_activity_after_the_source_execution_f
             .archived
     );
 }
+
+#[tokio::test]
+async fn long_persona_receipts_are_evicted_by_byte_budget_not_only_by_count() {
+    let (manager, _) = fixture().await;
+    manager.ensure_default_bot_profile().await.unwrap();
+    let initial = manager
+        .create_bot_profile(create("long-persona-byte-budget", "Long"))
+        .await
+        .unwrap();
+    // Each receipt stores the full request payload and result, so a handful of
+    // ~64 KiB character sheets exceeds the receipt byte budget well before the
+    // 256-entry count cap.
+    let persona = "你是一只鲸鱼娘。".repeat(8 * 1024);
+    let mut current = initial.clone();
+    for i in 0..40 {
+        current = manager
+            .update_bot_profile(
+                initial.id,
+                BotUpdate {
+                    request_key: format!("long-update-{i}"),
+                    expected_revision: current.revision,
+                    name: initial.name.clone(),
+                    persona: BotPersona {
+                        instructions: format!("{persona}{i}"),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let registry = manager.load_registry().await.unwrap();
+    let bytes: usize = registry
+        .receipts
+        .iter()
+        .map(|(key, receipt)| key.len() + receipt_size(receipt))
+        .sum();
+    assert!(
+        bytes <= MAX_RECEIPT_BYTES,
+        "registry receipts grew to {bytes} bytes"
+    );
+    assert!(
+        registry
+            .receipts
+            .keys()
+            .any(|key| key == &format!("update:{}:long-update-39", initial.id)),
+        "the newest receipt must survive eviction"
+    );
+    // The live profile, not the receipt history, is the durable truth.
+    assert_eq!(manager.get_bot_profile(initial.id).await.unwrap(), current);
+}

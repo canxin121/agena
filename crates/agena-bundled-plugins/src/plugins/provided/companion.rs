@@ -5,6 +5,11 @@ use agena_plugin_host::sdk::{
     Result, ToolInvokeOutput,
 };
 use std::sync::{Arc, OnceLock};
+
+/// The injected context carries the effective profile, including a Bot's
+/// additional instructions. Persona prompts may legitimately be large, so keep
+/// this well above `agena_assistant::MAX_BOT_INSTRUCTIONS_BYTES`.
+const MAX_COMPANION_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) struct CompanionPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
 }
@@ -114,7 +119,10 @@ locale("ar-SA", summary = "إضافة سياق المساعد", help = "يضيف
             return Ok(None);
         }
         let context = serde_json::to_string(&context)?;
-        if context.len() > 64 * 1024 {
+        // The context embeds the effective profile, so its instructions can be
+        // large. Bound it generously above the persona ceiling instead of
+        // silently failing every turn for a long character sheet.
+        if context.len() > MAX_COMPANION_CONTEXT_BYTES {
             return Err(PluginError::internal(
                 "assistant context exceeded its bounded contract",
             ));

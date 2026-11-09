@@ -187,7 +187,15 @@ async fn bot_profiles_registry_auth_validation_concurrency_and_receipts() -> Tes
         for (index,name) in ["", "   ", "bad\nname", "bad\u{0001}name", &"x".repeat(1000)].into_iter().enumerate() {
             rejected(http.send_json(Method::POST,"/api/v1/bots",&json!({"request_key":format!("bad-{index}"),"name":name})).await?, &["name","invalid","empty","control","byte"])?;
         }
-        rejected(http.send_json(Method::POST,"/api/v1/bots",&json!({"request_key":"too-long-persona","name":"Long","persona":{"instructions":"x".repeat(4097)}})).await?, &["instruction","4096","byte"])?;
+        // Multi-kilobyte character sheets are accepted; only the generous
+        // storage ceiling is refused. The per-model context window is the real
+        // limit and is reported when a turn's prompt is assembled.
+        let long_persona = "你是一只鲸鱼娘。".repeat(2000);
+        ensure!(long_persona.len() > 4096);
+        let created = http.send_json(Method::POST,"/api/v1/bots",&json!({"request_key":"long-persona","name":"Long","persona":{"instructions":long_persona}})).await?.require_success()?;
+        let created_profile: serde_json::Value = created.json()?;
+        ensure!(created_profile["name"] == "Long", "long persona was not persisted");
+        rejected(http.send_json(Method::POST,"/api/v1/bots",&json!({"request_key":"too-long-persona","name":"Huge","persona":{"instructions":"x".repeat(agena_api::bot::MAX_BOT_INSTRUCTIONS_BYTES + 1)}})).await?, &["instruction","byte"])?;
         // Every removed persona field must fail parsing on both endpoints, even
         // when it contains its former default value. Axum's typed JSON parser
         // rejects unknown fields with HTTP 422 before any profile write.
@@ -777,4 +785,47 @@ async fn bot_profiles_both_route_native_subagents_with_hidden_source_and_target_
         }
         Ok(())
     }).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn long_persona_is_stored_and_a_small_context_model_reports_a_readable_budget_error()
+-> TestResult {
+    use agena_api::resource::{ModelRef, RunOptions};
+    fixture().case_timeout(Duration::from_secs(150))
+        .model_options(agena_testkit::ModelOptions {
+            models: vec!["fake-model".into(), "tiny-context-model".into()],
+            default_timeout: Duration::from_secs(20),
+            ..Default::default()
+        })
+        .configure_global(|config| {
+            // A deliberately small window so a several-thousand-character
+            // persona cannot fit, without sending anything to a real provider.
+            config["providers"]["testkit"]["adapters"]["openai_responses"]["models"]["tiny-context-model"] =
+                json!({"context_window_tokens": 2048, "max_output_tokens": 512,
+                       "native_compaction": false, "agena_tools": {"mode": "provider_protocol"}});
+        })
+        .run(|case| async move {
+            // Far beyond the old 4 KiB validation limit, but an ordinary size
+            // for a community character sheet.
+            let persona = "你是一只鲸鱼娘。蓝色渐变长发，脾气很好。".repeat(600);
+            ensure!(persona.len() > 4096, "fixture persona should exceed the old limit");
+            let bot = create(&case, "long-persona", "Whale", Some(json!({"instructions": persona.clone()}))).await?;
+            ensure!(bot.persona.instructions == persona, "long persona was not stored verbatim");
+            ensure!(profile(&case, bot.id).await?.persona.instructions == persona, "long persona did not survive a reload");
+
+            let session = case.user().attach_session(bot.session_id).await?;
+            session.client().update_session_selection(bot.session_id, RunOptions {
+                model: Some(ModelRef::new_with_adapter("testkit", "openai_responses", "tiny-context-model")),
+                ..Default::default()
+            }).await?;
+
+            session.send("long-persona-turn").await?.wait_settled().await?.assert_failed()?;
+            let state = resource(&case, bot.session_id).await?;
+            let detail = state["state"]["last_failure"].to_string();
+            ensure!(detail.contains("instructions") && detail.contains("tokens") && detail.contains("context window"),
+                "the budget error should name the instructions, their token cost and the remedy: {detail}");
+            // The oversized prompt must not have been sent to the provider.
+            ensure!(case.model().requests().is_empty(), "an oversized prompt still reached the provider");
+            Ok(())
+        }).await
 }

@@ -64,7 +64,7 @@ impl AssistantPreferences {
             || self.address_user.len() > 128
             || self.language.trim().is_empty()
             || self.language.len() > 64
-            || self.instructions.len() > 4096
+            || self.instructions.len() > crate::bot::MAX_BOT_INSTRUCTIONS_BYTES
         {
             return Err(Error::Invalid(
                 "assistant name/address/language/instructions exceed their bounds",

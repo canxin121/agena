@@ -1,4 +1,5 @@
 import type { AssistantPreferences, AssistantPatch } from '@/generated/agenaState'
+import { MAX_INSTRUCTIONS_BYTES } from '@/features/bots/draft'
 export function minuteText(value: number): string {
   return `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
 }
@@ -10,7 +11,7 @@ export function parseMinute(value: string): number | null {
 export function validPreferences(p: AssistantPreferences): boolean {
   return (
     Boolean(p.name?.trim() && p.language?.trim() && p.timezone?.trim()) &&
-    new TextEncoder().encode(p.instructions || '').length <= 4096 &&
+    new TextEncoder().encode(p.instructions || '').length <= MAX_INSTRUCTIONS_BYTES &&
     p.daily_limit >= 1 &&
     p.daily_limit <= 24 &&
     p.cooldown_seconds >= 60 &&

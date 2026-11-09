@@ -11,6 +11,10 @@ mod manage;
 mod registry;
 
 const RESPONSE_BUDGET: usize = 64 * 1024;
+/// Upper bound for one Bot management request. Large enough for a full
+/// character sheet plus its JSON envelope; the persona ceiling is enforced by
+/// `agena_assistant::MAX_BOT_INSTRUCTIONS_BYTES`.
+const MAX_BOT_MANAGEMENT_INPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Serialize, Deserialize)]
 struct Intent {
@@ -422,10 +426,14 @@ impl SessionManager {
         request: BotRequest,
     ) -> Result<Value, AppError> {
         self.require_operator_bot(source).await?;
-        if serde_json::to_vec(&request)?.len() > 32 * 1024 {
-            return Err(invalid(
-                "management input exceeds 32 KiB; send a bounded instruction",
-            ));
+        let request_bytes = serde_json::to_vec(&request)?.len();
+        // A whole Bot character sheet may legitimately be tens of kilobytes.
+        // Bound the tool request well above the persona ceiling, not at a
+        // generic 32 KiB JSON budget.
+        if request_bytes > MAX_BOT_MANAGEMENT_INPUT_BYTES {
+            return Err(invalid(&format!(
+                "management input exceeds {MAX_BOT_MANAGEMENT_INPUT_BYTES} bytes; send a bounded instruction"
+            )));
         }
         validate_request(&request)?;
         // Even reads require a real, live callback; supplied integers confer no authority.

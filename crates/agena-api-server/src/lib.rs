@@ -87,11 +87,30 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/changes/revisions", get(rest::resource_revisions))
             .route("/api/v1/runtime", get(rest::get_runtime_status))
             .route("/api/v1/bot/session", post(rest::ensure_bot_session))
-            .route("/api/v1/bots", get(rest::list_bots).post(rest::create_bot))
-            .route("/api/v1/bots/{id}", get(rest::get_bot).put(rest::update_bot))
+            // Persona instructions may be a full character sheet, and JSON
+            // escaping roughly doubles multibyte text. Raise only these two
+            // routes above axum's 2 MiB default; the persona ceiling itself is
+            // validated in `agena_assistant`.
+            .route(
+                "/api/v1/bots",
+                get(rest::list_bots)
+                    .post(rest::create_bot)
+                    .layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+            )
+            .route(
+                "/api/v1/bots/{id}",
+                get(rest::get_bot)
+                    .put(rest::update_bot)
+                    .layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+            )
             .route("/api/v1/bots/{id}/archive", post(rest::archive_bot))
             .route("/api/v1/bots/{id}/session", post(rest::ensure_named_bot_session))
-            .route("/api/v1/sessions/{session_id}/assistant",get(rest::get_assistant).put(rest::put_assistant))
+            .route(
+                "/api/v1/sessions/{session_id}/assistant",
+                get(rest::get_assistant)
+                    .put(rest::put_assistant)
+                    .layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+            )
             .route("/api/v1/sessions/{session_id}/assistant/reminders/{reminder_id}",post(rest::control_assistant_reminder))
             .route("/api/v1/sessions/{session_id}/assistant/memory",post(rest::edit_assistant_memory))
             .route("/api/v1/sessions/{session_id}/integrations",get(rest::list_integrations).post(rest::create_integration))

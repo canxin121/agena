@@ -922,7 +922,7 @@ mod persona_tests {
                 ..Default::default()
             },
             AssistantPatch {
-                instructions: Some("x".repeat(4097)),
+                instructions: Some("x".repeat(agena_assistant::MAX_BOT_INSTRUCTIONS_BYTES + 1)),
                 ..Default::default()
             },
             AssistantPatch {

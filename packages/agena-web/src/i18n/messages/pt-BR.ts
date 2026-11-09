@@ -21,7 +21,7 @@ export default {
   "nameHint": "ex.: Atlas ou Parceiro de escrita",
   "instructions": "Instruções adicionais do sistema (opcional)",
   "instructionsNotSet": "Nenhuma instrução adicional do sistema",
-  "instructionsCount": "{count} / {max} bytes",
+  "instructionsCount": "{count} bytes usados (máx. {max}). O limite real é a janela de contexto do modelo escolhido; se for grande demais, a conversa avisa.",
   "reload": "Recarregar perfil salvo (descartar alterações)",
   "archive": "Arquivar Bot",
   "archiveHint": "Arquivar preserva o histórico e o perfil deste Bot. Ele sai da lista ativa e perde o acesso de gerenciamento de projetos. A conversa não é excluída.",

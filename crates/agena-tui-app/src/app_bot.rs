@@ -332,7 +332,9 @@ impl App {
         let Some(form) = &self.bot.form else {
             return;
         };
-        if form.name.trim().is_empty() || form.persona.instructions.len() > 4096 {
+        if form.name.trim().is_empty()
+            || form.persona.instructions.len() > MAX_BOT_INSTRUCTIONS_BYTES
+        {
             self.bot.error = Some(self.i18n.text("bot-form-invalid"));
             return;
         }

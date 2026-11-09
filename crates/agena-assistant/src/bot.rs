@@ -3,6 +3,18 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Hard storage/wire ceiling for one Bot's additional system instructions.
+///
+/// Persona prompts are written in prose, and 4 KiB is far too small for the
+/// character sheets people actually use. The real limit is the selected
+/// model's context window, which is enforced when the prompt is assembled:
+/// [`agena_runtime_session`] reports a `PromptBudgetExceeded` telling the user
+/// how many tokens the instructions need and what the model allows. This
+/// constant only stops a pathological payload from becoming an unbounded
+/// registry record; it is deliberately generous (about 64k characters of CJK
+/// prose) and is not meant to be hit in normal use.
+pub const MAX_BOT_INSTRUCTIONS_BYTES: usize = 256 * 1024;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BotPersona {
@@ -15,10 +27,11 @@ impl BotPersona {
                 "Bot name must contain 1..128 non-control UTF-8 bytes",
             ));
         }
-        if self.instructions.len() > 4096 {
-            return Err(Error::Invalid(
-                "Bot additional system instructions must be at most 4096 UTF-8 bytes",
-            ));
+        if self.instructions.len() > MAX_BOT_INSTRUCTIONS_BYTES {
+            // The message carries the number, so it cannot be a `&'static str`.
+            return Err(Error::Policy(format!(
+                "Bot additional system instructions must be at most {MAX_BOT_INSTRUCTIONS_BYTES} UTF-8 bytes"
+            )));
         }
         Ok(())
     }
@@ -121,17 +134,28 @@ mod tests {
     }
 
     #[test]
-    fn persona_validates_byte_limit_and_name() {
+    fn persona_accepts_large_prose_prompts_and_rejects_pathological_payloads() {
+        // A realistic long character sheet is accepted; the per-model context
+        // window, not this storage ceiling, is what limits normal use.
+        let prose = "你是一只鲸鱼娘。".repeat(2000);
+        assert!(prose.len() > 4096);
         assert!(
             BotPersona {
-                instructions: "界".repeat(1365)
+                instructions: prose.clone()
             }
             .validate("Bot")
             .is_ok()
         );
         assert!(
             BotPersona {
-                instructions: "界".repeat(1366)
+                instructions: "界".repeat(MAX_BOT_INSTRUCTIONS_BYTES / 3)
+            }
+            .validate("Bot")
+            .is_ok()
+        );
+        assert!(
+            BotPersona {
+                instructions: "a".repeat(MAX_BOT_INSTRUCTIONS_BYTES + 1)
             }
             .validate("Bot")
             .is_err()

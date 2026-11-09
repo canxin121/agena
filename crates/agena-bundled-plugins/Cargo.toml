@@ -8,6 +8,7 @@ description = "Agena's bundled plugin implementations and factory registrations"
 
 [dependencies]
 agena-skills = { workspace = true }
+agena-assistant = { workspace = true }
 anyhow = { workspace = true }
 agena-storage-layout = { workspace = true }
 agena-async = { workspace = true }

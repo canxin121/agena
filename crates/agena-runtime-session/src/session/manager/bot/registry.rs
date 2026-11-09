@@ -7,6 +7,11 @@ use uuid::Uuid;
 
 const REGISTRY: &str = "bot_registry_v1";
 const UPDATE_RECEIPTS: usize = 256;
+/// Idempotence receipts hold the full request payload. With multi-kilobyte
+/// persona prompts, retaining 256 of them would bloat every registry read,
+/// write and backup. Keep a small recent window instead; a replay outside it
+/// is answered from the current profile, which is still revision-safe.
+const MAX_RECEIPT_BYTES: usize = 4 * 1024 * 1024;
 const RETIRED_SESSIONS: usize = 4096;
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,6 +37,15 @@ struct Creation {
 }
 fn conflict(message: &'static str) -> AppError {
     AppError::BotConflict(message)
+}
+/// Serialized footprint of one idempotence receipt, used to bound registry growth.
+fn receipt_size(receipt: &Receipt) -> usize {
+    serde_json::to_vec(&receipt.payload)
+        .map(|encoded| encoded.len())
+        .unwrap_or(0)
+        + serde_json::to_vec(&receipt.result)
+            .map(|encoded| encoded.len())
+            .unwrap_or(0)
 }
 fn validate_key(key: &str) -> Result<(), AppError> {
     if key.is_empty() || key.len() > 160 || key.trim() != key || key.chars().any(char::is_control) {
@@ -82,21 +96,34 @@ impl Registry {
         Ok(name.into())
     }
     fn trim_update_receipts(&mut self, newest: &str) {
-        let count = self
-            .receipts
-            .keys()
-            .filter(|key| key.starts_with("update:"))
-            .count();
+        // Oldest first, so eviction is deterministic. `newest` stays put.
         let mut updates: Vec<_> = self
             .receipts
             .iter()
-            .filter(|(key, _)| key.starts_with("update:") && key.as_str() != newest)
+            .filter(|(key, _)| key.starts_with("update:"))
             .map(|(key, r)| (r.result.updated_at_ms, key.clone()))
             .collect();
         updates.sort();
-        let excess = count.saturating_sub(UPDATE_RECEIPTS);
-        for (_, key) in updates.into_iter().take(excess) {
-            self.receipts.remove(&key);
+        let mut count = updates.len();
+        let mut bytes: usize = updates
+            .iter()
+            .filter_map(|(_, key)| {
+                self.receipts
+                    .get(key)
+                    .map(|receipt| key.len() + receipt_size(receipt))
+            })
+            .sum();
+        for (_, key) in updates {
+            if key == newest {
+                continue;
+            }
+            if count <= UPDATE_RECEIPTS && bytes <= MAX_RECEIPT_BYTES {
+                break;
+            }
+            if let Some(receipt) = self.receipts.remove(&key) {
+                count -= 1;
+                bytes = bytes.saturating_sub(key.len() + receipt_size(&receipt));
+            }
         }
     }
     fn replay(&self, key: &str, payload: &Value) -> Result<Option<BotProfile>, AppError> {

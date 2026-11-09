@@ -21,7 +21,7 @@ export default {
   "nameHint": "p. ex. Atlas ou Partenaire d’écriture",
   "instructions": "Instructions système supplémentaires (facultatif)",
   "instructionsNotSet": "Aucune instruction système supplémentaire",
-  "instructionsCount": "{count} / {max} octets",
+  "instructionsCount": "{count} octets utilisés (max {max}). La vraie limite est la fenêtre de contexte du modèle choisi ; si le prompt est trop long, la conversation l’indique.",
   "reload": "Recharger le profil enregistré (annuler les modifications)",
   "archive": "Archiver le Bot",
   "archiveHint": "L’archivage conserve l’historique et le profil de ce Bot. Il le retire de la liste active et révoque son accès à la gestion des projets. La conversation n’est pas supprimée.",

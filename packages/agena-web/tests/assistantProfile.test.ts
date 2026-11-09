@@ -7,6 +7,7 @@ import {
   preferencePatch,
   rebasePreferences,
 } from '../src/features/assistant/profileForm'
+import { MAX_INSTRUCTIONS_BYTES } from '../src/features/bots/draft'
 import type { AssistantPreferences } from '../src/generated/agenaState'
 
 function profile(): AssistantPreferences {
@@ -50,9 +51,11 @@ describe('workspace assistant settings', () => {
       { cooldown_seconds: 86401 },
       { quiet_start_minute: 1440 },
       { quiet_enabled: true, quiet_start_minute: 480, quiet_end_minute: 480 },
-      { instructions: '中'.repeat(1400) },
+      { instructions: '中'.repeat(MAX_INSTRUCTIONS_BYTES / 3 + 1) },
     ])
       expect(validPreferences({ ...profile(), ...patch })).toBe(false)
+    // A long character sheet is ordinary input, not an invalid profile.
+    expect(validPreferences({ ...profile(), instructions: '中'.repeat(1400) })).toBe(true)
     expect(validPreferences({ ...profile(), quiet_enabled: true })).toBe(true)
   })
   test('turning off recall or proactive contact is an explicit dirty profile', () => {

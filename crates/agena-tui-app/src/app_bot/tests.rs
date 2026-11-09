@@ -1058,11 +1058,13 @@ async fn two_fields_cycle_and_enforce_utf8_byte_limit() {
     );
     assert!(!rendered.contains("Tone"), "{rendered}");
     form_field(&mut app, 0, "Bytes");
-    form_field(&mut app, 1, &"界".repeat(1366));
+    // Only the storage ceiling is refused; the save keeps the form open.
+    form_field(&mut app, 1, &"a".repeat(MAX_BOT_INSTRUCTIONS_BYTES + 1));
     app.handle_key_event(key(KeyCode::Char('s')));
     assert!(app.bot.error.is_some());
     assert!(server.profiles.lock().unwrap().len() == 1);
-    form_field(&mut app, 1, &format!("{}a", "界".repeat(1365)));
+    // A multi-kilobyte character sheet is ordinary and saves verbatim.
+    form_field(&mut app, 1, &"界".repeat(2000));
     app.handle_key_event(key(KeyCode::Char('s')));
     wait_main(&mut app).await;
     assert_eq!(
@@ -1070,7 +1072,7 @@ async fn two_fields_cycle_and_enforce_utf8_byte_limit() {
             .persona
             .instructions
             .len(),
-        4096
+        "界".repeat(2000).len()
     );
 }
 

@@ -499,7 +499,8 @@ impl SessionManager {
                     let layer_tokens=system.as_deref().map(|text|crate::estimate_prompt_tokens_from_chars(text.chars().count())).unwrap_or(0);
                     if layer_tokens>limit{
                         let contributors=super::session_prompt::prompt_layer_contributors(&state,&prompt_inputs);
-                        return Err(AppError::Config(format!("additional instructions alone need about {layer_tokens} tokens but the prompt budget for this model is {limit}; shorten or disable these fragments: {}",contributors.join(", "))));
+                        let detail=if contributors.is_empty(){String::new()}else{format!("; largest fragments: {}",contributors.join(", "))};
+                        return Err(AppError::Config(format!("additional system instructions alone need about {layer_tokens} tokens, but this model's prompt budget is {limit} tokens. Shorten the Bot's instructions, disable some prompt fragments, or choose a model with a larger context window{detail}")));
                     }
                 }
                 let budget=crate::estimate_auto_compaction_limit_tokens(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens,state.config.auto_compaction.reserved_tokens).unwrap_or_else(||crate::estimate_prompt_tokens_from_chars(state.governor.max_prompt_chars()));

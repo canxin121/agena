@@ -21,7 +21,7 @@ export default {
   "nameHint": "例如：小星、写作伙伴",
   "instructions": "附加系统指令（可选）",
   "instructionsNotSet": "未设置附加系统指令",
-  "instructionsCount": "{count} / {max} 字节",
+  "instructionsCount": "已用 {count} 字节（最多 {max}）。真正的上限取决于所选模型的上下文长度，超出时会在对话中提示。",
   "reload": "重新加载已保存资料（放弃修改）",
   "archive": "归档 Bot",
   "archiveHint": "归档会保留此 Bot 的对话历史和资料，将其移出可用列表，并撤销其项目管理权限。对话不会被删除。",

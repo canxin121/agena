@@ -1,9 +1,9 @@
 //! HTTP requests are fenced by their initialized instance. Lifecycle changes
-//! serialize, retire admitted work, and compare the revision observed before init.
+//! serialize per owner, retire admitted work, and compare that owner’s revision.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use axum::http::HeaderMap;
 use serde_json::Value;
@@ -23,8 +23,8 @@ pub const HTTP_INSTANCE_VERSION: u32 = 1;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 // A delayed predecessor may acknowledge retirement after a successor's init
 // already shut it down. Keep bounded evidence of actual successful cleanup.
-// An unknown or evicted owner still fails closed: a predecessor retained across
-// more than this many cleanups may therefore report a retirement error.
+// Owner identities and their revisions are retained within this bound; once it
+// is full, new identities fail closed instead of forgetting a prior revision.
 const COMPLETED_SHUTDOWN_CAPACITY: usize = 256;
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -36,14 +36,17 @@ pub struct HttpInstanceState {
 }
 
 pub(super) struct Instances<P: Plugin> {
-    control: tokio::sync::Mutex<()>,
-    current: Mutex<Option<Arc<Instance<P>>>>,
+    control: Mutex<HashMap<Option<String>, Weak<tokio::sync::Mutex<()>>>>,
+    known_owners: Mutex<HashSet<String>>,
+    current: Mutex<HashMap<Option<String>, Arc<Instance<P>>>>,
     completed_shutdowns: Mutex<VecDeque<CompletedShutdown>>,
 }
 
 struct CompletedShutdown {
     owner: String,
     bindings: Vec<String>,
+    revision: String,
+    no_binding: bool,
 }
 
 pub(super) struct Instance<P: Plugin> {
@@ -92,8 +95,9 @@ impl<P: Plugin> Instance<P> {
 impl<P: Plugin> Default for Instances<P> {
     fn default() -> Self {
         Self {
-            control: tokio::sync::Mutex::new(()),
-            current: Mutex::new(None),
+            control: Mutex::new(HashMap::new()),
+            known_owners: Mutex::new(HashSet::new()),
+            current: Mutex::new(HashMap::new()),
             completed_shutdowns: Mutex::new(VecDeque::new()),
         }
     }
@@ -150,7 +154,22 @@ pub(super) fn request_id(headers: &HeaderMap, id: &RequestId) -> crate::Result<R
 }
 
 impl<P: Plugin> Instances<P> {
-    fn shutdown_completed(&self, owner: Option<&str>) -> bool {
+    fn owner_control(&self, owner: Option<&str>) -> Arc<tokio::sync::Mutex<()>> {
+        let mut controls = self
+            .control
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        controls.retain(|_, lock| lock.strong_count() > 0);
+        let key = owner.map(str::to_owned);
+        if let Some(lock) = controls.get(&key).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        controls.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+
+    fn shutdown_completed(&self, owner: Option<&str>, binding: Option<&str>) -> bool {
         let Some(owner) = owner else {
             // Legacy requests have no identity with which to prove retirement.
             return false;
@@ -159,7 +178,13 @@ impl<P: Plugin> Instances<P> {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .iter()
-            .any(|completed| completed.owner == owner)
+            .any(|completed| {
+                completed.owner == owner
+                    && match binding {
+                        Some(id) => completed.bindings.iter().any(|old| old == id),
+                        None => completed.no_binding,
+                    }
+            })
     }
 
     fn binding_shutdown_completed(&self, owner: Option<&str>, binding: &str) -> bool {
@@ -175,16 +200,13 @@ impl<P: Plugin> Instances<P> {
             })
     }
 
-    fn forget_completed_shutdown(&self, owner: Option<&str>) {
-        if let Some(owner) = owner {
-            self.completed_shutdowns
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .retain(|completed| completed.owner != owner);
-        }
-    }
-
-    fn record_completed_shutdown(&self, owner: Option<&str>, mut bindings: Vec<String>) {
+    fn record_completed_shutdown(
+        &self,
+        owner: Option<&str>,
+        revision: &str,
+        mut bindings: Vec<String>,
+        mut no_binding: bool,
+    ) {
         let Some(owner) = owner else {
             return;
         };
@@ -193,34 +215,45 @@ impl<P: Plugin> Instances<P> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         if let Some(previous) = completed.iter().find(|previous| previous.owner == owner) {
+            no_binding |= previous.no_binding;
             bindings.extend(previous.bindings.iter().cloned());
             bindings.sort_unstable();
             bindings.dedup();
         }
         completed.retain(|previous| previous.owner != owner);
-        if completed.len() == COMPLETED_SHUTDOWN_CAPACITY {
-            completed.pop_front();
-        }
         completed.push_back(CompletedShutdown {
             owner: owner.to_owned(),
             bindings,
+            revision: revision.to_owned(),
+            no_binding,
         });
     }
 
-    pub(super) fn current(&self) -> Option<Arc<Instance<P>>> {
+    fn current(&self, owner: Option<&str>) -> Option<Arc<Instance<P>>> {
         self.current
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()
+            .get(&owner.map(str::to_owned))
+            .cloned()
+    }
+
+    fn revision(&self, owner: Option<&str>) -> Option<String> {
+        self.current(owner)
+            .map(|instance| instance.revision.clone())
+            .or_else(|| {
+                let owner = owner?;
+                self.completed_shutdowns
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .iter()
+                    .find(|entry| entry.owner == owner)
+                    .map(|entry| entry.revision.clone())
+            })
     }
 
     fn owned(&self, headers: &HeaderMap) -> crate::Result<Arc<Instance<P>>> {
         let owner = header(headers, INSTANCE_HEADER)?;
-        let current = self.current().ok_or_else(stopped)?;
-        if current.owner != owner {
-            return Err(stopped());
-        }
-        Ok(current)
+        self.current(owner.as_deref()).ok_or_else(stopped)
     }
 
     pub(super) async fn admit(&self, headers: &HeaderMap) -> crate::Result<Admission<P>> {
@@ -273,8 +306,24 @@ async fn cleanup<P: Plugin>(instances: &Instances<P>, current: &Instance<P>) -> 
     // Record success only after the shutdown hook and object retirement finish.
     // CleanupGuard's retry uses this same path, so cancellation cannot invent a
     // receipt and a later successful retry can truthfully complete retirement.
+    let no_binding = current.bindings.authorize_shutdown(None).is_ok();
     let bindings = current.bindings.clear_after_shutdown()?;
-    instances.record_completed_shutdown(current.owner.as_deref(), bindings);
+    instances.record_completed_shutdown(
+        current.owner.as_deref(),
+        &current.revision,
+        bindings,
+        no_binding,
+    );
+    let mut live = instances
+        .current
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if live
+        .get(&current.owner)
+        .is_some_and(|entry| std::ptr::eq(entry.as_ref(), current))
+    {
+        live.remove(&current.owner);
+    }
     Ok(())
 }
 
@@ -297,10 +346,11 @@ impl<P: Plugin> Drop for CleanupGuard<P> {
         let instance = self.instance.clone();
         tokio::spawn(async move {
             let result = tokio::time::timeout(CONTROL_TIMEOUT, async {
-                let _control = state.instances.control.lock().await;
+                let owner_control = state.instances.owner_control(instance.owner.as_deref());
+                let _control = owner_control.lock().await;
                 if !state
                     .instances
-                    .current()
+                    .current(instance.owner.as_deref())
                     .is_some_and(|current| Arc::ptr_eq(&current, &instance))
                 {
                     return Ok(());
@@ -353,17 +403,17 @@ async fn control_inner<P: Plugin>(
     context: Option<HostCallbackContext>,
 ) -> crate::Result<Value> {
     if method_name == method::META_HTTP_STATE {
+        let owner = header(headers, INSTANCE_HEADER)?;
         return Ok(serde_json::to_value(HttpInstanceState {
             version: HTTP_INSTANCE_VERSION,
-            revision: state
-                .instances
-                .current()
-                .map(|current| current.revision.clone()),
+            revision: state.instances.revision(owner.as_deref()),
         })?);
     }
     // Independent from dispatch permits: control must be able to cancel all
     // admitted requests even when each ordinary slot is occupied by a stream.
-    let _control = state.instances.control.lock().await;
+    let owner = header(headers, INSTANCE_HEADER)?;
+    let owner_control = state.instances.owner_control(owner.as_deref());
+    let _control = owner_control.lock().await;
     if method_name == method::META_HOST_RETIRE {
         let retire: HttpCallbackRetire = serde_json::from_value(params)?;
         bindings::identifier(&retire.binding_id)?;
@@ -373,11 +423,17 @@ async fn control_inner<P: Plugin>(
             ));
         }
         let owner = header(headers, INSTANCE_HEADER)?;
-        let current = state.instances.current();
+        let current = state.instances.current(owner.as_deref());
         let still_owned = current.as_ref().is_some_and(|current| {
             current.owner == owner && current.needs_cleanup.load(Ordering::Acquire)
         });
-        if !still_owned
+        if (!still_owned
+            || current.as_ref().is_some_and(|instance| {
+                instance
+                    .bindings
+                    .authorize_shutdown(Some(&retire.binding_id))
+                    .is_err()
+            }))
             && state
                 .instances
                 .binding_shutdown_completed(owner.as_deref(), &retire.binding_id)
@@ -403,13 +459,19 @@ async fn control_inner<P: Plugin>(
         let owner = header(headers, INSTANCE_HEADER)?;
         // Always prefer the live owner, including when a caller reuses an old
         // owner ID. A receipt must never bypass a new instance's shutdown hook.
-        let current = match state.instances.current() {
+        let current = match state.instances.current(owner.as_deref()) {
             Some(current) if current.owner == owner => current,
-            _ if state.instances.shutdown_completed(owner.as_deref()) => {
+            _ if state
+                .instances
+                .shutdown_completed(owner.as_deref(), bindings::header(headers)?.as_deref()) =>
+            {
                 return Ok(serde_json::json!({}));
             }
             _ => return Err(stopped()),
         };
+        current
+            .bindings
+            .authorize_shutdown(bindings::header(headers)?.as_deref())?;
         let mut guard = CleanupGuard {
             state: state.clone(),
             instance: current.clone(),
@@ -424,6 +486,9 @@ async fn control_inner<P: Plugin>(
         if current.stop.is_cancelled() || !current.ready.load(Ordering::Acquire) {
             return Err(stopped());
         }
+        current
+            .bindings
+            .authorize_shutdown(bindings::header(headers)?.as_deref())?;
         rebind_callback_client(&state, &current, params).await?;
         return Ok(serde_json::json!({}));
     }
@@ -454,36 +519,66 @@ async fn control_inner<P: Plugin>(
     }
     let owner = header(headers, INSTANCE_HEADER)?;
     let expected = header(headers, EXPECTED_REVISION_HEADER)?;
-    let current = state.instances.current();
-    if owner.is_some() {
+    let current = state.instances.current(owner.as_deref());
+    let revision = state.instances.revision(owner.as_deref());
+    if let Some(id) = owner.as_ref() {
         let expected = expected.ok_or_else(|| {
             PluginError::invalid_params("HTTP initialization requires an expected revision")
         })?;
-        if current
-            .as_ref()
-            .map(|current| current.revision.as_str())
-            .unwrap_or("-")
-            != expected
-        {
+        if revision.as_deref().unwrap_or("-") != expected {
             return Err(PluginError::from_kind(
                 PluginErrorKind::PolicyDenied,
                 "HTTP plugin instance changed before initialization",
             ));
         }
-        if current
-            .as_ref()
-            .is_some_and(|current| current.owner == owner)
+        let completed = state
+            .instances
+            .completed_shutdowns
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         {
+            let mut known = state
+                .instances
+                .known_owners
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if !known.contains(id) && known.len() >= COMPLETED_SHUTDOWN_CAPACITY {
+                return Err(PluginError::from_kind(
+                    PluginErrorKind::PolicyDenied,
+                    "HTTP owner history capacity exhausted",
+                ));
+            }
+            known.insert(id.clone());
+        }
+        if revision.is_some() && bindings::header(headers)?.is_none() {
             return Err(PluginError::invalid_params(
-                "HTTP plugin instance was already initialized",
+                "HTTP reinitialization requires a fresh callback binding",
             ));
         }
-    } else if expected.is_some()
-        || current
-            .as_ref()
-            .is_some_and(|current| current.owner.is_some())
-    {
+        if let Some(entry) = completed
+            .iter()
+            .find(|entry| Some(entry.owner.as_str()) == owner.as_deref())
+        {
+            let id = bindings::header(headers)?;
+            if id.as_ref().is_some_and(|id| entry.bindings.contains(id))
+                || entry.bindings.len() >= COMPLETED_SHUTDOWN_CAPACITY
+            {
+                return Err(PluginError::from_kind(
+                    PluginErrorKind::PolicyDenied,
+                    "HTTP callback binding was already retired or history is full",
+                ));
+            }
+        }
+    } else if expected.is_some() {
         return Err(stopped());
+    }
+    // Do not allow a predecessor's binding to name its successor.
+    if let Some(previous) = &current
+        && owner.is_some()
+    {
+        previous
+            .bindings
+            .reject_reused_binding(bindings::header(headers)?.as_deref())?;
     }
     let stop = CancellationToken::new();
     let bindings = Arc::new(bindings::CallbackBindings::new(
@@ -533,16 +628,13 @@ async fn control_inner<P: Plugin>(
         callback_client: RwLock::new(callback),
         bindings,
     });
-    // Owner IDs are caller-selected. Remove evidence for a previous use before
-    // installing this generation, even if its initialization later fails.
+    // The predecessor’s retirement evidence remains fenced across generations.
     state
-        .instances
-        .forget_completed_shutdown(instance.owner.as_deref());
-    *state
         .instances
         .current
         .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(instance.clone());
+        .unwrap_or_else(|error| error.into_inner())
+        .insert(instance.owner.clone(), instance.clone());
     let mut guard = CleanupGuard {
         state: state.clone(),
         instance: instance.clone(),
@@ -628,15 +720,26 @@ mod tests {
     }
 
     async fn initialize(state: &State, owner: &str) -> crate::Result<Value> {
+        initialize_binding(state, owner, None).await
+    }
+
+    async fn initialize_binding(
+        state: &State,
+        owner: &str,
+        binding: Option<&str>,
+    ) -> crate::Result<Value> {
         let observed = control(
             state.clone(),
-            &HeaderMap::new(),
+            &headers(owner),
             method::META_HTTP_STATE,
             serde_json::json!({}),
             None,
         )
         .await?;
         let mut headers = headers(owner);
+        if let Some(binding) = binding {
+            headers.insert(bindings::BINDING_HEADER, binding.parse().unwrap());
+        }
         headers.insert(
             EXPECTED_REVISION_HEADER,
             observed["revision"]
@@ -677,13 +780,12 @@ mod tests {
         let (state, probe) = fixture();
         initialize(&state, "first").await.unwrap();
         initialize(&state, "second").await.unwrap();
-        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
         shutdown(&state, "first").await.unwrap();
         shutdown(&state, "first").await.unwrap();
         assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
         assert!(state.instances.admit(&headers("first")).await.is_err());
         assert!(state.instances.admit(&headers("second")).await.is_ok());
-
         shutdown(&state, "second").await.unwrap();
         shutdown(&state, "second").await.unwrap();
         assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
@@ -713,8 +815,8 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.kind, expected);
         }
-        assert_eq!(probe.calls.load(Ordering::SeqCst), 1);
-        assert!(state.instances.admit(&headers("second")).await.is_ok());
+        assert_eq!(probe.calls.load(Ordering::SeqCst), 0);
+        shutdown(&state, "first").await.unwrap();
         shutdown(&state, "second").await.unwrap();
     }
 
@@ -722,38 +824,40 @@ mod tests {
     async fn failed_cleanup_does_not_create_a_receipt_or_replace_current() {
         let (state, probe) = fixture();
         initialize(&state, "first").await.unwrap();
+        initialize(&state, "second").await.unwrap();
         probe.fail.store(true, Ordering::SeqCst);
-        let error = initialize(&state, "second").await.unwrap_err();
+        let error = initialize_binding(&state, "first", Some("next"))
+            .await
+            .unwrap_err();
         assert_eq!(error.diagnostic_message(), "deliberate shutdown failure");
-        assert!(!state.instances.shutdown_completed(Some("first")));
-        assert_eq!(
-            state.instances.current().unwrap().owner.as_deref(),
-            Some("first"),
-        );
-        let error = shutdown(&state, "first").await.unwrap_err();
-        assert_eq!(error.diagnostic_message(), "deliberate shutdown failure");
-        assert!(!state.instances.shutdown_completed(Some("first")));
-        assert_eq!(
-            shutdown(&state, "second").await.unwrap_err().kind,
-            PluginErrorKind::HostUnavailable,
-        );
+        assert!(!state.instances.shutdown_completed(Some("first"), None));
+        assert!(state.instances.current(Some("first")).is_some());
         assert!(state.instances.admit(&headers("first")).await.is_err());
+        assert!(state.instances.admit(&headers("second")).await.is_ok());
     }
 
     #[tokio::test]
     async fn reused_owner_must_run_its_new_shutdown_hook() {
         let (state, probe) = fixture();
         initialize(&state, "first").await.unwrap();
-        initialize(&state, "second").await.unwrap();
-        assert!(state.instances.shutdown_completed(Some("first")));
-        initialize(&state, "first").await.unwrap();
-        assert!(!state.instances.shutdown_completed(Some("first")));
-        assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
+        shutdown(&state, "first").await.unwrap();
+        initialize_binding(&state, "first", Some("next"))
+            .await
+            .unwrap();
         probe.fail.store(true, Ordering::SeqCst);
-        let error = shutdown(&state, "first").await.unwrap_err();
+        let mut next = headers("first");
+        next.insert(bindings::BINDING_HEADER, "next".parse().unwrap());
+        let error = control(
+            state.clone(),
+            &next,
+            method::META_SHUTDOWN,
+            serde_json::json!({}),
+            None,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(error.diagnostic_message(), "deliberate shutdown failure");
-        assert!(probe.calls.load(Ordering::SeqCst) >= 3);
-        assert!(!state.instances.shutdown_completed(Some("first")));
+        assert!(probe.calls.load(Ordering::SeqCst) >= 2);
     }
 
     #[tokio::test]
@@ -775,41 +879,62 @@ mod tests {
             .unwrap()
             .unwrap();
         retry.forget();
-        assert!(!state.instances.shutdown_completed(Some("first")));
+        assert!(!state.instances.shutdown_completed(Some("first"), None));
         probe.release.cancel();
-        // The successor serializes behind the retry, which must finish before
-        // its successful retirement receipt can acknowledge the old owner.
-        initialize(&state, "second").await.unwrap();
-        assert!(state.instances.shutdown_completed(Some("first")));
+        // A same-owner retry waits for cleanup before accepting its receipt.
         shutdown(&state, "first").await.unwrap();
+        assert!(state.instances.shutdown_completed(Some("first"), None));
+        initialize(&state, "second").await.unwrap();
         assert_eq!(probe.calls.load(Ordering::SeqCst), 2);
         assert!(state.instances.admit(&headers("second")).await.is_ok());
         shutdown(&state, "second").await.unwrap();
     }
 
     #[tokio::test]
-    async fn evicted_retirement_evidence_fails_closed_without_stopping_current() {
+    async fn blocked_cleanup_does_not_block_another_owner_lifecycle() {
         let (state, probe) = fixture();
-        for index in 0..=COMPLETED_SHUTDOWN_CAPACITY + 1 {
-            initialize(&state, &format!("owner-{index}")).await.unwrap();
+        initialize(&state, "global").await.unwrap();
+        initialize(&state, "project").await.unwrap();
+        probe.hold.store(true, Ordering::SeqCst);
+        let global_state = state.clone();
+        let global = tokio::spawn(async move { shutdown(&global_state, "global").await });
+        tokio::time::timeout(Duration::from_secs(2), probe.entered.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        assert!(state.instances.admit(&headers("project")).await.is_ok());
+        // An independently initialized owner must not wait on the stalled hook.
+        tokio::time::timeout(Duration::from_secs(2), initialize(&state, "third"))
+            .await
+            .unwrap()
+            .unwrap();
+        probe.release.cancel();
+        global.await.unwrap().unwrap();
+        shutdown(&state, "project").await.unwrap();
+        shutdown(&state, "third").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn full_owner_history_fails_closed_without_stopping_current() {
+        let (state, probe) = fixture();
+        for index in 0..COMPLETED_SHUTDOWN_CAPACITY {
+            let owner = format!("owner-{index}");
+            initialize(&state, &owner).await.unwrap();
+            shutdown(&state, &owner).await.unwrap();
         }
         assert_eq!(
             state.instances.completed_shutdowns.lock().unwrap().len(),
-            COMPLETED_SHUTDOWN_CAPACITY,
+            COMPLETED_SHUTDOWN_CAPACITY
         );
-        let calls = probe.calls.load(Ordering::SeqCst);
-        // Retention is deliberately bounded; even a formerly valid owner must
-        // not receive an invented success once its proof has been evicted.
         assert_eq!(
-            shutdown(&state, "owner-0").await.unwrap_err().kind,
-            PluginErrorKind::HostUnavailable,
+            initialize(&state, "unknown").await.unwrap_err().kind,
+            PluginErrorKind::PolicyDenied
         );
-        shutdown(&state, &format!("owner-{COMPLETED_SHUTDOWN_CAPACITY}"))
-            .await
-            .unwrap();
-        let current = format!("owner-{}", COMPLETED_SHUTDOWN_CAPACITY + 1);
-        assert!(state.instances.admit(&headers(&current)).await.is_ok());
-        assert_eq!(probe.calls.load(Ordering::SeqCst), calls);
-        shutdown(&state, &current).await.unwrap();
+        shutdown(&state, "owner-0").await.unwrap();
+        assert_eq!(
+            probe.calls.load(Ordering::SeqCst),
+            COMPLETED_SHUTDOWN_CAPACITY
+        );
     }
 }

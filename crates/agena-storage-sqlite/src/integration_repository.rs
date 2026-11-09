@@ -1,6 +1,6 @@
 //! Durable integration grants, transactional inbox checkpoints and outbound
 //! receipts. A provider crash never silently authorizes a repeated side effect.
-use agena_superagent::*;
+use agena_assistant::*;
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use sea_orm::{
@@ -152,7 +152,7 @@ impl IntegrationRepository for SqliteIntegrationRepository {
                 vec![w.into()],
             ),
             None => (
-                "SELECT binding_json FROM agena_integration_bindings WHERE state='enabled' ORDER BY next_poll_ms,id LIMIT 256",
+                "SELECT binding_json FROM agena_integration_bindings WHERE state='enabled' OR EXISTS(SELECT 1 FROM agena_integration_inbox i WHERE i.binding_id=agena_integration_bindings.id AND i.state IN ('processing','executing') AND (json_extract(i.event_json,'$.execution_id') IS NOT NULL OR EXISTS(SELECT 1 FROM agena_deliveries d WHERE d.business_key='integration:'||i.binding_id||':'||i.event_id))) ORDER BY next_poll_ms,id LIMIT 256",
                 vec![],
             ),
         };
@@ -231,7 +231,8 @@ impl IntegrationRepository for SqliteIntegrationRepository {
                 event,
                 state,
                 received_at_ms: now,
-                task_id: None,
+                session_id: None,
+                execution_generation: None,
                 execution_id: None,
                 note,
             };
@@ -341,6 +342,23 @@ impl IntegrationRepository for SqliteIntegrationRepository {
     async fn events(&self, id: Uuid) -> Result<Vec<IntegrationEvent>> {
         self.database.query_all(statement("SELECT event_json FROM agena_integration_inbox WHERE binding_id=? ORDER BY received_at_ms DESC,event_id LIMIT 100",vec![id.to_string().into()])).await.map_err(error)?.into_iter().map(|r|decode(r,"event_json")).collect()
     }
+    async fn execution_events(&self, id: Uuid) -> Result<Vec<(IntegrationEvent, i64)>> {
+        // Read the kernel's immutable receipt using the same global business
+        // key as dispatch. No independent worker state or timing is inferred.
+        let rows = self.database.query_all(statement("SELECT i.event_json,e.session_id,e.id AS resume_execution_id,COALESCE(json_extract(i.event_json,'$.execution_generation'),d.resume_generation) AS resume_generation,e.created_at_ms FROM agena_integration_inbox i LEFT JOIN agena_deliveries d ON d.business_key='integration:'||i.binding_id||':'||i.event_id JOIN agena_executions e ON e.id=COALESCE(json_extract(i.event_json,'$.execution_id'),d.resume_execution_id) AND e.session_id=COALESCE(json_extract(i.event_json,'$.session_id'),d.session_id) WHERE i.binding_id=? AND i.state IN ('processing','executing') ORDER BY i.received_at_ms,i.event_id LIMIT 128", vec![id.to_string().into()])).await.map_err(error)?;
+        rows.into_iter()
+            .map(|row| {
+                let mut event: IntegrationEvent =
+                    serde_json::from_str(&row.try_get::<String>("", "event_json").map_err(error)?)
+                        .map_err(error)?;
+                event.session_id = Some(row.try_get("", "session_id").map_err(error)?);
+                event.execution_id = Some(row.try_get("", "resume_execution_id").map_err(error)?);
+                event.execution_generation =
+                    Some(row.try_get("", "resume_generation").map_err(error)?);
+                Ok((event, row.try_get("", "created_at_ms").map_err(error)?))
+            })
+            .collect()
+    }
     async fn enqueue_delivery(&self, d: IntegrationDelivery) -> Result<()> {
         if d.text.len() > 24576 || d.id.len() > 160 {
             return Err(Error::Invalid("channel delivery exceeds bounded contract"));
@@ -394,25 +412,26 @@ impl IntegrationRepository for SqliteIntegrationRepository {
         put_delivery(self.database.as_ref(), &d).await
     }
     async fn recover_sending(&self) -> Result<()> {
-        let _permit = crate::acquire_write_permit(&self.database)
-            .await
-            .map_err(error)?;
-        let tx = self.database.begin().await.map_err(error)?;
-        let rows = tx
-            .query_all(statement(
-                "SELECT delivery_json FROM agena_integration_outbox WHERE state='sending'",
-                vec![],
-            ))
-            .await
-            .map_err(error)?;
-        for row in rows {
-            let mut d: IntegrationDelivery = decode(row, "delivery_json")?;
-            d.state = "uncertain".into();
-            d.error = Some("process ended before a remote acknowledgement; no blind replay".into());
-            put_delivery(&tx, &d).await?;
+        loop {
+            let _permit = crate::acquire_write_permit(&self.database)
+                .await
+                .map_err(error)?;
+            let tx = self.database.begin().await.map_err(error)?;
+            let rows = tx.query_all(statement(
+                "SELECT delivery_json FROM agena_integration_outbox WHERE state='sending' ORDER BY id LIMIT 128", vec![],
+            )).await.map_err(error)?;
+            if rows.is_empty() {
+                return Ok(());
+            }
+            for row in rows {
+                let mut d: IntegrationDelivery = decode(row, "delivery_json")?;
+                d.state = "uncertain".into();
+                d.error =
+                    Some("process ended before a remote acknowledgement; no blind replay".into());
+                put_delivery(&tx, &d).await?;
+            }
+            tx.commit().await.map_err(error)?;
         }
-        tx.commit().await.map_err(error)?;
-        Ok(())
     }
     async fn unexported_executions(
         &self,

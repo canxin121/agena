@@ -500,7 +500,7 @@ impl LiveContent {
             .filter_map(|source| {
                 let mut diagnostic = None;
                 let state = match command {
-                    Command::DeleteSession{session} if source.scope.session()==*session => CaptureState::Interrupted,
+                    Command::DeleteSession{session, ..} if source.scope.session()==*session => CaptureState::Interrupted,
                     Command::SealContent {
                         scope,
                         content,
@@ -845,7 +845,7 @@ pub(super) async fn seal_stored(
     command: &Command,
 ) -> Result<()> {
     let (target, ending) = match command {
-        Command::DeleteSession { session } => (
+        Command::DeleteSession { session, .. } => (
             TerminalTarget::Session(*session),
             CaptureEnd::Interrupted {
                 diagnostic: "origin session deleted".into(),

@@ -200,6 +200,26 @@ impl HookRunRecord {
         self.occurred_at_ms = occurred_at_ms;
         self
     }
+
+    /// Routine successful hook dispatches (prompt/parameter transforms,
+    /// lifecycle notifications, etc.) are not useful transcript activity.
+    /// Keep failures and explicit decisions or continuations that users can
+    /// act on; hook execution itself is still performed normally.
+    fn is_transcript_activity(&self) -> bool {
+        match self.status {
+            HookRunStatus::Failed | HookRunStatus::TimedOut => true,
+            HookRunStatus::Skipped => false,
+            HookRunStatus::Applied => {
+                self.detail
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty())
+                    || self
+                        .message
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty())
+            }
+        }
+    }
 }
 
 /// Upper bound on the pending hook-run queue. Every dispatch pushes one
@@ -215,11 +235,15 @@ pub(crate) fn push_hook_runs_into(
     queue: &Arc<Mutex<Vec<HookRunRecord>>>,
     runs: Vec<HookRunRecord>,
 ) {
-    if runs.is_empty() {
+    let visible = runs
+        .into_iter()
+        .filter(HookRunRecord::is_transcript_activity)
+        .collect::<Vec<_>>();
+    if visible.is_empty() {
         return;
     }
     let mut pending = queue.lock().expect("hook run queue mutex poisoned");
-    pending.extend(runs);
+    pending.extend(visible);
     if pending.len() > MAX_PENDING_HOOK_RUNS {
         let excess = pending.len() - MAX_PENDING_HOOK_RUNS;
         pending.drain(..excess);
@@ -1079,4 +1103,113 @@ struct ScopedHostClient {
     plugin_id: String,
     plugin_key: PluginKey,
     effect_scope: Arc<PluginEffectScope>,
+}
+
+#[cfg(test)]
+mod hook_run_visibility_tests {
+    use super::*;
+
+    #[test]
+    fn successful_internal_hooks_do_not_create_transcript_activity() {
+        let queue = Arc::new(Mutex::new(Vec::new()));
+        push_hook_runs_into(
+            &queue,
+            vec![
+                HookRunRecord::new(
+                    "chat.system",
+                    "agena.companion",
+                    Some(7),
+                    HookRunStatus::Applied,
+                    "chat.system hook ran",
+                    None,
+                ),
+                HookRunRecord::new(
+                    "prompt.submit",
+                    "test.prompt",
+                    Some(7),
+                    HookRunStatus::Applied,
+                    "prompt.submit hook ran",
+                    Some("   ".into()),
+                ),
+                HookRunRecord::new(
+                    "session.end",
+                    "test.observer",
+                    Some(7),
+                    HookRunStatus::Applied,
+                    "session.end hook notified",
+                    None,
+                ),
+                HookRunRecord::new(
+                    "chat.params",
+                    "test.noop",
+                    Some(7),
+                    HookRunStatus::Skipped,
+                    "chat.params hook skipped",
+                    Some("no changes".into()),
+                ),
+            ],
+        );
+        assert!(queue.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn actionable_hook_outcomes_and_failures_remain_visible() {
+        let queue = Arc::new(Mutex::new(Vec::new()));
+        push_hook_runs_into(
+            &queue,
+            vec![
+                HookRunRecord::new(
+                    "chat.system",
+                    "agena.companion",
+                    Some(7),
+                    HookRunStatus::Applied,
+                    "chat.system hook ran",
+                    None,
+                ),
+                HookRunRecord::new(
+                    "command.before",
+                    "test.guard",
+                    Some(7),
+                    HookRunStatus::Applied,
+                    "command.before hook aborted command",
+                    Some("blocked by policy".into()),
+                ),
+                HookRunRecord::new(
+                    "agent.stop",
+                    "test.plan",
+                    Some(7),
+                    HookRunStatus::Applied,
+                    "agent.stop hook blocked stop",
+                    None,
+                )
+                .with_message(Some("Continue the approved plan".into())),
+                HookRunRecord::new(
+                    "chat.system",
+                    "test.bad-plugin",
+                    Some(7),
+                    HookRunStatus::Failed,
+                    "chat.system hook failed",
+                    None,
+                ),
+                HookRunRecord::new(
+                    "session.end",
+                    "test.slow-plugin",
+                    Some(7),
+                    HookRunStatus::TimedOut,
+                    "session.end hook timed out",
+                    None,
+                ),
+            ],
+        );
+        let kept = queue.lock().unwrap();
+        assert_eq!(kept.len(), 4);
+        assert_eq!(
+            kept.iter().map(|run| run.hook.as_str()).collect::<Vec<_>>(),
+            ["command.before", "agent.stop", "chat.system", "session.end"]
+        );
+        assert_eq!(
+            kept[1].message.as_deref(),
+            Some("Continue the approved plan")
+        );
+    }
 }

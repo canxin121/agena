@@ -49,11 +49,72 @@ pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
 
 fn browser_owner(context: &ToolInvokeContext<'_>) -> SdkResult<agena_runtime_tools::TerminalOwner> {
     Ok(agena_runtime_tools::TerminalOwner {
-        workspace: Path::new(context.workspace_root)
-            .canonicalize()
-            .map_err(|error| PluginError::internal_error(&error))?,
+        workspace: if context.is_global() {
+            PathBuf::new()
+        } else {
+            Path::new(context.workspace_root)
+                .canonicalize()
+                .map_err(|error| PluginError::internal_error(&error))?
+        },
         session_id: Some(context.session_id),
     })
+}
+
+fn web_storage_root(context: &ToolInvokeContext<'_>, project: &Path) -> PathBuf {
+    if context.is_global() {
+        agena_storage_layout::StorageLayout::current().session_assets_dir(context.session_id)
+    } else {
+        project.to_path_buf()
+    }
+}
+
+fn web_artifacts_root(context: &ToolInvokeContext<'_>, project: &Path) -> PathBuf {
+    let layout = agena_storage_layout::StorageLayout::current();
+    if context.is_global() {
+        layout.session_artifacts_dir(context.session_id)
+    } else {
+        layout.artifacts_dir(project)
+    }
+}
+
+#[cfg(test)]
+mod global_browser_owner_tests {
+    use super::*;
+
+    #[test]
+    fn global_browser_owner_has_no_workspace() {
+        let context = ToolInvokeContext {
+            tool_name: "browser",
+            session_id: 42,
+            call_id: 1,
+            workspace_root: "",
+            cancellation: Default::default(),
+        };
+        let owner = browser_owner(&context).unwrap();
+        assert!(owner.workspace.as_os_str().is_empty());
+        assert_eq!(owner.session_id, Some(42));
+        let other = ToolInvokeContext {
+            tool_name: "browser",
+            session_id: 43,
+            call_id: 1,
+            workspace_root: "",
+            cancellation: Default::default(),
+        };
+        let project = Path::new("/tmp/initial-project");
+        assert_ne!(
+            web_storage_root(&other, project),
+            web_storage_root(&context, project)
+        );
+        assert_ne!(
+            web_artifacts_root(&other, project),
+            web_artifacts_root(&context, project)
+        );
+        assert_eq!(
+            web_artifacts_root(&context, project),
+            agena_storage_layout::StorageLayout::current().session_artifacts_dir(42)
+        );
+        assert!(!web_storage_root(&context, project).starts_with(project));
+    }
 }
 
 fn plugin_internal_error_with_context(
@@ -1624,8 +1685,16 @@ impl WebPlugin {
         }
     }
 
-    fn store(&self) -> SdkResult<CrawlStore> {
-        Ok(CrawlStore::for_workspace(self.workspace_root()?))
+    fn store(&self, context: &ToolInvokeContext<'_>) -> SdkResult<CrawlStore> {
+        let root = web_storage_root(
+            context,
+            if context.is_global() {
+                Path::new("")
+            } else {
+                self.workspace_root()?
+            },
+        );
+        Ok(CrawlStore::for_workspace(&root))
     }
 
     fn spider_fetch_options(&self, rendered: bool) -> SdkResult<SpiderFetchOptions> {
@@ -2535,7 +2604,11 @@ impl WebPlugin {
             locale("zh-TW", summary = "在本機已檢索的頁面中尋找證據並取得可讀快照。")
         )
     )]
-    async fn invoke_query(&self, input: &QueryCrawlInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_query(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &QueryCrawlInput,
+    ) -> SdkResult<ToolInvokeOutput> {
         if input.query.trim().is_empty() || input.query.chars().count() > 4096 {
             return Err(PluginError::invalid_params(
                 "query must contain 1–4096 characters",
@@ -2543,7 +2616,7 @@ impl WebPlugin {
         }
         let limit = content::bounded(input.max_results, 5, 20, "max_results")?;
         let hits = self
-            .store()?
+            .store(context)?
             .search_async(input.query.clone(), limit)
             .await
             .map_err(crawl_error_to_plugin)?;
@@ -2608,8 +2681,12 @@ impl WebPlugin {
         locale("zh-TW", summary = "檢索網站並在本機快取已索引頁面。")
 )
 )]
-    async fn invoke_crawl(&self, input: &CrawlRunInput) -> SdkResult<ToolInvokeOutput> {
-        self.run_crawl(input, None).await
+    async fn invoke_crawl(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &CrawlRunInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.run_crawl(context, input, None).await
     }
 
     /// Streaming variant: a crawl runs for a while, so report where it starts
@@ -2617,13 +2694,15 @@ impl WebPlugin {
     async fn invoke_crawl_stream(
         &self,
         sink: ToolStreamSink,
+        context: &ToolInvokeContext<'_>,
         input: &CrawlRunInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.run_crawl(input, Some(&sink)).await
+        self.run_crawl(context, input, Some(&sink)).await
     }
 
     async fn run_crawl(
         &self,
+        context: &ToolInvokeContext<'_>,
         input: &CrawlRunInput,
         progress: Option<&ToolStreamSink>,
     ) -> SdkResult<ToolInvokeOutput> {
@@ -2632,7 +2711,7 @@ impl WebPlugin {
         }
         let start_url =
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
-        let store = self.store()?;
+        let store = self.store(context)?;
         let _guard = self.crawl_lock.lock().await;
         let config = self.config()?;
         let options = CrawlRunOptions {
@@ -3790,14 +3869,24 @@ impl WebPlugin {
                         plugin_internal_error_with_context("invalid screenshot data", &error)
                     })
             })?;
-        let workspace = self.workspace_root()?;
         let path = match input.path.as_deref() {
             Some(path) if Path::new(path).is_absolute() => PathBuf::from(path),
-            Some(path) => workspace.join(path),
-            None => agena_storage_layout::StorageLayout::current()
-                .artifacts_dir(workspace)
-                .join("browser")
-                .join(format!("{}.png", uuid::Uuid::new_v4())),
+            Some(_) if context.is_global() => {
+                return Err(PluginError::invalid_params(
+                    "global sessions require an explicit full absolute path",
+                ));
+            }
+            Some(path) => self.workspace_root()?.join(path),
+            None => web_artifacts_root(
+                context,
+                if context.is_global() {
+                    Path::new("")
+                } else {
+                    self.workspace_root()?
+                },
+            )
+            .join("browser")
+            .join(format!("{}.png", uuid::Uuid::new_v4())),
         };
         if input.path.is_some() {
             self.state()?
@@ -3918,10 +4007,16 @@ impl WebPlugin {
         } else {
             self.browser_preflight_redirects(&url).await?
         };
-        let download_dir = agena_storage_layout::StorageLayout::current()
-            .artifacts_dir(self.workspace_root()?)
-            .join("browser/downloads")
-            .join(uuid::Uuid::new_v4().simple().to_string());
+        let download_dir = web_artifacts_root(
+            context,
+            if context.is_global() {
+                Path::new("")
+            } else {
+                self.workspace_root()?
+            },
+        )
+        .join("browser/downloads")
+        .join(uuid::Uuid::new_v4().simple().to_string());
         let endpoint = self.browser_endpoint().await?;
         let browser_context_id = self
             .browser_state

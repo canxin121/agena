@@ -283,6 +283,7 @@ impl StreamReplayPolicy {
 /// Registry of model providers.
 pub struct ProviderRegistry {
     providers: HashMap<String, Arc<dyn ModelRuntime>>,
+    inventory: Arc<Mutex<HashMap<String, Vec<Model>>>>,
     retry_policy: RequestRetryPolicy,
     stream_replay_policy: StreamReplayPolicy,
     breaker: Arc<Mutex<HashMap<String, BreakerState>>>,
@@ -373,9 +374,8 @@ impl ModelRuntime for PluginRegisteredProvider {
         &self.default_model
     }
 
-    async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
-        Ok(self
-            .models
+    fn configured_models(&self) -> Vec<Model> {
+        self.models
             .iter()
             .map(|model| Model {
                 provider_id: ProviderId::new(self.id.as_str()),
@@ -389,7 +389,11 @@ impl ModelRuntime for PluginRegisteredProvider {
                 thinking_modes: Vec::new(),
                 speed_modes: std::collections::BTreeMap::new(),
             })
-            .collect())
+            .collect()
+    }
+
+    async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+        Ok(self.configured_models())
     }
 
     async fn complete(
@@ -417,6 +421,7 @@ impl ProviderRegistry {
     pub fn new() -> Self {
         Self {
             providers: HashMap::new(),
+            inventory: Arc::new(Mutex::new(HashMap::new())),
             retry_policy: RequestRetryPolicy::default(),
             stream_replay_policy: StreamReplayPolicy::default(),
             breaker: Arc::new(Mutex::new(HashMap::new())),
@@ -476,15 +481,22 @@ impl ProviderRegistry {
     where
         P: ModelRuntime + 'static,
     {
-        self.providers
-            .insert(provider.id().to_owned(), Arc::new(provider));
+        self.register_arc(Arc::new(provider));
     }
 
     pub fn register_arc(&mut self, provider: Arc<dyn ModelRuntime>) {
+        self.inventory
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(provider.id());
         self.providers.insert(provider.id().to_owned(), provider);
     }
 
     pub fn remove(&mut self, provider_id: &str) {
+        self.inventory
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .remove(provider_id);
         self.providers.remove(provider_id);
     }
 

@@ -49,6 +49,16 @@ impl App {
             return;
         }
 
+        if self.overlay.is_none() && global_action == Some(KeyAction::OpenBot) {
+            self.open_bot();
+            return;
+        }
+
+        if self.overlay.is_none() && global_action == Some(KeyAction::OpenHub) {
+            self.open_hub();
+            return;
+        }
+
         if self.handle_overlay_key(key) {
             return;
         }
@@ -270,7 +280,6 @@ impl App {
             Route::PlanViewer(dialog) => self.handle_plan_viewer_key(key, dialog),
             Route::Integrations(source) => self.handle_integrations_key(key, *source),
             Route::Assistant(source) => self.handle_assistant_key(key, *source),
-            Route::Tasks(source) => self.handle_tasks_key(key, *source),
             Route::SessionWork(id) => self.handle_session_work_route_key(key, *id),
             Route::Btw(_) => self.handle_btw_route_key(key),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
@@ -285,6 +294,7 @@ impl App {
             }
             Route::SessionSearch(dialog) => self.handle_session_search_overlay_key(key, dialog),
             Route::Hub(state) => self.handle_hub_key(key, state),
+            Route::BotEntry(_) => self.handle_bot_entry_key(key),
             Route::CommandPalette(dialog) => self.handle_command_palette_key(key, dialog),
             Route::SessionNavigation(dialog) => self.handle_session_navigation_key(key, dialog),
             Route::SelectionPicker(dialog) => self.handle_selection_picker_key(key, dialog),

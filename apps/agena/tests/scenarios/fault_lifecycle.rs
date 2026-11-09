@@ -2,7 +2,7 @@
 
 use super::fixture;
 use agena_testkit::{FaultEffect, Reply, RequestMatch, TestResult};
-use anyhow::ensure;
+use anyhow::{Context, ensure};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_crash_arm_preserves_monitoring_and_a_fresh_arm_can_recover() -> TestResult {
@@ -10,7 +10,12 @@ async fn failed_crash_arm_preserves_monitoring_and_a_fresh_arm_can_recover() -> 
         .kernel_faults()
         .run(|case| async move {
             let original = case.user().new_session().await?;
-            let workspace = original.snapshot().await?.session.workspace_id;
+            let workspace = original
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let faults = case.faults()?;
 
             // An outstanding unconsumed injection makes a second arm invalid. This

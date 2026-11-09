@@ -1091,19 +1091,18 @@ impl HostHandle {
                         )
                         .await
                     }
-                    method::HOST_CONVERSATION_WORK => {
-                        let p: HostRequestParams<crate::sdk::host_api::WorkRequest> =
-                            parse(params)?;
+                    method::HOST_BOT_CONTEXT => {
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
-                            inner.conversation_work(p.request),
+                            inner.bot_context(),
                         )
                         .await
                     }
-                    method::HOST_CONVERSATION_WORK_CONTEXT => {
+                    method::HOST_BOT_OPERATION => {
+                        let p: HostRequestParams<crate::sdk::host_api::BotRequest> = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
-                            inner.conversation_work_context(),
+                            inner.bot_operation(p.request),
                         )
                         .await
                     }

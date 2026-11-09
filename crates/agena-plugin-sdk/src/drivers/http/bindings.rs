@@ -234,6 +234,38 @@ impl CallbackBindings {
         })
     }
 
+    pub(super) fn authorize_shutdown(&self, id: Option<&str>) -> crate::Result<()> {
+        let state = self.read()?;
+        if state
+            .active
+            .iter()
+            .chain(state.final_slot.iter())
+            .any(|slot| slot.id.as_deref() == id)
+        {
+            Ok(())
+        } else {
+            Err(unavailable())
+        }
+    }
+
+    pub(super) fn reject_reused_binding(&self, id: Option<&str>) -> crate::Result<()> {
+        let state = self.read()?;
+        if state
+            .active
+            .iter()
+            .chain(state.final_slot.iter())
+            .any(|slot| slot.id.as_deref() == id)
+            || id.is_some_and(|id| {
+                state.retired.iter().any(|(old, _)| old == id) || state.aborted.contains(id)
+            })
+        {
+            return Err(PluginError::invalid_params(
+                "HTTP callback binding identifier is already used",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) async fn admit(&self, id: Option<&str>) -> crate::Result<BindingLease> {
         let slot = self.select(id, false)?;
         if slot.id.as_deref() != id {

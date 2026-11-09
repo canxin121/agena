@@ -35,6 +35,63 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn session_upload_response_and_download_bind_the_original_bytes() {
+    let fixture = Fixture::new();
+    let uploads = fixture.base.join("session-assets/43/uploads");
+    let uploaded = store_uploaded_file(
+        None,
+        Some(43),
+        uploads.clone(),
+        WorkspaceFileUploadRequest {
+            filename: "photo.png".into(),
+            mime: Some("image/png".into()),
+            data_base64: String::new(),
+        },
+        Some(b"original bytes".to_vec()),
+    )
+    .unwrap();
+    assert_eq!(uploaded.workspace_id, None);
+    assert_eq!(uploaded.session_id, Some(43));
+    assert_eq!(uploaded.mime.as_deref(), Some("image/png"));
+    let query = || WorkspaceFileDownloadQuery {
+        path: uploaded.path.clone(),
+    };
+    assert_eq!(
+        read_scoped_session_asset(uploads.clone(), query())
+            .unwrap()
+            .1,
+        b"original bytes"
+    );
+    assert!(
+        read_scoped_session_asset(fixture.base.join("session-assets/44/uploads"), query()).is_err()
+    );
+    fs::write(&uploaded.path, b"changed bytes").unwrap();
+    assert!(read_scoped_session_asset(uploads.clone(), query()).is_err());
+    let long_name = format!("{}.png", "图".repeat(60));
+    let long = store_uploaded_file(
+        None,
+        Some(43),
+        uploads,
+        WorkspaceFileUploadRequest {
+            filename: long_name.clone(),
+            mime: Some("image/png".into()),
+            data_base64: String::new(),
+        },
+        Some(b"data".to_vec()),
+    )
+    .unwrap();
+    assert_eq!(long.name, long_name);
+    assert!(
+        Path::new(&long.path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .len()
+            <= 255
+    );
+}
+
+#[test]
 fn relative_absolute_and_generated_downloads_keep_bytes_and_names() {
     let f = Fixture::new();
     fs::write(f.workspace.join("向日葵.txt"), b"original").unwrap();

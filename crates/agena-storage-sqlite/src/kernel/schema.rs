@@ -6,7 +6,7 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, Transaction
 
 pub(super) const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_background_activities (id TEXT PRIMARY KEY, session_id INTEGER NOT NULL, execution_id TEXT NOT NULL, generation INTEGER NOT NULL, round_id INTEGER NOT NULL, tool_id INTEGER NOT NULL, entry_id INTEGER NOT NULL, owner_epoch TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('process','terminal','agent','monitor')), label TEXT NOT NULL CHECK(length(CAST(label AS BLOB)) BETWEEN 1 AND 1024), phase TEXT NOT NULL CHECK(phase IN ('running','succeeded','failed','stopped','interrupted')), outcome_json TEXT CHECK(outcome_json IS NULL OR (json_valid(outcome_json) AND length(CAST(outcome_json AS BLOB))<=65536)), created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER, UNIQUE(id,entry_id,session_id,execution_id,generation), FOREIGN KEY(tool_id,execution_id,generation,round_id) REFERENCES agena_tool_calls(id,execution_id,generation,round_id), FOREIGN KEY(entry_id,session_id,execution_id,generation) REFERENCES agena_entries(id,origin_session_id,execution_id,generation), CHECK((phase='running' AND outcome_json IS NULL AND finished_at_ms IS NULL) OR (phase!='running' AND outcome_json IS NOT NULL AND json_extract(outcome_json,'$.outcome') IS NOT NULL AND json_extract(outcome_json,'$.outcome')=phase AND finished_at_ms IS NOT NULL AND finished_at_ms>=created_at_ms)))",
-    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id), title TEXT NOT NULL, parent_session_id INTEGER REFERENCES agena_sessions(id), root_session_id INTEGER REFERENCES agena_sessions(id), depth INTEGER NOT NULL DEFAULT 0 CHECK(typeof(depth)='integer' AND depth>=0), relation_kind TEXT NOT NULL DEFAULT 'root' CHECK(relation_kind IN ('root','child','fork','rewind','subagent')), configuration_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(configuration_json) AND length(CAST(configuration_json AS BLOB))<=65536), agent_name TEXT GENERATED ALWAYS AS (json_extract(configuration_json,'$.agent.name')) STORED, agent_status TEXT GENERATED ALWAYS AS (json_extract(configuration_json,'$.agent.status')) STORED, temporary INTEGER GENERATED ALWAYS AS (COALESCE(json_extract(configuration_json,'$.conversation.mode'),'')='btw') STORED, favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0,1)), pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)), selection_json TEXT CHECK(selection_json IS NULL OR json_valid(selection_json)), metadata_version INTEGER NOT NULL DEFAULT 1 CHECK(typeof(metadata_version)='integer' AND metadata_version>0), membership_generation INTEGER NOT NULL DEFAULT 1 CHECK(typeof(membership_generation)='integer' AND membership_generation>0), control_version INTEGER NOT NULL DEFAULT 1 CHECK(typeof(control_version)='integer' AND control_version>0), created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, deleted_at_ms INTEGER, CHECK(updated_at_ms>=created_at_ms))",
+    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id INTEGER REFERENCES agena_workspaces(id) CHECK(workspace_id IS NULL OR workspace_id>0), title TEXT NOT NULL, parent_session_id INTEGER REFERENCES agena_sessions(id), root_session_id INTEGER REFERENCES agena_sessions(id), depth INTEGER NOT NULL DEFAULT 0 CHECK(typeof(depth)='integer' AND depth>=0), relation_kind TEXT NOT NULL DEFAULT 'root' CHECK(relation_kind IN ('root','child','fork','rewind','subagent')), configuration_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(configuration_json) AND length(CAST(configuration_json AS BLOB))<=65536), agent_name TEXT GENERATED ALWAYS AS (json_extract(configuration_json,'$.agent.name')) STORED, agent_status TEXT GENERATED ALWAYS AS (json_extract(configuration_json,'$.agent.status')) STORED, temporary INTEGER GENERATED ALWAYS AS (COALESCE(json_extract(configuration_json,'$.conversation.mode'),'')='btw') STORED, favorite INTEGER NOT NULL DEFAULT 0 CHECK(favorite IN (0,1)), pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)), selection_json TEXT CHECK(selection_json IS NULL OR json_valid(selection_json)), metadata_version INTEGER NOT NULL DEFAULT 1 CHECK(typeof(metadata_version)='integer' AND metadata_version>0), membership_generation INTEGER NOT NULL DEFAULT 1 CHECK(typeof(membership_generation)='integer' AND membership_generation>0), control_version INTEGER NOT NULL DEFAULT 1 CHECK(typeof(control_version)='integer' AND control_version>0), created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, deleted_at_ms INTEGER, CHECK(updated_at_ms>=created_at_ms))",
     "CREATE TABLE IF NOT EXISTS agena_session_statistics (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id), entry_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(entry_count)='integer' AND entry_count>=0), user_message_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(user_message_count)='integer' AND user_message_count>=0), queued_executions INTEGER NOT NULL DEFAULT 0 CHECK(typeof(queued_executions)='integer' AND queued_executions>=0), running_executions INTEGER NOT NULL DEFAULT 0 CHECK(typeof(running_executions)='integer' AND running_executions>=0), last_message_at_ms INTEGER, child_session_count INTEGER NOT NULL DEFAULT 0 CHECK(typeof(child_session_count)='integer' AND child_session_count>=0), processing_state TEXT NOT NULL DEFAULT 'ready' CHECK(processing_state IN ('ready','running','awaiting_interaction','failed')))",
     "CREATE TABLE IF NOT EXISTS agena_executions (id TEXT PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id), message_id INTEGER NOT NULL REFERENCES agena_entries(id) DEFERRABLE INITIALLY DEFERRED, current_generation INTEGER NOT NULL CHECK(typeof(current_generation)='integer' AND current_generation>0), created_at_ms INTEGER NOT NULL, UNIQUE(id,session_id), FOREIGN KEY(id,current_generation) REFERENCES agena_attempts(execution_id,generation) DEFERRABLE INITIALLY DEFERRED)",
     "CREATE TABLE IF NOT EXISTS agena_attempts (execution_id TEXT NOT NULL, generation INTEGER NOT NULL CHECK(typeof(generation)='integer' AND generation>0), session_id INTEGER NOT NULL, owner_epoch TEXT, response_entry_id INTEGER REFERENCES agena_entries(id), stop_requested INTEGER NOT NULL DEFAULT 0 CHECK(stop_requested IN (0,1)), phase TEXT NOT NULL CHECK(phase IN ('queued','running','succeeded','failed','cancelled','interrupted')), started_at_ms INTEGER, finished_at_ms INTEGER, PRIMARY KEY(execution_id,generation), UNIQUE(execution_id,generation,session_id), FOREIGN KEY(execution_id,session_id) REFERENCES agena_executions(id,session_id), CHECK((phase='queued' AND owner_epoch IS NULL AND started_at_ms IS NULL AND finished_at_ms IS NULL) OR (phase='running' AND owner_epoch IS NOT NULL AND started_at_ms IS NOT NULL AND finished_at_ms IS NULL) OR (phase IN ('succeeded','failed','cancelled','interrupted') AND finished_at_ms IS NOT NULL)), CHECK(finished_at_ms IS NULL OR started_at_ms IS NULL OR finished_at_ms>=started_at_ms)) WITHOUT ROWID",
@@ -210,12 +210,6 @@ fn declarations() -> impl Iterator<Item = String> {
         .chain(SESSION_EXTENSIONS.iter().copied())
         .chain(infrastructure.copied())
         .chain(agena_scheduler::schema::declarations())
-        .chain(crate::superagent_repository::DECLARATIONS.iter().copied())
-        .chain(
-            crate::superagent_repository::CONVERSATION_DECLARATIONS
-                .iter()
-                .copied(),
-        )
         .chain(crate::companion_repository::DECLARATIONS.iter().copied())
         .chain(crate::integration_repository::DECLARATIONS.iter().copied())
         .chain(
@@ -226,182 +220,60 @@ fn declarations() -> impl Iterator<Item = String> {
         .map(str::to_owned)
         .chain(std::iter::once(crate::schema::instance_table()))
         .chain(summary_triggers())
+        .chain(GLOBAL_TABLES.iter().map(|s| (*s).to_owned()))
+}
+
+const GLOBAL_TABLES: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS agena_assistant_global_profile (singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL CHECK(revision>0), profile_json TEXT NOT NULL CHECK(json_valid(profile_json)))",
+    "CREATE TABLE IF NOT EXISTS agena_assistant_global_profile_receipts (request_key TEXT NOT NULL PRIMARY KEY, input_json TEXT NOT NULL CHECK(json_valid(input_json)), result_json TEXT NOT NULL CHECK(json_valid(result_json))) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_assistant_global_contact_budget (local_day TEXT NOT NULL PRIMARY KEY, contacts INTEGER NOT NULL CHECK(contacts>=0), last_contact_ms INTEGER NOT NULL) WITHOUT ROWID",
+];
+
+fn object_map(
+    declarations: impl Iterator<Item = String>,
+) -> Result<std::collections::BTreeMap<(String, String), String>, DbErr> {
+    declarations
+        .map(|sql| {
+            let d = declaration(&sql)?;
+            Ok(((d.kind.to_owned(), d.name.to_owned()), d.stored_sql))
+        })
+        .collect()
+}
+
+// SQLite quotes a table name when ALTER TABLE RENAME writes sqlite_schema.
+// Normalize only those exact generated names; all other SQL remains exact.
+fn normalize_renamed(objects: &mut std::collections::BTreeMap<(String, String), String>) {
+    for name in ["agena_sessions", "agena_assistant_reminders"] {
+        if let Some(sql) = objects.get_mut(&("table".into(), name.into())) {
+            *sql = sql.replacen(
+                &format!("CREATE TABLE \"{name}\""),
+                &format!("CREATE TABLE {name}"),
+                1,
+            );
+        }
+    }
 }
 
 fn incompatible_database(reason: &str) -> DbErr {
     DbErr::Custom(format!(
-        "{reason}; use a new empty data directory; the existing database has not been modified"
+        "{reason}; migrate the database once with the offline upgrade tool before starting Agena, or use a new empty data directory; the existing database has not been modified"
     ))
-}
-
-/// Move the retired session prompt override into the session prompt layer.
-///
-/// The retired field no longer deserializes, so this rewrite runs once during
-/// schema initialization and leaves no runtime compatibility path behind.
-///
-/// The old field distinguished inheritance (`null`) from an explicit empty
-/// override (`""`). A string becomes one inline session fragment; an empty
-/// string becomes a `replace` layer so broader additional instructions stay
-/// disabled. `null` and a missing key both mean inheritance, so the key is
-/// simply removed.
-async fn migrate_retired_prompt_configuration(database: &DatabaseConnection) -> Result<(), DbErr> {
-    let rows = database
-        .query_all(Statement::from_string(
-            database.get_database_backend(),
-            "SELECT id, configuration_json FROM agena_sessions \
-             WHERE json_type(configuration_json,'$.additional_system_prompt') IS NOT NULL",
-        ))
-        .await?;
-    let mut rewrites = Vec::with_capacity(rows.len());
-    for row in rows {
-        let id: i64 = row.try_get("", "id")?;
-        let raw: String = row.try_get("", "configuration_json")?;
-        let mut configuration: serde_json::Value = serde_json::from_str(&raw).map_err(|error| {
-            DbErr::Custom(format!(
-                "session {id} has an invalid configuration object: {error}"
-            ))
-        })?;
-        let object = configuration.as_object_mut().ok_or_else(|| {
-            DbErr::Custom(format!(
-                "session {id} configuration is not a JSON object; the retired prompt field cannot be migrated"
-            ))
-        })?;
-        let retired = object.remove("additional_system_prompt").ok_or_else(|| {
-            DbErr::Custom(format!(
-                "session {id} reported a retired prompt field that disappeared during migration"
-            ))
-        })?;
-        match retired {
-            // `null` meant "inherit from broader scopes"; removing the key is
-            // the new representation of that same state.
-            serde_json::Value::Null => {}
-            serde_json::Value::String(text) if text.trim().is_empty() => {
-                // `""` disabled inherited additional instructions while keeping
-                // built-in instructions. A replace layer with no content does
-                // exactly that, and leaves any already-migrated layer intact.
-                if object.get("prompts").is_none_or(serde_json::Value::is_null) {
-                    object.insert("prompts".into(), serde_json::json!({"mode": "replace"}));
-                }
-            }
-            serde_json::Value::String(text) => {
-                if object.get("prompts").is_none_or(serde_json::Value::is_null) {
-                    object.insert(
-                        "prompts".into(),
-                        serde_json::json!({
-                            "order": ["legacy-session-prompt"],
-                            "inline": [{
-                                "id": "legacy-session-prompt",
-                                "title": "Retired session prompt",
-                                "body": text,
-                            }],
-                        }),
-                    );
-                }
-            }
-            other => {
-                return Err(DbErr::Custom(format!(
-                    "session {id} has an unsupported retired additional_system_prompt value of type `{}`; expected a string or null",
-                    json_kind(&other)
-                )));
-            }
-        }
-        if object
-            .get("prompts")
-            .is_some_and(serde_json::Value::is_null)
-        {
-            object.remove("prompts");
-        }
-        let configuration = serde_json::to_string(&configuration)
-            .map_err(|error| DbErr::Json(error.to_string()))?;
-        rewrites.push((id, configuration));
-    }
-    if rewrites.is_empty() {
-        return Ok(());
-    }
-    let transaction = database.begin().await?;
-    for (id, configuration) in rewrites {
-        transaction
-            .execute(Statement::from_sql_and_values(
-                transaction.get_database_backend(),
-                "UPDATE agena_sessions SET configuration_json=? WHERE id=?",
-                [configuration.into(), id.into()],
-            ))
-            .await?;
-    }
-    transaction.commit().await?;
-    Ok(())
-}
-
-fn json_kind(value: &serde_json::Value) -> &'static str {
-    match value {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
-    }
 }
 
 async fn validate_objects(
     database: &DatabaseConnection,
     actual: std::collections::BTreeMap<(String, String), String>,
 ) -> Result<bool, DbErr> {
-    let expected = declarations()
-        .map(|sql| {
-            let d = declaration(&sql)?;
-            Ok(((d.kind.to_owned(), d.name.to_owned()), d.stored_sql))
-        })
-        .collect::<Result<std::collections::BTreeMap<_, _>, DbErr>>()?;
-    let current = expected == actual;
-    if !current {
-        // Recognize only complete historical baselines: immediately before
-        // task tables, or that baseline before the session extension bundle.
-        // Partial additions and foreign objects remain fail-closed.
-        let mut previous = expected;
-        for sql in crate::integration_repository::CHANNEL_DECLARATIONS {
-            let d = declaration(sql)?;
-            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
-        }
-        let previous_integrations = previous == actual;
-        for sql in crate::integration_repository::DECLARATIONS {
-            let d = declaration(sql)?;
-            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
-        }
-        let previous_assistant = previous == actual;
-        for sql in crate::companion_repository::DECLARATIONS {
-            let d = declaration(sql)?;
-            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
-        }
-        let previous_conversation = previous == actual;
-        for sql in crate::superagent_repository::CONVERSATION_DECLARATIONS {
-            let d = declaration(sql)?;
-            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
-        }
-        let previous_tasks = previous == actual;
-        for sql in crate::superagent_repository::DECLARATIONS {
-            let d = declaration(sql)?;
-            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
-        }
-        let previous_with_sessions = previous == actual;
-        for sql in SESSION_EXTENSIONS {
-            let d = declaration(sql)?;
-            previous.remove(&(d.kind.to_owned(), d.name.to_owned()));
-        }
-        if !previous_integrations
-            && !previous_assistant
-            && !previous_conversation
-            && !previous_tasks
-            && !previous_with_sessions
-            && previous != actual
-        {
-            return Err(incompatible_database(
-                "database schema does not match the current Agena baseline",
-            ));
-        }
+    let mut actual = actual;
+    normalize_renamed(&mut actual);
+    let expected = object_map(declarations())?;
+    if expected != actual {
+        return Err(incompatible_database(
+            "database schema does not match the current Agena baseline",
+        ));
     }
     instance_id(database).await?;
-    Ok(current)
+    Ok(true)
 }
 
 /// A read-only probe must reject even a nonempty file with no user tables.
@@ -417,30 +289,7 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     // Repositories never initialize their own tables after composition.
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
-        if validate_objects(database, actual).await? {
-            migrate_retired_prompt_configuration(database).await?;
-            return Ok(());
-        }
-        // Only the exact recognized predecessor may receive these additive
-        // tables. A partial/foreign schema still fails before any mutation.
-        let transaction = database.begin().await?;
-        for sql in SESSION_EXTENSIONS
-            .iter()
-            .chain(crate::superagent_repository::DECLARATIONS)
-            .chain(crate::superagent_repository::CONVERSATION_DECLARATIONS)
-            .chain(crate::companion_repository::DECLARATIONS)
-            .chain(crate::integration_repository::DECLARATIONS)
-            .chain(crate::integration_repository::CHANNEL_DECLARATIONS)
-        {
-            transaction
-                .execute(Statement::from_string(
-                    database.get_database_backend(),
-                    *sql,
-                ))
-                .await?;
-        }
-        transaction.commit().await?;
-        migrate_retired_prompt_configuration(database).await?;
+        validate_objects(database, actual).await?;
         return Ok(());
     }
     // The full schema and baseline identity reach the main database together,
@@ -495,4 +344,52 @@ pub(crate) async fn instance_id(database: &DatabaseConnection) -> Result<String,
         return Err(incompatible_database("instance identity is invalid"));
     }
     Ok(id)
+}
+
+#[cfg(test)]
+mod nullable_tests {
+    use super::*;
+    use sea_orm::Database;
+
+    async fn exec(db: &impl ConnectionTrait, sql: &str) {
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            sql.to_owned(),
+        ))
+        .await
+        .unwrap();
+    }
+    async fn scalar(db: &impl ConnectionTrait, sql: &str) -> i64 {
+        db.query_one(Statement::from_string(
+            db.get_database_backend(),
+            sql.to_owned(),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get("", "n")
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn foreign_schema_is_rejected_without_modifying_database() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        exec(&db, "CREATE TABLE unexpected_object(id INTEGER)").await;
+        let before = schema_objects(&db).await.unwrap();
+        let error = initialize(&db).await.unwrap_err().to_string();
+        assert!(error.contains("migrate the database once"), "{error}");
+        assert_eq!(schema_objects(&db).await.unwrap(), before);
+        assert!(validate_existing(&db).await.is_err());
+    }
+    #[tokio::test]
+    async fn fresh_schema_requires_no_workspace() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        exec(&db, "INSERT INTO agena_sessions(workspace_id,title,created_at_ms,updated_at_ms) VALUES(NULL,'global',1,1)").await;
+        assert_eq!(
+            scalar(&db, "SELECT count(*) AS n FROM agena_workspaces").await,
+            0
+        );
+        initialize(&db).await.unwrap();
+    }
 }

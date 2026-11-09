@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Runtime primitives and concrete application composition"
 
 [dependencies]
-agena-superagent = { workspace = true }
+agena-assistant = { workspace = true }
 agena-tool-api = { workspace = true }
 agena-storage-layout = { workspace = true }
 agena-async = { workspace = true }
@@ -40,7 +40,6 @@ hex = { workspace = true }
 html_escape = { workspace = true }
 http = { workspace = true }
 infer = { workspace = true }
-log = { workspace = true }
 parking_lot = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }

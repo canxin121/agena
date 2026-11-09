@@ -410,12 +410,19 @@ impl App {
 
     pub(crate) fn current_session_path_label(&self) -> Option<String> {
         self.transcript.session_id?;
-        let effective = self
+        if self.is_bot_session() {
+            return None;
+        }
+        let execution = self
             .transcript
             .execution
             .as_ref()
-            .filter(|execution| self.transcript.session_id == Some(execution.session.id))
-            .and_then(|execution| execution.execution.effective_workspace_root.as_deref())
+            .filter(|execution| self.transcript.session_id == Some(execution.session.id))?;
+        execution.session.workspace_id?;
+        let effective = execution
+            .execution
+            .effective_workspace_root
+            .as_deref()
             .map(str::trim)
             .filter(|path| !path.is_empty());
         let path = effective

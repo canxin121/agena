@@ -52,6 +52,10 @@ pub(super) async fn validate(
             results.push(json!({"file":path,"state":"not_configured"}));
             continue;
         };
+        if executor.is_global() && !std::path::Path::new(&path).is_absolute() {
+            results.push(json!({"file":path,"state":"explicit_absolute_path_required"}));
+            continue;
+        }
         let target = executor.resolve_target_path(&path);
         if !target.is_file() {
             results.push(json!({"file":path,"state":"not_a_current_file"}));

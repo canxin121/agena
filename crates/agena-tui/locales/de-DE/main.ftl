@@ -3224,66 +3224,6 @@ inline-ui-reset = Eingaben zurücksetzen
 inline-ui-native-help = Tab/↑↓ Fokus · Enter/Space Aktion · ←→ ändern · PgUp/PgDn scrollen · Esc schließen
 inline-ui-editor-help = Enter bestätigen · Esc abbrechen · ←→ bewegen · Ctrl+U leeren
 
-## Durable tasks
-command-task-summary = Neue Aufgabe
-command-tasks-summary = Dauerhafte Aufgaben
-task-board-title = Dauerhafte Aufgaben
-task-board-description = Arbeit in einer eigenen Sitzung ausführen, Fortschritt verfolgen und Ergebnisse prüfen.
-task-board-create = Neue Aufgabe
-task-board-resume = Mit Anweisungen fortsetzen
-task-board-cancel = Aufgabe abbrechen
-task-board-accept = Ergebnis bestätigen
-task-board-refresh = Aktualisieren
-task-board-scope = Bereich
-task-board-currentSession = Diese Unterhaltung
-task-board-allTasks = Alle Aufgaben
-task-board-state = Status
-task-board-allStates = Alle Status
-task-board-serial = Eine Aufgabe gleichzeitig. Bestehende Berechtigungen bleiben erhalten.
-task-board-noSession = Vor dem Erstellen einer Aufgabe eine Unterhaltung öffnen.
-task-board-chat = Chat öffnen
-task-board-list = Aufgabenliste
-task-board-loading = Aufgaben werden geladen…
-task-board-empty = Keine Aufgaben in dieser Ansicht.
-task-board-attempt = Versuch
-task-board-previous = Zurück
-task-board-next = Weiter
-task-board-details = Aufgabendetails
-task-board-back = Zur Liste
-task-board-updated = Aktualisiert
-task-board-waitingHint = Die Ausführungssitzung öffnen, um Fragen oder Berechtigungsanfragen zu beantworten.
-task-board-reviewHint = Der Agent ist fertig. Ergebnis und Prüfnachweise vor der Bestätigung kontrollieren.
-task-board-worker = Ausführung öffnen
-task-board-source = Ursprüngliche Unterhaltung
-task-board-feedback = Zusätzliche Anweisungen
-task-board-select = Eine Aufgabe auswählen, um Fortschritt und Ergebnis zu prüfen.
-task-board-formHint = Dies ist ein ausdrücklicher Auftrag. Bestehende Werkzeugberechtigungen gelten weiter.
-task-board-restored = Der unvollständige Auftrag wurde wiederhergestellt. Vor dem Senden prüfen.
-task-board-goal = Aufgabenziel
-task-board-placeholder = Erwartetes Ergebnis und Prüfmethode beschreiben.
-task-board-invalid = Nicht leere Anweisungen mit höchstens 32 KiB eingeben.
-task-board-confirmCancel = Aufgabe und Unteraufgaben stoppen? Bereits ausgeführte externe Aktionen werden nicht rückgängig gemacht.
-task-board-confirmAccept = Ergebnis und Prüfnachweise kontrolliert? Damit wird die Aufgabe abgeschlossen.
-task-board-uncertain = Der Server könnte den Auftrag angenommen haben. Wiederholung verwendet dieselbe Kennung; vor einem neuen Auftrag prüfen.
-task-board-conflict = Die Aufgabe wurde geändert. Aktuellen Zustand prüfen und erneut bestätigen. Eingaben bleiben erhalten.
-task-board-close = Schließen
-task-board-rebase = Aktuelle Version prüfen
-task-board-saving = Wird gesendet…
-task-board-confirm = Bestätigen
-task-board-retry = Gleichen Auftrag wiederholen
-task-state-queued = Eingereiht
-task-state-starting = Startet
-task-state-running = Läuft
-task-state-waiting = Eingabe nötig
-task-state-review = Zur Prüfung
-task-state-completed = Abgeschlossen
-task-state-interrupted = Unterbrochen
-task-state-failed = Fehlgeschlagen
-task-state-cancelling = Wird gestoppt
-task-state-cancelled = Abgebrochen
-task-board-keys = ↑/↓ wählen · Enter Ausführung · o Ursprung · n neu · u fortsetzen · a bestätigen · c abbrechen · r aktualisieren · g Bereich · f Filter · [/] Seiten · PgUp/PgDn Details · Esc zurück
-task-board-formKeys = Ctrl+Enter / Alt+Enter senden · Ctrl+R aktuelle Version bestätigen · Esc schließen. Enter fügt eine Zeile ein.
-task-board-compactKeys = ↑↓ wählen · Enter öffnen · n neu · u weiter · a bestätigen · c abbrechen · r aktualisieren · [/] Seiten · Esc zurück
 
 ## Workspace assistant
 command-assistant-summary = Assistent
@@ -3376,7 +3316,7 @@ integrations-state_enabled = Aktiv
 integrations-state_paused = Pausiert
 integrations-state_expired = Abgelaufen
 integrations-state_faulted = Prüfung nötig
-integrations-keys = ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
+integrations-keys = Enter session · ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
 integrations-formKeys = Ctrl+Enter / Alt+Enter save draft · Enter newline · Esc close. Enable requires separate confirmation.
 
 ## Scoped channel access
@@ -3416,11 +3356,46 @@ channelAccess-role_operator = Operator
 channelAccess-role_administrator = Administrator
 channelAccess-role_owner = Owner
 channelAccess-capabilities = Capabilities per role
-channelAccess-capabilityHint = A role grants no tools by itself. Use exact canonical tool IDs and hosts. Shared context permits no tools, private memory or background work.
-channelAccess-work = Background work
+channelAccess-capabilityHint = A role grants no tools by itself. Use exact canonical tool IDs and hosts. Shared context permits no tools or private memory.
 channelAccess-memory = Private memory
 channelAccess-project = Source project access
 channelAccess-tools = Allowed tools, one canonical ID per line
 channelAccess-network = Allowed network hosts, one per line
 channelAccess-reports = Allow automated posts from a separate service session
 channelAccess-stale = The policy changed elsewhere. Close, refresh and review again; your stale settings will not overwrite the latest policy.
+
+# Canonical AI Bot chat
+command-bot-summary = Chat mit deinem AI Bot öffnen
+bot-title = AI Bot
+bot-description = Projektsitzungen finden und verwalten, mit nativen Modellen, Warteschlangen und Zweigen.
+bot-opening = Bot-Chat wird geöffnet…
+bot-open-failed = AI Bot konnte nicht geöffnet werden.
+bot-retry-help = Enter / r erneut · Esc zurück
+bot-loading-help = Esc zurück · Ctrl+G Projekte
+bot-session-header = AI Bot · Ctrl+G Projekte
+hub-bot-entry = b AI Bot · Ctrl+B
+bot-ready = Bereit
+
+# Named Bot registry and independent persona editor
+bot-manager-title = Benannte Bots
+bot-list-keys = ↑↓ wählen · Enter öffnen · n erstellen
+    e bearbeiten · a archivieren · r laden
+    w Arbeitsbereich · Esc zurück
+bot-entry-keys = Enter/r erneut · l Bot-Liste · Esc zurück
+bot-confirm-keys = Enter bestätigen · Esc abbrechen
+bot-editor-keys = Ctrl+Enter/Alt+Enter anwenden · Esc zurück
+bot-form-keys = ↑↓ Feld · Enter ändern · s speichern
+    r neu laden · Esc zurück
+bot-current = (aktuell)
+bot-empty = Keine aktiven Bots. Mit n erstellen.
+bot-archive-confirm = Diesen Bot archivieren? Der Server prüft, ob er inaktiv ist. Der Gesprächsverlauf bleibt erhalten.
+bot-reload-confirm = Entwurf verwerfen und das zuletzt gespeicherte Profil laden?
+bot-error-guidance = Anfrage fehlgeschlagen. Entwurf erhalten; bei Versionskonflikten neu laden.
+bot-form-invalid = Name eingeben; Anweisungen dürfen höchstens 4096 Bytes umfassen.
+bot-command-help = /bot · /bot list · /bot create · /bot edit · /bot UUID
+hub-bot-list = l Bot-Liste
+bot-create-title = Bot erstellen
+bot-edit-title = Bot bearbeiten
+
+bot-instructions = Zusätzliche Systemanweisungen
+bot-instructions-empty = Keine zusätzlichen Systemanweisungen

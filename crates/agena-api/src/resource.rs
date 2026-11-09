@@ -662,7 +662,7 @@ pub struct SessionResource {
     pub parent_id: Option<i64>,
     pub depth: i64,
     pub root_id: i64,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     /// Durable user favorite state shared by TUI/Web/API clients.
     #[serde(default)]
@@ -1773,7 +1773,9 @@ mod model_catalog_contract_tests {
 pub struct WorkspaceFileUploadResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
     pub path: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

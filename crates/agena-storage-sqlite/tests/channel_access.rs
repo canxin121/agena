@@ -1,5 +1,5 @@
+use agena_assistant::*;
 use agena_storage_sqlite::{SqliteIntegrationRepository, open_kernel_runtime};
-use agena_superagent::*;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -55,7 +55,7 @@ fn spec() -> IntegrationSpec {
         expires_at_ms: 1_000_000,
         daily_limit: 100,
         total_limit: 1000,
-        max_task_seconds: 60,
+        max_execution_seconds: 60,
         use_source_permissions: true,
         channel_policy: Some(policy()),
     }
@@ -508,7 +508,7 @@ async fn loss_of_last_platform_owner_faults_connection_instead_of_leaving_ownerl
 }
 
 #[tokio::test]
-async fn deterministic_access_commands_are_not_blocked_by_chat_or_task_budgets() {
+async fn deterministic_access_commands_are_not_blocked_by_chat_or_execution_budgets() {
     let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
     let repo = SqliteIntegrationRepository::new(db.database.clone());
     let mut b = enabled(&repo).await;

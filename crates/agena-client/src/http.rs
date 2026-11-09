@@ -46,10 +46,10 @@ mod content;
 mod inline_ui;
 pub use inline_ui::InlineUiSubscription;
 mod assistant;
+mod bot;
 mod integrations;
 mod mcp_connections;
 mod skills;
-mod tasks;
 #[cfg(test)]
 mod tests;
 pub use content::ContentSubscription;
@@ -1163,6 +1163,24 @@ impl AgenaClient {
     ) -> Result<agena_api::resource::WorkspaceFileUploadResource, ClientError> {
         self.post_json(
             &format!("/api/v1/workspaces/{workspace_id}/files"),
+            serde_json::json!({
+                "filename": filename,
+                "data_base64": data_base64,
+                "mime": mime,
+            }),
+        )
+        .await
+    }
+
+    pub async fn upload_session_file(
+        &self,
+        session_id: i64,
+        filename: &str,
+        data_base64: &str,
+        mime: Option<&str>,
+    ) -> Result<agena_api::resource::WorkspaceFileUploadResource, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/attachments"),
             serde_json::json!({
                 "filename": filename,
                 "data_base64": data_base64,

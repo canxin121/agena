@@ -252,6 +252,13 @@ fn literal_enums() -> Vec<LiteralEnum> {
 /// their payload shapes). Referenced types are emitted once, by name.
 fn structured_roots() -> Vec<(&'static str, Value)> {
     vec![
+        ("BotSession", schema_of::<agena_api::bot::BotSession>()),
+        ("BotPersona", schema_of::<agena_api::bot::BotPersona>()),
+        ("BotProfile", schema_of::<agena_api::bot::BotProfile>()),
+        ("BotList", schema_of::<agena_api::bot::BotList>()),
+        ("BotCreate", schema_of::<agena_api::bot::BotCreate>()),
+        ("BotUpdate", schema_of::<agena_api::bot::BotUpdate>()),
+        ("BotArchive", schema_of::<agena_api::bot::BotArchive>()),
         (
             "ChannelPolicyUpdate",
             schema_of::<agena_api::integrations::ChannelPolicyUpdate>(),
@@ -288,9 +295,6 @@ fn structured_roots() -> Vec<(&'static str, Value)> {
             "ReminderControl",
             schema_of::<agena_api::assistant::ReminderControl>(),
         ),
-        ("Task", schema_of::<agena_api::tasks::Task>()),
-        ("CreateTask", schema_of::<agena_api::tasks::CreateTask>()),
-        ("ResumeTask", schema_of::<agena_api::tasks::ResumeTask>()),
         (
             "SessionState",
             schema_of::<agena_api::resource::SessionState>(),
@@ -362,9 +366,31 @@ pub fn module_source_result() -> Result<String, String> {
         roots.push((name, schema));
     }
 
-    // Reference resolution needs every emitted name, including the literal
-    // enums, which are declared from `specs` rather than from `definitions`.
+    // A public root can also be referenced from another root's $defs (for
+    // example BotProfile -> BotPersona). Emit that type exactly once, while
+    // rejecting genuinely different definitions of the same public name.
+    for (name, schema) in &roots {
+        if let Some(nested) = definitions.remove(*name) {
+            let strip_root_annotations = |mut value: Value| {
+                if let Some(object) = value.as_object_mut() {
+                    object.remove("$schema");
+                    object.remove("title");
+                }
+                value
+            };
+            if strip_root_annotations(nested) != strip_root_annotations(schema.clone()) {
+                return Err(format!(
+                    "conflicting root and referenced schema for `{name}`"
+                ));
+            }
+        }
+    }
+
+    // Reference resolution includes roots as well as nested and literal types.
     let mut known = definitions.clone();
+    for (name, schema) in &roots {
+        known.insert((*name).to_owned(), schema.clone());
+    }
     for spec in &specs {
         known.insert(spec.name.to_owned(), Value::Null);
     }
@@ -776,5 +802,35 @@ mod dynamic_ui_schema_tests {
             super::render(&schema, &Default::default(), 0).unwrap(),
             "JsonValue"
         );
+    }
+}
+
+#[cfg(test)]
+mod public_root_identity_tests {
+    #[test]
+    fn public_roots_referenced_from_other_roots_are_emitted_once() {
+        let source = super::module_source_result().expect("valid public schemas");
+        let mut names = std::collections::BTreeSet::new();
+        for line in source.lines() {
+            if let Some(declaration) = line.strip_prefix("export type ") {
+                let name = declaration
+                    .split_once('=')
+                    .expect("type assignment")
+                    .0
+                    .trim();
+                assert!(names.insert(name), "duplicate generated type: {name}");
+            }
+        }
+        for name in [
+            "BotSession",
+            "BotPersona",
+            "BotProfile",
+            "BotList",
+            "BotCreate",
+            "BotUpdate",
+            "BotArchive",
+        ] {
+            assert!(names.contains(name), "missing named Bot contract: {name}");
+        }
     }
 }

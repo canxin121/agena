@@ -366,6 +366,12 @@ pub trait ModelRuntime: Send + Sync {
         self.execute_image(model, request).await
     }
 
+    /// Routes explicitly configured on this native runtime, without discovery,
+    /// network requests, or synthesizing an unconfigured default model.
+    fn configured_models(&self) -> Vec<Model> {
+        Vec::new()
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError>;
 
     async fn discover_models(

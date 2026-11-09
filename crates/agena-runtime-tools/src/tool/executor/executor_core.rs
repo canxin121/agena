@@ -11,6 +11,8 @@ impl ToolExecutor {
             session_relation_kind: agena_domain::SessionRelationKind::Root,
             conversation: None,
             workspace_root: workspace_root.into(),
+            global: false,
+            session_id: None,
             principal,
             allowed_tool_names: None,
             model_id: None,
@@ -47,6 +49,10 @@ impl ToolExecutor {
         self.lsp_registry.as_ref()
     }
 
+    pub fn is_global(&self) -> bool {
+        self.global
+    }
+
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }
@@ -63,7 +69,11 @@ impl ToolExecutor {
         scoped.plugin_scope = session_context
             .session_id()
             .map(agena_plugin_host::PluginScopeKey::session);
-        if let Some(root) = session_context.effective_workspace_root() {
+        scoped.global = session_context.is_global();
+        scoped.session_id = session_context.session_id();
+        if scoped.global {
+            scoped.workspace_root = PathBuf::new();
+        } else if let Some(root) = session_context.effective_workspace_root() {
             scoped.workspace_root = root.to_path_buf();
         }
         if !session_context.effective_permission().is_empty() {
@@ -255,7 +265,8 @@ impl ToolExecutor {
         };
         agena_domain::PathClassPromptFlags {
             temp_paths_allowed: allowed(&std::env::temp_dir()),
-            internal_paths_allowed: allowed(&crate::project_state_dir(workspace_root)),
+            internal_paths_allowed: !self.is_global()
+                && allowed(&crate::project_state_dir(workspace_root)),
         }
     }
 
@@ -317,6 +328,9 @@ impl ToolExecutor {
         }
         let mut tools = self.registered_tools_with_definition_overrides();
 
+        if self.global && self.session_id.is_none() {
+            return tools;
+        }
         if !self.plugins.is_empty() {
             let inputs = tools
                 .iter()
@@ -327,7 +341,12 @@ impl ToolExecutor {
                     input_schema: entry.input_schema(),
                 })
                 .collect::<Vec<_>>();
-            let patched = self.plugins.dispatch_tool_definitions(inputs).await;
+            let workspace_root = (!self.global && self.session_id.is_some())
+                .then(|| self.workspace_root.to_string_lossy().into_owned());
+            let patched = self
+                .plugins
+                .dispatch_tool_definitions(inputs, self.session_id, workspace_root)
+                .await;
             tools = apply_definition_overrides(tools, patched);
         }
 

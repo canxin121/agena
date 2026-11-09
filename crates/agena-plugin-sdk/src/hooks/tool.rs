@@ -214,6 +214,13 @@ pub struct ToolInvokeContext<'a> {
     pub cancellation: crate::CancellationToken,
 }
 
+impl ToolInvokeContext<'_> {
+    /// Whether this invocation has no project working directory.
+    pub fn is_global(&self) -> bool {
+        self.workspace_root.is_empty()
+    }
+}
+
 impl ToolInvokeInput {
     pub fn context(&self) -> ToolInvokeContext<'_> {
         ToolInvokeContext {

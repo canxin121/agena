@@ -7,8 +7,9 @@ rust-version.workspace = true
 description = "Agena session model, history and execution"
 
 [dependencies]
+caseless = "0.2.2"
 agena-storage-layout = { workspace = true }
-agena-superagent = { workspace = true }
+agena-assistant = { workspace = true }
 agena-tool-api = { workspace = true }
 agena-async = { workspace = true }
 portable-atomic = { workspace = true }
@@ -47,6 +48,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+agena-runtime-provider-adapters = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 
 [lints]

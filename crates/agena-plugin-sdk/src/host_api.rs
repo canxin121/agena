@@ -20,16 +20,23 @@ use crate::manifest::{
     ToolDefinition,
 };
 pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
+mod bot;
 mod companion;
 mod integrations;
-mod work;
+pub use bot::{BotAction, BotRequest};
 pub use companion::{CompanionAction, CompanionRequest};
 pub use integrations::{IntegrationAction, IntegrationRequest};
-pub use work::{WorkAction, WorkRequest};
 
 #[async_trait]
 /// Client interface used by plugins to call host capabilities.
 pub trait HostClient: Send + Sync + 'static {
+    async fn bot_context(&self) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+    async fn bot_operation(&self, _request: BotRequest) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
     async fn manage_integrations(&self, _request: IntegrationRequest) -> Result<serde_json::Value> {
         Err(unavailable())
     }
@@ -38,16 +45,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
     async fn companion_operation(&self, _request: CompanionRequest) -> Result<serde_json::Value> {
-        Err(unavailable())
-    }
-
-    async fn conversation_work_context(&self) -> Result<serde_json::Value> {
-        Err(unavailable())
-    }
-
-    /// Host-owned work under the live tool callback. The caller cannot supply
-    /// another session identity or turn an automatic result into a user request.
-    async fn conversation_work(&self, _request: WorkRequest) -> Result<serde_json::Value> {
         Err(unavailable())
     }
 
@@ -932,10 +929,40 @@ pub struct HostSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<i64>,
     pub root_id: i64,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     #[serde(default)]
     pub is_subagent: bool,
+}
+
+#[cfg(test)]
+mod host_session_scope_tests {
+    use super::HostSession;
+
+    #[test]
+    fn session_workspace_preserves_global_and_project_scope() {
+        let mut session = HostSession {
+            id: 1,
+            parent_id: None,
+            root_id: 1,
+            workspace_id: None,
+            title: "Bot".into(),
+            is_subagent: false,
+        };
+        let global = serde_json::to_value(&session).unwrap();
+        assert!(global["workspace_id"].is_null());
+        assert_eq!(
+            serde_json::from_value::<HostSession>(global).unwrap(),
+            session
+        );
+        session.workspace_id = Some(42);
+        let project = serde_json::to_value(&session).unwrap();
+        assert_eq!(project["workspace_id"], 42);
+        assert_eq!(
+            serde_json::from_value::<HostSession>(project).unwrap(),
+            session
+        );
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

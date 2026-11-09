@@ -167,16 +167,13 @@ impl SessionManager {
     /// Missing preference authority disables automatic persistent learning.
     pub fn install_memory_preferences(
         &self,
-        repository: Arc<dyn agena_superagent::CompanionRepository>,
+        repository: Arc<dyn agena_assistant::CompanionRepository>,
     ) {
         let _ = self.memory_preferences.set(repository);
     }
 
     pub(super) fn schedule_memory(&self, session: SessionId) {
-        if self.shutdown.is_cancelled()
-            || self.memory_preferences.get().is_none()
-            || MaintenanceConfig::for_state(&self.state.load()).is_none()
-        {
+        if self.shutdown.is_cancelled() || self.memory_preferences.get().is_none() {
             return;
         }
         let dispatch = self.session_dispatch(session);
@@ -197,7 +194,10 @@ impl SessionManager {
         self.control_tasks.spawn(async move {
             let mut worker = Worker { dispatch, active: true };
             loop {
-                let Some(config) = MaintenanceConfig::for_state(&manager.state.load()) else {
+                let Ok(state) = manager.state_for_session(session).await else {
+                    return;
+                };
+                let Some(config) = MaintenanceConfig::for_state(&state) else {
                     return;
                 };
                 let deadline = {
@@ -297,7 +297,7 @@ impl SessionManager {
         let workspace = control.metadata.workspace_id;
         drop(control);
         if !preferences
-            .profile(workspace)
+            .profile_scoped(workspace)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?
             .preferences
@@ -330,6 +330,7 @@ impl SessionManager {
         drop(first);
         let root = match &context.channel_authority {
             Some(authority) => authority.memory_workspace_root.clone(),
+            None if workspace.is_none() => self.global_memory_root().to_path_buf(),
             None => match context.effective_workspace_root.clone() {
                 Some(root) => root,
                 None => return Ok(None),
@@ -436,7 +437,7 @@ impl SessionManager {
         if pending.is_empty() {
             return Ok(true);
         }
-        if !Arc::ptr_eq(state, &self.state.load_full()) {
+        if !Arc::ptr_eq(state, &self.state_for_session(session).await?) {
             return Ok(false);
         }
         let Some((current, executor)) = self.memory_target(session, state).await? else {
@@ -480,7 +481,7 @@ impl SessionManager {
     }
 
     async fn maintain_memory(&self, session: SessionId) -> Result<MaintenanceOutcome, AppError> {
-        let state = self.state.load_full();
+        let state = self.state_for_session(session).await?;
         let Some(config) = MaintenanceConfig::for_state(&state) else {
             return Ok(MaintenanceOutcome::Complete);
         };
@@ -625,7 +626,11 @@ impl SessionManager {
             body,
         };
         let options = MemoryWriteOptions {
-            scope: Some(MemoryScope::Workspace),
+            scope: Some(if store.dir().starts_with(self.global_memory_root()) {
+                MemoryScope::Global
+            } else {
+                MemoryScope::Workspace
+            }),
             source: Some(MemorySource {
                 session_id: session.get(),
                 instance_id: self.memory_instance_id().to_owned(),
@@ -649,7 +654,9 @@ impl SessionManager {
         store: &MemoryStore,
         name: &str,
     ) -> Result<bool, AppError> {
-        if self.shutdown.is_cancelled() || !Arc::ptr_eq(state, &self.state.load_full()) {
+        if self.shutdown.is_cancelled()
+            || !Arc::ptr_eq(state, &self.state_for_session(session).await?)
+        {
             return Ok(false);
         }
         let Some((current, executor)) = self.memory_target(session, state).await? else {

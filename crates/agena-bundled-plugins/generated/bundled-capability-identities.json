@@ -162,6 +162,39 @@
       "hooks": [
         "init",
         "tool.invoke",
+        "chat.system"
+      ],
+      "id": "agena.bot",
+      "tools": [
+        {
+          "canonical_name": "agena.bot.connections",
+          "conditional": null,
+          "definition_identity": "e419ce242fa28af7481cc2bcbc2dd2062dfaf808f548e61cd2bf292b9f90e2a2",
+          "input_schema_sha256": "0f374abda7dcdbb592d92abb337292cba943be04548e8f35eca4d65b5b1aff75",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "agent"
+          ]
+        },
+        {
+          "canonical_name": "agena.bot.sessions",
+          "conditional": null,
+          "definition_identity": "e59bed4d9739e681c9407cb912b055ee98310be54b256cce17ddf7bf66e31476",
+          "input_schema_sha256": "083f461b4fd088384e434b8bccddba74dded1afe4e8716a8c845b466ee7da08d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "agent"
+          ]
+        }
+      ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [
+        "init",
+        "tool.invoke",
         "tool.invoke.stream"
       ],
       "id": "agena.chatgpt",
@@ -2822,39 +2855,6 @@
             "network",
             "discovery",
             "read_only"
-          ]
-        }
-      ],
-      "version": "0.1.0"
-    },
-    {
-      "conditional": null,
-      "hooks": [
-        "init",
-        "tool.invoke",
-        "chat.system"
-      ],
-      "id": "agena.work",
-      "tools": [
-        {
-          "canonical_name": "agena.work.connections",
-          "conditional": null,
-          "definition_identity": "b413ff255d671f3fccb7521b8405264fa096fff58705d4cd706fca0a5d43f901",
-          "input_schema_sha256": "26ee593673247ca343977dbe7882ad0886cb4122df9e9e602bbfb274ccc43ef7",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutate",
-            "agent"
-          ]
-        },
-        {
-          "canonical_name": "agena.work.manage",
-          "conditional": null,
-          "definition_identity": "e48324fb80e5c5bfa6e2e0e6e7723737bad02595a9c34724e7aa2f77239c60fa",
-          "input_schema_sha256": "188287bc69fa96791866b179bd4b76991762e141d5d8ed3e1e3482004651b4a2",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "agent"
           ]
         }
       ],

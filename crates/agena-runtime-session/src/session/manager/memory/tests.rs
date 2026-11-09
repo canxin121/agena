@@ -1,4 +1,5 @@
 use super::*;
+use agena_assistant::{AssistantPatch, AssistantUpdate, CompanionRepository};
 use agena_domain::{Model, ModelId, ProviderId};
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
@@ -7,7 +8,6 @@ use agena_provider::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionUsage,
 };
 use agena_runtime_provider::{ProviderError, provider::ModelRuntime};
-use agena_superagent::{AssistantPatch, AssistantUpdate, CompanionRepository};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[derive(Clone)]

@@ -73,7 +73,8 @@ fn select_item(hub: &mut SessionHubPresentation, target: HubPageTarget, id: i64)
 
 #[test]
 fn current_project_capacity_uses_the_rendered_table_height() {
-    for (height, expected) in [(24, 11), (36, 23), (60, 47)] {
+    // The persistent Bot entry reserves one row above the project tabs.
+    for (height, expected) in [(24, 10), (36, 22), (60, 46)] {
         let area = Rect::new(0, 0, 100, height);
         assert_eq!(
             current_project_page_size(area, false, false, &I18n::english()),
@@ -859,5 +860,46 @@ fn normal_terminals_use_full_width_tables_with_sticky_column_headings() {
             text.contains("session-101") && text.contains("Idle") && text.contains("10-25 17:00"),
             "{text}"
         );
+    }
+}
+
+#[test]
+fn bot_entry_is_visible_and_clickable_in_empty_narrow_hub_in_every_locale() {
+    for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+        let i18n = I18n::resolve(Some(locale), None);
+        for view in HubView::ALL {
+            let mut hub = SessionHubPresentation::empty();
+            hub.set_view(view);
+            let mut terminal = Terminal::new(TestBackend::new(42, 18)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_session_hub(frame, frame.area(), &hub, true, None, false, "", &i18n)
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = (0..18)
+                .map(|y| (0..42).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("AI Bot"), "{locale}: {text}");
+            assert!(text.contains("Ctrl+B"), "{locale}: {text}");
+            let compact = |value: &str| {
+                value
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect::<String>()
+            };
+            // TestBackend includes blank continuation cells after wide glyphs.
+            // Compare all translated characters, ignoring those display cells.
+            assert!(
+                compact(&text).contains(&compact(&i18n.text("hub-bot-list"))),
+                "{locale}: {text}"
+            );
+            assert!(hub_bot_hit_test(Rect::new(0, 0, 42, 18), 4, 1));
+            assert!(!hub_bot_hit_test(Rect::new(0, 0, 42, 18), 25, 1));
+            assert!(hub_bot_list_hit_test(Rect::new(0, 0, 42, 18), 25, 1));
+            assert!(!hub_bot_list_hit_test(Rect::new(0, 0, 42, 18), 4, 1));
+            assert!(!hub_bot_hit_test(Rect::new(0, 0, 42, 18), 4, 2));
+        }
     }
 }

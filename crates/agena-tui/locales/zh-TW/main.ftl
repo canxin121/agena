@@ -3129,66 +3129,6 @@ inline-ui-reset = 重設輸入
 inline-ui-native-help = Tab/↑↓ 切換 · Enter/Space 操作 · ←→ 調整 · PgUp/PgDn 捲動 · Esc 關閉
 inline-ui-editor-help = Enter 確認 · Esc 取消 · ←→ 移動 · Ctrl+U 清空
 
-## Durable tasks
-command-task-summary = 新增任務
-command-tasks-summary = 長期任務
-task-board-title = 長期任務
-task-board-description = 把工作交給獨立執行會話，查看進度、驗收結果並安全繼續。
-task-board-create = 新增任務
-task-board-resume = 補充要求並繼續
-task-board-cancel = 取消任務
-task-board-accept = 驗收完成
-task-board-refresh = 重新整理
-task-board-scope = 範圍
-task-board-currentSession = 目前會話
-task-board-allTasks = 所有任務
-task-board-state = 狀態
-task-board-allStates = 全部狀態
-task-board-serial = 目前逐個執行任務，保留原有權限限制。
-task-board-noSession = 請先開啟一個會話，再建立任務。
-task-board-chat = 開啟聊天
-task-board-list = 任務清單
-task-board-loading = 正在讀取任務…
-task-board-empty = 目前範圍沒有任務。
-task-board-attempt = 執行次數
-task-board-previous = 上一頁
-task-board-next = 下一頁
-task-board-details = 任務詳情
-task-board-back = 返回清單
-task-board-updated = 最近更新
-task-board-waitingHint = 請開啟執行會話，回答問題或處理權限審批。
-task-board-reviewHint = Agent 已結束執行，請檢查結果和驗證證據後再驗收。
-task-board-worker = 開啟執行會話
-task-board-source = 原始會話
-task-board-feedback = 補充要求
-task-board-select = 選擇任務，查看進度與結果。
-task-board-formHint = 這是明確交辦，現有工具權限仍然適用。
-task-board-restored = 已還原未完成的請求，請核對後再提交。
-task-board-goal = 任務目標
-task-board-placeholder = 說明希望得到的結果及驗證方式。
-task-board-invalid = 請輸入非空要求，最多 32 KiB。
-task-board-confirmCancel = 確定停止此任務與子任務？已完成的外部操作不會自動撤銷。
-task-board-confirmAccept = 是否已檢查結果和驗證證據？確認後將標記為完成。
-task-board-uncertain = 服務端可能已接受請求。重試會沿用相同標識，請先核對結果。
-task-board-conflict = 任務已變化，請核對最新狀態並重新確認，輸入已保留。
-task-board-close = 關閉
-task-board-rebase = 使用最新版本重新確認
-task-board-saving = 正在提交…
-task-board-confirm = 確認
-task-board-retry = 重試相同請求
-task-state-queued = 待排程
-task-state-starting = 正在準備
-task-state-running = 執行中
-task-state-waiting = 等待你處理
-task-state-review = 待驗收
-task-state-completed = 已完成
-task-state-interrupted = 已中斷
-task-state-failed = 執行失敗
-task-state-cancelling = 正在停止
-task-state-cancelled = 已取消
-task-board-keys = ↑/↓選擇 · Enter執行會話 · o原會話 · n新增 · u繼續 · a驗收 · c取消 · r更新 · g範圍 · f篩選 · [/]翻頁 · PgUp/PgDn詳情 · Esc返回
-task-board-formKeys = Ctrl+Enter / Alt+Enter提交 · Ctrl+R核對最新版本 · Esc關閉。編輯時Enter換行。
-task-board-compactKeys = ↑↓選擇 · Enter執行會話 · n新增 · u繼續 · a驗收 · c取消 · r更新 · [/]翻頁 · Esc返回
 
 ## Workspace assistant
 command-assistant-summary = 助手設定
@@ -3281,7 +3221,7 @@ integrations-state_enabled = 已啟用
 integrations-state_paused = 已暫停
 integrations-state_expired = 已到期
 integrations-state_faulted = 需要處理
-integrations-keys = ↑↓选择连接 · g切换插件 · n新建 · a权限 · e启用 · p暂停 · o检查 · r刷新 · PgUp/PgDn详情 · Esc返回
+integrations-keys = Enter会话 · ↑↓选择连接 · g切换插件 · n新建 · a权限 · e启用 · p暂停 · o检查 · r刷新 · PgUp/PgDn详情 · Esc返回
 integrations-formKeys = Ctrl+Enter / Alt+Enter保存草稿 · Enter换行 · Esc关闭。保存后需单独确认启用。
 
 ## Scoped channel access
@@ -3321,11 +3261,46 @@ channelAccess-role_operator = 任务操作者
 channelAccess-role_administrator = 范围管理员
 channelAccess-role_owner = 范围所有者
 channelAccess-capabilities = 各角色的能力
-channelAccess-capabilityHint = 角色名称不会自动授予工具。工具和网络目标必须明确列出；共享上下文不允许工具、私人记忆或后台工作。
-channelAccess-work = 后台工作
+channelAccess-capabilityHint = 角色名称不会自动授予工具。工具和网络目标必须明确列出；共享上下文不允许工具或私人记忆。
 channelAccess-memory = 私人记忆
 channelAccess-project = 访问来源项目
 channelAccess-tools = 允许的工具，每行一个完整工具 ID
 channelAccess-network = 允许的网络目标，每行一个主机
 channelAccess-reports = 允许通过独立服务会话发送自动报告
 channelAccess-stale = 权限已被其他操作修改。请关闭、刷新后重新核对；旧设置不会覆盖最新策略。
+
+# Canonical AI Bot chat
+command-bot-summary = 開啟 AI Bot 對話
+bot-title = AI Bot
+bot-description = 尋找、整理與繼續專案工作階段；使用原生模型、佇列與分支功能。
+bot-opening = 正在開啟 Bot 對話…
+bot-open-failed = 無法開啟 AI Bot。
+bot-retry-help = Enter / r 重試 · Esc 返回
+bot-loading-help = Esc 返回 · Ctrl+G 專案
+bot-session-header = AI Bot · Ctrl+G 專案
+hub-bot-entry = b AI Bot · Ctrl+B
+bot-ready = 就緒
+
+# Named Bot registry and independent persona editor
+bot-manager-title = 命名 Bot
+bot-list-keys = ↑↓ 選擇 · Enter 開啟 · n 建立
+    e 編輯 · a 封存 · r 重新整理
+    w 工作區設定 · Esc 返回
+bot-entry-keys = Enter/r 重試 · l Bot 清單 · Esc 返回
+bot-confirm-keys = Enter 確認 · Esc 取消
+bot-editor-keys = Ctrl+Enter/Alt+Enter 套用 · Esc 取消
+bot-form-keys = ↑↓ 欄位 · Enter 編輯 · s 儲存
+    r 重新載入 · Esc 返回
+bot-current = （目前）
+bot-empty = 沒有可用的 Bot。按 n 建立。
+bot-archive-confirm = 封存此 Bot？伺服器要求它處於閒置狀態。對話歷史會保留。
+bot-reload-confirm = 捨棄草稿並重新載入最新儲存的設定？
+bot-error-guidance = 請求失敗，草稿已保留。版本衝突時請重新載入。
+bot-form-invalid = 請輸入名稱；附加系統指令不得超過 4096 位元組。
+bot-command-help = /bot · /bot list · /bot create · /bot edit · /bot UUID
+hub-bot-list = l Bot 清單
+bot-create-title = 建立 Bot
+bot-edit-title = 編輯 Bot
+
+bot-instructions = 附加系統指令
+bot-instructions-empty = 未設定附加系統指令

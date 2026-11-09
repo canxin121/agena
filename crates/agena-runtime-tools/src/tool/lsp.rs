@@ -27,12 +27,12 @@ pub(super) async fn execute_definition_async(
     executor: &ToolExecutor,
     input: &LspDefinitionToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let path = lsp_target(executor, &input.position.file_path)?;
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.position.file_path);
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
-    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let client = client_for_target(executor, registry, &path).await?;
     let sync_status = sync_document(&client, &path, &uri)
         .await
         .map_err(map_lsp_err)?
@@ -68,13 +68,13 @@ pub(super) async fn execute_references_async(
     executor: &ToolExecutor,
     input: &LspReferencesToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let path = lsp_target(executor, &input.position.file_path)?;
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.position.file_path);
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
     let include_definition = input.include_declaration;
 
-    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let client = client_for_target(executor, registry, &path).await?;
     let sync_status = sync_document(&client, &path, &uri)
         .await
         .map_err(map_lsp_err)?
@@ -112,12 +112,12 @@ pub(super) async fn execute_hover_async(
     executor: &ToolExecutor,
     input: &LspHoverToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let path = lsp_target(executor, &input.position.file_path)?;
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.position.file_path);
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
-    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let client = client_for_target(executor, registry, &path).await?;
     let sync_status = sync_document(&client, &path, &uri)
         .await
         .map_err(map_lsp_err)?
@@ -155,13 +155,13 @@ pub(super) async fn execute_diagnostics_async(
     executor: &ToolExecutor,
     input: &LspDiagnosticsToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
+    let path = lsp_target(executor, &input.file_path)?;
     let registry = registry(executor)?;
-    let path = executor.resolve_target_path(&input.file_path);
     let uri = path_to_uri(&path)?;
 
     // Make sure the language server has been spawned (it might not have
     // pushed diagnostics yet if no other tool touched this file).
-    let client = registry.client_for_path(&path).await.map_err(map_lsp_err)?;
+    let client = client_for_target(executor, registry, &path).await?;
     let receipt = sync_document(&client, &path, &uri)
         .await
         .map_err(map_lsp_err)?;
@@ -216,6 +216,33 @@ pub(super) async fn execute_diagnostics_async(
         },
         view,
     ))
+}
+
+pub(super) fn lsp_target(
+    executor: &ToolExecutor,
+    raw: &str,
+) -> Result<std::path::PathBuf, ToolError> {
+    if executor.is_global() && !Path::new(raw).is_absolute() {
+        return Err(ToolError::invalid_input(
+            "global sessions require an explicit full absolute path",
+        ));
+    }
+    Ok(executor.resolve_target_path(raw))
+}
+
+pub(super) async fn client_for_target(
+    executor: &ToolExecutor,
+    registry: &agena_lsp::LspRegistry,
+    path: &Path,
+) -> Result<std::sync::Arc<agena_lsp::LspClient>, ToolError> {
+    if executor.is_global() {
+        registry
+            .client_for_path_global(path)
+            .await
+            .map_err(map_lsp_err)
+    } else {
+        registry.client_for_path(path).await.map_err(map_lsp_err)
+    }
 }
 
 fn registry(executor: &ToolExecutor) -> Result<&std::sync::Arc<agena_lsp::LspRegistry>, ToolError> {

@@ -95,7 +95,8 @@ impl Clock {
 
 const BUCKETS: [&str; 5] = ["pinned", "favorite", "running", "attention", "recent"];
 fn bucket_membership(state: Option<&SessionListState>, bucket: &str) -> bool {
-    let Some(state) = state.filter(|state| state.include_in_lists) else {
+    let Some(state) = state.filter(|state| state.include_in_lists && state.workspace_id.is_some())
+    else {
         return false;
     };
     match bucket {
@@ -112,11 +113,11 @@ fn bucket_membership(state: Option<&SessionListState>, bucket: &str) -> bool {
 }
 
 fn list_row_keys(state: &SessionListState, keys: &mut BTreeSet<String>) {
-    if !state.include_in_lists {
+    let Some(workspace_id) = state.workspace_id.filter(|_| state.include_in_lists) else {
         return;
-    }
+    };
     keys.insert("sessions".into());
-    let workspace = format!("workspace:{}:sessions", state.workspace_id);
+    let workspace = format!("workspace:{workspace_id}:sessions");
     keys.insert(workspace.clone());
     keys.insert(match state.parent_session_id {
         Some(parent) => format!("{workspace}:parent:{}", parent.get()),
@@ -132,7 +133,7 @@ fn list_row_keys(state: &SessionListState, keys: &mut BTreeSet<String>) {
 
 fn statistics_contribution(state: Option<&SessionListState>, workspace: i64) -> [bool; 5] {
     let Some(state) =
-        state.filter(|state| state.include_in_lists && state.workspace_id == workspace)
+        state.filter(|state| state.include_in_lists && state.workspace_id == Some(workspace))
     else {
         return [false; 5];
     };
@@ -161,7 +162,7 @@ fn list_change_keys(change: &SessionListChange) -> BTreeSet<String> {
         let workspaces = [before, after]
             .into_iter()
             .flatten()
-            .map(|state| state.workspace_id)
+            .filter_map(|state| state.workspace_id)
             .collect::<BTreeSet<_>>();
         for workspace in workspaces {
             if statistics_contribution(before, workspace)
@@ -466,6 +467,46 @@ impl ConditionalRead {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn list_state(workspace_id: Option<i64>) -> SessionListState {
+        SessionListState {
+            session: 7_i64.try_into().unwrap(),
+            workspace_id,
+            parent_session_id: None,
+            favorite: true,
+            pinned: true,
+            include_in_lists: true,
+            is_subagent: false,
+            processing_state: SessionStateKind::Ready,
+            queued_executions: 0,
+            running_executions: 0,
+            metadata_version: 1,
+            updated_at_ms: 1,
+            user_message_count: 0,
+            last_message_at_ms: None,
+        }
+    }
+
+    #[test]
+    fn global_changes_do_not_invalidate_project_list_revisions() {
+        let global = list_state(None);
+        let project = list_state(Some(2));
+        let change = |before, after| SessionListChange {
+            before,
+            after,
+            parents: vec![],
+        };
+        assert!(list_change_keys(&change(None, Some(global.clone()))).is_empty());
+        let keys = list_change_keys(&change(Some(project), Some(global)));
+        assert!(keys.contains("workspace:2:sessions"));
+        assert!(keys.contains("workspace:2:stats"));
+        assert!(keys.contains("sessions:bucket:recent:count"));
+        assert!(
+            !keys
+                .iter()
+                .any(|key| key.contains("workspace:0") || key.contains("None"))
+        );
+    }
 
     fn revisions() -> ResourceRevisions {
         ResourceRevisions {

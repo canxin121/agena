@@ -225,11 +225,11 @@ impl App {
                 | Route::SessionModelChooser(_)
                 | Route::Timeline(_)
                 | Route::PlanViewer(_)
-                | Route::Tasks(_)
                 | Route::Assistant(_)
                 | Route::Integrations(_)
                 | Route::SessionWork(_)
                 | Route::Btw(_)
+                | Route::BotEntry(_)
                 | Route::Hub(_)
         ) {
             return 0;
@@ -385,7 +385,7 @@ impl App {
         };
         let title = sanitize_display_text(self.transcript_surface_title());
         let subtitle = self
-            .current_session_path_label()
+            .transcript_surface_subtitle()
             .map(|path| sanitize_display_text(path.as_str()));
         let right = sanitize_display_text(self.transcript_surface_top_right().join("  ·  "));
         let footer = if layout.footer.height > 0 {
@@ -476,17 +476,38 @@ impl App {
 
     pub(crate) fn transcript_surface_top_right(&self) -> Vec<String> {
         transcript_surface_top_right_parts(
-            self.current_session_activity_indicator(),
+            self.current_session_activity_indicator().or_else(|| {
+                self.is_bot_session().then(|| {
+                    self.i18n
+                        .text(if self.transcript.state_load_in_flight_since.is_some() {
+                            "overlay-picker-loading"
+                        } else {
+                            "bot-ready"
+                        })
+                })
+            }),
             self.main_surface_mode_label(),
         )
     }
 
+    fn transcript_surface_subtitle(&self) -> Option<String> {
+        if self.is_bot_session() {
+            Some("/bot list · /assistant · Ctrl+G".into())
+        } else {
+            self.current_session_path_label()
+        }
+    }
+
     pub(crate) fn transcript_surface_title(&self) -> String {
-        let title = ui_text::transcript_header_title(
-            &self.i18n,
-            self.transcript.session_id,
-            self.transcript.session_title.as_str(),
-        );
+        let title = if let Some(profile) = self.current_bot_profile() {
+            agena_tui::sanitize_picker_text(&profile.name)
+        } else {
+            ui_text::transcript_header_title(
+                &self.i18n,
+                self.transcript.session_id,
+                self.transcript.session_title.as_str(),
+            )
+        };
         if self
             .transcript
             .execution
@@ -1040,7 +1061,7 @@ impl App {
             }
             crate::SurfaceSelectionKind::HeaderSubtitle => {
                 let text = self
-                    .current_session_path_label()
+                    .transcript_surface_subtitle()
                     .map(|path| sanitize_display_text(path.as_str()))
                     .unwrap_or_default();
                 let displayed = truncate_display_text_middle(

@@ -116,7 +116,7 @@ pub type RequestId = agena_domain::CommandId;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionMetadata {
     pub id: SessionId,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     pub favorite: bool,
     pub pinned: bool,
@@ -138,7 +138,7 @@ pub struct SessionSummaryView {
     pub agent_status: Option<agena_domain::AgentStatus>,
     pub child_session_count: u64,
     pub id: SessionId,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     pub favorite: bool,
     pub pinned: bool,
@@ -157,7 +157,7 @@ pub struct SessionSummaryView {
 /// A listing is live: changes between pages can move a session to an earlier page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SessionSummaryCursor {
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub updated_at_ms: i64,
     pub id: SessionId,
 }
@@ -165,7 +165,7 @@ pub struct SessionSummaryCursor {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionSummaryPage {
     pub total: Option<u64>,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub sessions: Vec<SessionSummaryView>,
     pub next: Option<SessionSummaryCursor>,
     pub has_more: bool,
@@ -173,6 +173,9 @@ pub struct SessionSummaryPage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct MetadataChange {
+    /// Optional compare-and-set, enforced in the metadata transaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<i64>,
     pub title: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,
@@ -195,6 +198,21 @@ pub enum SelectionChange {
     SpeedMode(Option<String>),
     Verbosity(Option<String>),
     ParallelToolCalls(Option<bool>),
+}
+
+/// Exact-target queue controls, checked with the queue version in the writer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QueueChange {
+    Pause(bool),
+    EditText {
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+        text: String,
+    },
+    Remove {
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    },
 }
 
 /// Durable intent survives queue suspension and service recovery. Control
@@ -633,6 +651,50 @@ impl SessionCommands {
             _ => Err(unexpected()),
         }
     }
+    /// Apply all requested fields together, preserving every unmentioned field.
+    pub async fn patch_selection(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        expected_version: i64,
+        changes: Vec<SelectionChange>,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        control_metadata_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::SelectionPatch {
+                        session,
+                        expected_version,
+                        changes,
+                    },
+                )
+                .await?,
+        )
+    }
+
+    /// Version and attempt identity are checked in the same transaction as the effect.
+    pub async fn control_queue(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        expected_control_version: i64,
+        change: QueueChange,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        control_metadata_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::QueueControl {
+                        session,
+                        expected_control_version,
+                        change,
+                    },
+                )
+                .await?,
+        )
+    }
+
     pub async fn update_selection(
         &self,
         request: RequestId,
@@ -1348,5 +1410,17 @@ impl KernelReader {
         limit: usize,
     ) -> Result<ReadView<HistoryPage>> {
         self.0.backend.history(session, before, limit).await
+    }
+}
+
+fn control_metadata_receipt(
+    result: CommitReceipt<Mutation>,
+) -> Result<CommitReceipt<SessionMetadata>> {
+    match result.value {
+        Mutation::Session(value) => Ok(CommitReceipt {
+            position: result.position,
+            value: *value,
+        }),
+        _ => Err(unexpected()),
     }
 }

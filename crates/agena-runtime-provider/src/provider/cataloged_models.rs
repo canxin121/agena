@@ -282,6 +282,14 @@ impl ModelRuntime for CatalogedModelsProvider {
         Ok(discovery)
     }
 
+    fn configured_models(&self) -> Vec<Model> {
+        self.target
+            .configured_models()
+            .into_iter()
+            .map(|model| self.apply_to_model(&model.id.clone(), model))
+            .collect()
+    }
+
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
         let mut models = self.target.list_models().await?;
         let mut listed = std::collections::BTreeSet::new();

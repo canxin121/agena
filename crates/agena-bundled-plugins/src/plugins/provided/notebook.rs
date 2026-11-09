@@ -213,6 +213,7 @@ impl NotebookPlugin {
         context: &ToolInvokeContext<'_>,
         input: &NotebookEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        super::fs::require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;

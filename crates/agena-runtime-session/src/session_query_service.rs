@@ -19,7 +19,7 @@ use chrono::{DateTime, Utc};
 pub struct SessionPresentation {
     pub id: i64,
     pub parent_id: Option<i64>,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     pub version: i64,
     pub created_at: DateTime<Utc>,

@@ -28,6 +28,7 @@ pub struct SkillManager {
     declared: Vec<DeclaredSkill>,
     disabled_names: Vec<String>,
     read_filter: Option<ReadFilter>,
+    instance_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,7 +117,14 @@ impl SkillManager {
             declared: Vec::new(),
             disabled_names: Vec::new(),
             read_filter: None,
+            instance_only: false,
         }
+    }
+
+    /// Restrict discovery to the explicitly managed instance catalog.
+    pub fn with_instance_only_roots(mut self) -> Self {
+        self.instance_only = true;
+        self
     }
 
     pub fn with_additional_roots(mut self, roots: Vec<PathBuf>) -> Self {
@@ -147,6 +155,13 @@ impl SkillManager {
     }
 
     pub fn roots(&self) -> Vec<SkillRoot> {
+        if self.instance_only {
+            return vec![SkillRoot {
+                path: self.global_root.to_string_lossy().into_owned(),
+                scope: SkillScope::Global,
+                editable: true,
+            }];
+        }
         let mut roots = default_roots(Some(&self.workspace), &self.global_root);
         let insert_at = roots.len().saturating_sub(1);
         for (offset, root) in self.additional_roots.iter().enumerate() {

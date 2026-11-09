@@ -9,6 +9,11 @@ use agena_runtime_tools::media_input;
 pub(super) static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 pub(super) static MEDIA_PREPARATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
+fn upload_hash_matches(path: &std::path::Path, expected: &str) -> bool {
+    agena_runtime_tools::managed_session_upload_digest(path)
+        .is_some_and(|hash| hash.eq_ignore_ascii_case(expected))
+}
+
 /// The run owns the media destination. Tool arguments can choose local input
 /// bytes, but cannot choose a provider, adapter, or authorization scope.
 pub(super) fn tool_media_input_binder(
@@ -45,7 +50,7 @@ impl SessionManager {
             model,
             document,
             request,
-            self.state.load_full(),
+            self.state_for_session(session).await?,
         )
         .await
     }
@@ -73,10 +78,16 @@ impl SessionManager {
             .map_err(|_| AppError::Cancelled)?;
         let context = self.execution_context_with_state(session, &state).await?;
         let executor = state.executor.for_session_context_async(&context).await;
-        let root = executor
-            .workspace_root()
-            .canonicalize()
-            .map_err(|e| AppError::Config(e.to_string()))?;
+        let root = if context.global {
+            None
+        } else {
+            Some(
+                executor
+                    .workspace_root()
+                    .canonicalize()
+                    .map_err(|e| AppError::Config(e.to_string()))?,
+            )
+        };
         let route = state.providers.media_route_binding(model)?;
         let mut blobs = Vec::new();
         let mut bytes = 0usize;
@@ -99,25 +110,39 @@ impl SessionManager {
             }
             let (prepared, existing_blob) = match &resource.reference {
                 ResourceReference::WorkspacePath { path } => {
-                    let target = root.join(path).canonicalize().map_err(|error| {
-                        AppError::Config(format!("selected attachment is unavailable: {error}"))
-                    })?;
-                    if !target.starts_with(&root)
-                        && agena_runtime_tools::managed_attachment_root(&root, &target).is_none()
-                    {
-                        return Err(AppError::Config(
-                            "selected attachment escapes the active workspace and its managed attachments".into(),
-                        ));
+                    let requested = std::path::Path::new(path);
+                    let target = match &root {
+                        Some(root) => root.join(requested),
+                        None if requested.is_absolute() => requested.to_path_buf(),
+                        None => return Err(AppError::Config("Global Bot attachments need their session-owned uploaded path".into())),
+                    }.canonicalize().map_err(|error| AppError::Config(format!("selected attachment is unavailable: {error}")))?;
+                    if context.global && requested != target {
+                        return Err(AppError::Config("Global Bot uploads must use their canonical session-owned path".into()));
                     }
-                    if !matches!(
-                        executor.principal().authorize_path_access(AccessKind::Read, &root, &target),
+                    let owned_asset = agena_runtime_tools::managed_session_attachment_root(session.get(), &target);
+                    if context.global {
+                        let expected = activity.provenance.content_hash.as_deref().ok_or_else(|| AppError::Config("Global Bot uploads require their content hash; select the file again".into()))?;
+                        if !upload_hash_matches(&target, expected) {
+                            return Err(AppError::Config("Global Bot upload identity or content hash is invalid; select the file again".into()));
+                        }
+                    }
+                    let read_root = if let Some(asset_root) = &owned_asset {
+                        asset_root.clone()
+                    } else if let Some(project_root) = &root {
+                        if !target.starts_with(project_root) && agena_runtime_tools::managed_attachment_root(project_root, &target).is_none() {
+                            return Err(AppError::Config("selected attachment is not owned by this project or session".into()));
+                        }
+                        project_root.clone()
+                    } else {
+                        return Err(AppError::Config("selected upload is not owned by this global Bot session".into()));
+                    };
+                    if !(context.global && owned_asset.is_some()) && !matches!(
+                        executor.principal().authorize_path_access(AccessKind::Read, executor.workspace_root(), &target),
                         PermissionDecision::Allow
                     ) {
-                        return Err(AppError::Config(
-                            "attachment read requires permission; no content was sent".into(),
-                        ));
+                        return Err(AppError::Config("attachment read requires permission; no content was sent".into()));
                     }
-                    let root = root.clone();
+                    let root = read_root;
                     let path = path.clone();
                     let expected = activity.provenance.content_hash.clone();
                     let prepared = MEDIA_WORKERS
@@ -232,6 +257,20 @@ mod tool_media_tests {
         provider::{CompletionResponse, ModelRuntime},
     };
     use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    #[test]
+    fn global_upload_name_binds_the_selected_content_hash() {
+        let hash = "a".repeat(64);
+        let path = std::path::PathBuf::from(format!(
+            "/uploads/00000000-0000-0000-0000-000000000000-{hash}-image.png"
+        ));
+        assert!(upload_hash_matches(&path, &hash));
+        assert!(!upload_hash_matches(&path, &"b".repeat(64)));
+        assert!(!upload_hash_matches(
+            std::path::Path::new("/uploads/image.png"),
+            &hash
+        ));
+    }
 
     type Observed = Arc<StdMutex<Vec<(Option<AdapterId>, ModelId, AttachmentItem)>>>;
 

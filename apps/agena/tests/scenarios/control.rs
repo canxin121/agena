@@ -106,7 +106,12 @@ async fn failed_kernel_commit_rolls_back_and_allows_a_fresh_successful_write() -
         .kernel_faults()
         .run(|case| async move {
             let original = case.user().new_session().await?;
-            let workspace_id = original.snapshot().await?.session.workspace_id;
+            let workspace_id = original
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let control = case.faults()?;
             control
                 .arm("kernel.before_commit", FaultEffect::Fail)
@@ -143,7 +148,12 @@ async fn held_kernel_commit_remains_invisible_until_exact_release() -> TestResul
         .kernel_faults()
         .run(|case| async move {
             let anchor = case.user().new_session().await?;
-            let workspace_id = anchor.snapshot().await?.session.workspace_id;
+            let workspace_id = anchor
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let control = case.faults()?;
             control
                 .arm("kernel.before_commit", FaultEffect::Hold)
@@ -177,7 +187,12 @@ async fn crash_during_uncommitted_kernel_write_recovers_without_phantom_session(
         .kernel_faults()
         .run(|case| async move {
             let existing = case.user().new_session().await?;
-            let workspace_id = existing.snapshot().await?.session.workspace_id;
+            let workspace_id = existing
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let original_id = existing.id();
             let control = case.faults()?;
             control
@@ -223,7 +238,12 @@ async fn injected_kernel_crash_exits_the_real_product_and_restart_recovers() -> 
         .kernel_faults()
         .run(|case| async move {
             let original = case.user().new_session().await?;
-            let workspace_id = original.snapshot().await?.session.workspace_id;
+            let workspace_id = original
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let original_id = original.id();
             let fault = case.faults()?;
 
@@ -269,7 +289,12 @@ async fn hold_release_and_clear_allow_immediate_rearm_without_losing_the_new_fau
         .kernel_faults()
         .run(|case| async move {
             let anchor = case.user().new_session().await?;
-            let workspace_id = anchor.snapshot().await?.session.workspace_id;
+            let workspace_id = anchor
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let control = case.faults()?;
             control
                 .arm("kernel.before_commit", FaultEffect::Hold)
@@ -335,7 +360,12 @@ async fn recover_from_sqlite_fault(
         .kernel_faults()
         .run(move |case| async move {
             let original = case.user().new_session().await?;
-            let workspace_id = original.snapshot().await?.session.workspace_id;
+            let workspace_id = original
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("ordinary session must have a project")?;
             let original_id = original.id();
             let fault = case.faults()?;
             if effect == FaultEffect::DiskFull {

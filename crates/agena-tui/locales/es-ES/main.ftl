@@ -3080,66 +3080,6 @@ inline-ui-reset = Restablecer entradas
 inline-ui-native-help = Tab/↑↓ navegar · Enter/Espacio operar · ←→ ajustar · PgUp/PgDn desplazar · Esc cerrar
 inline-ui-editor-help = Enter confirmar · Esc cancelar · ←→ mover · Ctrl+U borrar
 
-## Durable tasks
-command-task-summary = Nueva tarea
-command-tasks-summary = Tareas
-task-board-title = Tareas
-task-board-description = Delega trabajo en una sesión independiente. Consulta el progreso, revisa resultados y continúa con seguridad.
-task-board-create = Nueva tarea
-task-board-resume = Continuar con comentarios
-task-board-cancel = Cancelar tarea
-task-board-accept = Aceptar resultado
-task-board-refresh = Actualizar
-task-board-scope = Ámbito
-task-board-currentSession = Esta conversación
-task-board-allTasks = Todas las tareas
-task-board-state = Estado
-task-board-allStates = Cualquier estado
-task-board-serial = Se ejecuta una tarea a la vez. Los permisos no cambian.
-task-board-noSession = Abre una conversación antes de crear una tarea.
-task-board-chat = Abrir chat
-task-board-list = Lista de tareas
-task-board-loading = Cargando tareas…
-task-board-empty = No hay tareas en esta vista.
-task-board-attempt = Intento
-task-board-previous = Anterior
-task-board-next = Siguiente
-task-board-details = Detalles de la tarea
-task-board-back = Volver a la lista
-task-board-updated = Actualización
-task-board-waitingHint = Abre la sesión de ejecución para responder preguntas o revisar permisos.
-task-board-reviewHint = El agente terminó, pero falta tu aprobación. Revisa el resultado y las pruebas antes de aceptar.
-task-board-worker = Abrir ejecución
-task-board-source = Conversación original
-task-board-feedback = Instrucciones adicionales
-task-board-select = Selecciona una tarea para consultar su progreso y resultados.
-task-board-formHint = Esta es una solicitud explícita. Se mantienen los permisos de herramientas.
-task-board-restored = Se restauró la solicitud pendiente. Revísala antes de enviarla.
-task-board-goal = Objetivo
-task-board-placeholder = Describe el resultado esperado y cómo verificarlo.
-task-board-invalid = Escribe instrucciones no vacías de hasta 32 KiB.
-task-board-confirmCancel = ¿Detener esta tarea y sus subtareas? Las acciones externas ya realizadas no se deshacen.
-task-board-confirmAccept = ¿Revisaste el resultado y las pruebas? Esto marca la tarea como completada.
-task-board-uncertain = El servidor puede haber aceptado la solicitud. El reintento conserva su identidad; verifica antes de crear otra.
-task-board-conflict = La tarea cambió. Revisa el estado actualizado y confirma de nuevo; se conserva tu texto.
-task-board-close = Cerrar
-task-board-rebase = Revisar versión actual
-task-board-saving = Enviando…
-task-board-confirm = Confirmar
-task-board-retry = Reintentar la solicitud
-task-state-queued = En cola
-task-state-starting = Iniciando
-task-state-running = En ejecución
-task-state-waiting = Esperando respuesta
-task-state-review = Pendiente de revisión
-task-state-completed = Completada
-task-state-interrupted = Interrumpida
-task-state-failed = Fallida
-task-state-cancelling = Deteniendo
-task-state-cancelled = Cancelada
-task-board-keys = ↑/↓ elegir · Intro ejecución · o origen · n nueva · u continuar · a aceptar · c cancelar · r actualizar · g ámbito · f filtro · [/] páginas · PgUp/PgDn detalles · Esc volver
-task-board-formKeys = Ctrl+Intro / Alt+Intro enviar · Ctrl+R revisar versión actual · Esc cerrar. Intro añade una línea.
-task-board-compactKeys = ↑↓ elegir · Intro ejecución · n nueva · u continuar · a aceptar · c cancelar · r actualizar · [/] páginas · Esc volver
 
 ## Workspace assistant
 command-assistant-summary = Asistente
@@ -3232,7 +3172,7 @@ integrations-state_enabled = Activo
 integrations-state_paused = Pausado
 integrations-state_expired = Vencido
 integrations-state_faulted = Requiere atención
-integrations-keys = ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
+integrations-keys = Enter session · ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
 integrations-formKeys = Ctrl+Enter / Alt+Enter save draft · Enter newline · Esc close. Enable requires separate confirmation.
 
 ## Scoped channel access
@@ -3272,11 +3212,46 @@ channelAccess-role_operator = Operador
 channelAccess-role_administrator = Administrador
 channelAccess-role_owner = Propietario
 channelAccess-capabilities = Capacidades por rol
-channelAccess-capabilityHint = El rol por sí solo no concede herramientas. Usa IDs completos y destinos exactos. El contexto compartido no permite herramientas, memoria privada ni trabajo en segundo plano.
-channelAccess-work = Trabajo en segundo plano
+channelAccess-capabilityHint = El rol por sí solo no concede herramientas. Usa IDs completos y destinos exactos. El contexto compartido no permite herramientas ni memoria privada.
 channelAccess-memory = Memoria privada
 channelAccess-project = Acceso al proyecto de origen
 channelAccess-tools = Herramientas permitidas, un ID completo por línea
 channelAccess-network = Destinos de red permitidos, uno por línea
 channelAccess-reports = Permitir publicaciones automáticas desde una sesión de servicio separada
 channelAccess-stale = La política cambió en otra operación. Cierra, actualiza y revisa de nuevo; el borrador antiguo no sobrescribirá la política actual.
+
+# Canonical AI Bot chat
+command-bot-summary = Abrir el chat con tu AI Bot
+bot-title = AI Bot
+bot-description = Busca, organiza y continúa sesiones con modelos, colas y ramas nativas.
+bot-opening = Abriendo el chat del Bot…
+bot-open-failed = No se pudo abrir AI Bot.
+bot-retry-help = Enter / r reintentar · Esc volver
+bot-loading-help = Esc volver · Ctrl+G proyectos
+bot-session-header = AI Bot · Ctrl+G proyectos
+hub-bot-entry = b AI Bot · Ctrl+B
+bot-ready = Listo
+
+# Named Bot registry and independent persona editor
+bot-manager-title = Bots con nombre
+bot-list-keys = ↑↓ elegir · Enter abrir · n crear
+    e editar · a archivar · r recargar
+    w ajustes del espacio · Esc volver
+bot-entry-keys = Enter/r reintentar · l lista · Esc volver
+bot-confirm-keys = Enter confirmar · Esc cancelar
+bot-editor-keys = Ctrl+Enter/Alt+Enter aplicar · Esc cancelar
+bot-form-keys = ↑↓ campo · Enter editar · s guardar
+    r recargar perfil · Esc volver
+bot-current = (actual)
+bot-empty = No hay Bots activos. Pulsa n para crear.
+bot-archive-confirm = ¿Archivar este Bot? El servidor comprueba que esté inactivo. Se conserva el historial.
+bot-reload-confirm = ¿Descartar el borrador y cargar el último perfil guardado?
+bot-error-guidance = Falló la solicitud. Se conserva el borrador; recarga si hay un conflicto de versión.
+bot-form-invalid = Introduce un nombre; las instrucciones admiten hasta 4096 bytes.
+bot-command-help = /bot · /bot list · /bot create · /bot edit · /bot UUID
+hub-bot-list = l Lista de Bots
+bot-create-title = Crear Bot
+bot-edit-title = Editar Bot
+
+bot-instructions = Instrucciones adicionales del sistema
+bot-instructions-empty = Sin instrucciones adicionales del sistema

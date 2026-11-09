@@ -21,7 +21,8 @@ pub const SOURCE_READ_VIEW_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReadOwner {
     Session(SessionId),
-    /// Zero is the shared owner for global listings and change subscriptions.
+    /// Shared, unscoped listings and change subscriptions.
+    Shared,
     Workspace(i64),
 }
 
@@ -29,13 +30,13 @@ impl ReadOwner {
     fn byte_limit(self) -> usize {
         match self {
             Self::Session(_) => SESSION_READ_VIEW_BYTES,
-            Self::Workspace(_) => WORKSPACE_READ_VIEW_BYTES,
+            Self::Workspace(_) | Self::Shared => WORKSPACE_READ_VIEW_BYTES,
         }
     }
     fn allocation_limit(self) -> usize {
         match self {
             Self::Session(_) => 2048,
-            Self::Workspace(_) => 512,
+            Self::Workspace(_) | Self::Shared => 512,
         }
     }
 }
@@ -106,7 +107,7 @@ impl ReadBudget {
     }
 
     pub fn reserve_owned(&self, owner: ReadOwner, bytes: usize) -> Result<ReadLease> {
-        if matches!(owner, ReadOwner::Workspace(id) if id < 0) {
+        if matches!(owner, ReadOwner::Workspace(id) if id <= 0) {
             return Err(KernelError::Invalid("invalid workspace".into()));
         }
         self.reserve(owner, None, bytes.saturating_add(256), false)
@@ -136,7 +137,7 @@ impl ReadBudget {
     }
 
     pub fn subscribe_global(&self) -> Result<ReadLease> {
-        self.reserve(ReadOwner::Workspace(0), None, 4096, true)
+        self.reserve(ReadOwner::Shared, None, 4096, true)
     }
 
     pub fn subscribe(&self, session: SessionId) -> Result<ReadLease> {
@@ -187,7 +188,7 @@ impl ReadBudget {
         if !state.owners.contains_key(&read_owner) {
             match read_owner {
                 ReadOwner::Session(_) => state.totals.sessions += 1,
-                ReadOwner::Workspace(_) => state.totals.workspaces += 1,
+                ReadOwner::Workspace(_) | ReadOwner::Shared => state.totals.workspaces += 1,
             }
         }
         let owner = state.owners.entry(read_owner).or_default();
@@ -266,7 +267,7 @@ impl Drop for ReadLease {
             state.owners.remove(&self.owner);
             match self.owner {
                 ReadOwner::Session(_) => state.totals.sessions -= 1,
-                ReadOwner::Workspace(_) => state.totals.workspaces -= 1,
+                ReadOwner::Workspace(_) | ReadOwner::Shared => state.totals.workspaces -= 1,
             }
         }
         if let Some(source) = self.source {

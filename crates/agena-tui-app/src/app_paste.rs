@@ -19,6 +19,7 @@ impl App {
         match &self.current_route {
             Route::Main => self.focus == Focus::Composer,
             Route::Btw(_) => true,
+            Route::BotEntry(_) => self.bot.accepts_text(),
             Route::Integrations(source) => self
                 .integration_panels
                 .get(source)
@@ -27,10 +28,6 @@ impl App {
                 .assistant_panels
                 .get(source)
                 .is_some_and(|s| s.accepts_text()),
-            Route::Tasks(source) => self
-                .task_boards
-                .get(source)
-                .is_some_and(|state| state.accepts_text()),
             Route::Usage(_)
             | Route::Activities(_)
             | Route::PlanViewer(_)
@@ -105,10 +102,8 @@ impl App {
                     }
                     handled_route = true;
                 }
-                Route::Tasks(source) => {
-                    if let Some(state) = self.task_boards.get_mut(source) {
-                        state.paste(&text);
-                    }
+                Route::BotEntry(_) => {
+                    self.bot.paste(&text);
                     handled_route = true;
                 }
                 Route::Main => {}

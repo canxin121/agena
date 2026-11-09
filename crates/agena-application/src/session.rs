@@ -253,6 +253,31 @@ fn valid_workspace_attachment_path(raw: &str) -> bool {
             .all(|part| matches!(part, Component::Normal(_)));
     }
     let layout = agena_storage_layout::StorageLayout::current();
+    let session_roots = layout.root().join("session-assets");
+    if let Ok(relative) = path.strip_prefix(&session_roots) {
+        let mut parts = relative.components();
+        let Some(Component::Normal(id)) = parts.next() else {
+            return false;
+        };
+        if id
+            .to_str()
+            .and_then(|id| id.parse::<i64>().ok())
+            .is_none_or(|id| id <= 0)
+        {
+            return false;
+        }
+        let Some(Component::Normal(bucket)) = parts.next() else {
+            return false;
+        };
+        if bucket != "uploads" && bucket != "artifacts" {
+            return false;
+        }
+        let remaining: Vec<_> = parts.collect();
+        return !remaining.is_empty()
+            && remaining
+                .iter()
+                .all(|part| matches!(part, Component::Normal(_)));
+    }
     let workspace_roots = layout.root().join("workspaces");
     let Ok(relative) = path.strip_prefix(&workspace_roots) else {
         return false;

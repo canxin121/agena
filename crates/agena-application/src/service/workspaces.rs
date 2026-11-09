@@ -178,17 +178,63 @@ impl ApplicationService {
                 bytes,
             ));
         }
+        let requested = Path::new(&query.path);
+        if requested.is_absolute() {
+            let target = requested
+                .canonicalize()
+                .map_err(|error| workspace_fs_error(requested, error))?;
+            if let Some(boundary) =
+                agena_runtime_tools::managed_session_attachment_root(session_id, &target)
+            {
+                if requested != target
+                    || query
+                        .path
+                        .split(['/', '\\'])
+                        .any(|part| part == "." || part == "..")
+                {
+                    return Err(ApplicationError::bad_request(
+                        "session attachment paths must not contain traversal or symlinks",
+                    ));
+                }
+                return WORKSPACE_TRANSFERS
+                    .run(move || read_scoped_session_asset(boundary, query))
+                    .await
+                    .map_err(|error| ApplicationError::internal_error(&error))?;
+            }
+        }
+        let workspace = session.workspace_id;
+        let Some(workspace_id) = workspace else {
+            if !requested.is_absolute() {
+                return Err(ApplicationError::bad_request(
+                    "Global Bot media has no implicit project directory",
+                ));
+            }
+            if let Some(attachment) = visible_exported_tool_attachment(
+                &self.session_kernel.reader,
+                session_id,
+                &query.path,
+            )
+            .await?
+            {
+                let owner_root = requested
+                    .parent()
+                    .ok_or_else(|| ApplicationError::bad_request("attachment path has no parent"))?
+                    .to_path_buf();
+                return WORKSPACE_TRANSFERS
+                    .run(move || read_verified_generated_attachment(owner_root, query, &attachment))
+                    .await
+                    .map_err(|error| ApplicationError::internal_error(&error))?;
+            }
+            return Err(ApplicationError::not_found(
+                "The attachment does not belong to this Bot conversation",
+            ));
+        };
         let workspace_path = self
             .workspace_repository
-            .path_by_id(session.workspace_id)
+            .path_by_id(workspace_id)
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?
-            .ok_or_else(|| {
-                ApplicationError::not_found_with_diagnostic(
-                    "The workspace was not found.",
-                    format!("workspace not found: {}", session.workspace_id),
-                )
-            })?;
+            .ok_or_else(|| ApplicationError::not_found("The workspace was not found"))?;
         let generated_root = agena_runtime_tools::project_state_dir(Path::new(&workspace_path))
             .join("generated_images");
         let managed_root = generated_root.join(session_id.to_string());
@@ -235,6 +281,49 @@ impl ApplicationService {
             .run(move || {
                 read_attachment_file_sync(PathBuf::from(workspace_path), managed_root, query)
             })
+            .await
+            .map_err(|error| ApplicationError::internal_error(&error))?
+    }
+
+    /// Stage explicit user uploads under the owning session, independent of a cwd.
+    pub async fn upload_session_file(
+        &self,
+        session_id: i64,
+        request: WorkspaceFileUploadRequest,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        self.upload_session_file_inner(session_id, request, None)
+            .await
+    }
+    pub async fn upload_session_file_bytes(
+        &self,
+        session_id: i64,
+        filename: String,
+        mime: Option<String>,
+        bytes: Vec<u8>,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        self.upload_session_file_inner(
+            session_id,
+            WorkspaceFileUploadRequest {
+                filename,
+                mime,
+                data_base64: String::new(),
+            },
+            Some(bytes),
+        )
+        .await
+    }
+    async fn upload_session_file_inner(
+        &self,
+        session_id: i64,
+        request: WorkspaceFileUploadRequest,
+        bytes: Option<Vec<u8>>,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        let session = self.ensure_session_model(session_id).await?;
+        let scope = session.workspace_id;
+        let upload_dir =
+            agena_storage_layout::StorageLayout::current().session_uploads_dir(session_id);
+        WORKSPACE_TRANSFERS
+            .run(move || store_uploaded_file(scope, Some(session_id), upload_dir, request, bytes))
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?
     }
@@ -891,8 +980,6 @@ fn upload_workspace_file_in(
     bytes: Option<Vec<u8>>,
     layout: &agena_storage_layout::StorageLayout,
 ) -> ApplicationResult<WorkspaceFileUploadResource> {
-    const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
-
     let root = root_path
         .canonicalize()
         .map_err(|error| workspace_fs_error(root_path.as_path(), error))?;
@@ -903,6 +990,23 @@ fn upload_workspace_file_in(
         ));
     }
 
+    store_uploaded_file(
+        Some(workspace_id),
+        None,
+        layout.uploads_dir(&root),
+        request,
+        bytes,
+    )
+}
+
+fn store_uploaded_file(
+    workspace_id: Option<i64>,
+    session_id: Option<i64>,
+    upload_dir: PathBuf,
+    request: WorkspaceFileUploadRequest,
+    bytes: Option<Vec<u8>>,
+) -> ApplicationResult<WorkspaceFileUploadResource> {
+    const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
     let filename = sanitize_upload_filename(request.filename.as_str());
     if filename.is_empty() {
         return Err(ApplicationError::bad_request(
@@ -937,7 +1041,6 @@ fn upload_workspace_file_in(
         ));
     }
 
-    let upload_dir = layout.uploads_dir(&root);
     agena_storage_layout::secure_directory(&upload_dir).map_err(|error| {
         ApplicationError::bad_request_with_diagnostic(
             "attachment staging directory must be a real private directory, not a symlink",
@@ -953,7 +1056,34 @@ fn upload_workspace_file_in(
             "attachment staging directory changed during validation",
         ));
     }
-    let stored_name = format!("{}-{}", Uuid::new_v4().simple(), filename);
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(&decoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let stored_name = if session_id.is_some() {
+        // Leave room for the owner token and digest within common 255-byte
+        // filesystem component limits, retaining a useful file extension.
+        let extension = filename
+            .rsplit_once('.')
+            .filter(|(stem, ext)| !stem.is_empty() && !ext.is_empty() && ext.len() <= 32)
+            .map(|(_, ext)| format!(".{ext}"))
+            .unwrap_or_default();
+        let stored_filename = if filename.len() > 150 {
+            let mut end = 150 - extension.len();
+            while !filename.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}{}", &filename[..end], extension)
+        } else {
+            filename.clone()
+        };
+        // Canonical hyphenated UUID matches the immutable upload identity
+        // parser used before a global session passes bytes to its model.
+        format!("{}-{}-{}", Uuid::new_v4(), digest, stored_filename)
+    } else {
+        format!("{}-{}", Uuid::new_v4().simple(), filename)
+    };
     let target = upload_dir.join(&stored_name);
     // Publish only complete, synced bytes. Interrupted uploads must not leave
     // partially-written final filenames behind.
@@ -964,20 +1094,51 @@ fn upload_workspace_file_in(
         return Err(workspace_fs_error(&target, error));
     }
 
-    use sha2::Digest as _;
     Ok(WorkspaceFileUploadResource {
-        sha256: Some(
-            sha2::Sha256::digest(&decoded)
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-        ),
+        sha256: Some(digest),
         workspace_id,
+        session_id,
         path: target.to_string_lossy().into_owned(),
         name: filename,
         mime: non_empty(request.mime.as_deref()).map(ToOwned::to_owned),
         size_bytes: decoded.len() as u64,
     })
+}
+
+fn read_scoped_session_asset(
+    boundary: PathBuf,
+    query: WorkspaceFileDownloadQuery,
+) -> ApplicationResult<(String, Vec<u8>)> {
+    let requested = PathBuf::from(query.path);
+    let target = requested
+        .canonicalize()
+        .map_err(|error| workspace_fs_error(&requested, error))?;
+    if !target.starts_with(&boundary) || target == boundary || !target.is_file() {
+        return Err(ApplicationError::bad_request(
+            "attachment path escapes this session's managed storage",
+        ));
+    }
+    let bytes = read_bounded_workspace_file(&target, 100 * 1024 * 1024)?;
+    let name = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment")
+        .to_owned();
+    if boundary.file_name().is_some_and(|name| name == "uploads") {
+        use sha2::Digest as _;
+        let expected = agena_runtime_tools::managed_session_upload_digest(&target)
+            .ok_or_else(|| ApplicationError::bad_request("invalid session upload identity"))?;
+        let actual = sha2::Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if !expected.eq_ignore_ascii_case(&actual) {
+            return Err(ApplicationError::bad_request(
+                "session attachment content has changed",
+            ));
+        }
+    }
+    Ok((name, bytes))
 }
 
 fn read_bounded_workspace_file(path: &Path, limit: u64) -> ApplicationResult<Vec<u8>> {

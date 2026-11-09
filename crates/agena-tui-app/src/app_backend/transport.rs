@@ -814,18 +814,33 @@ impl TuiBackend {
         self.inner.workspace_id
     }
 
-    pub(crate) async fn upload_workspace_attachment(
+    pub(crate) async fn upload_session_attachment(
         &self,
+        session_id: Option<i64>,
         filename: &str,
         bytes: &[u8],
         mime: Option<&str>,
     ) -> Result<agena_api::resource::WorkspaceFileUploadResource> {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let workspace_id = match session_id {
+            Some(session) => match self.get_session(session).await?.workspace_id {
+                Some(workspace_id) => workspace_id,
+                None => {
+                    return self
+                        .inner
+                        .client
+                        .upload_session_file(session, filename, encoded.as_str(), mime)
+                        .await
+                        .context("failed to upload attachment into its owning session");
+                }
+            },
+            None => self.inner.workspace_id,
+        };
         self.inner
             .client
-            .upload_workspace_file(self.inner.workspace_id, filename, encoded.as_str(), mime)
+            .upload_workspace_file(workspace_id, filename, encoded.as_str(), mime)
             .await
-            .context("failed to upload a client-local attachment into the server workspace")
+            .context("failed to stage attachment for the project conversation")
     }
 
     pub(crate) fn media_workspace_root(&self) -> &Path {

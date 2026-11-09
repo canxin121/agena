@@ -10,10 +10,7 @@ pub(super) const CASES: &[BundledBehaviorCase] = &[
         "agena.companion",
         companion_changes_workspace_preferences_through_a_real_user_turn,
     ),
-    (
-        "agena.work",
-        work_delegates_and_stops_a_real_worker_from_the_same_conversation,
-    ),
+    ("agena.bot", bot_creates_a_real_visible_project_session),
 ];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -34,20 +31,45 @@ async fn companion_changes_workspace_preferences_through_a_real_user_turn() -> T
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn work_delegates_and_stops_a_real_worker_from_the_same_conversation() -> TestResult {
-    fixture().run(|case|async move{
-        let model=case.model();let source=case.user().new_session().await?;
-        let first=model.expect(RequestMatch::user_text("后台检查并等待我的后续要求"))
-            .reply(Reply::tool_call("work-registration-start","work.manage",json!({"action":"start","user_quote":"后台检查并等待我的后续要求","instruction":"registered-work-behavior-marker"})));
-        model.expect(RequestMatch::tool_output("work-registration-start")).after(&first).check_tool_output_contains("work-registration-start","accepted").reply(Reply::text("后台已经开始。"));
-        let worker=model.expect(RequestMatch::user_text("registered-work-behavior-marker")).reply(Reply::text("held-worker-result").held());
-        source.send("后台检查并等待我的后续要求").await?.wait_settled().await?.assert_succeeded()?;worker.observed().await?;
-        let rows:Vec<Value>=case.http().await.get(&format!("/api/v1/tasks?source_session_id={}",source.id())).await?.require_success()?.json()?;
-        let task=rows.first().context("created work")?;ensure!(task["worker_session_id"]!=source.id());
-        let stop=model.expect(RequestMatch::user_text("停止刚才的后台检查"))
-            .reply(Reply::tool_call("work-registration-stop","work.manage",json!({"action":"cancel","task_id":task["id"],"user_quote":"停止刚才的后台检查"})));
-        model.expect(RequestMatch::tool_output("work-registration-stop")).after(&stop).check_tool_output_contains("work-registration-stop","accepted").reply(Reply::text("已停止。"));
-        source.send("停止刚才的后台检查").await?.wait_settled().await?.assert_succeeded()?;worker.disconnected().await?;
-        Ok(())
-    }).await
+async fn bot_creates_a_real_visible_project_session() -> TestResult {
+    fixture()
+        .run(|case| async move {
+            let client = case.client().await;
+            let bot = case
+                .user()
+                .attach_session(client.ensure_bot_session().await?.session_id)
+                .await?;
+            let http = case.http().await;
+            let resource: Value = http
+                .get(&format!("/api/v1/sessions/{}", bot.id()))
+                .await?
+                .require_success()?
+                .json()?;
+            let workspace = resource["workspace_id"].as_i64().context("Bot workspace")?;
+            let model = case.model();
+            let start = model.expect(RequestMatch::user_text("create a project conversation"))
+            .reply(Reply::tool_call("bot-registration", "bot.sessions", json!({
+                "action":"create", "workspace_id":workspace, "title":"Registered Bot behavior",
+                "user_quote":"create a project conversation", "request_key":"builtin-bot-create"
+            })));
+            model
+                .expect(RequestMatch::tool_output("bot-registration"))
+                .after(&start)
+                .check_tool_output_contains("bot-registration", "session_id")
+                .reply(Reply::text("Project conversation created."));
+            bot.send("create a project conversation")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+            let sessions: Value = http
+                .get("/api/v1/sessions")
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(sessions.to_string().contains("Registered Bot behavior"));
+            ensure!(http.get("/api/v1/tasks").await?.status == 404);
+            Ok(())
+        })
+        .await
 }

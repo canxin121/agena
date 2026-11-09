@@ -605,23 +605,26 @@ async fn manual_compaction_has_one_run_lifecycle_and_its_own_compaction_hooks() 
         .await
         .unwrap()
         .value;
-    let run = manager.supervise(
-        execution,
-        SessionRunOptions {
-            model: ModelRef::new("compaction-budget-test", "tiny"),
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
-            model_supports_parallel_tool_calls: None,
-            thinking: None,
-            request_override: Default::default(),
-            system: None,
-            temperature: None,
-            max_output_tokens: None,
-        },
-        true,
-        manager.reserve_execution().unwrap(),
-    );
+    let run = manager
+        .supervise(
+            execution,
+            SessionRunOptions {
+                model: ModelRef::new("compaction-budget-test", "tiny"),
+                thinking_mode: None,
+                speed_mode: None,
+                verbosity: None,
+                model_supports_parallel_tool_calls: None,
+                thinking: None,
+                request_override: Default::default(),
+                system: None,
+                temperature: None,
+                max_output_tokens: None,
+            },
+            true,
+            manager.reserve_execution().unwrap(),
+        )
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(10), run.wait_settled())
         .await
         .expect("the compaction run should settle");

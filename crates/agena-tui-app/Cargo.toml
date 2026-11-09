@@ -34,7 +34,6 @@ base64 = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
 crossterm = { workspace = true }
-hex = { workspace = true }
 indexmap = { workspace = true }
 mime_guess = { workspace = true }
 ratatui = { workspace = true }

@@ -33,6 +33,18 @@ impl ToolExecutor {
     /// Resolve a plugin's concrete access using the same canonical paths and
     /// session principal as executor-owned tools. This does not grant access.
     pub fn path_permission_check(&self, access: AccessKind, path: &str) -> ToolPermissionCheck {
+        if self.is_global() && !Path::new(path).is_absolute() {
+            return ToolPermissionCheck {
+                action: PermissionAction::PathAccess {
+                    access_kind: access_kind_name(access).to_string(),
+                    workspace_root: String::new(),
+                    target_path: path.to_owned(),
+                },
+                decision: agena_domain::PermissionDecision::Deny {
+                    reason: "global sessions require an explicit absolute path".into(),
+                },
+            };
+        }
         let mut checks = Vec::with_capacity(1);
         self.push_resolved_path_check(&mut checks, access, path);
         checks.remove(0)
@@ -102,6 +114,9 @@ impl ToolExecutor {
         &'a self,
         session_context: Option<&'a dyn crate::ToolSessionContext>,
     ) -> &'a Path {
+        if self.is_global() || session_context.is_some_and(crate::ToolSessionContext::is_global) {
+            return self.workspace_root();
+        }
         session_context
             .and_then(crate::ToolSessionContext::effective_workspace_root)
             .unwrap_or(self.workspace_root())
@@ -142,7 +157,11 @@ impl ToolExecutor {
         access: AccessKind,
         target_path: &Path,
     ) {
-        let canonical_workspace_root = canonicalize_path_for_execution(self.workspace_root());
+        let canonical_workspace_root = if self.is_global() {
+            PathBuf::new()
+        } else {
+            canonicalize_path_for_execution(self.workspace_root())
+        };
         let canonical_target_path = canonicalize_path_for_execution(target_path);
         let workspace_root = normalize_path_for_display(&canonical_workspace_root);
         let target = normalize_path_for_display(&canonical_target_path);

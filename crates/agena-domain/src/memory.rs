@@ -29,12 +29,13 @@ impl MemoryKind {
     }
 }
 
-/// Scope always remains inside the owning workspace's permission boundary.
+/// Scope remains inside its owning project or instance storage boundary.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MemoryScope {
     #[default]
     Workspace,
+    Global,
     Session {
         session_id: i64,
         instance_id: String,
@@ -44,7 +45,7 @@ pub enum MemoryScope {
 impl MemoryScope {
     pub fn includes_context(&self, session_id: Option<i64>, instance_id: Option<&str>) -> bool {
         match self {
-            Self::Workspace => true,
+            Self::Workspace | Self::Global => true,
             Self::Session {
                 session_id: owner,
                 instance_id: owner_instance,

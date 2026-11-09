@@ -51,9 +51,15 @@ pub(crate) struct SnapshotDatabases {
 pub(crate) struct RuntimeSnapshot {
     client_identity: crate::ProviderClientIdentity,
     plugin_shutdown: agena_runtime::PluginShutdownCoordinator,
+    global_plugins: Arc<PluginHost>,
+    global_plugin_config: agena_plugin_host::PluginsConfig,
+    _global_mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    _global_plugin_shutdown: Option<Arc<agena_runtime::CallbackOnDrop>>,
+    _global_lsp_registration: Option<Arc<agena_runtime::AbortOnDrop>>,
     state: SnapshotState,
     resolution_meta: ConfigResolutionMeta,
     pub(super) host_client: Arc<super::host_client::RuntimeHostClient>,
+    pub(super) global_host_client: Arc<super::host_client::RuntimeHostClient>,
     callback_server: Arc<super::callback_server::PluginCallbackServer>,
     pending_session_reconfiguration: parking_lot::Mutex<Option<PendingSessionReconfiguration>>,
 }
@@ -127,6 +133,14 @@ impl RuntimeSnapshot {
         let database = session_kernel
             .as_ref()
             .map(|kernel| kernel.database.clone());
+        let global_loader = loader.clone();
+        let global_request = load_request.clone();
+        let mut global_resolution = crate::blocking::FILE_OPERATIONS
+            .run(move || global_loader.load_global(&global_request))
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("global config load worker failed: {error}"))
+            })??;
         let worker_loader = loader.clone();
         let request = load_request.clone();
         let mut resolution = crate::blocking::FILE_OPERATIONS
@@ -142,6 +156,24 @@ impl RuntimeSnapshot {
             agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
         )
         .map_err(AppError::Config)?;
+        global_resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
+            global_resolution.config.plugins.clone(),
+            agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
+        )
+        .map_err(AppError::Config)?;
+        // Only process initialization uses this instance location. Per-session
+        // executors clear it when binding a global session.
+        let global_internal_root = global_resolution
+            .meta
+            .config_path
+            .parent()
+            .filter(|path| path.is_absolute())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| {
+                agena_storage_layout::StorageLayout::current()
+                    .root()
+                    .to_path_buf()
+            });
         let client_identity =
             crate::ProviderClientIdentity::new(agena_provider::ProviderClientVersions {
                 codex: resolution
@@ -174,6 +206,14 @@ impl RuntimeSnapshot {
         )
         .await
         .map_err(AppError::Config)?;
+        let global_mcp_manager = agena_runtime::build_configured_mcp_manager(
+            &global_resolution.config.plugins,
+            agena_runtime::RUNTIME_CODEX_MCP_CLIENT_NAME,
+            client_identity.codex_package_version(),
+            &global_internal_root,
+        )
+        .await
+        .map_err(AppError::Config)?;
         let (previous_host, previous_config) = previous
             .as_ref()
             .map(|prev| {
@@ -190,6 +230,10 @@ impl RuntimeSnapshot {
         let host_client = super::host_client::RuntimeHostClient::candidate(
             generation,
             agena_runtime::config_resolution_json_value(&resolution)?,
+        );
+        let global_host_client = super::host_client::RuntimeHostClient::candidate(
+            generation,
+            agena_runtime::config_resolution_json_value(&global_resolution)?,
         );
         let plugins = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
@@ -229,6 +273,39 @@ impl RuntimeSnapshot {
                 return Err(AppError::Internal(report.to_string()));
             }
         };
+        let global_plugins = build_plugin_services(
+            agena_runtime::PluginCompositionInputs {
+                plugin_config: global_resolution.config.plugins.clone(),
+                workspace_root: &global_internal_root,
+                previous_host: previous
+                    .as_ref()
+                    .map(|prev| Arc::clone(&prev.global_plugins)),
+                previous_config: previous
+                    .as_ref()
+                    .map(|prev| prev.global_plugin_config.clone()),
+                mcp_manager: global_mcp_manager.clone(),
+                callback_base_url: callback_server.base_url.clone(),
+                callback_dispatcher: callback_server.dispatcher.clone(),
+                host_client: global_host_client.clone(),
+            },
+            session_kernel
+                .as_ref()
+                .map(|kernel| agena_bundled_plugins::tool::NotificationSource {
+                    reader: kernel.ports.reader.clone(),
+                    state: kernel.instance_state.clone(),
+                }),
+        )
+        .await?;
+        let global_plugin_shutdown =
+            match plugin_shutdown_coordinator.register(Arc::clone(&global_plugins)) {
+                Ok(guard) => guard,
+                Err(mut report) => {
+                    report
+                        .failures
+                        .extend(global_plugins.shutdown_report().await.failures);
+                    return Err(AppError::Internal(report.to_string()));
+                }
+            };
         let (catalog_source_providers, model_catalog) = build_model_catalog_services(
             agena_runtime::ModelCatalogCompositionInputs {
                 providers: &resolution.config.providers,
@@ -248,10 +325,30 @@ impl RuntimeSnapshot {
             &client_identity,
         )
         .await?;
+        let global_providers = build_runtime_provider_registry(
+            &global_resolution.config.providers,
+            global_resolution.meta.config_path.as_path(),
+            global_plugins.as_ref(),
+            &catalog_snapshot,
+            &client_identity,
+        )
+        .await?;
+        let global_session_config =
+            agena_runtime::session_build_config_from_resolved(&global_resolution.config);
         // Notify plugins of the resolved config (best-effort).
         if let Ok(value) = agena_runtime::config_resolution_json_value(&resolution) {
             agena_runtime::dispatch_config_if_nonempty(Arc::clone(&plugins), value).await;
         }
+        if let Ok(value) = agena_runtime::config_resolution_json_value(&global_resolution) {
+            agena_runtime::dispatch_config_if_nonempty(Arc::clone(&global_plugins), value).await;
+        }
+        let (global_lsp_registry, global_lsp_registration) = agena_runtime::compose_lsp_services(
+            &global_resolution.config.plugins,
+            &global_internal_root,
+            agena_runtime::RUNTIME_CODEX_ORIGINATOR,
+            client_identity.codex_package_version(),
+        )
+        .map_err(AppError::Config)?;
         let (lsp_registry, lsp_registration) = agena_runtime::compose_lsp_services(
             &resolution.config.plugins,
             workspace_root,
@@ -263,8 +360,8 @@ impl RuntimeSnapshot {
             agena_runtime::session_build_config_from_resolved(&resolution.config);
         let (session_manager, pending_session_reconfiguration) =
             if let Some(db) = session_kernel.as_ref() {
-                let (manager, pending) =
-                    build_or_prepare_session_manager(agena_runtime::SessionCompositionInputs {
+                let (manager, pending) = build_or_prepare_session_manager(
+                    agena_runtime::SessionCompositionInputs {
                         existing: existing_session_manager,
                         database: db,
                         providers: Arc::clone(&providers),
@@ -275,7 +372,14 @@ impl RuntimeSnapshot {
                         mcp_manager: mcp_manager.clone(),
                         monitor_registry: monitor_registry.clone(),
                         scheduler_database: scheduler_database.clone(),
-                    });
+                    },
+                    global_providers.clone(),
+                    Arc::clone(&global_plugins),
+                    global_mcp_manager.clone(),
+                    global_lsp_registry,
+                    &global_internal_root,
+                    &global_session_config,
+                );
                 (Some(manager), pending)
             } else {
                 (None, None)
@@ -305,6 +409,11 @@ impl RuntimeSnapshot {
         let meta = resolution.meta;
         Ok(Self {
             plugin_shutdown: plugin_shutdown_coordinator,
+            global_plugins,
+            global_plugin_config: global_resolution.config.plugins,
+            _global_mcp_manager: global_mcp_manager,
+            _global_plugin_shutdown: global_plugin_shutdown,
+            _global_lsp_registration: global_lsp_registration,
             state: agena_runtime::compose_runtime_snapshot_state(
                 agena_runtime::RuntimeSnapshotCompositionInputs {
                     generation,
@@ -316,11 +425,16 @@ impl RuntimeSnapshot {
             resolution_meta: meta,
             client_identity,
             host_client,
+            global_host_client,
             callback_server,
             pending_session_reconfiguration: parking_lot::Mutex::new(
                 pending_session_reconfiguration,
             ),
         })
+    }
+
+    pub(super) fn global_plugin_manager(&self) -> Arc<PluginHost> {
+        Arc::clone(&self.global_plugins)
     }
 
     /// Apply a prepared shared-manager update only while the caller owns the
@@ -654,5 +768,132 @@ impl fmt::Debug for RuntimeSnapshot {
                 &self.state.services().session_manager.is_some(),
             )
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod global_plugin_tests {
+    use super::*;
+    use agena_plugin_host::sdk::host_api::HostClient;
+
+    #[tokio::test]
+    async fn global_and_project_plugin_hosts_and_mcp_config_are_isolated() {
+        let root =
+            std::env::temp_dir().join(format!("agena-plugin-scope-{}", uuid::Uuid::new_v4()));
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".agena")).unwrap();
+        let config_path = root.join("agena.json");
+        std::fs::write(&config_path, serde_json::to_vec(&serde_json::json!({
+            "plugins": {"list": {
+                "agena.plan": {"enabled": false, "package": {"kind": "static"}},
+                "agena.mcp": {"package": {"kind": "static"}, "settings": {"servers": {
+                    "global-marker": {"transport": "stdio", "process": {"command": "global-mcp"}}
+                }}}
+            }}
+        })).unwrap()).unwrap();
+        std::fs::write(project.join(".agena/agena.json"), serde_json::to_vec(&serde_json::json!({
+            "plugins": {"list": {
+                "agena.plan": {"enabled": true, "package": {"kind": "static"}},
+                "agena.mcp": {"package": {"kind": "static"}, "settings": {"servers": {
+                    "project-marker": {"transport": "stdio", "process": {"command": "project-mcp"}}
+                }}}
+            }}
+        })).unwrap()).unwrap();
+        let loader = ConfigLoader::default();
+        let request = LoadConfigRequest {
+            config_path: Some(config_path),
+            workspace_root: Some(project.clone()),
+            ..Default::default()
+        };
+        let mut global = loader.load_global(&request).unwrap();
+        let mut merged = loader.load(&request).unwrap();
+        for resolution in [&mut global, &mut merged] {
+            resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
+                resolution.config.plugins.clone(),
+                agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
+            )
+            .unwrap();
+        }
+        let global_mcp =
+            agena_runtime_config::mcp_config_from_plugins(&global.config.plugins).unwrap();
+        let project_mcp =
+            agena_runtime_config::mcp_config_from_plugins(&merged.config.plugins).unwrap();
+        assert!(global_mcp.servers.contains_key("global-marker"));
+        assert!(!global_mcp.servers.contains_key("project-marker"));
+        assert!(project_mcp.servers.contains_key("project-marker"));
+        let global_client = super::super::host_client::RuntimeHostClient::candidate(
+            1,
+            agena_runtime::config_resolution_json_value(&global).unwrap(),
+        );
+        let project_client = super::super::host_client::RuntimeHostClient::candidate(
+            1,
+            agena_runtime::config_resolution_json_value(&merged).unwrap(),
+        );
+        let global_config = global_client.read_config(None).await.unwrap().to_string();
+        let project_config = project_client.read_config(None).await.unwrap().to_string();
+        assert!(global_config.contains("global-marker"));
+        assert!(!global_config.contains("project-marker"));
+        assert!(project_config.contains("project-marker"));
+        // Keep the host fixture focused on a single bundled marker; unrelated
+        // plugins may consult process-wide configuration during initialization.
+        global
+            .config
+            .plugins
+            .list
+            .retain(|id, _| id == "agena.plan");
+        merged
+            .config
+            .plugins
+            .list
+            .retain(|id, _| id == "agena.plan");
+        let callback = super::super::callback_server::PluginCallbackServer::start()
+            .await
+            .unwrap();
+        let global_host = build_plugin_services(
+            agena_runtime::PluginCompositionInputs {
+                plugin_config: global.config.plugins,
+                workspace_root: &root,
+                previous_host: None,
+                previous_config: None,
+                mcp_manager: None,
+                callback_base_url: callback.base_url.clone(),
+                callback_dispatcher: callback.dispatcher.clone(),
+                host_client: global_client,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        let project_host = build_plugin_services(
+            agena_runtime::PluginCompositionInputs {
+                plugin_config: merged.config.plugins,
+                workspace_root: &project,
+                previous_host: None,
+                previous_config: None,
+                mcp_manager: None,
+                callback_base_url: callback.base_url.clone(),
+                callback_dispatcher: callback.dispatcher.clone(),
+                host_client: project_client,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(!Arc::ptr_eq(&global_host, &project_host));
+        assert!(
+            !global_host
+                .plugins()
+                .iter()
+                .any(|plugin| plugin.key().to_string() == "agena.plan")
+        );
+        assert!(
+            project_host
+                .plugins()
+                .iter()
+                .any(|plugin| plugin.key().to_string() == "agena.plan")
+        );
+        global_host.shutdown_report().await;
+        project_host.shutdown_report().await;
+        let _ = std::fs::remove_dir_all(root);
     }
 }

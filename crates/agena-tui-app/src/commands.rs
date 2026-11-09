@@ -224,3 +224,78 @@ fn client_command(entry: &CommandCatalogItem) -> Option<ClientCommand> {
         action,
     })
 }
+
+#[cfg(test)]
+pub(crate) mod bot_tests {
+    use super::*;
+
+    pub(crate) fn bot_catalog() -> PluginSurfaceCatalog {
+        serde_json::from_value(serde_json::json!({"commands": [{
+            "plugin_id": "agena.commands", "accepts_empty_input": true, "default_input": {},
+            "id": "bot", "title": "Bot", "group": "Agena", "slash": "/bot",
+            "docs": {"summary_key": "command-bot-summary"},
+            "input": agena_plugin_sdk::SettingsContract::empty_object("No input", ""),
+            "target": {"kind": "client", "action": "bot"}
+        }]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn stale_task_actions_are_dropped_in_every_locale() {
+        let mut catalog = bot_catalog();
+        for name in ["task", "tasks"] {
+            let mut entry = catalog.commands[0].clone();
+            entry.command.id = name.into();
+            entry.command.slash = Some(format!("/{name}"));
+            entry.command.target = CommandTarget::Client {
+                action: name.into(),
+            };
+            catalog.commands.push(entry);
+        }
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            let i18n = I18n::resolve(Some(locale), None);
+            for name in ["task", "tasks"] {
+                assert!(
+                    find_client_command(Some(&catalog), name).is_none(),
+                    "{locale}"
+                );
+                assert!(
+                    client_command_suggestions(Some(&catalog), name).is_empty(),
+                    "{locale}"
+                );
+                assert!(
+                    i18n.try_text(&format!("command-{name}-summary")).is_none(),
+                    "{locale}"
+                );
+            }
+            for key in [
+                "task-board-title",
+                "task-state-running",
+                "channelAccess-work",
+            ] {
+                assert!(i18n.try_text(key).is_none(), "{locale}: {key}");
+            }
+            assert_eq!(client_commands(Some(&catalog)).len(), 1);
+            assert_eq!(
+                find_client_command(Some(&catalog), "bot").unwrap().action(),
+                ClientCommandAction::Bot
+            );
+        }
+    }
+
+    #[test]
+    fn bot_catalog_command_resolves_without_session_context_and_is_localized() {
+        let catalog = bot_catalog();
+        let command = find_client_command(Some(&catalog), "bot").unwrap();
+        assert_eq!(command.action(), ClientCommandAction::Bot);
+        assert_eq!(command.invocation(), "/bot");
+        assert!(!command.takes_arguments());
+        assert!(parse_invocation("/bot").is_some());
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            let i18n = I18n::resolve(Some(locale), None);
+            assert!(i18n.try_text("command-bot-summary").is_some());
+            assert!(i18n.try_text("bot-retry-help").is_some());
+            assert!(i18n.try_text("hub-bot-entry").is_some());
+        }
+    }
+}

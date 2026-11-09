@@ -111,6 +111,14 @@ pub(crate) fn resolve_workdir(
     executor: &ToolExecutor,
     workdir: Option<&str>,
 ) -> Result<PathBuf, ToolError> {
+    if executor.is_global()
+        && !workdir
+            .is_some_and(|path| !path.trim().is_empty() && std::path::Path::new(path).is_absolute())
+    {
+        return Err(ToolError::invalid_input(
+            "global shell execution requires an explicit absolute workdir",
+        ));
+    }
     let cwd = workdir
         .map(|value| executor.resolve_target_path(value))
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());

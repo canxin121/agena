@@ -37,7 +37,7 @@ pub struct Application {
     runtime_draft_authentication: Arc<dyn agena_runtime::RuntimeDraftAuthenticationService>,
     runtime_status: Arc<dyn agena_runtime::RuntimeStatusService>,
     runtime_tools: Arc<dyn agena_runtime::RuntimeToolExecutionService>,
-    superagent: Option<Arc<dyn agena_superagent::SuperagentService>>,
+    assistant_service: Option<Arc<dyn agena_assistant::AssistantService>>,
     runtime_activities: Option<Arc<dyn agena_runtime::RuntimeActivityService>>,
     live_signals: Option<Arc<dyn agena_runtime::RuntimeLiveSignalService>>,
     service: ApplicationService,
@@ -125,7 +125,7 @@ impl Application {
             instance_id,
             instance_state: _,
             repositories: _,
-            superagent,
+            assistant_service,
             provider_catalog,
             model_catalog,
             plugins,
@@ -159,7 +159,7 @@ impl Application {
             runtime_draft_authentication: draft_authentication,
             runtime_status: status,
             runtime_tools: tools,
-            superagent,
+            assistant_service,
             runtime_activities: activities,
             live_signals,
             workspace_root: workspace_root.clone(),
@@ -187,11 +187,11 @@ impl Application {
         Ok(application)
     }
 
-    pub fn superagent(
+    pub fn assistant_service(
         &self,
-    ) -> Result<&Arc<dyn agena_superagent::SuperagentService>, ApplicationError> {
-        self.superagent.as_ref().ok_or_else(|| {
-            ApplicationError::service_unavailable("durable task runtime is unavailable")
+    ) -> Result<&Arc<dyn agena_assistant::AssistantService>, ApplicationError> {
+        self.assistant_service.as_ref().ok_or_else(|| {
+            ApplicationError::service_unavailable("assistant runtime is unavailable")
         })
     }
 

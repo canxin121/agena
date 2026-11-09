@@ -74,6 +74,16 @@ fn plugin_error(error: impl std::error::Error + 'static) -> PluginError {
     PluginError::internal_error(&error)
 }
 
+fn bot_plugin_error(error: crate::AppError) -> PluginError {
+    match &error {
+        crate::AppError::Config(_)
+        | crate::AppError::PersistenceConflict(_)
+        | crate::AppError::BotConflict(_)
+        | crate::AppError::Conflict { .. } => PluginError::invalid_params_error(&error),
+        _ => plugin_error_from_app(error),
+    }
+}
+
 fn plugin_error_from_app(error: crate::AppError) -> PluginError {
     match error {
         crate::AppError::Cancelled => PluginError::from_kind(
@@ -706,7 +716,7 @@ impl HostClient for RuntimeHostClient {
             .ok_or_else(|| host_unavailable("assistant context requires a session"))?;
         let service = self
             .runtime()?
-            .conversation_work_service()
+            .assistant_service()
             .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
         service
             .companion_context(source)
@@ -720,7 +730,7 @@ impl HostClient for RuntimeHostClient {
         let (source, call) = self.callback_session_and_call()?;
         let service = self
             .runtime()?
-            .conversation_work_service()
+            .assistant_service()
             .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
         service
             .companion_operation(source, call, request)
@@ -735,7 +745,7 @@ impl HostClient for RuntimeHostClient {
         let (source, call) = self.callback_session_and_call()?;
         let service = self
             .runtime()?
-            .conversation_work_service()
+            .assistant_service()
             .ok_or_else(|| host_unavailable("integration service unavailable"))?;
         service
             .conversation_integrations(source, call, request)
@@ -743,36 +753,26 @@ impl HostClient for RuntimeHostClient {
             .map_err(|error| PluginError::invalid_params(error.to_string()))
     }
 
-    async fn conversation_work_context(&self) -> Result<serde_json::Value, PluginError> {
+    async fn bot_context(&self) -> Result<serde_json::Value, PluginError> {
         let session = self
             .callback_context()?
             .session_id
-            .ok_or_else(|| host_unavailable("work context requires a session-scoped hook"))?;
-        let service = self
-            .runtime()?
-            .conversation_work_service()
-            .ok_or_else(|| host_unavailable("conversation work is unavailable"))?;
-        service
-            .conversation_context(session)
+            .ok_or_else(|| host_unavailable("Bot context requires a session"))?;
+        self.session_manager()?
+            .bot_context(session)
             .await
-            .map_err(|error| PluginError::invalid_params(error.to_string()))
+            .map_err(bot_plugin_error)
     }
-
-    async fn conversation_work(
+    async fn bot_operation(
         &self,
-        request: agena_plugin_sdk::host_api::WorkRequest,
+        request: agena_plugin_sdk::host_api::BotRequest,
     ) -> Result<serde_json::Value, PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
-        let service = self
-            .runtime()?
-            .conversation_work_service()
-            .ok_or_else(|| host_unavailable("conversation work is unavailable"))?;
-        service
-            .conversation_operation(session, call, request)
+        let (source, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .bot_operation(source, call, request)
             .await
-            .map_err(|error| PluginError::invalid_params(error.to_string()))
+            .map_err(bot_plugin_error)
     }
-
     async fn spawn_agent(&self, req: AgentSpawnRequest) -> Result<AgentHandle, PluginError> {
         let (session, call) = self.callback_session_and_call()?;
         self.session_manager()?

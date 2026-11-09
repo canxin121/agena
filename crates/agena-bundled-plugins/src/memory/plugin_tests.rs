@@ -452,6 +452,7 @@ fn derived_task_projection_must_match_current_host_checkpoint() {
         ..Default::default()
     });
     let mut context = MemoryContext {
+        global: false,
         instance_id: Some("database-a".to_string()),
         checkpoint_entry_id: Some(42),
     };

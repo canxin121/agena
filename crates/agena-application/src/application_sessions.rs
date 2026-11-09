@@ -22,6 +22,85 @@ use crate::dto::{
 use crate::{Application, ApplicationError};
 
 impl Application {
+    pub async fn ensure_bot_session(&self) -> Result<agena_api::bot::BotSession, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .ensure_default_bot_profile()
+            .await
+            .map(Into::into)
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn list_bots(
+        &self,
+        include_archived: bool,
+    ) -> Result<agena_assistant::bot::BotList, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .list_bots(include_archived)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn create_bot(
+        &self,
+        create: agena_assistant::bot::BotCreate,
+    ) -> Result<agena_assistant::bot::BotProfile, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .create_bot(create)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn get_bot(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<agena_assistant::bot::BotProfile, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .get_bot(id)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn update_bot(
+        &self,
+        id: uuid::Uuid,
+        update: agena_assistant::bot::BotUpdate,
+    ) -> Result<agena_assistant::bot::BotProfile, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .update_bot(id, update)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn archive_bot(
+        &self,
+        id: uuid::Uuid,
+        archive: agena_assistant::bot::BotArchive,
+    ) -> Result<agena_assistant::bot::BotProfile, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .archive_bot(id, archive)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn ensure_named_bot_session(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<agena_assistant::bot::BotSession, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .ensure_named_bot_session(id)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    pub async fn ensure_default_bot_profile(
+        &self,
+    ) -> Result<agena_assistant::bot::BotProfile, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .ensure_default_bot_profile()
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
     /// Build the default server home view: durable favorites plus every
     /// session needing attention, every running session, then a bounded recent
     /// tail. Favorites intentionally overlap the execution-state buckets.
@@ -165,7 +244,7 @@ impl Application {
                 .list_sessions_query(ListSessionsParams {
                     cursor: None,
                     limit: Some(200),
-                    workspace_id: Some(root.workspace_id),
+                    workspace_id: root.workspace_id,
                     parent_id: Some(parent_id),
                     roots: false,
                     exclude_subagents: false,

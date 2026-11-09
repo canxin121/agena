@@ -192,8 +192,12 @@ impl SessionManager {
     /// until the conversation is compacted. Sending a message is *not* gated:
     /// the run loop still compacts automatically there, so a session that is
     /// already on the selected model is left alone.
-    async fn ensure_model_fits_session(&self, id: i64, model: &ModelRef) -> Result<(), AppError> {
-        let state = self.state.load_full();
+    pub(super) async fn ensure_model_fits_session(
+        &self,
+        id: i64,
+        model: &ModelRef,
+    ) -> Result<(), AppError> {
+        let state = self.state_for_session(session_id(id)?).await?;
         let selection = self
             .kernel()
             .reader
@@ -711,7 +715,9 @@ impl SessionManager {
         // Steering is a committed input execution queued behind the current
         // owner. It has a stable identity and cannot mutate frozen input.
         let session = self.get_session(id).await?;
-        let options = self.options_for_selection(&session.execution.selection)?;
+        let options = self
+            .options_for_session(session_id(session.id)?, &session.execution.selection)
+            .await?;
         self.submit(crate::SessionUserRunRequest::new(id, options, document))
             .await?;
         Ok(())
@@ -751,7 +757,9 @@ impl SessionManager {
                     return Err(AppError::Config("this is not a permission request".into()));
                 };
                 let action = serde_json::from_str(action_key)?;
-                let state = self.state.load_full();
+                let state = self.state_for_session(session).await?;
+                let context = self.execution_context_with_state(session, &state).await?;
+                let executor = state.executor.for_session_context_async(&context).await;
                 self.classify_permission(
                     &action,
                     &agena_domain::PermissionDecision::Auto {
@@ -759,7 +767,7 @@ impl SessionManager {
                     },
                     session,
                     &state,
-                    &state.executor,
+                    &executor,
                 )
                 .await
                 .ok_or_else(|| {
@@ -900,6 +908,70 @@ fn command_error(error: AppError) -> SessionExecutionCommandError {
 }
 #[async_trait::async_trait]
 impl SessionExecutionCommandService for SessionManager {
+    async fn list_bots(
+        &self,
+        include_archived: bool,
+    ) -> Result<agena_assistant::bot::BotList, SessionExecutionCommandError> {
+        SessionManager::list_bot_profiles(self, include_archived)
+            .await
+            .map_err(command_error)
+    }
+    async fn create_bot(
+        &self,
+        create: agena_assistant::bot::BotCreate,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError> {
+        SessionManager::create_bot_profile(self, create)
+            .await
+            .map_err(command_error)
+    }
+    async fn get_bot(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError> {
+        SessionManager::get_bot_profile(self, id)
+            .await
+            .map_err(command_error)
+    }
+    async fn update_bot(
+        &self,
+        id: uuid::Uuid,
+        update: agena_assistant::bot::BotUpdate,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError> {
+        SessionManager::update_bot_profile(self, id, update)
+            .await
+            .map_err(command_error)
+    }
+    async fn archive_bot(
+        &self,
+        id: uuid::Uuid,
+        archive: agena_assistant::bot::BotArchive,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError> {
+        SessionManager::archive_bot_profile(self, id, archive)
+            .await
+            .map_err(command_error)
+    }
+    async fn ensure_named_bot_session(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<agena_assistant::bot::BotSession, SessionExecutionCommandError> {
+        SessionManager::ensure_named_bot_session(self, id)
+            .await
+            .map_err(command_error)
+    }
+    async fn ensure_default_bot_profile(
+        &self,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError> {
+        SessionManager::ensure_default_bot_profile(self)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn ensure_bot_session(&self) -> Result<i64, SessionExecutionCommandError> {
+        SessionManager::ensure_bot_session(self)
+            .await
+            .map_err(command_error)
+    }
+
     async fn edit_queued_message(
         &self,
         request: crate::SessionQueuedMessageEditRequest,
@@ -929,9 +1001,15 @@ impl SessionExecutionCommandService for SessionManager {
                     .await
                     .map_err(|error| command_error(kernel_error(error)))?;
                 let options = self
-                    .options_for_selection(&metadata.selection.clone().unwrap_or_default())
+                    .options_for_session(session, &metadata.selection.clone().unwrap_or_default())
+                    .await
                     .map_err(command_error)?;
-                (options.model, self.state.load_full())
+                (
+                    options.model,
+                    self.state_for_session(session)
+                        .await
+                        .map_err(command_error)?,
+                )
             }
         };
         let (document, blobs) = self

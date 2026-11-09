@@ -26,18 +26,50 @@ where
     }
 
     pub fn load(&self, request: &LoadConfigRequest) -> Result<ConfigResolution, ConfigError> {
+        self.load_scoped(request, false)
+    }
+
+    /// Resolve instance settings without reading or merging a project file.
+    pub fn load_global(
+        &self,
+        request: &LoadConfigRequest,
+    ) -> Result<ConfigResolution, ConfigError> {
+        self.load_scoped(request, true)
+    }
+
+    fn load_scoped(
+        &self,
+        request: &LoadConfigRequest,
+        global: bool,
+    ) -> Result<ConfigResolution, ConfigError> {
         let config_path = request
             .config_path
             .clone()
             .unwrap_or_else(|| crate::default_config_path(&self.env));
-        let workspace_root = match request.workspace_root.clone() {
-            Some(workspace_root) => workspace_root,
-            None => crate::try_default_workspace_root()?,
+        let workspace_root = if global {
+            std::path::PathBuf::new()
+        } else {
+            match request.workspace_root.clone() {
+                Some(workspace_root) => workspace_root,
+                None => crate::try_default_workspace_root()?,
+            }
         };
-        let project_config_path = crate::project_config_path(workspace_root.as_path());
+        let project_config_path = if global {
+            std::path::PathBuf::new()
+        } else {
+            crate::project_config_path(workspace_root.as_path())
+        };
 
         let file_state = RawConfigFile::read(&config_path)?;
-        let project_file_state = RawConfigFile::read(&project_config_path)?;
+        let project_file_state = if global {
+            RawConfigFile {
+                config: RawConfig::default(),
+                found: false,
+                merge_keys: Default::default(),
+            }
+        } else {
+            RawConfigFile::read(&project_config_path)?
+        };
         let env_overlay = RawConfig::from_env(&self.env)?;
         let environment_applied = !env_overlay.is_empty();
 
@@ -78,7 +110,11 @@ where
             global: global_prompts,
             workspace: workspace_prompts,
             global_dir: prompt_dir(config_path.as_path()),
-            workspace_dir: workspace_root.join(".agena").join("prompts"),
+            workspace_dir: if global {
+                std::path::PathBuf::new()
+            } else {
+                workspace_root.join(".agena").join("prompts")
+            },
         };
         // Fragment directories are configuration: a referenced id that has no
         // file must fail here instead of silently dropping instructions.

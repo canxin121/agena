@@ -59,6 +59,8 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
 
 mod activities;
 mod assistant;
+mod bot;
+pub use bot::*;
 mod attachment_response;
 mod auth;
 mod content;
@@ -79,7 +81,6 @@ mod runs;
 mod sessions;
 mod settings;
 mod skills;
-mod superagent;
 pub use assistant::*;
 mod workspaces;
 
@@ -90,7 +91,6 @@ pub use runs::*;
 pub use sessions::*;
 pub use settings::*;
 pub use skills::*;
-pub use superagent::*;
 pub use workspaces::*;
 
 pub use activities::*;

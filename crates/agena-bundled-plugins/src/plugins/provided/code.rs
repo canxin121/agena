@@ -201,6 +201,7 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        super::fs::require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -276,6 +277,7 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        super::fs::require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -345,6 +347,7 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeRewriteInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        super::fs::require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;

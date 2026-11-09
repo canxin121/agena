@@ -6,5 +6,5 @@ pub(crate) mod cost;
 mod processor;
 pub(crate) mod usage;
 pub use agena_runtime_session_core::model::Session;
-pub use manager::SessionManager;
+pub use manager::{SessionManager, SessionScopeReconfiguration};
 pub use processor::SessionProcessor;

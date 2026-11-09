@@ -38,7 +38,8 @@ pub(super) async fn prepare_command_async(
     let hook_input = CommandBeforeInput {
         session_id: Some(session_id),
         call_id: Some(call_id),
-        workspace_root: Some(executor.workspace_root().to_string_lossy().to_string()),
+        workspace_root: (!executor.is_global())
+            .then(|| executor.workspace_root().to_string_lossy().to_string()),
         command: "sh".to_string(),
         args: vec!["-c".to_string(), input.command.clone()],
         cwd: cwd.clone(),
@@ -50,6 +51,11 @@ pub(super) async fn prepare_command_async(
         .await
     {
         Ok(CommandBeforeOutcome::Continue(updated)) => {
+            if executor.is_global() && !updated.cwd.is_absolute() {
+                return Err(ToolError::invalid_input(
+                    "global shell execution requires an explicit absolute workdir",
+                ));
+            }
             let command =
                 if updated.args.len() >= 2 && updated.args[0] == "-c" && updated.command == "sh" {
                     updated.args[1].clone()

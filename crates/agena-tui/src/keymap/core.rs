@@ -8,6 +8,8 @@ use super::{
 pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
     match context {
         KeyContext::Global => match key.code {
+            K::Char('b') if only_ctrl(key) => Some(A::OpenBot),
+            K::Char('g') if only_ctrl(key) => Some(A::OpenHub),
             K::Char('c') if only_ctrl(key) => Some(A::Interrupt),
             K::Char('h') if only_ctrl(key) => Some(A::Help),
             K::Char('\u{0008}') if unmodified(key) => Some(A::Help),
@@ -167,6 +169,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::Hub => match key.code {
+            K::Char('b') if unmodified(key) => Some(A::OpenBot),
             K::Char('p') if only_ctrl(key) => Some(A::HubAddProject),
             K::Esc if unmodified(key) => Some(A::Close),
             K::Left | K::Char('h') if unmodified(key) => Some(A::MoveLeft),
@@ -332,6 +335,44 @@ mod tests {
         );
         assert_eq!(
             resolve(KeyContext::Hub, KeyEvent::new(K::Tab, M::CONTROL)),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod bot_tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn bot_and_projects_shortcuts_are_global_and_do_not_capture_plain_typing() {
+        assert_eq!(
+            resolve(
+                KeyContext::Global,
+                KeyEvent::new(K::Char('b'), KeyModifiers::CONTROL)
+            ),
+            Some(A::OpenBot)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Global,
+                KeyEvent::new(K::Char('g'), KeyModifiers::CONTROL)
+            ),
+            Some(A::OpenHub)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Hub,
+                KeyEvent::new(K::Char('b'), KeyModifiers::NONE)
+            ),
+            Some(A::OpenBot)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Global,
+                KeyEvent::new(K::Char('b'), KeyModifiers::NONE)
+            ),
             None
         );
     }

@@ -1790,7 +1790,7 @@ struct SessionDetail {
     id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_id: Option<i64>,
-    workspace_id: i64,
+    workspace_id: Option<i64>,
     title: String,
     version: i64,
     created_at: DateTime<Utc>,

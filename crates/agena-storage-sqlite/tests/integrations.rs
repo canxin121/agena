@@ -1,12 +1,12 @@
+use agena_assistant::*;
 use agena_storage_sqlite::{SqliteIntegrationRepository, open_kernel_runtime};
-use agena_superagent::*;
 use serde_json::{Value, json};
 
 fn spec() -> IntegrationSpec {
     IntegrationSpec {
         title: "Triage".into(),
         provider: "example.github_issues".into(),
-        mode: IntegrationMode::Task,
+        mode: IntegrationMode::Session,
         config: json!({"repository":"owner/repo"}),
         resource: "owner/repo".into(),
         thread: None,
@@ -17,7 +17,7 @@ fn spec() -> IntegrationSpec {
         expires_at_ms: 86400000,
         daily_limit: 2,
         total_limit: 3,
-        max_task_seconds: 300,
+        max_execution_seconds: 300,
         use_source_permissions: true,
         channel_policy: None,
     }
@@ -227,7 +227,7 @@ async fn same_creation_key_cannot_rebind_identity_or_authority() {
     );
 }
 #[tokio::test]
-async fn previous_assistant_baseline_upgrades_without_erasing_profiles() {
+async fn partial_schema_missing_integration_bundles_is_rejected() {
     use sea_orm::sqlx::Connection;
     let temp = tempfile::tempdir().unwrap();
     let url = format!(
@@ -266,9 +266,7 @@ async fn previous_assistant_baseline_upgrades_without_erasing_profiles() {
             .unwrap();
     }
     raw.close().await.unwrap();
-    let upgraded = open_kernel_runtime(&url).await.unwrap();
-    let repo = SqliteIntegrationRepository::new(upgraded.database.clone());
-    assert!(repo.bindings(Some(1)).await.unwrap().is_empty());
+    assert!(open_kernel_runtime(&url).await.is_err());
 }
 
 #[tokio::test]
@@ -293,7 +291,7 @@ async fn empty_source_can_receive_authorized_system_notice_without_fake_user_inp
         .unwrap()
         .value
         .id;
-    let payload = json!({"kind":"conversation_work","work_id":"external-result","text":"authorized event result"});
+    let payload = json!({"kind":"integration_notice","notice_id":"external-result","text":"authorized event result"});
     let receipt = db
         .ports
         .executor
@@ -325,5 +323,205 @@ async fn empty_source_can_receive_authorized_system_notice_without_fake_user_inp
         rows.entries
             .iter()
             .all(|entry| !matches!(entry.payload, EntryPayload::User { .. }))
+    );
+}
+
+#[tokio::test]
+async fn native_receipt_recovers_lost_inbox_ack_and_stays_reconcilable_after_pause() {
+    use agena_storage::kernel::*;
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = db
+        .workspaces
+        .ensure_id("/integration-receipt")
+        .await
+        .unwrap();
+    let session = db
+        .ports
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Visible project".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let mut binding = IntegrationBinding::new(
+        workspace,
+        session.get(),
+        "native-receipt".into(),
+        spec(),
+        "fp".into(),
+        1000,
+    )
+    .unwrap();
+    binding.state = BindingState::Enabled;
+    binding.epoch = 1;
+    let binding = repo.create_binding(binding).await.unwrap();
+    repo.accept_batch(
+        binding.id,
+        binding.revision,
+        AdapterBatch {
+            events: vec![event("receipt-proof")],
+            cursor: json!(1),
+            retry_after_seconds: None,
+        },
+        3000,
+    )
+    .await
+    .unwrap();
+    let pending = repo.next_event(binding.id, 3001).await.unwrap().unwrap();
+    let key = format!("integration:{}:{}", binding.id, pending.event.id);
+    let payload = json!({"kind":"integration_instruction","binding_id":binding.id,"epoch":1,"text":"fixed operator goal; untrusted event data"});
+    let receipt = db
+        .ports
+        .executor
+        .deliver_control_notice(
+            RequestId::new(),
+            session,
+            key.clone(),
+            payload.clone(),
+            "fixed operator goal; untrusted event data".into(),
+        )
+        .await
+        .unwrap()
+        .value;
+    // Simulate a process ending after the kernel commit and before finish_event.
+    assert!(pending.execution_id.is_none());
+    let facts = repo.execution_events(binding.id).await.unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].0.session_id, Some(session.get()));
+    assert_eq!(facts[0].0.execution_id, Some(receipt.id.to_string()));
+    assert_eq!(
+        facts[0].0.execution_generation,
+        Some(receipt.generation.get())
+    );
+    assert!(facts[0].1 > 0); // Native execution admission time, never event timestamp.
+    let replay = db
+        .ports
+        .executor
+        .deliver_control_notice(
+            RequestId::new(),
+            session,
+            key,
+            payload,
+            "fixed operator goal; untrusted event data".into(),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(receipt.id, replay.id);
+    assert_eq!(repo.binding(binding.id).await.unwrap().admitted, 1);
+    let mut paused = repo.binding(binding.id).await.unwrap();
+    let revision = paused.revision;
+    paused.state = BindingState::Paused;
+    paused.revision += 1;
+    paused.epoch += 1;
+    repo.save_binding(paused, revision).await.unwrap();
+    assert!(
+        repo.bindings(None)
+            .await
+            .unwrap()
+            .iter()
+            .any(|b| b.id == binding.id)
+    );
+    assert_eq!(
+        repo.execution_events(binding.id).await.unwrap()[0]
+            .0
+            .execution_id,
+        Some(receipt.id.to_string())
+    );
+    let mut completed = facts[0].0.clone();
+    completed.state = "handled".into();
+    repo.finish_event(completed).await.unwrap();
+    assert!(repo.execution_events(binding.id).await.unwrap().is_empty());
+    assert!(repo.bindings(None).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn integration_control_fifo_cancellation_preserves_later_human_input() {
+    use agena_storage::kernel::*;
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = db.workspaces.ensure_id("/integration-fifo").await.unwrap();
+    let session = db
+        .ports
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Human project".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let automated = db.ports.executor.deliver_control_notice(RequestId::new(), session, "fifo-event".into(), json!({"kind":"integration_instruction","binding_id":"rule","epoch":1,"text":"bounded instruction"}), "bounded instruction".into()).await.unwrap().value;
+    let human = db
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                text: "continue this project manually".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    db.ports
+        .sessions
+        .cancel_attempt(
+            RequestId::new(),
+            session,
+            automated.id,
+            automated.generation,
+        )
+        .await
+        .unwrap();
+    let latest = db.ports.reader.execution(session, human.id).await.unwrap();
+    assert_eq!(latest.phase, ExecutionPhase::Queued);
+    // A retry of that same execution also belongs to its new native generation.
+    let retry = db
+        .ports
+        .sessions
+        .retry(RequestId::new(), session, automated.id)
+        .await
+        .unwrap()
+        .value;
+    assert!(retry.generation > automated.generation);
+    assert!(matches!(
+        db.ports
+            .sessions
+            .cancel_attempt(
+                RequestId::new(),
+                session,
+                automated.id,
+                automated.generation
+            )
+            .await,
+        Err(KernelError::StaleAttempt)
+    ));
+    assert_eq!(
+        db.ports
+            .reader
+            .execution(session, retry.id)
+            .await
+            .unwrap()
+            .phase,
+        ExecutionPhase::Queued
+    );
+    let history = db.ports.reader.history(session, None, 50).await.unwrap();
+    assert_eq!(
+        history
+            .entries
+            .iter()
+            .filter(|e| matches!(e.payload, EntryPayload::User { .. }))
+            .count(),
+        1
     );
 }

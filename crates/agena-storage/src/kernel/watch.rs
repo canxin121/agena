@@ -23,7 +23,7 @@ pub enum ChangeKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionListState {
     pub session: SessionId,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub parent_session_id: Option<SessionId>,
     pub favorite: bool,
     pub pinned: bool,
@@ -52,7 +52,7 @@ pub struct KernelChange {
     pub cursor: WatchCursor,
     pub session: SessionId,
     pub kind: ChangeKind,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     /// False for temporary side conversations, including their deletion event.
     pub include_in_lists: bool,
     pub list_change: Option<SessionListChange>,
@@ -210,14 +210,15 @@ impl ChangeFeed {
         affected_entries: Vec<super::EntryId>,
         requires_snapshot: bool,
     ) {
-        self.publish_session(
+        self.publish_scoped(
             position,
             session,
-            0,
+            None,
             true,
             kind,
             affected_entries,
             requires_snapshot,
+            None,
         );
     }
 
@@ -235,7 +236,7 @@ impl ChangeFeed {
         self.publish_scoped(
             position,
             session,
-            workspace_id,
+            Some(workspace_id),
             include_in_lists,
             kind,
             affected_entries,
@@ -249,7 +250,7 @@ impl ChangeFeed {
         &self,
         position: CommitPosition,
         session: SessionId,
-        workspace_id: i64,
+        workspace_id: Option<i64>,
         include_in_lists: bool,
         kind: ChangeKind,
         affected_entries: Vec<super::EntryId>,

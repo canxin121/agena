@@ -13,7 +13,7 @@ ipc = ["ws"]
 jsonrpc = ["http"]
 
 [dependencies]
-agena-superagent = { workspace = true }
+agena-assistant = { workspace = true }
 infer.workspace = true
 blake3.workspace = true
 portable-atomic = { workspace = true }

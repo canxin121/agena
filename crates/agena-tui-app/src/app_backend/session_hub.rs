@@ -180,7 +180,7 @@ impl TuiBackend {
             let ids = catalog
                 .sessions
                 .iter()
-                .map(|session| session.workspace_id)
+                .filter_map(|session| session.workspace_id)
                 .collect::<BTreeSet<_>>();
             let mut workspaces = tokio::task::JoinSet::new();
             for id in ids {
@@ -198,7 +198,7 @@ impl TuiBackend {
                     catalog
                         .sessions
                         .iter()
-                        .filter(|session| session.workspace_id == workspace.id)
+                        .filter(|session| session.workspace_id == Some(workspace.id))
                         .map(|session| session.id)
                         .collect(),
                 );

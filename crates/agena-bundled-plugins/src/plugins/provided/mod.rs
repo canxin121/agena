@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod bot;
 mod cloud_media;
 pub mod code;
 pub mod commands;
@@ -21,7 +22,6 @@ pub mod session;
 pub mod settings;
 pub mod shell;
 pub mod skills;
-pub mod work;
 pub mod workflow;
 pub use agena_runtime_tools::tool::router;
 pub(crate) mod chatgpt;

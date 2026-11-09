@@ -19,30 +19,31 @@ impl SessionManager {
             .try_acquire_owned()
             .map_err(|_| AppError::Config("the execution queue is full".into()))
     }
-    pub(super) fn supervise(
+    pub(super) async fn supervise(
         &self,
         execution: ExecutionView,
         options: SessionRunOptions,
         compact: bool,
         permit: OwnedSemaphorePermit,
-    ) -> Arc<RunControl> {
+    ) -> Result<Arc<RunControl>, AppError> {
         self.supervise_with_budget(execution, options, compact, permit, None)
+            .await
     }
-    pub(super) fn supervise_with_budget(
+    pub(super) async fn supervise_with_budget(
         &self,
         execution: ExecutionView,
         options: SessionRunOptions,
         compact: bool,
         permit: OwnedSemaphorePermit,
         budget: Option<AgentBudget>,
-    ) -> Arc<RunControl> {
+    ) -> Result<Arc<RunControl>, AppError> {
         let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
-        let state = self.state.load_full();
+        let state = self.state_for_session(execution.session_id).await?;
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(run) = active.get(&execution.id)
             && run.generation >= execution.generation
         {
-            return run.clone();
+            return Ok(run.clone());
         }
         let run = Arc::new(RunControl {
             session: execution.session_id,
@@ -120,7 +121,7 @@ impl SessionManager {
                 manager.schedule_memory(run.session);
             }
         });
-        result
+        Ok(result)
     }
     pub(super) fn settle_supervised_run(&self, run: &Arc<RunControl>) {
         // A continuation may commit its next generation before this task has
@@ -175,6 +176,7 @@ impl SessionManager {
                 // Preparation, commit and supervisor registration form one
                 // admission sequence, independently of the running provider.
                 let _submission = dispatch.submission.lock().await;
+                manager.require_writable_bot_history(session.get()).await?;
                 manager.restore_queued_executions(session).await?;
                 let mut options = request.run.options;
                 manager.prepare_options(session, &mut options).await?;
@@ -183,7 +185,7 @@ impl SessionManager {
                     .as_deref()
                     .map(|key| request_key(&format!("send:{}", session.get()), key))
                     .unwrap_or_default();
-                let state = manager.state.load_full();
+                let state = manager.state_for_session(session).await?;
                 let document = manager
                     .submit_hook(session, request.document, &state)
                     .await?;
@@ -204,7 +206,9 @@ impl SessionManager {
                 .await
                 .map_err(kernel_error)?;
                 let result = execution_outcome(&receipt.value);
-                manager.supervise(receipt.value, options, false, permit);
+                manager
+                    .supervise(receipt.value, options, false, permit)
+                    .await?;
                 manager.schedule_title(session);
                 Ok(result)
             }
@@ -317,6 +321,7 @@ impl SessionManager {
                 let session = session_id(request.session_id)?;
                 let dispatch = manager.session_dispatch(session);
                 let _submission = dispatch.submission.lock().await;
+                manager.require_writable_bot_history(session.get()).await?;
                 if !compact {
                     manager.wait_terminal_agent_settlement(session).await?;
                 }
@@ -358,7 +363,9 @@ impl SessionManager {
                 .map_err(kernel_error)?
                 .value;
                 let outcome = execution_outcome(&execution);
-                manager.supervise(execution, options, compact, permit);
+                manager
+                    .supervise(execution, options, compact, permit)
+                    .await?;
                 Ok(outcome)
             }
             .await;
@@ -474,7 +481,7 @@ impl SessionManager {
                 let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let request_layer=super::session_prompt::request_system_layer(options.system.as_deref());
-                let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),tools_enabled:!bindings.is_empty()};
+                let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
                 let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
                 let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
@@ -519,7 +526,7 @@ impl SessionManager {
                 // Managed image artifacts use the owning workspace root: the
                 // session-media download route resolves this same workspace
                 // regardless of a child session's effective working directory.
-                let workspace_root=self.session_workspace_root(control.session.get()).await?;
+                let workspace_root=self.session_workspace_root_optional(control.session.get()).await?;
                 let mut run=state.processor.kernel_round(request,self.kernel().reader.clone(),state.providers.clone(),workspace_root).map_err(kernel_error)?;
                 provider_calls+=1;
                 control.phase(agena_domain::ExecutionPhase::StreamingModel);
@@ -941,7 +948,7 @@ impl SessionManager {
             let rules = self
                 .kernel_runtime
                 .permissions
-                .resolve(&action_key, Some(control.session.get()), Some(workspace))
+                .resolve(&action_key, Some(control.session.get()), workspace)
                 .await
                 .map_err(|e| ToolError::invalid_input(e.to_string()))?;
             let rules = rules
@@ -1250,7 +1257,7 @@ impl SessionManager {
         session: SessionId,
         options: &mut SessionRunOptions,
     ) -> Result<(), AppError> {
-        let state = self.state.load_full();
+        let state = self.state_for_session(session).await?;
         self.prepare_options_with_state(session, options, &state)
             .await
     }
@@ -1275,6 +1282,9 @@ impl SessionManager {
             if options.verbosity.is_none() {
                 options.verbosity = selection.verbosity;
             }
+            if let Some(parallel) = selection.parallel_tool_calls {
+                options.model_supports_parallel_tool_calls = Some(parallel);
+            }
         }
         self.apply_model_modes_with_state(options, state)?;
         let metadata = state
@@ -1296,11 +1306,26 @@ impl SessionManager {
         crate::prompt_budget::align_output_token_overrides(&mut options.request_override, output);
         Ok(())
     }
+    pub(super) async fn options_for_session(
+        &self,
+        session: SessionId,
+        selection: &ExecutionSelection,
+    ) -> Result<SessionRunOptions, AppError> {
+        let state = self.state_for_session(session).await?;
+        self.options_for_selection_with_state(selection, &state)
+    }
+
     pub(super) fn options_for_selection(
         &self,
         selection: &ExecutionSelection,
     ) -> Result<SessionRunOptions, AppError> {
-        let state = self.state.load_full();
+        self.options_for_selection_with_state(selection, &self.state.load_full())
+    }
+    pub(super) fn options_for_selection_with_state(
+        &self,
+        selection: &ExecutionSelection,
+        state: &ExecutionState,
+    ) -> Result<SessionRunOptions, AppError> {
         let selection = state
             .config
             .default_selection
@@ -1501,7 +1526,8 @@ impl SessionManager {
             provider_registry
                 .model_metadata(&options.model)
                 .unwrap_or_default()
-                .supports_parallel_tool_calls_for_model(),
+                .supports_parallel_tool_calls_for_model()
+                && options.model_supports_parallel_tool_calls.unwrap_or(true),
         );
         options.request_override = merged_override;
         Ok(())
@@ -1535,9 +1561,9 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?)
         .clone();
-        let state = self.state.load_full();
+        let state = self.state_for_session(session).await?;
         let context = self.execution_context_with_state(session, &state).await?;
-        let mut options = self.options_for_selection(&context.selection)?;
+        let mut options = self.options_for_selection_with_state(&context.selection, &state)?;
         self.prepare_options_with_state(session, &mut options, &state)
             .await?;
         let policy = compaction_policy_key(&options, &state)?;
@@ -1619,6 +1645,7 @@ impl SessionManager {
             request_layer: request_layer.as_ref(),
             model: &options.model,
             session_id: control.session.get(),
+            global: context.global,
             workspace: context
                 .effective_workspace_root
                 .as_ref()

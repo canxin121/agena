@@ -30,7 +30,7 @@ pub struct SessionSummary {
     pub parent_id: Option<i64>,
     pub depth: i64,
     pub root_id: i64,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     #[serde(default)]
     pub favorite: bool,

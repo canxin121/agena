@@ -9,6 +9,8 @@ enum ExecutionTranscript {
 
 impl App {
     pub(crate) fn open_session(&mut self, session_id: i64, title: String) {
+        self.bot.cancel();
+        self.bot.cancel_scope();
         // Full-screen surfaces are bound to the session that opened them.
         if matches!(
             self.current_route,
@@ -38,6 +40,10 @@ impl App {
         self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
         self.subscription_generation = self.subscription_generation.wrapping_add(1);
+        self.select_known_bot_for_session(session_id);
+        // A Bot opened from the ordinary session list still needs registry
+        // chrome and its own persona editor. This read never focuses a chat.
+        self.refresh_bot_registry(false);
         if let Some(cache) = self.transcript_cache.get(&session_id).cloned() {
             self.transcript
                 .restore_cache(cache, session_id, self.transcript.session_title.clone());
@@ -193,6 +199,9 @@ impl App {
         match transcript {
             ExecutionTranscript::Window => self.transcript.apply_execution(execution),
             ExecutionTranscript::Shell => self.transcript.apply_execution_shell(execution),
+        }
+        if is_terminal && was_running && self.is_bot_session() {
+            self.refresh_bot_registry(false);
         }
         if is_terminal {
             // A terminal execution means no run is in flight for this

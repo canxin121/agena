@@ -37,7 +37,7 @@ enum Decision {
 
 impl SessionManager {
     pub(super) fn schedule_title(&self, session: SessionId) {
-        if self.shutdown.is_cancelled() || !self.state.load().config.auto_title.enabled {
+        if self.shutdown.is_cancelled() {
             return;
         }
         let dispatch = self.session_dispatch(session);
@@ -99,7 +99,7 @@ impl SessionManager {
     }
 
     async fn update_auto_title(&self, session: SessionId) -> Result<(), AppError> {
-        let state = self.state.load_full();
+        let state = self.state_for_session(session).await?;
         if !state.config.auto_title.enabled {
             return Ok(());
         }
@@ -234,7 +234,9 @@ impl SessionManager {
         let decision = parse_decision(&response.text)?;
         // A reload may disable naming or replace its model while this request
         // is in flight. Let the next event use the newly published configuration.
-        if self.shutdown.is_cancelled() || !Arc::ptr_eq(&state, &self.state.load_full()) {
+        if self.shutdown.is_cancelled()
+            || !Arc::ptr_eq(&state, &self.state_for_session(session).await?)
+        {
             return Ok(());
         }
         let title = match decision {

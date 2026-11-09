@@ -74,8 +74,14 @@ jobs:
           TMPDIR: ${{ runner.temp }}/agena-test-artifacts
         run: cargo test-libs
 
-      - name: Test durable task storage and migrations
-        run: cargo test --locked -p agena-storage-sqlite --test superagent_tasks --test companion --test integrations --test channel_access -- --test-threads=2
+      - name: Reject retired Task/Worker runtime surfaces
+        run: python3 scripts/ci/check-task-retirement.py
+      - name: Enforce project-less global Bot scope and current-only schema
+        run: python3 scripts/ci/check-global-bot-scope.py
+      - name: Enforce per-Bot additional system instructions as the only persona field
+        run: python3 scripts/ci/check-bot-instructions-only.py
+      - name: Test assistant persistence and schema retirement
+        run: cargo test --locked -p agena-storage-sqlite --tests -- --test-threads=2
       - name: Test reference integration plugins and generated ABI
         run: |
           python3 examples/integration-plugins/test_adapters.py -v
@@ -99,17 +105,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .node-version
-      - name: Prepare real task UI acceptance dependencies
+      - name: Prepare real Bot and assistant UI acceptance dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y tmux
           command -v google-chrome
           cd packages/agena-web
           bun install --frozen-lockfile
-      - name: Exercise natural work and assistant workflows in Web/TUI
+      - name: Exercise Bot, assistant and integration workflows in Web/TUI
         env:
           TMPDIR: ${{ runner.temp }}/agena-test-artifacts
-        run: cargo test --locked -p agena --test system scenarios::superagent_ui -- --ignored --test-threads=1 --nocapture
+        run: |
+          cargo test --locked -p agena --test system scenarios::assistant_ui -- --ignored --test-threads=1 --nocapture
+          cargo test --locked -p agena --test system scenarios::bot_operator_ui -- --ignored --test-threads=1 --nocapture
+          cargo test --locked -p agena --test system scenarios::bot_profiles_ui -- --ignored --test-threads=1 --nocapture
       - name: Test all bundled plugins
         env:
           TMPDIR: ${{ runner.temp }}/agena-test-artifacts
@@ -121,9 +130,9 @@ jobs:
           name: agena-system-test-diagnostics
           path: |
             ${{ runner.temp }}/agena-test-artifacts/agena-testkit-*/diagnostics/**
-            ${{ runner.temp }}/agena-test-artifacts/agena-task-*-evidence-*/**
-            ${{ runner.temp }}/agena-test-artifacts/agena-natural-*-evidence-*/**
             ${{ runner.temp }}/agena-test-artifacts/agena-assistant-*-evidence-*/**
+            ${{ runner.temp }}/agena-test-artifacts/agena-bot-ui-evidence-*/**
+            ${{ runner.temp }}/agena-test-artifacts/agena-multi-bot-ui-evidence-*/**
             ${{ runner.temp }}/agena-test-artifacts/agena-integrations-*-evidence-*/**
             ${{ runner.temp }}/agena-test-artifacts/agena-channel-access-*-evidence-*/**
           if-no-files-found: ignore

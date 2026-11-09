@@ -158,7 +158,6 @@ impl App {
             Route::PlanViewer(dialog) => self.render_plan_viewer(frame, area, dialog),
             Route::Integrations(source) => self.render_integrations(frame, area, *source),
             Route::Assistant(source) => self.render_assistant(frame, area, *source),
-            Route::Tasks(source) => self.render_tasks(frame, area, *source),
             Route::SessionWork(_) => self.render_session_work_panel(frame, area),
             Route::Btw(_) => self.render_btw_panel(frame, area),
             Route::SettingsStudio(dialog) => {
@@ -177,6 +176,7 @@ impl App {
                 agena_tui_session::session_search::render_overlay(frame, area, dialog, &self.i18n);
             }
             Route::Hub(state) => self.render_hub(frame, area, state, SurfaceMode::Route),
+            Route::BotEntry(_) => self.render_bot_entry(frame, area),
             Route::CommandPalette(dialog) => {
                 agena_tui::command_palette::render_overlay(
                     frame,

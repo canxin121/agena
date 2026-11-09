@@ -295,33 +295,24 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn conversation_work(
+    async fn bot_context(&self) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.bot_context()).await
+        })
+        .await
+    }
+    async fn bot_operation(
         &self,
-        request: crate::sdk::host_api::WorkRequest,
+        request: crate::sdk::host_api::BotRequest,
     ) -> crate::sdk::Result<serde_json::Value> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(
-                self.context()?,
-                inner.conversation_work(request),
-            )
-            .await
+            host_api::run_in_host_callback_context(self.context()?, inner.bot_operation(request))
+                .await
         })
         .await
     }
-
-    async fn conversation_work_context(&self) -> crate::sdk::Result<serde_json::Value> {
-        self.run_callback(async {
-            let inner = self.handle.inner.read().await.clone();
-            host_api::run_in_host_callback_context(
-                self.context()?,
-                inner.conversation_work_context(),
-            )
-            .await
-        })
-        .await
-    }
-
     async fn spawn_agent(&self, req: AgentSpawnRequest) -> crate::sdk::Result<AgentHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();

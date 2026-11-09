@@ -86,7 +86,7 @@ async fn bind(
         expires_at_ms: Utc::now().timestamp_millis() + 3600000,
         daily_limit: 100,
         total_limit: 200,
-        max_task_seconds: 120,
+        max_execution_seconds: 120,
         use_source_permissions: true,
         channel_policy: Some(policy),
     };
@@ -517,12 +517,12 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn private_memory_is_scoped_and_task_workers_inherit_channel_tool_limits() -> TestResult {
+async fn private_memory_is_scoped_and_native_subagents_inherit_channel_tool_limits() -> TestResult {
     let replies: Replies = Default::default();
     channel_fixture(replies.clone()).run(move|case|async move{
         let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ChannelKind::Group);
         p.grants.insert(ChannelRole::Member,ChannelGrant{private_memory:true,..Default::default()});
-        p.grants.insert(ChannelRole::Operator,ChannelGrant{background_work:true,..Default::default()});
+        p.grants.insert(ChannelRole::Operator,ChannelGrant{tools:BTreeSet::from(["agena.agent.spawn".into(),"agena.agent.cancel".into()]),..Default::default()});
         let b=bind(&source,"private-memory",p.clone()).await?;
         let remember=model.expect(RequestMatch::user_text("记住我的私人报告偏好"))
             .reply(Reply::tool_call("alice-memory","memory.write",json!({"name":"private-style","content":"ALICE-ONLY-MEMORY-cb28: conclusions first","kind":"preference"})));
@@ -530,16 +530,17 @@ async fn private_memory_is_scoped_and_task_workers_inherit_channel_tool_limits()
         message(&case,&p,"remember","alice",Some("private-thread"),"记住我的私人报告偏好").await?;reply(&replies,"alice-private-memory-saved").await?;
         model.expect(RequestMatch::user_text("bob-no-memory-check")).check(|r|{ensure!(!r.body.to_string().contains("ALICE-ONLY-MEMORY-cb28"));Ok(())}).reply(Reply::text("bob-no-memory-ack"));
         message(&case,&p,"bob-check","bob",Some("private-thread"),"bob-no-memory-check").await?;reply(&replies,"bob-no-memory-ack").await?;
-        let start=model.expect(RequestMatch::user_text("请后台分析这个问题"))
-            .reply(Reply::tool_call("channel-work","work.manage",json!({"action":"start","user_quote":"请后台分析这个问题","instruction":"rbac-worker-marker: analyze without filesystem privileges"})));
-        model.expect(RequestMatch::tool_output("channel-work")).after(&start).check_tool_output_contains("channel-work","accepted").reply(Reply::text("channel-work-started-ack"));
-        let worker=model.expect(RequestMatch::user_text("rbac-worker-marker"))
-            .reply(Reply::tool_call("worker-forbidden-write","fs.write",json!({"path":"worker-must-not-write.txt","content":"bad"})));
-        model.expect(RequestMatch::tool_output("worker-forbidden-write")).after(&worker).reply(Reply::text("rbac-worker-result: analyzed without privileged effects"));
-        let report=model.expect(RequestMatch::new("scoped channel task report",|r|{let text=r.body.to_string();text.contains("Background work update")&&text.contains("rbac-worker-result")})).reply(Reply::text("channel-work-finished-ack"));
-        message(&case,&p,"work","runner",Some("work-thread"),"请后台分析这个问题").await?;report.finished().await?;reply(&replies,"channel-work-finished-ack").await?;
+        let start=model.expect(RequestMatch::user_text("请用子代理分析这个问题"))
+            .reply(Reply::tool_call("channel-spawn","agent.spawn",json!({"name":"scoped_child","prompt":"rbac-subagent-marker: analyze without filesystem privileges"})));
+        model.expect(RequestMatch::tool_output("channel-spawn")).after(&start).check_tool_output_contains("channel-spawn","succeeded").reply(Reply::text("channel-native-child-started"));
+        let child=model.expect(RequestMatch::user_text("rbac-subagent-marker"))
+            .reply(Reply::tool_call("child-forbidden-write","fs.write",json!({"path":"child-must-not-write.txt","content":"bad"})));
+        model.expect(RequestMatch::tool_output("child-forbidden-write")).after(&child)
+            .check_tool_output_contains("child-forbidden-write","failed").reply(Reply::text("rbac-child-result: analyzed without privileged effects"));
+        let report=model.expect(RequestMatch::new("native channel Subagent continuation",|r|r.body.to_string().contains("rbac-child-result"))).reply(Reply::text("channel-native-child-finished"));
+        message(&case,&p,"native-child","runner",Some("work-thread"),"请用子代理分析这个问题").await?;report.finished().await?;reply(&replies,"channel-native-child-finished").await?;
         let detail=source.client().integration_detail(source.id(),b.id).await?;
-        for scope in &detail.channel_sessions{ensure!(!scope.authority.memory_workspace_root.join("worker-must-not-write.txt").exists());}
+        for scope in &detail.channel_sessions{ensure!(!scope.authority.memory_workspace_root.join("child-must-not-write.txt").exists());}
         let alice=detail.channel_sessions.iter().find(|s|s.authority.actor=="alice").context("alice")?;
         let bob=detail.channel_sessions.iter().find(|s|s.authority.actor=="bob").context("bob")?;
         let own=source.client().assistant_snapshot(alice.session_id).await?;let other=source.client().assistant_snapshot(bob.session_id).await?;
@@ -809,39 +810,105 @@ async fn lost_policy_receipt_retry_does_not_cancel_a_newer_authorized_session() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn authorized_operator_cannot_cancel_another_members_background_task() -> TestResult {
+async fn authorized_operator_cannot_cancel_another_members_native_execution() -> TestResult {
     let replies: Replies = Default::default();
-    channel_fixture(replies.clone()).run(move|case|async move{
-        let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ChannelKind::Group);
-        p.members.iter_mut().find(|m|m.actor=="bob").unwrap().role=ChannelRole::Operator;
-        p.grants.insert(ChannelRole::Operator,ChannelGrant{background_work:true,..Default::default()});
-        let b=bind(&source,"separate-task-ownership",p.clone()).await?;
-        let start=model.expect(RequestMatch::user_text("替我后台检查但不要访问文件"))
-            .reply(Reply::tool_call("owner-task-start","work.manage",json!({"action":"start","user_quote":"替我后台检查但不要访问文件","instruction":"isolated-owner-task-marker: analyze without tools"})));
-        model.expect(RequestMatch::tool_output("owner-task-start")).after(&start).check_tool_output_contains("owner-task-start","accepted").reply(Reply::text("owner-task-started"));
-        let worker=model.expect(RequestMatch::user_text("isolated-owner-task-marker"))
-            .reply(Reply::text("isolated-owner-task-evidence").held());
-        let completed=model.expect(RequestMatch::new("owner task completion",|r|{let body=r.body.to_string();body.contains("Background work update")&&body.contains("isolated-owner-task-evidence")}))
-            .reply(Reply::text("isolated-owner-task-completed"));
-        message(&case,&p,"owner-start","runner",Some("runner-work"),"替我后台检查但不要访问文件").await?;
-        worker.observed().await?;
-        let detail=source.client().integration_detail(source.id(),b.id).await?;
-        let runner=detail.channel_sessions.iter().find(|r|r.authority.actor=="runner").context("runner scope")?;
-        let tasks:Vec<Value>=case.http().await.get(&format!("/api/v1/tasks?source_session_id={}",runner.session_id)).await?.require_success()?.json()?;
-        let id=tasks.first().and_then(|t|t["id"].as_str()).context("runner task")?;
-        let attack=model.expect(RequestMatch::user_text("取消另一个成员正在做的任务"))
-            .reply(Reply::tool_call("cross-user-cancel","work.manage",json!({"action":"cancel","task_id":id,"user_quote":"取消另一个成员正在做的任务"})));
-        model.expect(RequestMatch::tool_output("cross-user-cancel")).after(&attack)
-            .check_tool_output_contains("cross-user-cancel","not found in this scope")
-            .reply(Reply::text("other-members-task-not-authorized"));
-        message(&case,&p,"foreign-cancel","bob",Some("bob-work"),"取消另一个成员正在做的任务").await?;
-        let denied=reply(&replies,"other-members-task-not-authorized").await?;ensure!(denied["thread"]=="bob-work");
-        let state:Value=case.http().await.get(&format!("/api/v1/tasks/{id}")).await?.require_success()?.json()?;
-        ensure!(state["state"]=="running","cross-user attempt changed another task");
-        worker.release();completed.finished().await?;
-        let result=reply(&replies,"isolated-owner-task-completed").await?;ensure!(result["thread"]=="runner-work");
-        Ok(())
-    }).await
+    channel_fixture(replies.clone())
+        .run(move |case| async move {
+            let source = case.user().new_session().await?;
+            let model = case.model();
+            let mut p = policy(ChannelKind::Group);
+            p.members
+                .iter_mut()
+                .find(|m| m.actor == "bob")
+                .unwrap()
+                .role = ChannelRole::Operator;
+            p.grants.insert(
+                ChannelRole::Operator,
+                ChannelGrant {
+                    tools: BTreeSet::from(["agena.agent.cancel".into()]),
+                    ..Default::default()
+                },
+            );
+            let b = bind(&source, "separate-native-ownership", p.clone()).await?;
+            let owner = model
+                .expect(RequestMatch::user_text("isolated-owner-native-marker"))
+                .reply(Reply::text("isolated-owner-native-completed").held());
+            message(
+                &case,
+                &p,
+                "owner-start",
+                "runner",
+                Some("runner-work"),
+                "isolated-owner-native-marker",
+            )
+            .await?;
+            owner.observed().await?;
+            let detail = wait(|| async {
+                let detail = source
+                    .client()
+                    .integration_detail(source.id(), b.id)
+                    .await?;
+                Ok(detail
+                    .events
+                    .iter()
+                    .any(|e| e.event.id == "owner-start" && e.execution_id.is_some())
+                    .then_some(detail))
+            })
+            .await?;
+            let runner = detail
+                .channel_sessions
+                .iter()
+                .find(|r| r.authority.actor == "runner")
+                .context("runner scope")?;
+            let event = detail
+                .events
+                .iter()
+                .find(|e| e.event.id == "owner-start")
+                .context("runner execution receipt")?;
+            let execution = event
+                .execution_id
+                .as_deref()
+                .context("execution")?
+                .parse()?;
+            let generation = event.execution_generation.context("generation")?;
+            let attack = model
+                .expect(RequestMatch::user_text("取消另一个成员正在做的事情"))
+                .reply(Reply::tool_call(
+                    "cross-user-cancel",
+                    "agent.cancel",
+                    json!({"target":runner.session_id.to_string()}),
+                ));
+            model
+                .expect(RequestMatch::tool_output("cross-user-cancel"))
+                .after(&attack)
+                .check_tool_output_contains("cross-user-cancel", "outside this agent group")
+                .reply(Reply::text("other-members-execution-not-authorized"));
+            message(
+                &case,
+                &p,
+                "foreign-cancel",
+                "bob",
+                Some("bob-work"),
+                "取消另一个成员正在做的事情",
+            )
+            .await?;
+            let denied = reply(&replies, "other-members-execution-not-authorized").await?;
+            ensure!(denied["thread"] == "bob-work");
+            let state = source
+                .client()
+                .execution_attempt(runner.session_id, execution, generation)
+                .await?;
+            ensure!(
+                state.phase == agena_domain::session_kernel::ExecutionPhase::Running,
+                "cross-user attempt changed another execution"
+            );
+            owner.release();
+            owner.finished().await?;
+            let result = reply(&replies, "isolated-owner-native-completed").await?;
+            ensure!(result["thread"] == "runner-work");
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

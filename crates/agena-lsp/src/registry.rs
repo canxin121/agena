@@ -191,6 +191,16 @@ impl LspRegistry {
         server_name: &str,
         hint_dir: &Path,
     ) -> LspResult<Arc<LspClient>> {
+        self.client_for_with_fallback(server_name, hint_dir, &self.workspace_root)
+            .await
+    }
+
+    async fn client_for_with_fallback(
+        &self,
+        server_name: &str,
+        hint_dir: &Path,
+        fallback: &Path,
+    ) -> LspResult<Arc<LspClient>> {
         // A shutdown takes the write side of this gate. Holding a read permit
         // makes spawn/initialize/insert one lifecycle transaction so shutdown
         // cannot drain the map and then have an in-flight initializer insert
@@ -205,10 +215,10 @@ impl LspRegistry {
             .ok_or_else(|| LspError::UnknownServer(server_name.to_string()))?;
         let root_spec = spec.clone();
         let hint_dir = hint_dir.to_owned();
-        let workspace = self.workspace_root.clone();
+        let fallback = fallback.to_owned();
         let root_dir = ROOT_RESOLVERS
             .run(move || {
-                let root = root_spec.resolve_root(&hint_dir, &workspace);
+                let root = root_spec.resolve_root(&hint_dir, &fallback);
                 std::fs::canonicalize(&root).unwrap_or(root)
             })
             .await
@@ -284,6 +294,32 @@ impl LspRegistry {
         self.client_for(&spec.name, parent).await
     }
 
+    /// Resolve an explicitly selected absolute file without using the registry's
+    /// workspace as a fallback. If no marker is found, use the file's parent.
+    pub async fn client_for_path_global(&self, file_path: &Path) -> LspResult<Arc<LspClient>> {
+        if !file_path.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "LSP global target must be an absolute file path: {}",
+                    file_path.display()
+                ),
+            )
+            .into());
+        }
+        let path = file_path.to_owned();
+        let parent = ROOT_RESOLVERS
+            .run(move || global_file_parent(&path))
+            .await
+            .map_err(|error| LspError::transport_error(&error))??;
+        let spec = self
+            .server_for_path(file_path)
+            .await
+            .ok_or_else(|| LspError::UnknownServer(file_path.display().to_string()))?;
+        self.client_for_with_fallback(&spec.name, &parent, &parent)
+            .await
+    }
+
     pub async fn shutdown_all(&self) {
         let _lifecycle_guard = self.lifecycle.write().await;
         // Do not hold the registry write lock while asking a client to shut
@@ -300,6 +336,28 @@ impl LspRegistry {
         };
         shutdown_clients(clients).await;
     }
+}
+
+fn global_file_parent(path: &Path) -> std::io::Result<PathBuf> {
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "LSP global target must be an absolute file path",
+        ));
+    }
+    let canonical = std::fs::canonicalize(path)?;
+    if !std::fs::metadata(&canonical)?.is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("LSP global target is not a file: {}", path.display()),
+        ));
+    }
+    canonical.parent().map(Path::to_path_buf).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "LSP global target has no parent directory",
+        )
+    })
 }
 
 async fn shutdown_clients(clients: Vec<Arc<LspClient>>) {
@@ -320,5 +378,57 @@ async fn shutdown_clients(clients: Vec<Arc<LspClient>>) {
                 "an LSP shutdown task failed"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn global_file_root_never_falls_back_to_registry_workspace() {
+        let dir = std::env::temp_dir().join(format!("agena-lsp-global-{}", std::process::id()));
+        let selected = dir.join("selected");
+        std::fs::create_dir_all(&selected).unwrap();
+        let file = selected.join("example.rs");
+        std::fs::write(&file, "").unwrap();
+        let registry = LspRegistry::new(dir.join("unrelated-workspace"), "test", "1");
+        let parent = global_file_parent(&file).unwrap();
+        let spec = LspServerSpec {
+            name: "test".into(),
+            command: "test".into(),
+            args: vec![],
+            env: Default::default(),
+            file_extensions: vec![],
+            root_markers: vec!["missing-marker".into()],
+            initialization_options: None,
+        };
+        assert_eq!(spec.resolve_root(&parent, &parent), parent);
+        assert_ne!(spec.resolve_root(&parent, &parent), registry.workspace_root);
+        assert!(
+            registry
+                .client_for_path_global(Path::new("relative.rs"))
+                .await
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("absolute")
+        );
+        assert!(
+            registry
+                .client_for_path_global(&selected)
+                .await
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("not a file")
+        );
+        assert!(
+            registry
+                .client_for_path_global(&selected.join("missing.rs"))
+                .await
+                .is_err()
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

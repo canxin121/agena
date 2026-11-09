@@ -615,6 +615,8 @@ pub struct ToolExecutor {
     pub(super) session_relation_kind: agena_domain::SessionRelationKind,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
+    pub(super) global: bool,
+    pub(super) session_id: Option<i64>,
     pub(super) principal: ExecutionPrincipal,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,

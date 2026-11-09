@@ -1,9 +1,9 @@
+mod assistant;
 mod builder;
 mod callback_server;
 mod host_client;
 mod reload;
 mod snapshot;
-mod superagent;
 
 pub(crate) use builder::AgenaRuntime;
 pub use builder::bootstrap_application_services;

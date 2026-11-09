@@ -102,6 +102,27 @@ pub(crate) fn subscribe(state: &AppState, scope: Scope) -> Result<LiveSubscripti
     subscribe_with_queue_capacity(state, scope, 256)
 }
 
+fn includes_session_change(
+    scope: &Scope,
+    session_id: i64,
+    workspace_id: Option<i64>,
+    include_in_lists: bool,
+) -> bool {
+    match scope {
+        Scope::Session {
+            session_id: requested,
+        } => *requested == session_id,
+        Scope::Workspace {
+            workspace_id: requested,
+        } => include_in_lists && workspace_id == Some(*requested),
+        Scope::Global => include_in_lists && workspace_id.is_some(),
+    }
+}
+
+fn belongs_to_workspace(workspace_id: i64, session_workspace_id: Option<i64>) -> bool {
+    session_workspace_id == Some(workspace_id)
+}
+
 async fn recover_watch(
     watch: &mut KernelWatch,
     replacement: impl FnOnce() -> Result<KernelWatch, KernelError>,
@@ -161,8 +182,7 @@ fn subscribe_with_queue_capacity(
                         continue;
                     }
                     let id=change.session.get();
-                    if matches!(scope,Scope::Workspace{workspace_id} if workspace_id!=change.workspace_id){continue;}
-                    if !change.include_in_lists && !matches!(scope,Scope::Session{..}) {continue;}
+                    if !includes_session_change(&scope,id,change.workspace_id,change.include_in_lists){continue;}
                     let metadata=match kernel.reader.summary(change.session).await {
                         Ok(metadata)=>metadata,
                         Err(agena_storage::kernel::KernelError::NotFound(_))=>{
@@ -170,7 +190,7 @@ fn subscribe_with_queue_capacity(
                             continue;
                         },Err(_)=>{if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}continue;}
                     };
-                    if matches!(scope,Scope::Workspace{workspace_id} if workspace_id!=metadata.workspace_id){continue;}
+                    if !includes_session_change(&scope,id,metadata.workspace_id,change.include_in_lists){continue;}
                     if tx.send(LiveItem::SessionChanged(SessionChangeResource::SessionMetaUpdated {session_id:id,
                         version:metadata.metadata_version.get(),title:metadata.title.clone(),favorite:metadata.favorite,
                         pinned:metadata.pinned,updated_at_ms:metadata.updated_at_ms})).await.is_err(){break;}
@@ -203,7 +223,7 @@ fn subscribe_with_queue_capacity(
                         &&signal.payload.get("kind").and_then(serde_json::Value::as_str)==Some("attention.changed");
                     let allowed=global_attention||match (&scope,signal.session_id) {
                         (Scope::Global,_)=>true,(Scope::Session{session_id},Some(id))=>*session_id==id,
-                        (Scope::Workspace{workspace_id},Some(id))=>match id.try_into(){Ok(id)=>kernel.reader.metadata(id).await.is_ok_and(|m|m.workspace_id==*workspace_id),Err(_)=>false},_=>false};
+                        (Scope::Workspace{workspace_id},Some(id))=>match id.try_into(){Ok(id)=>kernel.reader.metadata(id).await.is_ok_and(|m|belongs_to_workspace(*workspace_id,m.workspace_id)),Err(_)=>false},_=>false};
                     if allowed&&tx.send(LiveItem::RuntimeSignal(signal)).await.is_err(){break;}
                 }
             }

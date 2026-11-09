@@ -53,6 +53,7 @@ impl App {
     /// Opens the session hub as the current route and kicks off the overview
     /// load. Used as the bootstrap landing view and from the hub itself.
     pub(crate) fn open_hub(&mut self) {
+        self.bot.cancel();
         if let Some(task) = self.active_subscription.take() {
             task.abort();
         }
@@ -293,7 +294,7 @@ impl App {
                     .sessions
                     .iter()
                     .filter(|session| ids.contains(&session.id))
-                    .map(|session| self.hub_session_item(session))
+                    .filter_map(|session| self.hub_session_item(session))
                     .collect(),
             ))
         })
@@ -320,10 +321,10 @@ impl App {
                             .sessions
                             .iter()
                             .filter(|session| {
-                                session.workspace_id == workspace.id
+                                session.workspace_id == Some(workspace.id)
                                     && ids.is_some_and(|ids| ids.contains(&session.id))
                             })
-                            .map(|session| self.hub_session_item(session))
+                            .filter_map(|session| self.hub_session_item(session))
                             .collect(),
                     )
                 })
@@ -332,14 +333,14 @@ impl App {
                     .sessions
                     .iter()
                     .filter(|session| {
-                        session.workspace_id == workspace.id
+                        session.workspace_id == Some(workspace.id)
                             && (catalog.pages.is_empty()
                                 || catalog
                                     .members
                                     .get(&HubPageTarget::Directory(workspace.id))
                                     .is_some_and(|ids| ids.contains(&session.id)))
                     })
-                    .map(|session| self.hub_session_item(session))
+                    .filter_map(|session| self.hub_session_item(session))
                     .collect(),
                 expanded: workspace.id == self.application.workspace_id(),
                 visible_limit: page_size,
@@ -471,6 +472,16 @@ impl App {
                 _ => {}
             }
         }
+        if key.modifiers.is_empty() && key.code == KeyCode::Char('l') {
+            self.current_route = Route::Hub(state.clone());
+            self.open_bot_picker();
+            return true;
+        }
+        if resolve_tui_key(KeyContext::Hub, key) == Some(KeyAction::OpenBot) {
+            self.current_route = Route::Hub(state.clone());
+            self.open_bot();
+            return true;
+        }
         if key.modifiers.is_empty() && key.code == KeyCode::Char('/') {
             state.search_active = true;
             return false;
@@ -591,6 +602,28 @@ impl App {
             return;
         };
         if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && agena_tui_session::session_hub::hub_bot_list_hit_test(
+                self.layout.overlay_area,
+                mouse.column,
+                mouse.row,
+            )
+        {
+            self.current_route = Route::Hub(state);
+            self.open_bot_picker();
+            return;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
+            && agena_tui_session::session_hub::hub_bot_hit_test(
+                self.layout.overlay_area,
+                mouse.column,
+                mouse.row,
+            )
+        {
+            self.current_route = Route::Hub(state);
+            self.open_bot();
+            return;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && let Some(view) = agena_tui_session::session_hub::hub_view_hit_test(
                 self.layout.overlay_area,
                 state.error.is_some(),
@@ -650,7 +683,8 @@ impl App {
     /// Builds the display projection of one session row. Detail mirrors the
     /// session-search picker so the hub reads consistently with the rest of
     /// the TUI.
-    pub(crate) fn hub_session_item(&self, session: &SessionResource) -> SessionHubItem {
+    pub(crate) fn hub_session_item(&self, session: &SessionResource) -> Option<SessionHubItem> {
+        let workspace_id = session.workspace_id?;
         let mut detail_parts = vec![
             ui_text::session_state_label(&self.i18n, &session.state),
             ui_text::session_meta(
@@ -675,9 +709,9 @@ impl App {
                 &agena_tui::fl_args!("count" => session.child_session_count as i64),
             ));
         }
-        SessionHubItem {
+        Some(SessionHubItem {
             session_id: session.id,
-            workspace_id: session.workspace_id,
+            workspace_id,
             pinned: session.pinned,
             title: session.title.clone(),
             favorite: session.favorite,
@@ -693,7 +727,7 @@ impl App {
                 .to_string(),
             detail: detail_parts.join(" | "),
             is_new_session: false,
-        }
+        })
     }
 
     /// A project-local create action, available before metadata has loaded.

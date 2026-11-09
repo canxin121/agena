@@ -56,7 +56,6 @@
 |---|---|
 | `tools` | 精确的规范工具 ID，例如 `agena.fs.read`；不接受通配符或别名 |
 | `mcp_tools` | MCP 服务器到具体远端工具名的白名单；不能直接授权通用网关或连接管理 |
-| `background_work` | 是否允许该主体交办并管理其自己的持久工作 |
 | `private_memory` | 是否允许使用该主体隐私范围中的记忆和助手偏好工具 |
 | `source_workspace` | 是否允许工具以明确授权的来源项目为工作目录；默认只用私有范围目录 |
 | `network_hosts` | 精确网络主机/端口允许项；默认外网、私网和回环均拒绝 |
@@ -65,7 +64,7 @@
 
 实例配置、凭据、插件安装、权限管理、任意会话访问、Cron 等管理工具不能直接放进渠道角色允许集。MCP 同样需要二次授权：例如 `"mcp_tools":{"docs":["search"]}` 只允许这个服务器的这个工具；工具发现结果也只包含获准的服务器和工具及其输入结构；同服务器其他工具、其他服务器和 MCP 连接配置管理仍会被拒绝。受范围约束的工作和记忆工具由能力开关推导，不让外部用户自行填写一个管理工具名绕过限制。
 
-子代理、会话分叉和后台 Worker 继承不可改写的渠道权限身份。工具准备之前、审批检查时及真正执行之前都会重新检查权限；发生撤权后，旧审批或缓存工具列表不能继续授权执行。成员不能拿到别人的 Task ID 后取消或续办别人的工作，结果仍回到原成员的原线程。
+子代理和会话分叉 继承不可改写的渠道权限身份。工具准备之前、审批检查时及真正执行之前都会重新检查权限；发生撤权后，旧审批或缓存工具列表不能继续授权执行。成员只能继续自己有权访问的会话；原生执行和结果保持所属成员与线程，不能通过其他会话的 ID 获得权限。
 
 旧策略若把 `agena.mcp.tools.call`、连接管理或其他原始 MCP 入口直接写入 `tools`，不会被自动解释为新授权；该能力范围会校验失败，需要实例操作者改为明确的 `mcp_tools` 后重新确认。
 
@@ -83,7 +82,7 @@ MCP 的本层授权限定服务器和工具名，不替远端工具推断每个�
 
 ## 自动报告使用独立服务主体
 
-GitHub 自动任务的报告不借用 Owner 或某个普通成员的私有会话。需要在渠道策略中开启 `allow_automated_reports`，由单独的 `@service` 会话接收系统报告。
+GitHub 自动执行的报告不借用 Owner 或某个普通成员的私有会话。需要在渠道策略中开启 `allow_automated_reports`，由单独的 `@service` 会话接收系统报告。
 
 `service_grant` 明确控制这个服务主体可以做什么；它不能读取人的私有记忆。自动工作结果可以发布到你授权的渠道目标，但这不自动扩大任何成员的权限，也不能从通知文本里推导出新的授权。
 
@@ -120,7 +119,7 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
 
 适配器应把平台已验证的移除/退群事件标准化为 `membership.revoked`，使用与消息相同的签名通道，设置 `actor_verified: true`、`is_member: false`。这个事件只能减少权限，不能凭平台元数据新增角色或提升权限。
 
-宿主先处理同批次中的撤权，再处理普通消息。成员角色改为 Blocked，授权代次增加，变更写入审计；旧会话、执行中的模型、子代理、后台任务和待发送结果失效。平台重复推送使用同一事件身份，不会重复消耗预算或恢复被撤销权限。移除最后一位有效 Owner 时，连接进入需实例操作者处理的故障状态。
+宿主先处理同批次中的撤权，再处理普通消息。成员角色改为 Blocked，授权代次增加，变更写入审计；旧会话、执行中的模型、子代理、会话执行和待发送结果失效。平台重复推送使用同一事件身份，不会重复消耗预算或恢复被撤销权限。移除最后一位有效 Owner 时，连接进入需实例操作者处理的故障状态。
 
 成员到期不依赖下一条消息：后台检查会取消过期主体的活动执行，新输入和待发送结果也重新检查成员状态。失效后的旧政策回执重试不会重建权限，也不能误停后续新授权会话。
 
@@ -147,7 +146,6 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
     "operator": {
       "tools": ["agena.fs.read"],
       "mcp_tools": {},
-      "background_work": true,
       "private_memory": false,
       "source_workspace": true,
       "network_hosts": []
@@ -156,7 +154,7 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
   "per_user_daily_limit": 50,
   "allow_automated_reports": false,
   "service_grant": {
-    "tools": [], "mcp_tools": {}, "background_work": false, "private_memory": false,
+    "tools": [], "mcp_tools": {}, "private_memory": false,
     "source_workspace": false, "network_hosts": []
   }
 }
@@ -185,9 +183,9 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
 | 层次 | 位置 |
 |---|---|
 | 身份、场景、角色与能力策略 | `crates/agena-domain/src/channel_access.rs` |
-| 入站检查、不可变权限身份和出站范围 | `crates/agena-superagent/src/channel_access.rs` |
+| 入站检查、不可变权限身份和出站范围 | `crates/agena-assistant/src/channel_access.rs` |
 | 事务策略修改、审计、额度、平台撤权 | `crates/agena-storage-sqlite/src/integration_repository/channel_access.rs` |
-| 私有会话、实时授权验证、确定性管理命令 | `crates/agena-runtime/src/runtime/superagent/channel_access.rs` |
+| 私有会话、实时授权验证、确定性管理命令 | `crates/agena-runtime/src/runtime/assistant/channel_access.rs` |
 | 工具能力与多个权限上限取交集 | `agena-runtime-tools` 和 `agena-runtime-contracts` |
 | Web 权限表单 | `packages/agena-web/src/features/integrations/ChannelAccessPanel.vue` |
 | TUI 权限编辑器 | `crates/agena-tui-app/src/app_integrations.rs` |
@@ -203,34 +201,3 @@ python3 examples/integration-plugins/test_adapters.py -v
 ```
 
 系统用例使用真实 Agena、独立 stdio 适配插件、签名 Webhook、SQLite 和本地回复网关。模型为脚本化测试提供方，用于稳定触发越权调用等路径；权限判定由宿主执行，不依赖模型自觉拒绝。
-
-
-## 本轮实际验证记录
-
-| 验证范围 | 实际结果 |
-|---|---|
-| 多用户真实安全场景 | 最终 10 项通过：跨人/线程/群私聊隔离、角色越权拒绝、共享上下文无工具、私有记忆、到期和平台退群撤权、跨用户任务隔离、旧回执与旧审批防绕过、精确 MCP 发现/调用范围 |
-| 渠道授权持久化专项 | 最终 10 项通过：事务更新与审计、幂等、按人额度、旧渠道拒绝、不可改写会话身份、平台退群、最后 Owner 离开、管理命令不受模型额度阻塞、过期授权回执 |
-| 真实 Web/TUI 权限管理 | 最终 2 项通过：真实保存与审计、无效策略可纠正、旧版本冲突、MCP 服务器/工具白名单、手机布局与终端缩放 |
-| 最终 MCP 加固相关库 | 4 个库共 81 项通过 |
-| 最终原有 MCP 协议与连接管理复验 | 7 项通过，含授权读取、敏感配置保留、拒绝写入、真实 HTTP/stdio 工具调用 |
-| Web 全量行为测试 | 最终 321 项通过，0 失败 |
-| Web 生产构建、类型与语言检查 | 通过 |
-| 签名渠道和事件源参考插件 | 8 项通过，包括已验证的负成员关系事件 |
-| 本轮全量产品回归 | 125 项通过，10 项需系统依赖的界面场景另行实际执行 |
-| 本轮完整真实界面回归 | 10 项通过，覆盖 Task、自然工作、助手、接入管理及渠道权限 |
-| 本轮原生库/存储回归 | 11 个库共 519 项通过；SQLite 测试共 89 项通过，均仅有 1 项原有默认忽略用例 |
-| 严格 Clippy、Rust 格式和差异检查 | 通过，Clippy 使用 `-D warnings` |
-
-上述完整产品/界面回归发生在最后的 MCP 服务器/工具细化之前；最后的细化再次运行了相关库、全部渠道权限场景、真实权限界面、Web 构建和 MCP 专项，按各自日志记录结果，不将不同测试集重复相加为独立覆盖率。
-
-本轮额外修正了三类跨阶段问题：平台退群原先只声明了处理函数，现已在 Inbox 事务中优先处理；旧策略成功回执重试不会误停更新授权后的新会话；子代理保留更严格的父级权限上限。权限拒绝提前到工具前置 Hook 之前，MCP 发现和调用均检查具体服务器/工具组合。
-
-终端缩放验收曾匹配到旧宽屏画面，探针已改为等待实际 48 列新帧，连续三次通过后再次通过最终两端验收。生成类型和外部插件清单均与当前 SDK 输出一致。
-
-可追溯日志在开发主机 `/tmp/agena-channel-final/`；最后的 MCP 加固复验位于其 `mcp-hardening/` 子目录，`validation-summary.json` 汇总各轮次和重叠关系。`channel-ui.log`/`ui-all.log` 记录真实浏览器截图与终端文本目录。早期失败日志保留，不能替代最终复验结果。
-
-没有提交或推送 Git，没有重启现有用户服务，也没有迁移真实会话数据库。新构建启用后，旧渠道必须补齐并确认 `channel_policy`；不把过去的发送者允许名单自动升级成多用户管理权限。
-
-
-最终 MCP 加固的六个验证阶段已全部以退出码 0 完成，记录在 `/tmp/agena-channel-final/mcp-hardening/results.json`。该轮真实测试确认：获准成员只能发现指定服务器的指定工具；合法调用实际到达远端，其他服务器或工具在调用传输前被拒绝；父会话网络限制继续独立生效。Web 权限表单已实际保存并核对 `mcp_tools`，不是仅添加了一个未接线字段。

@@ -18,6 +18,9 @@ impl ToolExecutor {
     /// Root documents enter each model turn; file reads additionally surface
     /// relevant nested guidance before the model edits those files.
     pub fn project_instruction_section(&self, targets: &[PathBuf]) -> String {
+        if self.is_global() {
+            return String::new();
+        }
         let Ok(root) = self.workspace_root().canonicalize() else {
             return String::new();
         };

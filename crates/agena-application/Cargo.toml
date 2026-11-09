@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Agena product use cases and application-facing runtime handle"
 
 [dependencies]
-agena-superagent = { workspace = true }
+agena-assistant = { workspace = true }
 agena-mcp-client = { workspace = true }
 url.workspace = true
 agena-skills = { workspace = true }

@@ -113,7 +113,8 @@ async fn related_sessions_project_their_own_tool_and_interaction_workflow() {
         .metadata(root)
         .await
         .unwrap()
-        .workspace_id;
+        .workspace_id
+        .expect("project fixture workspace");
     let mut sessions = vec![root];
     let mut parent = root;
     for _ in 0..2 {

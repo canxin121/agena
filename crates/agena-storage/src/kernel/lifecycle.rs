@@ -101,6 +101,57 @@ pub struct SessionConfigurationChange {
     pub effective_workspace_root: Option<Option<PathBuf>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
 }
+/// Retained isolation facts for a live target and its bounded native ancestry.
+/// Soft deletion of an ordinary parent does not strand a surviving fork, and
+/// deleting a private parent never erases its inherited scope restrictions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ManagementAncestor {
+    pub session: SessionId,
+    pub workspace_id: Option<i64>,
+    pub effective_workspace_root: Option<PathBuf>,
+    pub excluded_scope: bool,
+}
+/// Native Bot fork fence. Captured once and persisted with the operation intent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkGuard {
+    pub metadata_version: i64,
+    pub entry_count: u64,
+    pub title: Option<String>,
+}
+/// Exact confirmed target and direct human turn. All checks run in the same
+/// writer transaction as soft deletion; no queue is cancelled by this path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteGuard {
+    pub metadata_version: i64,
+    pub control_version: i64,
+    pub entry_count: u64,
+    pub source_session: SessionId,
+    pub source_message: EntryId,
+    pub source_revision: EntryRevision,
+}
+/// Versions observed before an exact registry session is detached from its project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachGlobalGuard {
+    pub metadata_version: i64,
+    pub control_version: i64,
+}
+impl DetachGlobalGuard {
+    /// Trusted registry ID whose ordinary metadata is unavailable after deletion.
+    /// The writer accepts this guard only while the root is still a tombstone.
+    pub fn tombstone() -> Self {
+        Self {
+            metadata_version: 0,
+            control_version: 0,
+        }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DetachGlobalResult {
+    pub root: SessionId,
+    pub affected_sessions: u64,
+    pub changed_sessions: u64,
+    pub changed_reminders: u64,
+}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RewindResult {
     pub session: SessionMetadata,
@@ -133,6 +184,9 @@ pub enum CompactionPolicyOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SummaryQuery {
     pub workspace_id: Option<i64>,
+    /// Include global sessions when no particular workspace is selected.
+    #[serde(default)]
+    pub include_global: bool,
     pub parent_id: Option<SessionId>,
     pub roots_only: bool,
     pub exclude_subagents: bool,
@@ -199,6 +253,45 @@ pub enum StopDecision {
 }
 
 impl SessionCommands {
+    pub async fn create_global(
+        &self,
+        request: RequestId,
+        title: String,
+        configuration: SessionConfiguration,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::CreateGlobal {
+                        title,
+                        configuration,
+                    },
+                )
+                .await?,
+        )
+    }
+
+    pub async fn detach_global(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        guard: DetachGlobalGuard,
+    ) -> Result<CommitReceipt<DetachGlobalResult>> {
+        let receipt = self
+            .0
+            .command(request, Command::DetachGlobal { session, guard })
+            .await?;
+        match receipt.value {
+            Mutation::DetachedGlobal(value) => Ok(CommitReceipt {
+                position: receipt.position,
+                value,
+            }),
+            _ => Err(KernelError::Storage(
+                "incompatible global detach result".into(),
+            )),
+        }
+    }
     pub async fn present_interaction(
         &self,
         request: RequestId,
@@ -305,6 +398,49 @@ impl SessionCommands {
                         through,
                         rewind: false,
                         conversation_mode: None,
+                        management: None,
+                    },
+                )
+                .await?,
+        )
+    }
+    /// Ordinary fork with a stable observed source boundary and atomic title.
+    pub async fn fork_checked(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        through: EntryId,
+        guard: ForkGuard,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::Fork {
+                        session,
+                        through,
+                        rewind: false,
+                        conversation_mode: None,
+                        management: Some(guard),
+                    },
+                )
+                .await?,
+        )
+    }
+    /// Soft-delete only an idle, unchanged, human-confirmed target.
+    pub async fn delete_checked(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        guard: DeleteGuard,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::DeleteSession {
+                        session,
+                        guard: Some(guard),
                     },
                 )
                 .await?,
@@ -328,6 +464,7 @@ impl SessionCommands {
                         through,
                         rewind: false,
                         conversation_mode: Some(mode),
+                        management: None,
                     },
                 )
                 .await?,
@@ -350,6 +487,7 @@ impl SessionCommands {
                     through: message,
                     rewind: true,
                     conversation_mode: None,
+                    management: None,
                 },
             )
             .await?;
@@ -380,7 +518,13 @@ impl SessionCommands {
     ) -> Result<CommitReceipt<SessionMetadata>> {
         session_receipt(
             self.0
-                .command(request, Command::DeleteSession { session })
+                .command(
+                    request,
+                    Command::DeleteSession {
+                        session,
+                        guard: None,
+                    },
+                )
                 .await?,
         )
     }
@@ -424,6 +568,13 @@ fn session_receipt(r: CommitReceipt<Mutation>) -> Result<CommitReceipt<SessionMe
     }
 }
 impl KernelReader {
+    /// Target must be live; ancestors retain their policy after soft deletion.
+    pub async fn management_ancestry(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Vec<ManagementAncestor>>> {
+        self.0.backend.management_ancestry(session).await
+    }
     pub async fn prompt_window_status(
         &self,
         session: SessionId,
@@ -559,7 +710,15 @@ impl ExecutorCommands {
         payload: serde_json::Value,
         text: String,
     ) -> Result<CommitReceipt<ExecutionView>> {
-        if payload.get("kind").and_then(serde_json::Value::as_str) != Some("conversation_work") {
+        if !matches!(
+            payload.get("kind").and_then(serde_json::Value::as_str),
+            Some(
+                "assistant_notice"
+                    | "integration_notice"
+                    | "integration_instruction"
+                    | "bot_instruction"
+            )
+        ) {
             return Err(KernelError::Invalid(
                 "control notice requires a typed system payload".into(),
             ));
@@ -580,30 +739,6 @@ impl ExecutorCommands {
         )
     }
 
-    pub async fn deliver_and_resume(
-        &self,
-        request: RequestId,
-        session: SessionId,
-        business_key: String,
-        payload: serde_json::Value,
-        message: EntryId,
-        text: String,
-    ) -> Result<CommitReceipt<ExecutionView>> {
-        execution_receipt(
-            self.0
-                .command(
-                    request,
-                    Command::DeliverAndResume {
-                        session,
-                        business_key,
-                        payload,
-                        message: Some(message),
-                        text,
-                    },
-                )
-                .await?,
-        )
-    }
     /// Guidance belongs to this execution. Admission and the terminal fence
     /// are checked in the same transaction as durable publication.
     pub async fn deliver_to_execution(

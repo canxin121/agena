@@ -178,7 +178,7 @@ pub(super) async fn charge_channel_user(
 
 /// Process authenticated loss-of-membership before ordinary inbox admission.
 /// This path can only remove authority, never infer a new role from platform
-/// metadata. It is not charged against chat or task quotas.
+/// metadata. It is not charged against chat or execution quotas.
 pub(super) async fn ingest_platform_revocations(
     db: &impl ConnectionTrait,
     b: &mut IntegrationBinding,
@@ -278,7 +278,8 @@ pub(super) async fn ingest_platform_revocations(
             event: event.clone(),
             state: if valid { "handled" } else { "ignored" }.into(),
             received_at_ms: now,
-            task_id: None,
+            session_id: None,
+            execution_generation: None,
             execution_id: None,
             note: Some(note),
         };

@@ -45,7 +45,7 @@ impl LspServerSpec {
     }
 
     /// Walk `start_dir` upward looking for any of `root_markers`. Falls
-    /// back to `workspace_root` when nothing matches.
+    /// back to the supplied directory when nothing matches.
     pub fn resolve_root(
         &self,
         start_dir: &std::path::Path,
@@ -64,5 +64,33 @@ impl LspServerSpec {
             current = dir.parent().map(std::path::Path::to_path_buf);
         }
         workspace_root.to_path_buf()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_root_uses_explicit_fallback_and_finds_markers() {
+        let dir = std::env::temp_dir().join(format!("agena-lsp-root-{}", std::process::id()));
+        let nested = dir.join("project/src");
+        std::fs::create_dir_all(&nested).unwrap();
+        let fallback = dir.join("explicit-fallback");
+        let mut spec = LspServerSpec {
+            name: "test".into(),
+            command: "test".into(),
+            args: vec![],
+            env: Default::default(),
+            file_extensions: vec![],
+            root_markers: vec!["marker".into()],
+            initialization_options: None,
+        };
+        assert_eq!(spec.resolve_root(&nested, &fallback), fallback);
+        std::fs::write(dir.join("project/marker"), "").unwrap();
+        assert_eq!(spec.resolve_root(&nested, &fallback), dir.join("project"));
+        spec.root_markers.clear();
+        assert_eq!(spec.resolve_root(&nested, &fallback), fallback);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

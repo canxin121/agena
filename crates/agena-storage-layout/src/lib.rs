@@ -99,6 +99,18 @@ impl StorageLayout {
             .join("memory")
             .join(workspace_key(workspace))
     }
+    /// Private session assets are storage, never an execution working directory.
+    pub fn session_assets_dir(&self, session_id: i64) -> PathBuf {
+        self.root
+            .join("session-assets")
+            .join(session_id.to_string())
+    }
+    pub fn session_uploads_dir(&self, session_id: i64) -> PathBuf {
+        self.session_assets_dir(session_id).join("uploads")
+    }
+    pub fn session_artifacts_dir(&self, session_id: i64) -> PathBuf {
+        self.session_assets_dir(session_id).join("artifacts")
+    }
     pub fn uploads_dir(&self, workspace: &Path) -> PathBuf {
         self.workspace_dir(workspace).join("uploads")
     }

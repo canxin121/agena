@@ -1,5 +1,4 @@
-//! Trusted runtime entrypoints for durable business-task workers. They are not
-//! plugin callbacks and do not weaken the subagent role or its spawn limits.
+//! Trusted assistant notices, channel sessions and direct-user authority checks.
 use super::*;
 
 impl SessionManager {
@@ -43,7 +42,7 @@ impl SessionManager {
         key: &str,
         text: &str,
     ) -> Result<bool, AppError> {
-        self.deliver_isolated_notice(id, Some(origin), key, text)
+        self.deliver_isolated_notice(id, "assistant_notice", Some(origin), key, text)
             .await
     }
 
@@ -53,12 +52,14 @@ impl SessionManager {
         key: &str,
         text: &str,
     ) -> Result<bool, AppError> {
-        self.deliver_isolated_notice(id, None, key, text).await
+        self.deliver_isolated_notice(id, "integration_notice", None, key, text)
+            .await
     }
 
     async fn deliver_isolated_notice(
         &self,
         id: i64,
+        kind: &str,
         origin: Option<i64>,
         key: &str,
         text: &str,
@@ -71,6 +72,7 @@ impl SessionManager {
         let Ok(_submission) = dispatch.submission.try_lock() else {
             return Ok(false);
         };
+        self.require_writable_bot_history(id).await?;
         let Ok(_execution) = dispatch.execution.try_lock() else {
             return Ok(false);
         };
@@ -95,8 +97,12 @@ impl SessionManager {
         {
             return Ok(false);
         }
-        let options =
-            self.options_for_selection(&snapshot.metadata.selection.clone().unwrap_or_default())?;
+        let options = self
+            .options_for_session(
+                source,
+                &snapshot.metadata.selection.clone().unwrap_or_default(),
+            )
+            .await?;
         let origin = origin
             .map(EntryId::try_from)
             .transpose()
@@ -105,37 +111,20 @@ impl SessionManager {
             Ok(p) => p,
             Err(_) => return Ok(false),
         };
-        let payload = serde_json::json!({"kind":"conversation_work","message_id":origin.map(EntryId::get),"work_id":key,"text":text});
+        let payload = serde_json::json!({"kind":kind,"origin_message_id":origin.map(EntryId::get),"notice_id":key,"text":text});
         let notice = super::deliveries::delivery_text(&payload)?;
         let command = request_key("companion-contact", key);
         let execution = persist(|| async {
-            match origin {
-                Some(origin) => {
-                    self.kernel()
-                        .executor
-                        .deliver_and_resume(
-                            command,
-                            source,
-                            key.to_owned(),
-                            payload.clone(),
-                            origin,
-                            notice.clone(),
-                        )
-                        .await
-                }
-                None => {
-                    self.kernel()
-                        .executor
-                        .deliver_control_notice(
-                            command,
-                            source,
-                            key.to_owned(),
-                            payload.clone(),
-                            notice.clone(),
-                        )
-                        .await
-                }
-            }
+            self.kernel()
+                .executor
+                .deliver_control_notice(
+                    command,
+                    source,
+                    key.to_owned(),
+                    payload.clone(),
+                    notice.clone(),
+                )
+                .await
         })
         .await
         .map_err(kernel_error)?
@@ -144,14 +133,14 @@ impl SessionManager {
             execution.phase,
             ExecutionPhase::Queued | ExecutionPhase::Running
         ) {
-            self.supervise(execution, options, false, permit);
+            self.supervise(execution, options, false, permit).await?;
         }
         Ok(true)
     }
     /// Returns the actual direct user-message identity behind a live model
     /// tool call. A background notification/control execution cannot reuse an
     /// old user's words as fresh authority.
-    pub async fn require_conversation_work_user(
+    pub async fn require_current_user_quote(
         &self,
         id: i64,
         call: i64,
@@ -159,7 +148,7 @@ impl SessionManager {
     ) -> Result<i64, AppError> {
         if id <= 0 || quote.trim().is_empty() || quote.len() > 4096 {
             return Err(AppError::Config(
-                "work requires a quotation from the current direct user message".into(),
+                "operation requires a quotation from the current direct user message".into(),
             ));
         }
         let (_, control) = self.live_tool(id, call)?;
@@ -171,7 +160,8 @@ impl SessionManager {
             .map_err(kernel_error)?;
         if view.purpose != ExecutionPurpose::Message {
             return Err(AppError::Config(
-                "automatic work reports and control continuations cannot authorize new work".into(),
+                "automatic notices and control continuations cannot authorize user operations"
+                    .into(),
             ));
         }
         let entry = self
@@ -182,7 +172,7 @@ impl SessionManager {
             .map_err(kernel_error)?;
         let EntryPayload::User { document } = &entry.payload else {
             return Err(AppError::Config(
-                "work requires a real user input, not a tool result or notification".into(),
+                "operation requires a real user input, not a tool result or notification".into(),
             ));
         };
         let text = document
@@ -200,178 +190,6 @@ impl SessionManager {
             ));
         }
         Ok(view.message_id.get())
-    }
-
-    /// Reliable, typed business notice. It wakes an idle conversation, or is
-    /// consumed at the next model boundary without interrupting an active turn.
-    pub async fn deliver_conversation_work(
-        &self,
-        id: i64,
-        origin: i64,
-        key: &str,
-        text: &str,
-    ) -> Result<bool, AppError> {
-        let source = session_id(id)?;
-        let payload = serde_json::json!({"kind":"conversation_work","message_id":origin,"work_id":key,"text":text});
-        if serde_json::to_vec(&payload)?.len() > 64 * 1024 {
-            return Err(AppError::Config(
-                "work notice exceeds its byte budget".into(),
-            ));
-        }
-        // Stable command and business identities avoid accumulating a new
-        // command receipt on every busy-session poll. Read current state below.
-        let request = request_key("conversation-work-notice", key);
-        let receipt = persist(|| {
-            self.kernel()
-                .executor
-                .deliver(request, source, key.to_owned(), payload.clone())
-        })
-        .await
-        .map_err(kernel_error)?;
-        let current = self
-            .kernel()
-            .reader
-            .delivery(source, receipt.value.id)
-            .await
-            .map_err(kernel_error)?;
-        if current.consumed {
-            return Ok(true);
-        }
-        if self.shutdown.is_cancelled() {
-            return Ok(false);
-        }
-        let dispatch = self.session_dispatch(source);
-        let Ok(_submission) = dispatch.submission.try_lock() else {
-            return Ok(false);
-        };
-        let Ok(_execution) = dispatch.execution.try_lock() else {
-            return Ok(false);
-        };
-        if self
-            .active
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .values()
-            .any(|run| run.session == source)
-        {
-            return Ok(false);
-        }
-        let snapshot = self
-            .kernel()
-            .reader
-            .control_snapshot(source, 32)
-            .await
-            .map_err(kernel_error)?;
-        if snapshot.configuration.message_queue_paused
-            || !snapshot.active_executions.executions.is_empty()
-            || !snapshot.pending_interactions.interactions.is_empty()
-        {
-            return Ok(false);
-        }
-        let options =
-            self.options_for_selection(&snapshot.metadata.selection.clone().unwrap_or_default())?;
-        let origin =
-            EntryId::try_from(origin).map_err(|error| AppError::Config(error.to_string()))?;
-        let permit = match self.reserve_execution() {
-            Ok(permit) => permit,
-            Err(_) => return Ok(false),
-        };
-        let command = request_key("resume-delivery", &receipt.value.id.to_string());
-        let notice = super::deliveries::delivery_text(&payload)?;
-        let execution = persist(|| {
-            self.kernel().executor.resume_delivery(
-                command,
-                source,
-                receipt.value.id,
-                origin,
-                notice.clone(),
-            )
-        })
-        .await
-        .map_err(kernel_error)?
-        .value;
-        if matches!(
-            execution.phase,
-            ExecutionPhase::Queued | ExecutionPhase::Running
-        ) {
-            self.supervise(execution, options, false, permit);
-        }
-        Ok(true)
-    }
-
-    pub async fn conversation_work_result(
-        &self,
-        id: i64,
-        execution: &str,
-    ) -> Result<Option<String>, AppError> {
-        let execution = execution
-            .parse()
-            .map_err(|error| AppError::Config(format!("invalid work execution: {error}")))?;
-        self.final_text_for(session_id(id)?, Some(execution), 16 * 1024)
-            .await
-    }
-
-    pub async fn conversation_work_questions(
-        &self,
-        id: i64,
-    ) -> Result<Vec<InteractionView>, AppError> {
-        Ok(self
-            .kernel()
-            .reader
-            .control_snapshot(session_id(id)?, 32)
-            .await
-            .map_err(kernel_error)?
-            .pending_interactions
-            .interactions
-            .clone())
-    }
-
-    /// Only an ordinary user question can be answered through the assistant.
-    /// Permissions and approval/review decisions stay with native user UI.
-    pub async fn answer_conversation_work(
-        &self,
-        id: i64,
-        key: &str,
-        reply: agena_domain::UserInputReply,
-    ) -> Result<(), AppError> {
-        let session = session_id(id)?;
-        let interaction = InteractionId::try_from(
-            reply
-                .request_id
-                .parse::<i64>()
-                .map_err(|e| AppError::Config(e.to_string()))?,
-        )
-        .map_err(|e| AppError::Config(e.to_string()))?;
-        let view = self
-            .kernel()
-            .reader
-            .interaction(session, interaction)
-            .await
-            .map_err(kernel_error)?;
-        let InteractionRequest::Input { request } = &view.request else {
-            return Err(AppError::Config(
-                "permission decisions must be made by the user in the native approval card".into(),
-            ));
-        };
-        if request.kind != agena_domain::UserInputKind::AskUser {
-            return Err(AppError::Config(
-                "review/approval decisions require the native user confirmation".into(),
-            ));
-        }
-        super::commands::validate_answers(request, &reply)?;
-        let decision = InteractionDecision::Input(serde_json::to_string(&reply)?);
-        self.kernel()
-            .sessions
-            .reply(
-                request_key("conversation-work-answer", key),
-                session,
-                interaction,
-                decision,
-                None,
-            )
-            .await
-            .map_err(kernel_error)?;
-        Ok(())
     }
 
     /// Idempotent root for one authenticated channel principal. It has a
@@ -416,9 +234,7 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
         let mut denied = source.execution.capability_denied_tool_names.clone();
-        for name in ["integrations.manage", "work.connections"] {
-            denied.insert(name.into());
-        }
+        denied.insert("bot.connections".into());
         let root = if authority.grant.source_workspace {
             self.session_workspace_root(source_id).await?
         } else {
@@ -459,74 +275,6 @@ impl SessionManager {
         Ok(session.get())
     }
 
-    pub async fn ensure_task_worker(
-        &self,
-        source_id: i64,
-        task_key: &str,
-    ) -> Result<i64, AppError> {
-        self.verify_channel_session(source_id).await?;
-        let source = self.get_session(source_id).await?;
-        if source
-            .execution
-            .channel_authority
-            .as_ref()
-            .is_some_and(|a| !a.grant.background_work)
-        {
-            return Err(AppError::Config(
-                "channel role cannot delegate background work".into(),
-            ));
-        }
-        if source.is_subagent() {
-            return Err(AppError::Config(
-                "subagents cannot create durable task workers".into(),
-            ));
-        }
-        let original = self
-            .kernel()
-            .reader
-            .configuration(session_id(source_id)?)
-            .await
-            .map_err(kernel_error)?;
-        let ceiling = if original.permission_ceiling.is_empty() {
-            source.execution.effective_permission.clone()
-        } else {
-            original.permission_ceiling.clone()
-        };
-        let mut denied = source.execution.capability_denied_tool_names.clone();
-        if !denied.iter().any(|name| name == "work.manage") {
-            denied.insert("work.manage".into());
-        }
-        denied.insert("companion.manage".into());
-        denied.insert("integrations.manage".into());
-        denied.insert("work.connections".into());
-        let configuration = SessionConfiguration {
-            prompts: original.prompts.clone(),
-            permission: source.execution.effective_permission.clone(),
-            permission_ceiling: ceiling,
-            channel_authority: source.execution.channel_authority.clone(),
-            capability_denied_tool_names: denied,
-            effective_workspace_root: Some(self.session_workspace_root(source_id).await?),
-            ..Default::default()
-        };
-        let command = request_key("superagent-worker", task_key);
-        let worker = persist(|| {
-            self.kernel().sessions.create_configured(
-                command,
-                source.workspace_id,
-                format!("Task {task_key}"),
-                configuration.clone(),
-            )
-        })
-        .await
-        .map_err(kernel_error)?
-        .value
-        .id;
-        // Model selection is resolved through the ordinary provider factory.
-        let options = self.options_for_selection(&source.execution.selection)?;
-        self.update_session_selection(worker.get(), options).await?;
-        Ok(worker.get())
-    }
-
     /// Submit through the ordinary hooks, permissions, kernel and supervisor.
     /// The stable delivery key protects a lost submit acknowledgement.
     pub async fn submit_managed_message(
@@ -541,8 +289,12 @@ impl SessionManager {
             .metadata(session_id(id)?)
             .await
             .map_err(kernel_error)?;
-        let options =
-            self.options_for_selection(&metadata.selection.clone().unwrap_or_default())?;
+        let options = self
+            .options_for_session(
+                session_id(id)?,
+                &metadata.selection.clone().unwrap_or_default(),
+            )
+            .await?;
         self.submit(
             crate::SessionUserRunRequest::new(
                 id,

@@ -23,7 +23,6 @@ mod model_catalog_repository;
 mod permission_rule_repository;
 mod schema;
 mod server_state_repository;
-mod superagent_repository;
 mod transaction;
 mod workspace_repository;
 
@@ -37,7 +36,6 @@ pub use permission_rule_repository::{
     SeaPermissionRuleRepository, SeaPermissionRuleTransactionWriter,
 };
 pub use server_state_repository::ServerStateRepository;
-pub use superagent_repository::SqliteTaskRepository;
 pub use transaction::{
     acquire_write_lock, acquire_write_permit, is_sqlite_busy, is_write_admission_busy,
     run_transaction_app_effects, run_transaction_effects,

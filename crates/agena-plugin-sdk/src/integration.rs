@@ -1,6 +1,6 @@
 //! Versioned channel/source ABI over the EXISTING plugin service transport.
 //! In-process, cdylib, stdio and HTTP providers use the same three methods.
-pub use agena_superagent::{
+pub use agena_assistant::{
     AdapterBatch, AdapterDescribeRequest, AdapterDescription, AdapterKind, AdapterPollRequest,
     ChannelDelivery, ChannelEnvelope, ChannelIdentity, ChannelKind, ChannelReceipt, ExternalEvent,
     INTEGRATION_API_VERSION, INTEGRATION_SERVICE, SendDisposition,

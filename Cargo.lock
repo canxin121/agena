@@ -202,6 +202,7 @@ dependencies = [
 name = "agena-api"
 version = "0.1.0"
 dependencies = [
+ "agena-assistant",
  "agena-domain",
  "agena-failure",
  "agena-notification",
@@ -209,7 +210,6 @@ dependencies = [
  "agena-prompt-layers",
  "agena-provider",
  "agena-skills",
- "agena-superagent",
  "chrono",
  "schemars",
  "serde",
@@ -225,6 +225,7 @@ version = "0.1.0"
 dependencies = [
  "agena-api",
  "agena-application",
+ "agena-assistant",
  "agena-async",
  "agena-domain",
  "agena-failure",
@@ -235,7 +236,6 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-notifications",
  "agena-storage",
- "agena-superagent",
  "async-stream",
  "async-trait",
  "axum",
@@ -262,6 +262,7 @@ name = "agena-application"
 version = "0.1.0"
 dependencies = [
  "agena-api",
+ "agena-assistant",
  "agena-async",
  "agena-domain",
  "agena-failure",
@@ -280,7 +281,6 @@ dependencies = [
  "agena-storage",
  "agena-storage-layout",
  "agena-storage-sqlite",
- "agena-superagent",
  "agena-tool",
  "agena-tool-api",
  "anyhow",
@@ -296,6 +296,21 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "agena-assistant"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "async-trait",
+ "chrono",
+ "chrono-tz",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
  "uuid",
 ]
 
@@ -724,13 +739,13 @@ name = "agena-plugin-sdk"
 version = "0.1.0"
 dependencies = [
  "abi_stable",
+ "agena-assistant",
  "agena-async",
  "agena-domain",
  "agena-failure",
  "agena-macros",
  "agena-plugin-contracts",
  "agena-stdio-codec",
- "agena-superagent",
  "async-trait",
  "axum",
  "bitflags 2.13.1",
@@ -865,6 +880,7 @@ dependencies = [
 name = "agena-runtime"
 version = "0.1.0"
 dependencies = [
+ "agena-assistant",
  "agena-async",
  "agena-bundled-plugins",
  "agena-domain",
@@ -885,7 +901,6 @@ dependencies = [
  "agena-storage",
  "agena-storage-layout",
  "agena-storage-sqlite",
- "agena-superagent",
  "agena-tool",
  "agena-tool-api",
  "arc-swap",
@@ -898,7 +913,6 @@ dependencies = [
  "html-escape",
  "http 1.5.0",
  "infer",
- "log",
  "parking_lot",
  "regex",
  "reqwest 0.13.4",
@@ -999,7 +1013,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1073,6 +1086,7 @@ dependencies = [
 name = "agena-runtime-session"
 version = "0.1.0"
 dependencies = [
+ "agena-assistant",
  "agena-async",
  "agena-domain",
  "agena-failure",
@@ -1085,18 +1099,19 @@ dependencies = [
  "agena-runtime-contracts",
  "agena-runtime-plugins",
  "agena-runtime-provider",
+ "agena-runtime-provider-adapters",
  "agena-runtime-session-core",
  "agena-runtime-tools",
  "agena-scheduler",
  "agena-storage",
  "agena-storage-layout",
  "agena-storage-sqlite",
- "agena-superagent",
  "agena-tool",
  "agena-tool-api",
  "arc-swap",
  "async-trait",
  "base64 0.22.1",
+ "caseless",
  "chrono",
  "futures-util",
  "hex",
@@ -1137,7 +1152,6 @@ dependencies = [
  "agena-plugin-host",
  "agena-plugin-sdk",
  "agena-process",
- "agena-provider",
  "agena-runtime-contracts",
  "agena-scheduler",
  "agena-storage",
@@ -1284,6 +1298,7 @@ dependencies = [
 name = "agena-storage-sqlite"
 version = "0.1.0"
 dependencies = [
+ "agena-assistant",
  "agena-async",
  "agena-domain",
  "agena-failure",
@@ -1292,7 +1307,6 @@ dependencies = [
  "agena-scheduler",
  "agena-storage",
  "agena-storage-layout",
- "agena-superagent",
  "async-trait",
  "chrono",
  "hex",
@@ -1309,21 +1323,6 @@ dependencies = [
  "tracing",
  "unicode-width 0.2.2",
  "url",
- "uuid",
-]
-
-[[package]]
-name = "agena-superagent"
-version = "0.1.0"
-dependencies = [
- "agena-domain",
- "async-trait",
- "chrono",
- "chrono-tz",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
  "uuid",
 ]
 
@@ -1442,7 +1441,6 @@ dependencies = [
  "chrono",
  "crossterm",
  "futures-util",
- "hex",
  "indexmap",
  "mime_guess",
  "portable-atomic",

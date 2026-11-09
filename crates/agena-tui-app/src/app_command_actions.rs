@@ -9,7 +9,10 @@ impl App {
     /// resolving an invocation drops it.
     pub(crate) fn execute_command(&mut self, command: &ClientCommand, args: &str) {
         let action = command.action();
-        if !command.takes_arguments() && !args.trim().is_empty() {
+        if action != ClientCommandAction::Bot
+            && !command.takes_arguments()
+            && !args.trim().is_empty()
+        {
             self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
                 &agena_tui::fl_args!("usage" => command.invocation()),
@@ -19,8 +22,7 @@ impl App {
         match action {
             ClientCommandAction::Integrations => self.open_integrations(),
             ClientCommandAction::Assistant => self.open_assistant(),
-            ClientCommandAction::Tasks => self.open_tasks(false, ""),
-            ClientCommandAction::Task => self.open_tasks(true, args),
+            ClientCommandAction::Bot => self.execute_bot_command(args),
             ClientCommandAction::Help => {
                 self.open_context_help();
             }

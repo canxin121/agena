@@ -110,7 +110,7 @@ fn template(p: &IntegrationProvider) -> IntegrationSpec {
         expires_at_ms: chrono::Utc::now().timestamp_millis() + 7 * 86400000,
         daily_limit: 5,
         total_limit: 50,
-        max_task_seconds: 300,
+        max_execution_seconds: 300,
         use_source_permissions: false,
         channel_policy: if channel {
             Some(ChannelAccessPolicy {
@@ -386,6 +386,21 @@ impl App {
         } else {
             match key.code {
                 KeyCode::Esc => close = true,
+                KeyCode::Enter => {
+                    if let Some(detail) = &state.detail {
+                        let session = detail
+                            .events
+                            .iter()
+                            .filter_map(|event| {
+                                event.session_id.map(|id| (event.received_at_ms, id))
+                            })
+                            .max_by_key(|(received, _)| *received)
+                            .map_or(detail.binding.source_session_id, |(_, id)| id);
+                        self.route_stack.clear();
+                        self.open_session(session, detail.binding.spec.title.clone());
+                        close = true;
+                    }
+                }
                 KeyCode::Char('r') => {
                     state.error = None;
                     self.refresh_integrations(&mut state);
@@ -600,14 +615,4 @@ fn render(frame: &mut Frame, area: Rect, s: &IntegrationState, i18n: &I18n) {
     );
 }
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn panel_renders_with_no_provider_on_narrow_terminal() {
-        for (w, h) in [(100, 30), (42, 18)] {
-            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
-            t.draw(|f| render(f, f.area(), &IntegrationState::new(1), &I18n::english()))
-                .unwrap();
-        }
-    }
-}
+mod tests;

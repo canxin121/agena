@@ -29,7 +29,7 @@ pub struct RuntimeApplicationServices {
     /// Contract-backed repositories assembled with the concrete Runtime.
     /// Upper layers receive these ports without constructing SQLite adapters.
     pub repositories: Option<RuntimeApplicationRepositories>,
-    pub superagent: Option<Arc<dyn agena_superagent::SuperagentService>>,
+    pub assistant_service: Option<Arc<dyn agena_assistant::AssistantService>>,
     pub provider_catalog: Arc<dyn ProviderCatalog>,
     pub model_catalog: Arc<dyn ModelCatalogRuntimeService>,
     pub plugins: Arc<dyn PluginRuntimeService>,
@@ -72,7 +72,7 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) instance_state:
         Option<Arc<dyn agena_storage::instance_state::InstanceStateRepository>>,
     pub(crate) repositories: Option<RuntimeApplicationRepositories>,
-    pub(crate) superagent: Option<Arc<dyn agena_superagent::SuperagentService>>,
+    pub(crate) assistant_service: Option<Arc<dyn agena_assistant::AssistantService>>,
     pub(crate) provider_catalog: Arc<dyn ProviderCatalog>,
     pub(crate) model_catalog: Arc<dyn ModelCatalogRuntimeService>,
     pub(crate) plugins: Arc<dyn PluginRuntimeService>,
@@ -101,7 +101,7 @@ pub(crate) fn compose_runtime_application_services(
         instance_id: inputs.instance_id,
         instance_state: inputs.instance_state,
         repositories: inputs.repositories,
-        superagent: inputs.superagent,
+        assistant_service: inputs.assistant_service,
         provider_catalog: inputs.provider_catalog,
         model_catalog: inputs.model_catalog,
         plugins: inputs.plugins,

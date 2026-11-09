@@ -250,7 +250,7 @@ impl SessionManager {
         }
         let mut denials = parent.execution.capability_denied_tool_names.clone();
         denials.extend(agent_child_capability_denials());
-        let state = self.state.load_full();
+        let state = self.state_for_session(session_id(parent.id)?).await?;
         let selected = request.selection;
         let selection = parent
             .execution
@@ -265,7 +265,7 @@ impl SessionManager {
                 parallel_tool_calls: selected.parallel_tool_calls,
                 ..Default::default()
             });
-        let mut options = self.options_for_selection(&selection)?;
+        let mut options = self.options_for_selection_with_state(&selection, &state)?;
         let references = resolve_agent_command_references(
             &state.executor.plugin_manager().command_catalog(),
             &request.commands,
@@ -402,13 +402,30 @@ impl SessionManager {
                     agent: Some(agent.clone()),
                     ..Default::default()
                 };
-                persist(|| {
-                    self.kernel().sessions.create_configured(
-                        command,
-                        parent.workspace_id,
-                        request.name.trim().into(),
-                        configuration.clone(),
-                    )
+                persist(|| async {
+                    match parent.workspace_id {
+                        Some(workspace) => {
+                            self.kernel()
+                                .sessions
+                                .create_configured(
+                                    command,
+                                    workspace,
+                                    request.name.trim().into(),
+                                    configuration.clone(),
+                                )
+                                .await
+                        }
+                        None => {
+                            self.kernel()
+                                .sessions
+                                .create_global(
+                                    command,
+                                    request.name.trim().into(),
+                                    configuration.clone(),
+                                )
+                                .await
+                        }
+                    }
                 })
                 .await
                 .map_err(kernel_error)?
@@ -483,16 +500,18 @@ impl SessionManager {
         let execution_id = execution.id;
         let generation = execution.generation;
         let registration = self.register_agent_settlement(child, now, execution_id, generation);
-        let control = self.supervise_with_budget(
-            execution,
-            options.clone(),
-            false,
-            permit,
-            Some(AgentBudget {
-                max_tokens: request.max_tokens,
-                max_cost_microusd: request.max_cost_microusd,
-            }),
-        );
+        let control = self
+            .supervise_with_budget(
+                execution,
+                options.clone(),
+                false,
+                permit,
+                Some(AgentBudget {
+                    max_tokens: request.max_tokens,
+                    max_cost_microusd: request.max_cost_microusd,
+                }),
+            )
+            .await?;
         preparing.lock().unwrap_or_else(|p| p.into_inner()).take();
         drop(preparation);
         let manager = self.clone();
@@ -885,8 +904,8 @@ impl SessionManager {
         .await
         .map_err(kernel_error)?;
         if let Some(parent) = parent_session_id {
-            self.state
-                .load()
+            self.state_for_session(session_id(parent)?)
+                .await?
                 .executor
                 .plugin_manager()
                 .broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {
@@ -963,8 +982,8 @@ impl SessionManager {
             .map_err(kernel_error)?
             .parent_session_id
         {
-            self.state
-                .load()
+            self.state_for_session(parent)
+                .await?
                 .executor
                 .plugin_manager()
                 .broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {

@@ -260,6 +260,7 @@ struct MemoryWriteInput {
 #[serde(rename_all = "snake_case")]
 enum MemoryWriteScope {
     Workspace,
+    Global,
     Session,
 }
 
@@ -313,6 +314,7 @@ struct RecalledMemory {
 
 #[derive(Default)]
 struct MemoryContext {
+    global: bool,
     instance_id: Option<String>,
     checkpoint_entry_id: Option<i64>,
 }
@@ -470,10 +472,9 @@ impl MemoryPlugin {
         {
             return Ok(PathBuf::from(root));
         }
-        self.workspace_root
-            .get()
-            .cloned()
-            .ok_or_else(|| PluginError::internal("memory plugin invoked before init"))
+        Err(PluginError::internal(
+            "memory scope is unavailable for this session",
+        ))
     }
 
     async fn memory_context(&self) -> MemoryContext {
@@ -484,6 +485,10 @@ impl MemoryPlugin {
             return MemoryContext::default();
         };
         MemoryContext {
+            global: context
+                .get("memory_global")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
             instance_id: context
                 .get("memory_instance_id")
                 .and_then(serde_json::Value::as_str)
@@ -992,7 +997,19 @@ impl MemoryPlugin {
         let callback = agena_plugin_host::sdk::host_api::current_host_callback_context();
         let session_id = current_memory_session_id();
         let instance_id = self.memory_instance_id().await;
+        let global = self.memory_context().await.global;
         let scope = match input.scope {
+            Some(MemoryWriteScope::Workspace) if global => {
+                return Err(PluginError::invalid_params(
+                    "global memory has no project scope; inspect projects explicitly",
+                ));
+            }
+            Some(MemoryWriteScope::Global) if !global => {
+                return Err(PluginError::invalid_params(
+                    "global memory is available only in global sessions",
+                ));
+            }
+            Some(MemoryWriteScope::Global) => Some(MemoryScope::Global),
             Some(MemoryWriteScope::Workspace) => Some(MemoryScope::Workspace),
             Some(MemoryWriteScope::Session) => Some(MemoryScope::Session {
                 session_id: session_id.ok_or_else(|| {
@@ -1006,6 +1023,7 @@ impl MemoryPlugin {
                     )
                 })?,
             }),
+            None if global => Some(MemoryScope::Global),
             None => None,
         };
         for replaced in &input.supersedes {
@@ -1516,6 +1534,8 @@ fn memory_record_is_visible(
 ) -> bool {
     let metadata = &entry.metadata;
     if metadata.source_suppressed
+        || (context.global && matches!(&metadata.scope, MemoryScope::Workspace))
+        || (!context.global && matches!(&metadata.scope, MemoryScope::Global))
         || !metadata
             .scope
             .includes_context(session_id, context.instance_id.as_deref())

@@ -26,9 +26,9 @@ Engineering guides:
 - [Skill libraries, installation, and authoring](docs/skills.md)
 - [Multi-user channel roles, privacy and permissions](docs/channel-access.md)
 - [Plugin channels and event-driven automation](docs/integrations.md)
+- [AI Bot: manage projects and ordinary conversations](docs/ai-bot.md)
+- [Unified project-session execution and upgrades](docs/session-execution.md)
 - [Assistant personality, memory, and proactive contact](docs/assistant.md)
-- [Natural conversation work and automatic result delivery](docs/conversation-work.md)
-- [Durable tasks, Web/TUI workbenches, and chatbot ingress](docs/superagent.md)
 
 ## Install
 

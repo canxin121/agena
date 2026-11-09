@@ -26,10 +26,12 @@ use tokio_util::sync::CancellationToken;
 
 mod agents;
 mod auxiliary;
+mod bot;
 mod commands;
 mod deliveries;
 mod execution;
 mod host;
+mod integration_execution;
 mod managed;
 mod media;
 mod memory;
@@ -53,6 +55,16 @@ struct ExecutionState {
     config: RuntimeSessionManagerConfig,
     tools: Arc<Semaphore>,
 }
+/// The provider, plugin processor, executor, and limits of one independent
+/// session scope. Keep global and project settings together during an atomic
+/// publication so neither scope can accidentally inherit the other's tools.
+pub struct SessionScopeReconfiguration {
+    pub providers: Arc<ProviderRegistry>,
+    pub processor: SessionProcessor,
+    pub executor: ToolExecutor,
+    pub config: RuntimeSessionManagerConfig,
+}
+
 #[derive(Clone)]
 struct AgentBudget {
     max_tokens: Option<u64>,
@@ -154,6 +166,8 @@ impl RunControl {
 pub struct SessionManager {
     kernel_runtime: Arc<agena_storage_sqlite::SqliteKernel>,
     state: Arc<ArcSwap<ExecutionState>>,
+    global_state: Arc<ArcSwap<ExecutionState>>,
+    configuration_lock: Arc<parking_lot::Mutex<()>>,
     prompt_hydrator: KernelPromptHydrator,
     active: Arc<StdMutex<HashMap<ExecutionId, Arc<RunControl>>>>,
     admission: Arc<Semaphore>,
@@ -166,17 +180,24 @@ pub struct SessionManager {
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     tools: Arc<StdMutex<ActiveToolMap>>,
     operator_calls: Arc<StdMutex<OperatorInvocationMap>>,
+    bot_operations: Arc<tokio::sync::Mutex<()>>,
     agent_preparation: Arc<tokio::sync::Mutex<()>>,
     pending_agent_settlements: Arc<StdMutex<HashMap<SessionId, agents::PendingAgentSettlement>>>,
     delivery_scan: Arc<StdMutex<Option<SessionSummaryCursor>>>,
     host_sequences: Arc<StdMutex<HashMap<(i64, i64), u64>>>,
     workspace: Arc<tokio::sync::OnceCell<i64>>,
     channel_verifier: std::sync::OnceLock<Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>>,
-    memory_preferences: Arc<std::sync::OnceLock<Arc<dyn agena_superagent::CompanionRepository>>>,
+    memory_preferences: Arc<std::sync::OnceLock<Arc<dyn agena_assistant::CompanionRepository>>>,
     shutdown: CancellationToken,
 }
 
 impl SessionManager {
+    /// Instance-owned memory namespace for sessions without a project.
+    pub fn global_memory_root(&self) -> std::path::PathBuf {
+        agena_storage_layout::StorageLayout::current()
+            .root()
+            .join("global")
+    }
     pub fn new(
         kernel: Arc<agena_storage_sqlite::SqliteKernel>,
         providers: Arc<ProviderRegistry>,
@@ -185,16 +206,19 @@ impl SessionManager {
         executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) -> Self {
+        let initial = Arc::new(ExecutionState {
+            providers,
+            governor,
+            processor,
+            executor,
+            tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
+            config,
+        });
         Self {
             kernel_runtime: kernel,
-            state: Arc::new(ArcSwap::from_pointee(ExecutionState {
-                providers,
-                governor,
-                processor,
-                executor,
-                tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
-                config,
-            })),
+            state: Arc::new(ArcSwap::from(initial.clone())),
+            global_state: Arc::new(ArcSwap::from(initial)),
+            configuration_lock: Default::default(),
             prompt_hydrator: KernelPromptHydrator::default(),
             active: Default::default(),
             admission: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
@@ -209,6 +233,7 @@ impl SessionManager {
             agent_preparation: Default::default(),
             pending_agent_settlements: Default::default(),
             delivery_scan: Default::default(),
+            bot_operations: Default::default(),
             workspace: Default::default(),
             channel_verifier: Default::default(),
             memory_preferences: Default::default(),
@@ -239,6 +264,63 @@ impl SessionManager {
                 .map_err(AppError::Config)?;
         }
         Ok(())
+    }
+
+    /// Install instance-only execution defaults after a fully prepared runtime reload.
+    pub fn reconfigure_global(
+        &self,
+        providers: Arc<ProviderRegistry>,
+        processor: SessionProcessor,
+        executor: ToolExecutor,
+        config: RuntimeSessionManagerConfig,
+    ) {
+        let project = self.state.load_full();
+        self.global_state.store(Arc::new(ExecutionState {
+            providers,
+            governor: project.governor.clone(),
+            processor,
+            executor,
+            tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
+            config,
+        }));
+    }
+
+    async fn state_for_session(&self, session: SessionId) -> Result<Arc<ExecutionState>, AppError> {
+        let metadata = self
+            .kernel()
+            .reader
+            .metadata(session)
+            .await
+            .map_err(kernel_error)?;
+        let _guard = self.configuration_lock.lock();
+        Ok(if metadata.workspace_id.is_none() {
+            self.global_state.load_full()
+        } else {
+            self.state.load_full()
+        })
+    }
+
+    /// Publish both execution scopes as one configuration change for session routing.
+    pub fn reconfigure_scopes(
+        &self,
+        governor: ContextGovernor,
+        project: SessionScopeReconfiguration,
+        global: SessionScopeReconfiguration,
+    ) {
+        let _guard = self.configuration_lock.lock();
+        self.reconfigure(
+            project.providers,
+            governor,
+            project.processor,
+            project.executor,
+            project.config,
+        );
+        self.reconfigure_global(
+            global.providers,
+            global.processor,
+            global.executor,
+            global.config,
+        );
     }
 
     pub fn reconfigure(

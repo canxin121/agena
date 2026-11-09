@@ -77,7 +77,6 @@ impl App {
             btw_sessions: BTreeMap::new(),
             session_work: BTreeMap::new(),
             session_plan: Default::default(),
-            task_boards: Default::default(),
             assistant_panels: Default::default(),
             integration_panels: Default::default(),
             route_stack: Vec::new(),
@@ -157,6 +156,7 @@ impl App {
             fork_pending: false,
             next_usage_request_id: 0,
             next_hub_request_id: 0,
+            bot: Default::default(),
             session_mark_writes: Default::default(),
             active_subscription: None,
             subscription_generation: 0,
@@ -405,7 +405,6 @@ impl App {
     }
 
     pub(crate) fn on_tick(&mut self) {
-        self.tick_tasks();
         self.tick_assistant();
         self.tick_integrations();
         let now = Instant::now();

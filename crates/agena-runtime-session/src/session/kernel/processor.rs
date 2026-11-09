@@ -209,7 +209,7 @@ pub struct KernelRoundRun {
     round: RoundHandle,
     reader: KernelReader,
     model: ModelRef,
-    workspace_root: PathBuf,
+    workspace_root: Option<PathBuf>,
     _prompt: KernelPrompt,
     _lease: ReadLease,
     cancel: Option<CancellationToken>,
@@ -249,7 +249,7 @@ impl SessionProcessor {
         request: KernelRoundRequest,
         reader: KernelReader,
         providers: Arc<ProviderRegistry>,
-        workspace_root: PathBuf,
+        workspace_root: Option<PathBuf>,
     ) -> Result<KernelRoundRun> {
         let session = request.prompt.facts().metadata.id;
         let lease = RUN_BUDGET
@@ -1069,7 +1069,7 @@ impl KernelRoundRun {
                 let session_id = self.round.session_id().get();
                 Box::pin(async move {
                     let result = persist_hosted_media(
-                        &workspace_root,
+                        workspace_root.as_deref(),
                         session_id,
                         tool.id().get(),
                         result,
@@ -1216,7 +1216,7 @@ fn hosted_media_error(error: agena_runtime_tools::ManagedGeneratedImageError) ->
 /// paths and metadata; re-running a pending completion writes the same bytes
 /// to the same call-scoped path before retrying its kernel commit.
 async fn persist_hosted_media(
-    workspace_root: &Path,
+    workspace_root: Option<&Path>,
     session_id: i64,
     tool_id: i64,
     mut result: ToolResult,
@@ -1232,7 +1232,7 @@ async fn persist_hosted_media(
         } = block
             && is_inline_hosted_image(block)
         {
-            let saved = agena_runtime_tools::persist_generated_image_artifact(
+            let saved = agena_runtime_tools::persist_generated_image_artifact_scoped(
                 workspace_root,
                 session_id,
                 &artifact_id,
@@ -1373,7 +1373,7 @@ mod hosted_image_persistence_tests {
             phase: ToolPhase::Succeeded,
             value: json!({"title":"image generation","output_text":"sunflower"}),
         };
-        let completed = persist_hosted_media(&workspace, 43, 491, result.clone(), &blocks)
+        let completed = persist_hosted_media(Some(&workspace), 43, 491, result.clone(), &blocks)
             .await
             .unwrap();
         assert_eq!(completed.phase, ToolPhase::Succeeded);
@@ -1397,7 +1397,7 @@ mod hosted_image_persistence_tests {
         );
         assert_eq!(completed.value["blocks"][0]["text"], "other hosted output");
         // Retrying the same persistence step reuses a stable path and result.
-        let repeated = persist_hosted_media(&workspace, 43, 491, result, &blocks)
+        let repeated = persist_hosted_media(Some(&workspace), 43, 491, result, &blocks)
             .await
             .unwrap();
         assert_eq!(completed, repeated);
@@ -1412,7 +1412,7 @@ mod hosted_image_persistence_tests {
             phase: ToolPhase::Succeeded,
             value: json!({}),
         };
-        let err = persist_hosted_media(Path::new("/tmp"), 43, 491, result, &block)
+        let err = persist_hosted_media(Some(Path::new("/tmp")), 43, 491, result, &block)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("invalid generated image payload"));
@@ -1427,7 +1427,7 @@ mod hosted_image_persistence_tests {
             phase: ToolPhase::Succeeded,
             value: json!({"title":"web search","summary":"success"}),
         };
-        let completed = persist_hosted_media(Path::new("/tmp"), 43, 491, result, &blocks)
+        let completed = persist_hosted_media(Some(Path::new("/tmp")), 43, 491, result, &blocks)
             .await
             .unwrap();
         assert_eq!(

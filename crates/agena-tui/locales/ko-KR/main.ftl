@@ -3074,66 +3074,6 @@ inline-ui-reset = 입력 초기화
 inline-ui-native-help = Tab/↑↓ 이동 · Enter/Space 조작 · ←→ 조정 · PgUp/PgDn 스크롤 · Esc 닫기
 inline-ui-editor-help = Enter 확인 · Esc 취소 · ←→ 이동 · Ctrl+U 지우기
 
-## Durable tasks
-command-task-summary = 새 작업
-command-tasks-summary = 장기 작업
-task-board-title = 장기 작업
-task-board-description = 독립 실행 세션에 작업을 맡기고 진행 상황과 결과를 확인하세요.
-task-board-create = 새 작업
-task-board-resume = 추가 지시로 계속
-task-board-cancel = 작업 취소
-task-board-accept = 결과 승인
-task-board-refresh = 새로 고침
-task-board-scope = 범위
-task-board-currentSession = 현재 대화
-task-board-allTasks = 모든 작업
-task-board-state = 상태
-task-board-allStates = 모든 상태
-task-board-serial = 작업은 하나씩 실행되며 기존 권한은 유지됩니다.
-task-board-noSession = 작업을 만들기 전에 대화를 여세요.
-task-board-chat = 대화 열기
-task-board-list = 작업 목록
-task-board-loading = 작업 불러오는 중…
-task-board-empty = 현재 범위에 작업이 없습니다.
-task-board-attempt = 시도 횟수
-task-board-previous = 이전
-task-board-next = 다음
-task-board-details = 작업 상세
-task-board-back = 목록으로
-task-board-updated = 최근 업데이트
-task-board-waitingHint = 실행 세션에서 질문에 답하거나 권한 요청을 검토하세요.
-task-board-reviewHint = 에이전트 실행이 끝났습니다. 결과와 검증 근거를 확인한 뒤 승인하세요.
-task-board-worker = 실행 세션 열기
-task-board-source = 원래 대화
-task-board-feedback = 추가 지시
-task-board-select = 작업을 선택하여 진행 상황과 결과를 확인하세요.
-task-board-formHint = 명시적인 작업 요청입니다. 기존 도구 권한이 적용됩니다.
-task-board-restored = 미완료 요청을 복원했습니다. 제출 전에 확인하세요.
-task-board-goal = 작업 목표
-task-board-placeholder = 원하는 결과와 검증 방법을 설명하세요.
-task-board-invalid = 비어 있지 않은 지시를 32 KiB 이내로 입력하세요.
-task-board-confirmCancel = 작업과 하위 작업을 중지할까요? 완료된 외부 작업은 되돌리지 않습니다.
-task-board-confirmAccept = 결과와 검증 근거를 확인했나요? 작업을 완료로 표시합니다.
-task-board-uncertain = 서버가 요청을 수락했을 수 있습니다. 같은 식별자로 재시도하며 새 요청 전에 결과를 확인하세요.
-task-board-conflict = 작업이 변경되었습니다. 최신 상태를 확인하고 다시 승인하세요. 입력은 보존됩니다.
-task-board-close = 닫기
-task-board-rebase = 최신 상태 검토
-task-board-saving = 제출 중…
-task-board-confirm = 확인
-task-board-retry = 같은 요청 재시도
-task-state-queued = 대기 중
-task-state-starting = 시작 중
-task-state-running = 실행 중
-task-state-waiting = 입력 대기
-task-state-review = 검토 대기
-task-state-completed = 완료
-task-state-interrupted = 중단됨
-task-state-failed = 실패
-task-state-cancelling = 중지 중
-task-state-cancelled = 취소됨
-task-board-keys = ↑/↓선택 · Enter실행 · o원래 대화 · n새 작업 · u계속 · a승인 · c취소 · r새로 고침 · g범위 · f필터 · [/]페이지 · PgUp/PgDn상세 · Esc뒤로
-task-board-formKeys = Ctrl+Enter / Alt+Enter제출 · Ctrl+R최신 상태 재확인 · Esc닫기. 편집 중 Enter는 줄바꿈.
-task-board-compactKeys = ↑↓선택 · Enter실행 · n새 작업 · u계속 · a승인 · c취소 · r새로고침 · [/]페이지 · Esc뒤로
 
 ## Workspace assistant
 command-assistant-summary = 도우미
@@ -3226,7 +3166,7 @@ integrations-state_enabled = 활성
 integrations-state_paused = 일시 중지
 integrations-state_expired = 만료
 integrations-state_faulted = 확인 필요
-integrations-keys = ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
+integrations-keys = Enter session · ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
 integrations-formKeys = Ctrl+Enter / Alt+Enter save draft · Enter newline · Esc close. Enable requires separate confirmation.
 
 ## Scoped channel access
@@ -3266,11 +3206,46 @@ channelAccess-role_operator = Operator
 channelAccess-role_administrator = Administrator
 channelAccess-role_owner = Owner
 channelAccess-capabilities = Capabilities per role
-channelAccess-capabilityHint = A role grants no tools by itself. Use exact canonical tool IDs and hosts. Shared context permits no tools, private memory or background work.
-channelAccess-work = Background work
+channelAccess-capabilityHint = A role grants no tools by itself. Use exact canonical tool IDs and hosts. Shared context permits no tools or private memory.
 channelAccess-memory = Private memory
 channelAccess-project = Source project access
 channelAccess-tools = Allowed tools, one canonical ID per line
 channelAccess-network = Allowed network hosts, one per line
 channelAccess-reports = Allow automated posts from a separate service session
 channelAccess-stale = The policy changed elsewhere. Close, refresh and review again; your stale settings will not overwrite the latest policy.
+
+# Canonical AI Bot chat
+command-bot-summary = AI Bot 채팅 열기
+bot-title = AI Bot
+bot-description = 프로젝트 대화를 찾고 정리하고 이어 가며 모델, 대기열, 분기를 관리합니다.
+bot-opening = Bot 채팅을 여는 중…
+bot-open-failed = AI Bot을 열 수 없습니다.
+bot-retry-help = Enter / r 재시도 · Esc 뒤로
+bot-loading-help = Esc 뒤로 · Ctrl+G 프로젝트
+bot-session-header = AI Bot · Ctrl+G 프로젝트
+hub-bot-entry = b AI Bot · Ctrl+B
+bot-ready = 준비됨
+
+# Named Bot registry and independent persona editor
+bot-manager-title = 이름 있는 Bot
+bot-list-keys = ↑↓ 선택 · Enter 열기 · n 만들기
+    e 편집 · a 보관 · r 새로 고침
+    w 작업 공간 설정 · Esc 뒤로
+bot-entry-keys = Enter/r 재시도 · l Bot 목록 · Esc 뒤로
+bot-confirm-keys = Enter 확인 · Esc 취소
+bot-editor-keys = Ctrl+Enter/Alt+Enter 적용 · Esc 취소
+bot-form-keys = ↑↓ 항목 · Enter 편집 · s 저장
+    r 다시 불러오기 · Esc 뒤로
+bot-current = (현재)
+bot-empty = 활성 Bot이 없습니다. n으로 만드세요.
+bot-archive-confirm = 이 Bot을 보관할까요? 서버에서 유휴 상태를 확인합니다. 대화 기록은 유지됩니다.
+bot-reload-confirm = 초안을 버리고 최근 저장된 설정을 불러올까요?
+bot-error-guidance = 요청에 실패했습니다. 초안은 유지됩니다. 버전 충돌 시 다시 불러오세요.
+bot-form-invalid = 이름을 입력하세요. 지침은 4096바이트 이내여야 합니다.
+bot-command-help = /bot · /bot list · /bot create · /bot edit · /bot UUID
+hub-bot-list = l Bot 목록
+bot-create-title = Bot 만들기
+bot-edit-title = Bot 편집
+
+bot-instructions = 추가 시스템 지침
+bot-instructions-empty = 추가 시스템 지침이 없습니다

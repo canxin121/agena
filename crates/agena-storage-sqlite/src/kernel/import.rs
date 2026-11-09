@@ -1882,7 +1882,7 @@ pub(super) async fn publish(
                 feed.publish_scoped(
                     receipt.position,
                     receipt.value.id,
-                    job.workspace,
+                    Some(job.workspace),
                     include_in_lists,
                     ChangeKind::Membership,
                     Vec::new(),

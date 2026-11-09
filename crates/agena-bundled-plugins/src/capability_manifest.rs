@@ -131,7 +131,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_settings_plugin());
     add!(crate::tool::new_shell_plugin());
     add!(crate::tool::new_agent_plugin());
-    add!(crate::tool::new_work_plugin());
+    add!(crate::tool::new_bot_plugin());
     add!(crate::tool::new_companion_plugin());
     add!(crate::tool::new_web_plugin());
     plugins

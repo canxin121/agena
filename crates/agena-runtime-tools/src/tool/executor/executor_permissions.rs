@@ -139,6 +139,11 @@ impl ToolExecutor {
                 invocation.input.clone(),
             ))
             .map_err(|error| self.plugin_error_or_cancelled(error))?;
+            if self.is_global() && !std::path::Path::new(&input.path).is_absolute() {
+                return Err(ToolError::invalid_input(
+                    "global sessions require an explicit absolute path",
+                ));
+            }
             self.push_resolved_path_check(checks, AccessKind::Read, &input.path);
             return Ok(());
         }
@@ -147,7 +152,48 @@ impl ToolExecutor {
         else {
             return Ok(());
         };
-        match payload.map_err(|error| ToolError::invalid_input_error(&error))? {
+        let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
+        if self.is_global() {
+            let require_path = |path: Option<&str>| -> Result<(), ToolError> {
+                if path.is_some_and(|value| {
+                    !value.trim().is_empty() && std::path::Path::new(value).is_absolute()
+                }) {
+                    Ok(())
+                } else {
+                    Err(ToolError::invalid_input(
+                        "global sessions require an explicit absolute path",
+                    ))
+                }
+            };
+            match &payload {
+                ToolPayloadInput::Read(input) => require_path(Some(&input.file_path))?,
+                ToolPayloadInput::Glob(input) => require_path(input.path.as_deref())?,
+                ToolPayloadInput::Grep(input) => require_path(input.path.as_deref())?,
+                ToolPayloadInput::ApplyPatch(input) => {
+                    for path in crate::tool::apply_patch::planned_paths(&input.patch)? {
+                        require_path(Some(&path))?;
+                    }
+                }
+                ToolPayloadInput::LspDefinition(input) => {
+                    require_path(Some(&input.position.file_path))?
+                }
+                ToolPayloadInput::LspReferences(input) => {
+                    require_path(Some(&input.position.file_path))?
+                }
+                ToolPayloadInput::LspHover(input) => require_path(Some(&input.position.file_path))?,
+                ToolPayloadInput::LspDiagnostics(input) => require_path(Some(&input.file_path))?,
+                ToolPayloadInput::Shell(input) => {
+                    if let Some((_, command)) = input.launch_command() {
+                        crate::tool::shell_tools::resolve_workdir(
+                            self,
+                            command.workdir.as_deref(),
+                        )?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match payload {
             ToolPayloadInput::Read(input) => {
                 self.push_resolved_path_check(checks, AccessKind::Read, input.file_path.as_str());
             }
@@ -240,7 +286,24 @@ impl ToolExecutor {
             )?;
             self.push_declared_network_checks(checks, command, network)?;
         }
-        let base = self.shell_effect_base_path(workdir);
+        let base = if self.is_global() && input.launch_command().is_some() {
+            let base = crate::tool::shell_tools::resolve_workdir(self, workdir)?;
+            self.push_path_checks(checks, AccessKind::Read, &base);
+            base
+        } else {
+            self.shell_effect_base_path(workdir)
+        };
+        if self.is_global()
+            && input.launch_command().is_none()
+            && effects
+                .to_effects()
+                .iter()
+                .any(|effect| !std::path::Path::new(&effect.path).is_absolute())
+        {
+            return Err(ToolError::invalid_input(
+                "global shell input effects require absolute paths",
+            ));
+        }
         self.push_filesystem_effect_checks(checks, &effects, base.as_path());
         Ok(())
     }
@@ -524,11 +587,16 @@ mod session_role_tests {
     #[derive(Default)]
     struct SessionContext {
         relation: SessionRelationKind,
+        global: bool,
         permission: PermissionConfig,
         denied: BTreeSet<String>,
     }
 
     impl crate::ToolSessionContext for SessionContext {
+        fn is_global(&self) -> bool {
+            self.global
+        }
+
         fn relation_kind(&self) -> SessionRelationKind {
             self.relation
         }
@@ -640,5 +708,140 @@ mod session_role_tests {
         );
         drop(registrations);
         drop(owners);
+    }
+    #[tokio::test]
+    async fn global_scope_drops_inherited_root_and_requires_explicit_paths() {
+        let base = executor(Vec::new());
+        let global = base
+            .for_session_context_async(&SessionContext {
+                global: true,
+                ..Default::default()
+            })
+            .await;
+        let another = base
+            .for_session_context_async(&SessionContext {
+                global: true,
+                ..Default::default()
+            })
+            .await;
+        assert!(global.workspace_root().as_os_str().is_empty());
+        assert!(another.workspace_root().as_os_str().is_empty());
+        assert!(!base.workspace_root().as_os_str().is_empty());
+        assert!(matches!(
+            global
+                .path_permission_check(AccessKind::Read, "relative")
+                .decision,
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            global
+                .path_permission_check(AccessKind::Read, "/tmp/file")
+                .decision,
+            PermissionDecision::Allow
+        ));
+        assert!(crate::tool::shell_tools::resolve_workdir(&global, None).is_err());
+        assert!(crate::tool::shell_tools::resolve_workdir(&global, Some("relative")).is_err());
+        assert!(crate::tool::shell_tools::resolve_workdir(&global, Some("/tmp")).is_ok());
+        assert!(crate::tool::shell_tools::resolve_workdir(&base, None).is_ok());
+        assert!(
+            global
+                .project_instruction_section(&[base.workspace_root().to_path_buf()])
+                .is_empty()
+        );
+        let mut denied = global.clone();
+        denied.principal = ExecutionPrincipal::new(
+            PermissionPolicy::new(
+                agena_domain::PermissionMode::Deny,
+                agena_domain::PermissionMode::Deny,
+            ),
+            ToolPermissionPolicy::allow_all(),
+        );
+        assert!(matches!(
+            denied
+                .path_permission_check(AccessKind::Read, "/tmp/file")
+                .decision,
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            base.path_permission_check(AccessKind::Read, "relative")
+                .decision,
+            PermissionDecision::Allow
+        ));
+    }
+    #[tokio::test]
+    async fn global_lsp_uses_explicit_file_lookup() {
+        let base = executor(Vec::new());
+        let global = base
+            .for_session_context_async(&SessionContext {
+                global: true,
+                ..Default::default()
+            })
+            .await;
+        for raw in ["", "~", "~/file.rs", "./file.rs", "file.rs"] {
+            assert!(crate::tool::lsp::lsp_target(&global, raw).is_err(), "{raw}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.rs");
+        let registry = agena_lsp::LspRegistry::new(dir.path().join("project"), "test", "1");
+        // Global lookup checks that the target exists before looking for a server;
+        // project lookup instead reports the unmatched server immediately.
+        let global_error = crate::tool::lsp::client_for_target(&global, &registry, &missing)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        let project_error = crate::tool::lsp::client_for_target(&base, &registry, &missing)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            project_error.contains("no LSP server matches"),
+            "{project_error}"
+        );
+        assert!(
+            !global_error.contains("no LSP server matches"),
+            "{global_error}"
+        );
+        let file = dir.path().join("valid.rs");
+        std::fs::write(&file, "").unwrap();
+        let resolved = crate::tool::lsp::lsp_target(&global, file.to_str().unwrap()).unwrap();
+        let error = crate::tool::lsp::client_for_target(&global, &registry, &resolved)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("no LSP server matches"), "{error}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn global_path_check_resolves_symlinks_and_traversal() {
+        let base = executor(Vec::new());
+        let global = base
+            .for_session_context_async(&SessionContext {
+                global: true,
+                ..Default::default()
+            })
+            .await;
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("other");
+        let link_target = parent.join("child");
+        let target = parent.join("target");
+        std::fs::create_dir_all(&link_target).unwrap();
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&link_target, dir.path().join("link")).unwrap();
+        let raw = dir.path().join("link/../target/file");
+        let check = global.path_permission_check(AccessKind::Read, raw.to_str().unwrap());
+        let agena_domain::PermissionAction::PathAccess { target_path, .. } = check.action else {
+            panic!("path action expected")
+        };
+        assert_eq!(std::path::Path::new(&target_path), target.join("file"));
+        for raw in ["~", "~/file", "./file", "file"] {
+            assert!(matches!(
+                global.path_permission_check(AccessKind::Read, raw).decision,
+                PermissionDecision::Deny { .. }
+            ));
+        }
     }
 }

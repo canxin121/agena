@@ -974,7 +974,8 @@ impl ConfiguredModelDefinition {
     }
 }
 
-fn apply_configured_speed_modes(
+/// Merge configured speed modes and their default through the same path as model inventory.
+pub fn apply_configured_speed_modes(
     mut modes: BTreeMap<String, ModelSpeedMode>,
     configured: &ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
 ) -> BTreeMap<String, ModelSpeedMode> {

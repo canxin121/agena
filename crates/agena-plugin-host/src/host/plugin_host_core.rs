@@ -1927,6 +1927,8 @@ impl PluginHost {
     pub async fn dispatch_tool_definition(
         &self,
         input: ToolDefinitionInput,
+        session_id: Option<i64>,
+        workspace_root: Option<String>,
     ) -> Result<ToolDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let mut runs = Vec::new();
@@ -1952,9 +1954,9 @@ impl PluginHost {
                     Some(tool_hook_context(
                         plugin,
                         input.tool_name(),
+                        session_id,
                         None,
-                        None,
-                        None,
+                        workspace_root.clone(),
                     ))
                 },
                 Some(&self._host_handle),
@@ -1979,13 +1981,18 @@ impl PluginHost {
     pub async fn dispatch_tool_definitions(
         &self,
         inputs: Vec<ToolDefinitionInput>,
+        session_id: Option<i64>,
+        workspace_root: Option<String>,
     ) -> Vec<Result<ToolDefinitionInput, PluginError>> {
         const CATALOG_DEADLINE: Duration = Duration::from_secs(5);
         let input_count = inputs.len();
         let dispatch = async {
             let mut outputs = Vec::with_capacity(input_count);
             for input in inputs {
-                outputs.push(self.dispatch_tool_definition(input).await);
+                outputs.push(
+                    self.dispatch_tool_definition(input, session_id, workspace_root.clone())
+                        .await,
+                );
             }
             outputs
         };

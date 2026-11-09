@@ -53,10 +53,9 @@ macro_rules! impl_callback_host_client {
                 -> $crate::serde_json::Value = HOST_COMPANION_OPERATION { "request": request };
             manage_integrations(request: $crate::host_api::IntegrationRequest)
                 -> $crate::serde_json::Value = HOST_MANAGE_INTEGRATIONS { "request": request };
-            conversation_work(request: $crate::host_api::WorkRequest)
-                -> $crate::serde_json::Value = HOST_CONVERSATION_WORK { "request": request };
-            conversation_work_context()
-                -> $crate::serde_json::Value = HOST_CONVERSATION_WORK_CONTEXT {};
+            bot_context() -> $crate::serde_json::Value = HOST_BOT_CONTEXT {};
+            bot_operation(request: $crate::host_api::BotRequest)
+                -> $crate::serde_json::Value = HOST_BOT_OPERATION { "request": request };
             message_agent(request: $crate::host_api::AgentMessageRequest)
                 -> $crate::host_api::AgentMessageReceipt = HOST_AGENT_MESSAGE { "request": request };
             wait_agent(request: $crate::host_api::AgentWaitRequest)

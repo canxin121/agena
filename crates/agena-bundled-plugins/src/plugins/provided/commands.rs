@@ -131,6 +131,13 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-hub-summary",
     },
     BuiltInCommand {
+        action: "bot",
+        slash: "/bot",
+        aliases: &[],
+        usage: None,
+        summary_key: "command-bot-summary",
+    },
+    BuiltInCommand {
         action: "lineage",
         slash: "/lineage",
         aliases: &["branch-history", "branches"],
@@ -346,20 +353,6 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         aliases: &["companion"],
         usage: None,
         summary_key: "command-assistant-summary",
-    },
-    BuiltInCommand {
-        action: "tasks",
-        slash: "/tasks",
-        aliases: &["task-board"],
-        usage: None,
-        summary_key: "command-tasks-summary",
-    },
-    BuiltInCommand {
-        action: "task",
-        slash: "/task",
-        aliases: &[],
-        usage: Some("[goal]"),
-        summary_key: "command-task-summary",
     },
     BuiltInCommand {
         action: "plan",
@@ -2333,13 +2326,22 @@ impl CommandsPlugin {
     }
 
     fn request_workspace_root(&self) -> SdkResult<PathBuf> {
-        Ok(
-            agena_plugin_host::sdk::host_api::current_host_callback_context()
-                .and_then(|context| context.workspace_root)
-                .filter(|root| !root.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or(self.workspace_root()?.to_owned()),
-        )
+        // A global Bot deliberately has no project. Binding its commands to
+        // the plugin process's initialization workspace would leak whichever
+        // project happened to be selected at server startup.
+        if let Some(context) = agena_plugin_host::sdk::host_api::current_host_callback_context() {
+            if let Some(root) = context.workspace_root.filter(|root| !root.is_empty()) {
+                return Ok(PathBuf::from(root));
+            }
+            if context.session_id.is_some() {
+                return Err(PluginError::invalid_params(
+                    "commands require a project session; select an explicit project instead of using the global Bot",
+                ));
+            }
+        }
+        // Process-level plugin initialization (no owning session) is still
+        // allowed to load the commands source itself.
+        Ok(self.workspace_root()?.to_owned())
     }
 
     async fn authorize_discovery(&self) -> SdkResult<()> {
@@ -2682,4 +2684,82 @@ fn parse_tool_input<T: serde::de::DeserializeOwned + JsonSchema>(
         &macro_support::json_schema_for::<T>(),
         &format!("{COMMANDS_PLUGIN_ID}.{tool} input field"),
     )
+}
+
+#[cfg(test)]
+mod bot_command_tests {
+    use super::*;
+
+    #[test]
+    fn public_catalog_omits_retired_task_commands_and_keeps_runtime_controls() {
+        let commands = built_in_commands();
+        for name in ["task", "tasks", "task-board"] {
+            assert!(commands.iter().all(|command| {
+                command.slash.as_deref() != Some(format!("/{name}").as_str())
+                    && !command.aliases.iter().any(|alias| alias == name)
+                    && command.target
+                        != CommandTarget::Client {
+                            action: name.into(),
+                        }
+            }));
+        }
+        for slash in ["/bot", "/activities", "/background", "/queue"] {
+            assert!(
+                commands
+                    .iter()
+                    .any(|command| command.slash.as_deref() == Some(slash))
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn global_bot_commands_do_not_fall_back_to_plugin_initialization_workspace() {
+        let mut plugin = CommandsPlugin::new();
+        plugin.workspace_root = Arc::new(OnceLock::from(PathBuf::from("/project-from-init")));
+        let global = agena_plugin_host::sdk::host_api::HostCallbackContext {
+            session_id: Some(42),
+            workspace_root: Some(String::new()),
+            ..Default::default()
+        };
+        let error = agena_plugin_host::sdk::host_api::run_in_host_callback_context(global, async {
+            plugin.request_workspace_root()
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("require a project session"), "{error}");
+        let scoped = agena_plugin_host::sdk::host_api::HostCallbackContext {
+            session_id: Some(43),
+            workspace_root: Some("/explicit/project".to_owned()),
+            ..Default::default()
+        };
+        let resolved =
+            agena_plugin_host::sdk::host_api::run_in_host_callback_context(scoped, async {
+                plugin.request_workspace_root()
+            })
+            .await
+            .unwrap();
+        assert_eq!(resolved, PathBuf::from("/explicit/project"));
+    }
+
+    #[test]
+    fn bot_is_a_standalone_client_command() {
+        let bot = built_in_commands()
+            .into_iter()
+            .find(|c| c.slash.as_deref() == Some("/bot"))
+            .unwrap();
+        assert_eq!(
+            bot.target,
+            CommandTarget::Client {
+                action: "bot".into()
+            }
+        );
+        assert_eq!(bot.docs.summary_key.as_deref(), Some("command-bot-summary"));
+        assert!(bot.aliases.is_empty());
+        let assistant = BUILT_IN_COMMANDS
+            .iter()
+            .find(|c| c.action == "assistant")
+            .unwrap();
+        assert!(!assistant.aliases.contains(&"bot"));
+    }
 }

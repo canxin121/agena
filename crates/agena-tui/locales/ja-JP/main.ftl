@@ -3078,66 +3078,6 @@ inline-ui-reset = 入力をリセット
 inline-ui-native-help = Tab/↑↓ 移動 · Enter/Space 操作 · ←→ 調整 · PgUp/PgDn スクロール · Esc 閉じる
 inline-ui-editor-help = Enter 確定 · Esc 取消 · ←→ 移動 · Ctrl+U クリア
 
-## Durable tasks
-command-task-summary = 新しいタスク
-command-tasks-summary = 長期タスク
-task-board-title = 長期タスク
-task-board-description = 独立した実行セッションに作業を依頼し、進捗と結果を確認します。
-task-board-create = 新しいタスク
-task-board-resume = 指示を追加して再開
-task-board-cancel = タスクを取消
-task-board-accept = 結果を承認
-task-board-refresh = 更新
-task-board-scope = 範囲
-task-board-currentSession = この会話
-task-board-allTasks = すべてのタスク
-task-board-state = 状態
-task-board-allStates = すべての状態
-task-board-serial = タスクは一件ずつ実行され、既存の権限は維持されます。
-task-board-noSession = タスク作成前に会話を開いてください。
-task-board-chat = 会話を開く
-task-board-list = タスク一覧
-task-board-loading = 読み込み中…
-task-board-empty = この範囲にタスクはありません。
-task-board-attempt = 試行回数
-task-board-previous = 前へ
-task-board-next = 次へ
-task-board-details = タスク詳細
-task-board-back = 一覧に戻る
-task-board-updated = 更新日時
-task-board-waitingHint = 実行セッションで質問や権限要求に対応してください。
-task-board-reviewHint = エージェントの実行が終了しました。結果と検証根拠を確認して承認してください。
-task-board-worker = 実行セッションを開く
-task-board-source = 元の会話
-task-board-feedback = 追加の指示
-task-board-select = タスクを選んで進捗と結果を確認します。
-task-board-formHint = 明示的な依頼です。既存のツール権限が適用されます。
-task-board-restored = 未完了の依頼を復元しました。内容を確認してください。
-task-board-goal = タスクの目標
-task-board-placeholder = 期待する結果と検証方法を記入してください。
-task-board-invalid = 空でない指示を32 KiB以内で入力してください。
-task-board-confirmCancel = タスクと委任作業を停止しますか？完了済みの外部操作は取り消されません。
-task-board-confirmAccept = 結果と検証根拠を確認しましたか？タスクを完了にします。
-task-board-uncertain = サーバーが依頼を受理した可能性があります。同じ識別子で再試行し、新規依頼前に結果を確認してください。
-task-board-conflict = タスクが変更されました。最新状態を確認して再承認してください。入力は保持されます。
-task-board-close = 閉じる
-task-board-rebase = 最新状態を確認
-task-board-saving = 送信中…
-task-board-confirm = 確認
-task-board-retry = 同じ依頼を再試行
-task-state-queued = 待機中
-task-state-starting = 開始中
-task-state-running = 実行中
-task-state-waiting = 入力待ち
-task-state-review = 確認待ち
-task-state-completed = 完了
-task-state-interrupted = 中断
-task-state-failed = 失敗
-task-state-cancelling = 停止中
-task-state-cancelled = 取消済み
-task-board-keys = ↑/↓選択 · Enter実行 · o元会話 · n新規 · u再開 · a承認 · c取消 · r更新 · g範囲 · f絞込 · [/]ページ · PgUp/PgDn詳細 · Esc戻る
-task-board-formKeys = Ctrl+Enter / Alt+Enter送信 · Ctrl+R最新状態を再確認 · Esc閉じる。編集時Enterで改行。
-task-board-compactKeys = ↑↓選択 · Enter実行 · n新規 · u再開 · a承認 · c取消 · r更新 · [/]ページ · Esc戻る
 
 ## Workspace assistant
 command-assistant-summary = アシスタント
@@ -3230,7 +3170,7 @@ integrations-state_enabled = 有効
 integrations-state_paused = 一時停止
 integrations-state_expired = 期限切れ
 integrations-state_faulted = 確認が必要
-integrations-keys = ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
+integrations-keys = Enter session · ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
 integrations-formKeys = Ctrl+Enter / Alt+Enter save draft · Enter newline · Esc close. Enable requires separate confirmation.
 
 ## Scoped channel access
@@ -3270,11 +3210,46 @@ channelAccess-role_operator = Operator
 channelAccess-role_administrator = Administrator
 channelAccess-role_owner = Owner
 channelAccess-capabilities = Capabilities per role
-channelAccess-capabilityHint = A role grants no tools by itself. Use exact canonical tool IDs and hosts. Shared context permits no tools, private memory or background work.
-channelAccess-work = Background work
+channelAccess-capabilityHint = A role grants no tools by itself. Use exact canonical tool IDs and hosts. Shared context permits no tools or private memory.
 channelAccess-memory = Private memory
 channelAccess-project = Source project access
 channelAccess-tools = Allowed tools, one canonical ID per line
 channelAccess-network = Allowed network hosts, one per line
 channelAccess-reports = Allow automated posts from a separate service session
 channelAccess-stale = The policy changed elsewhere. Close, refresh and review again; your stale settings will not overwrite the latest policy.
+
+# Canonical AI Bot chat
+command-bot-summary = AI Bot のチャットを開く
+bot-title = AI Bot
+bot-description = プロジェクトの会話を検索・整理・再開し、モデル、キュー、分岐を操作します。
+bot-opening = Bot チャットを開いています…
+bot-open-failed = AI Bot を開けませんでした。
+bot-retry-help = Enter / r 再試行 · Esc 戻る
+bot-loading-help = Esc 戻る · Ctrl+G プロジェクト
+bot-session-header = AI Bot · Ctrl+G プロジェクト
+hub-bot-entry = b AI Bot · Ctrl+B
+bot-ready = 準備完了
+
+# Named Bot registry and independent persona editor
+bot-manager-title = 名前付き Bot
+bot-list-keys = ↑↓ 選択 · Enter 開く · n 作成
+    e 編集 · a アーカイブ · r 更新
+    w ワークスペース設定 · Esc 戻る
+bot-entry-keys = Enter/r 再試行 · l Bot 一覧 · Esc 戻る
+bot-confirm-keys = Enter 確認 · Esc キャンセル
+bot-editor-keys = Ctrl+Enter/Alt+Enter 適用 · Esc 取消
+bot-form-keys = ↑↓ 項目 · Enter 編集 · s 保存
+    r 再読み込み · Esc 戻る
+bot-current = （選択中）
+bot-empty = 有効な Bot がありません。n で作成。
+bot-archive-confirm = この Bot をアーカイブしますか？サーバーは待機状態を確認します。会話履歴は保持されます。
+bot-reload-confirm = 下書きを破棄し、保存済みの最新の設定を読み込みますか？
+bot-error-guidance = 失敗しました。下書きは保持されます。バージョン競合時は再読み込みしてください。
+bot-form-invalid = 名前を入力してください。指示は 4096 バイト以内です。
+bot-command-help = /bot · /bot list · /bot create · /bot edit · /bot UUID
+hub-bot-list = l Bot 一覧
+bot-create-title = Bot を作成
+bot-edit-title = Bot を編集
+
+bot-instructions = 追加システム指示
+bot-instructions-empty = 追加システム指示は未設定

@@ -20,22 +20,40 @@ pub(super) struct PendingSessionReconfiguration {
     processor: SessionProcessor,
     executor: ToolExecutor,
     config: agena_runtime::RuntimeSessionManagerConfig,
+    global_providers: Arc<ProviderRegistry>,
+    global_processor: SessionProcessor,
+    global_executor: ToolExecutor,
+    global_config: agena_runtime::RuntimeSessionManagerConfig,
 }
 
 impl PendingSessionReconfiguration {
     pub(super) fn publish(self, manager: &SessionManager) {
-        manager.reconfigure(
-            self.providers,
+        manager.reconfigure_scopes(
             ContextGovernor::new(ContextPolicy::default()),
-            self.processor,
-            self.executor,
-            self.config,
+            agena_runtime::SessionScopeReconfiguration {
+                providers: self.providers,
+                processor: self.processor,
+                executor: self.executor,
+                config: self.config,
+            },
+            agena_runtime::SessionScopeReconfiguration {
+                providers: self.global_providers,
+                processor: self.global_processor,
+                executor: self.global_executor,
+                config: self.global_config,
+            },
         );
     }
 }
 
 pub(super) fn build_or_prepare_session_manager(
     inputs: SessionCompositionInputs<'_>,
+    global_providers: Arc<ProviderRegistry>,
+    global_plugins: Arc<PluginHost>,
+    global_mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    global_lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
+    global_internal_root: &Path,
+    global_build_config: &agena_runtime::RuntimeSessionBuildConfig,
 ) -> (Arc<SessionManager>, Option<PendingSessionReconfiguration>) {
     let agena_runtime::SessionCompositionInputs {
         existing,
@@ -54,6 +72,11 @@ pub(super) fn build_or_prepare_session_manager(
             as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
     });
     let processor = SessionProcessor::new(Arc::clone(&plugins));
+    let global_processor = SessionProcessor::new(Arc::clone(&global_plugins));
+    let global_inspector = global_mcp_manager.map(|manager| {
+        Arc::new(McpRiskPermissionInspector { manager })
+            as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
+    });
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
         auxiliary_selection: build_config.auxiliary_selection.clone(),
@@ -64,18 +87,39 @@ pub(super) fn build_or_prepare_session_manager(
         max_concurrent_tools: build_config.max_concurrent_tools,
         max_turns: build_config.max_turns,
     };
+    let global_config = agena_runtime::RuntimeSessionManagerConfig {
+        default_selection: global_build_config.default_selection.clone(),
+        auxiliary_selection: global_build_config.auxiliary_selection.clone(),
+        prompts: global_build_config.prompts.clone(),
+        auto_title: global_build_config.auto_title.clone(),
+        permission: global_build_config.permission.clone(),
+        auto_compaction: global_build_config.auto_compaction,
+        max_concurrent_tools: global_build_config.max_concurrent_tools,
+        max_turns: global_build_config.max_turns,
+    };
 
     if let Some(manager) = existing {
         let executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
                 plugins,
-                lsp_registry,
+                lsp_registry: lsp_registry.clone(),
                 workspace_root,
                 session_manager: Some(Arc::clone(&manager)),
                 monitor_registry: monitor_registry.clone(),
                 scheduler_database: scheduler_database.clone(),
             },
             permission_inspector,
+        );
+        let global_executor = build_tool_executor(
+            agena_runtime::ToolCompositionInputs {
+                plugins: global_plugins,
+                lsp_registry: global_lsp_registry,
+                workspace_root: global_internal_root,
+                session_manager: Some(Arc::clone(&manager)),
+                monitor_registry: monitor_registry.clone(),
+                scheduler_database: scheduler_database.clone(),
+            },
+            global_inspector,
         );
         // The shared manager is already serving the published snapshot. Keep
         // its replacement execution state private until lifecycle publication.
@@ -86,6 +130,10 @@ pub(super) fn build_or_prepare_session_manager(
                 processor,
                 executor,
                 config,
+                global_providers,
+                global_processor,
+                global_executor,
+                global_config,
             }),
         );
     }
@@ -112,11 +160,11 @@ pub(super) fn build_or_prepare_session_manager(
     let executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
             plugins,
-            lsp_registry,
+            lsp_registry: lsp_registry.clone(),
             workspace_root,
             session_manager: Some(Arc::clone(&manager)),
             monitor_registry: monitor_registry.clone(),
-            scheduler_database,
+            scheduler_database: scheduler_database.clone(),
         },
         permission_inspector,
     );
@@ -126,6 +174,23 @@ pub(super) fn build_or_prepare_session_manager(
         processor,
         executor,
         config,
+    );
+    let global_executor = build_tool_executor(
+        agena_runtime::ToolCompositionInputs {
+            plugins: global_plugins,
+            lsp_registry: global_lsp_registry,
+            workspace_root: global_internal_root,
+            session_manager: Some(Arc::clone(&manager)),
+            monitor_registry,
+            scheduler_database,
+        },
+        global_inspector,
+    );
+    manager.reconfigure_global(
+        global_providers,
+        global_processor,
+        global_executor,
+        global_config,
     );
     (manager, None)
 }

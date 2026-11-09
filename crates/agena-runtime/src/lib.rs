@@ -162,7 +162,9 @@ pub use agena_runtime_plugins::plugin_runtime_service::{
     PluginRuntimeRpcError, PluginRuntimeService, PluginToolDescriptor, RuntimePluginToolCatalogItem,
 };
 pub(crate) use agena_runtime_plugins::plugin_shutdown::PluginShutdownCoordinator;
-pub(crate) use agena_runtime_plugins::plugin_slot::{current_plugin_host, install_plugin_host};
+pub(crate) use agena_runtime_plugins::plugin_slot::{
+    current_plugin_host, install_global_plugin_host, install_plugin_host,
+};
 pub(crate) use agena_runtime_provider::fetch_latest_provider_client_versions;
 pub(crate) use agena_runtime_provider::provider_model_catalog_priorities;
 pub(crate) use agena_runtime_provider::{
@@ -173,7 +175,6 @@ pub(crate) use agena_runtime_provider::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_
 pub(crate) use agena_runtime_provider::{configured_enabled_adapter_ids, configured_local_models};
 pub(crate) use agena_runtime_session::ContextGovernor;
 pub use agena_runtime_session::RuntimeMetricsSnapshot;
-pub(crate) use agena_runtime_session::RuntimeSessionManagerConfig;
 pub(crate) use agena_runtime_session::merge_system_prompts;
 pub(crate) use agena_runtime_session::resolve_installation_id;
 pub(crate) use agena_runtime_session::run_session_maintenance;
@@ -183,6 +184,7 @@ pub(crate) use agena_runtime_session::{
     prompt_token_budget, session_output_token_budget,
 };
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
+pub(crate) use agena_runtime_session::{RuntimeSessionManagerConfig, SessionScopeReconfiguration};
 pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,

@@ -178,18 +178,25 @@ async fn command_workspace_root(
                 format!("session not found: {session_id}"),
             )
         })?;
+    let workspace_id = command_workspace_id(session.workspace_id)?;
     let workspace = state
         .service()
-        .get_workspace(session.workspace_id)
+        .get_workspace(workspace_id)
         .await
         .map_err(server_error_from_application)?
         .ok_or_else(|| {
             ServerError::not_found_with_diagnostic(
                 "The workspace was not found.",
-                format!("workspace not found: {}", session.workspace_id),
+                format!("workspace not found: {workspace_id}"),
             )
         })?;
     Ok(Some(workspace.path))
+}
+
+fn command_workspace_id(workspace_id: Option<i64>) -> Result<i64, ServerError> {
+    workspace_id.ok_or_else(|| {
+        ServerError::bad_request("This session has no project workspace. Run the plugin command from a session in an explicit project.")
+    })
 }
 
 pub async fn list_plugin_logs(
@@ -224,3 +231,17 @@ use super::{
     PluginSurfaceCatalogResponse, PluginToolInvokeRequest, ServerError, State, items_json,
     server_error_from_application,
 };
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+
+    #[test]
+    fn global_session_command_requires_an_explicit_project_session() {
+        assert_eq!(command_workspace_id(Some(42)).unwrap(), 42);
+        let error = command_workspace_id(None).unwrap_err();
+        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        let body = serde_json::to_string(&error.into_api()).unwrap();
+        assert!(body.contains("explicit project"));
+    }
+}

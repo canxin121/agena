@@ -20,28 +20,72 @@ impl ProviderRegistry {
         discovery
             .models
             .dedup_by(|a, b| a.model.adapter_id == b.model.adapter_id && a.model.id == b.model.id);
+        self.remember_model_inventory(
+            provider_id,
+            discovery
+                .models
+                .iter()
+                .map(|entry| entry.model.clone())
+                .collect(),
+        );
         Ok(discovery)
     }
 
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, ProviderError> {
         let provider = self.require_provider(provider_id)?;
         let provider_id = provider_id.to_owned();
-        self.call_with_retry(provider_id.as_str(), "list_models", {
-            let provider = provider.clone();
-            let provider_id = provider_id.clone();
-            move || {
+        let models = self
+            .call_with_retry(provider_id.as_str(), "list_models", {
                 let provider = provider.clone();
                 let provider_id = provider_id.clone();
-                async move {
-                    let mut models = provider.list_models().await?;
-                    for model in &mut models {
-                        prepare_listed_model(provider.as_ref(), provider_id.as_str(), model, true);
+                move || {
+                    let provider = provider.clone();
+                    let provider_id = provider_id.clone();
+                    async move {
+                        let mut models = provider.list_models().await?;
+                        for model in &mut models {
+                            prepare_listed_model(
+                                provider.as_ref(),
+                                provider_id.as_str(),
+                                model,
+                                true,
+                            );
+                        }
+                        Ok(models)
                     }
-                    Ok(models)
                 }
+            })
+            .await?;
+        self.remember_model_inventory(&provider_id, models.clone());
+        Ok(models)
+    }
+
+    fn remember_model_inventory(&self, provider_id: &str, models: Vec<Model>) {
+        self.inventory
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(provider_id.into(), models);
+    }
+
+    /// Native configured routes plus the last successfully discovered inventory.
+    /// Listing choices never performs network discovery and never appends a
+    /// model merely because it appears in a public catalog or default string.
+    pub fn selection_model_inventory(&self) -> Vec<Model> {
+        let cached = self.inventory.lock().unwrap_or_else(|p| p.into_inner());
+        let mut models = Vec::new();
+        for (id, provider) in &self.providers {
+            if let Some(entries) = cached.get(id) {
+                models.extend(entries.clone());
             }
-        })
-        .await
+            for mut model in provider.configured_models() {
+                prepare_listed_model(provider.as_ref(), id, &mut model, true);
+                models.retain(|entry| entry.reference() != model.reference());
+                models.push(model);
+            }
+        }
+        models.sort_by_key(|model| model.reference().to_string());
+        models.dedup_by(|a, b| a.reference() == b.reference());
+        models
     }
 
     pub fn model_capabilities(&self, model: &ModelRef) -> Result<ModelCapabilities, ProviderError> {

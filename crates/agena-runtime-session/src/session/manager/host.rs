@@ -96,12 +96,20 @@ impl SessionManager {
                     .map_err(kernel_error)?
                     .workspace_id
             }
-            _ => self.current_workspace_id().await?,
+            _ => Some(self.current_workspace_id().await?),
         };
+        if workspace.is_none()
+            && let agena_domain::PermissionAction::PathAccess { target_path, .. } = &check.action
+            && !std::path::Path::new(target_path).is_absolute()
+        {
+            return Err(AppError::Config(
+                "Global sessions require a full absolute path".into(),
+            ));
+        }
         let rules = self
             .kernel_runtime
             .permissions
-            .resolve(&key, session, Some(workspace))
+            .resolve(&key, session, workspace)
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let rules = rules
@@ -129,6 +137,11 @@ impl SessionManager {
         path: String,
     ) -> Result<(), AppError> {
         self.require_host_permission(session, call, move |executor| {
+            if executor.is_global() && !std::path::Path::new(&path).is_absolute() {
+                return Err(ToolError::invalid_input(
+                    "Global sessions require a full absolute path",
+                ));
+            }
             let access = match kind {
                 agena_domain::PathKind::Read => agena_domain::AccessKind::Read,
                 agena_domain::PathKind::Write => agena_domain::AccessKind::Write,
@@ -326,7 +339,7 @@ impl SessionManager {
                 .map_err(tool_error);
         }
         let (tool, control) = self.live_tool(session, call)?;
-        let state = self.state.load_full();
+        let state = self.state_for_session(session_id(session)?).await?;
         let context = self.execution_context_value(session_id(session)?).await?;
         let executor = state
             .executor
@@ -418,11 +431,10 @@ impl crate::SessionToolExecutionService for SessionManager {
         invocation: ToolInvocation,
     ) -> Result<crate::SessionToolExecutionOutcome, crate::SessionToolExecutionError> {
         let result = async {
-            let context = self.execution_context_value(session_id(id)?).await?;
-            let executor = self
-                .tool_executor()
-                .for_session_context_async(&context)
-                .await;
+            let session = session_id(id)?;
+            let state = self.state_for_session(session).await?;
+            let context = self.execution_context_with_state(session, &state).await?;
+            let executor = state.executor.for_session_context_async(&context).await;
             let prepared = executor
                 .prepare_invocation(&invocation, id, -1)
                 .await
@@ -469,9 +481,15 @@ impl crate::SessionPluginCommandService for SessionManager {
         &self,
         request: crate::SessionPluginCommandRequest,
     ) -> Result<agena_plugin_host::sdk::CommandResult, crate::SessionPluginCommandError> {
-        self.get_session(request.session_id)
+        let session = self
+            .get_session(request.session_id)
             .await
             .map_err(|e| crate::SessionPluginCommandError::Execution(e.to_string()))?;
+        if session.workspace_id.is_none() {
+            return Err(crate::SessionPluginCommandError::Execution(
+                "This command requires a project session; select a project conversation".into(),
+            ));
+        }
         self.tool_executor()
             .plugin_manager()
             .invoke_plugin_command_async(

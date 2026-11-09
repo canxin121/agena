@@ -1,4 +1,4 @@
-use agena_superagent::{AssistantPatch, ReminderSpec};
+use agena_assistant::{AssistantPatch, ReminderSpec};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

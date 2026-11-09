@@ -273,7 +273,11 @@ impl App {
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .upload_workspace_attachment(
+                    .upload_session_attachment(
+                        match slot {
+                            DraftSlot::Session(id) => Some(id),
+                            DraftSlot::NewSession => None,
+                        },
                         &filename,
                         text.as_bytes(),
                         Some("text/plain; charset=utf-8"),
@@ -1228,7 +1232,8 @@ impl App {
                             .first_raw()
                             .map(str::to_owned);
                         application
-                            .upload_workspace_attachment(
+                            .upload_session_attachment(
+                                match slot { DraftSlot::Session(id) => Some(id), DraftSlot::NewSession => None },
                                 filename.as_str(),
                                 bytes.as_slice(),
                                 mime.as_deref(),

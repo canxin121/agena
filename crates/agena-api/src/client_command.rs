@@ -63,6 +63,7 @@ client_command_actions! {
     New => "new", "/new";
     Sessions => "sessions", "/sessions";
     Hub => "hub", "/hub";
+    Bot => "bot", "/bot";
     Lineage => "lineage", "/lineage";
     Rewind => "rewind", "/rewind";
     Rename => "rename", "/rename";
@@ -92,10 +93,8 @@ client_command_actions! {
     Queue => "queue", "/queue";
     Background => "background", "/background";
     Plan => "plan", "/plan";
-    Tasks => "tasks", "/tasks";
     Assistant => "assistant", "/assistant";
     Integrations => "integrations", "/integrations";
-    Task => "task", "/task";
     InlineUi => "inline-ui", "/ui";
     Side => "side", "/side";
     Btw => "btw", "/btw";
@@ -115,5 +114,44 @@ impl<'de> Deserialize<'de> for ClientCommandAction {
         Self::from_action(action.as_str()).ok_or_else(|| {
             serde::de::Error::custom(format!("unknown client command action `{action}`"))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClientCommandAction;
+
+    #[test]
+    fn retired_task_commands_are_not_public_actions() {
+        for name in ["task", "tasks"] {
+            assert!(ClientCommandAction::from_action(name).is_none());
+            assert!(serde_json::from_value::<ClientCommandAction>(name.into()).is_err());
+            assert!(
+                ClientCommandAction::ALL.iter().all(|action| {
+                    action.action() != name && action.slash() != format!("/{name}")
+                })
+            );
+        }
+        for name in ["bot", "activities", "background", "queue"] {
+            assert!(ClientCommandAction::from_action(name).is_some());
+        }
+    }
+
+    #[test]
+    fn bot_has_its_own_wire_action_and_slash() {
+        assert_eq!(
+            ClientCommandAction::from_action("bot"),
+            Some(ClientCommandAction::Bot)
+        );
+        assert_eq!(ClientCommandAction::Bot.slash(), "/bot");
+        assert_eq!(
+            serde_json::to_string(&ClientCommandAction::Bot).unwrap(),
+            "\"bot\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ClientCommandAction>("\"bot\"").unwrap(),
+            ClientCommandAction::Bot
+        );
+        assert_ne!(ClientCommandAction::Bot, ClientCommandAction::Assistant);
     }
 }

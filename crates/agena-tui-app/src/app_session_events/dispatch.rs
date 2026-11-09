@@ -53,6 +53,9 @@ impl App {
             AppMessage::UsageStatsLoaded { request_id, result } => {
                 self.handle_usage_stats_loaded(request_id, result)
             }
+            AppMessage::BotSessionReady { request_id, result } => {
+                self.handle_bot_session_ready(request_id, result);
+            }
             AppMessage::HubCatalogLoaded { request_id, result } => {
                 self.handle_hub_catalog_loaded(request_id, result)
             }

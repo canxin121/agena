@@ -96,6 +96,9 @@ impl ToolExecutor {
                 metadata: Default::default(),
             });
         };
+        if self.is_global() {
+            self.collect_builtin_effect_checks(&mut Vec::new(), &definition, invocation)?;
+        }
         let plugin_name = definition.plugin_full_name();
         self.check_cloud_tool_adapter(&definition.canonical_name())?;
         let input_json = invocation_input_json(invocation)?;
@@ -164,12 +167,12 @@ impl ToolExecutor {
         );
         let mut checks = vec![ToolPermissionCheck { action, decision }];
 
-        if let Some(inspector) = self.permission_inspector.as_ref() {
-            checks.extend(inspector.additional_checks(invocation, &self.principal)?);
-        }
-
         if let Some(resolution) = self.invocation_definition(invocation) {
             self.collect_builtin_effect_checks(&mut checks, &resolution, invocation)?;
+        }
+
+        if let Some(inspector) = self.permission_inspector.as_ref() {
+            checks.extend(inspector.additional_checks(invocation, &self.principal)?);
         }
 
         Ok(checks)
@@ -299,6 +302,9 @@ impl ToolExecutor {
             .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
 
+        if self.is_global() {
+            self.collect_builtin_effect_checks(&mut Vec::new(), &resolution, invocation)?;
+        }
         resolution
             .validate_input(&serde_json::Value::from(invocation.input.clone()))
             .map_err(ToolError::invalid_input)?;

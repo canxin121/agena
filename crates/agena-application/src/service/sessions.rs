@@ -28,6 +28,7 @@ impl ApplicationService {
             .session_kernel
             .reader
             .query_summaries(SummaryQuery {
+                include_global: query.parent_id.is_some(),
                 workspace_id: query.workspace_id,
                 parent_id: query.parent_id.map(crate::kernel_session_id).transpose()?,
                 roots_only: query.roots,

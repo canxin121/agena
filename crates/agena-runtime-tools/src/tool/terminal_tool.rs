@@ -43,6 +43,12 @@ pub(super) fn owner(
     executor: &ToolExecutor,
     session_id: Option<i64>,
 ) -> Result<TerminalOwner, ToolError> {
+    if executor.is_global() {
+        return Ok(TerminalOwner {
+            workspace: PathBuf::new(),
+            session_id,
+        });
+    }
     let workspace = std::fs::canonicalize(executor.workspace_root()).map_err(|error| {
         ToolError::invalid_input(format!("resolve terminal workspace: {error}"))
     })?;
@@ -56,6 +62,12 @@ pub(super) async fn owner_async(
     executor: &ToolExecutor,
     session_id: Option<i64>,
 ) -> Result<TerminalOwner, ToolError> {
+    if executor.is_global() {
+        return Ok(TerminalOwner {
+            workspace: PathBuf::new(),
+            session_id,
+        });
+    }
     let workspace = tokio::fs::canonicalize(executor.workspace_root())
         .await
         .map_err(|error| {

@@ -473,6 +473,12 @@ impl KernelBackend for Backend {
         )
         .await
     }
+    async fn management_ancestry(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Vec<ManagementAncestor>>> {
+        lifecycle::management_ancestry(self, session).await
+    }
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>> {
         lifecycle::query_summaries(self, query).await
     }
@@ -1718,7 +1724,7 @@ async fn commit_batch(
                 return aborted_batch(results, batch.len(), sequence, error);
             }
         };
-        match sqlx::query_scalar::<_, i64>("SELECT DISTINCT workspace_id FROM agena_sessions WHERE id IN (SELECT value FROM json_each(?))")
+        match sqlx::query_scalar::<_, i64>("SELECT DISTINCT workspace_id FROM agena_sessions WHERE workspace_id IS NOT NULL AND id IN (SELECT value FROM json_each(?))")
             .bind(identities).fetch_all(&mut *transaction).await {
             Ok(workspaces) => workspaces,
             Err(error) => {
@@ -1755,10 +1761,12 @@ async fn commit_batch(
     // Agent settlement updates the child and a different session's mailbox in
     // one transaction. A reset makes both observers take a consistent snapshot.
     let agent_handoff = batch.iter().zip(&results).any(|(pending, result)| {
-        matches!(pending.command, Command::FinishAgent { .. })
-            && result
-                .as_ref()
-                .is_ok_and(|r| r.position.sequence == sequence)
+        matches!(
+            pending.command,
+            Command::FinishAgent { .. } | Command::DetachGlobal { .. }
+        ) && result
+            .as_ref()
+            .is_ok_and(|r| r.position.sequence == sequence)
     });
     let shared_family = if agent_handoff {
         true
@@ -1976,14 +1984,18 @@ fn aborted_batch(
 
 fn previous_list_session(command: &Command) -> Option<SessionId> {
     Some(match command {
-        Command::CreateConfigured { .. } | Command::CreateSession { .. } | Command::Fork { .. } => {
+        Command::CreateConfigured { .. }
+        | Command::CreateGlobal { .. }
+        | Command::CreateSession { .. }
+        | Command::Fork { .. } => {
             return None;
         }
         Command::PresentInteraction { session, .. }
+        | Command::DetachGlobal { session, .. }
         | Command::Configure { session, .. }
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
-        | Command::DeleteSession { session }
+        | Command::DeleteSession { session, .. }
         | Command::Continue { session, .. }
         | Command::StartControlExecution { session, .. }
         | Command::Deliver { session, .. }
@@ -1992,6 +2004,8 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::ResumeDelivery { session, .. }
         | Command::ConsumeDelivery { session, .. }
         | Command::Metadata { session, .. }
+        | Command::SelectionPatch { session, .. }
+        | Command::QueueControl { session, .. }
         | Command::Selection { session, .. }
         | Command::Send { session, .. }
         | Command::EditQueued { session, .. }
@@ -2080,7 +2094,9 @@ pub(super) async fn list_state(
 fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKind) {
     match command {
         Command::RecordCompaction { scope, .. } => (scope.session, ChangeKind::Round),
-        Command::CreateConfigured { .. } | Command::CreateSession { .. } => match mutation {
+        Command::CreateConfigured { .. }
+        | Command::CreateGlobal { .. }
+        | Command::CreateSession { .. } => match mutation {
             Mutation::Session(metadata) => (metadata.id, ChangeKind::Metadata),
             _ => unreachable!("validated create-session result"),
         },
@@ -2090,11 +2106,11 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
             Mutation::Rewind(value) => (value.session.id, ChangeKind::Membership),
             _ => (*session, ChangeKind::Membership),
         },
-        Command::Configure { session, .. } | Command::FinishAgent { session, .. } => {
-            (*session, ChangeKind::Metadata)
-        }
+        Command::Configure { session, .. }
+        | Command::DetachGlobal { session, .. }
+        | Command::FinishAgent { session, .. } => (*session, ChangeKind::Metadata),
         Command::Withdraw { session, .. }
-        | Command::DeleteSession { session }
+        | Command::DeleteSession { session, .. }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
         Command::Continue { session, .. }
         | Command::ResumeDelivery { session, .. }
@@ -2111,13 +2127,14 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         Command::Deliver { session, .. } | Command::DeliverToExecution { session, .. } => {
             (*session, ChangeKind::Activity)
         }
-        Command::Metadata { session, .. } | Command::Selection { session, .. } => {
-            (*session, ChangeKind::Metadata)
-        }
+        Command::Metadata { session, .. }
+        | Command::Selection { session, .. }
+        | Command::SelectionPatch { session, .. } => (*session, ChangeKind::Metadata),
         Command::Send { session, .. } | Command::StartControlExecution { session, .. } => {
             (*session, ChangeKind::Membership)
         }
-        Command::Claim { session, .. }
+        Command::QueueControl { session, .. }
+        | Command::Claim { session, .. }
         | Command::EditQueued { session, .. }
         | Command::ClaimNext { session, .. }
         | Command::Cancel { session, .. }
@@ -2266,7 +2283,7 @@ async fn execute(
 struct EntryChanges {
     entries: Vec<EntryId>,
     requires_snapshot: bool,
-    workspace_id: i64,
+    workspace_id: Option<i64>,
     include_in_lists: bool,
     list_change: Option<SessionListChange>,
 }

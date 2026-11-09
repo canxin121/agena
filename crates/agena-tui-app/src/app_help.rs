@@ -102,6 +102,12 @@ impl App {
                 HelpPreset::Usage,
                 ui_text::t(&self.i18n, "context-help-context-usage"),
             ),
+            Route::BotEntry(_) if self.bot.accepts_text() => {
+                self.help_for_editor(self.i18n.text("bot-persona-title"), true)
+            }
+            Route::BotEntry(_) => {
+                self.help_for(HelpPreset::Bots, self.i18n.text("bot-manager-title"))
+            }
             Route::Hub(_) => self.help_for(
                 HelpPreset::Hub,
                 ui_text::t(&self.i18n, "context-help-context-hub"),
@@ -114,7 +120,6 @@ impl App {
                 self.help_for_editor(self.i18n.text("integrations-title"), true)
             }
             Route::Assistant(_) => self.help_for_editor(self.i18n.text("assistant-title"), true),
-            Route::Tasks(_) => self.help_for_editor(self.i18n.text("task-board-title"), true),
             Route::PlanViewer(_) => self.help_for(
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-plan-viewer"),

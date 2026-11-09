@@ -78,6 +78,37 @@ impl std::error::Error for SessionExecutionCommandError {}
 #[async_trait]
 /// Service that accepts session execution commands.
 pub trait SessionExecutionCommandService: Send + Sync {
+    async fn ensure_bot_session(&self) -> Result<i64, SessionExecutionCommandError>;
+    async fn list_bots(
+        &self,
+        include_archived: bool,
+    ) -> Result<agena_assistant::bot::BotList, SessionExecutionCommandError>;
+    async fn create_bot(
+        &self,
+        create: agena_assistant::bot::BotCreate,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError>;
+    async fn get_bot(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError>;
+    async fn update_bot(
+        &self,
+        id: uuid::Uuid,
+        update: agena_assistant::bot::BotUpdate,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError>;
+    async fn archive_bot(
+        &self,
+        id: uuid::Uuid,
+        archive: agena_assistant::bot::BotArchive,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError>;
+    async fn ensure_named_bot_session(
+        &self,
+        id: uuid::Uuid,
+    ) -> Result<agena_assistant::bot::BotSession, SessionExecutionCommandError>;
+    async fn ensure_default_bot_profile(
+        &self,
+    ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError>;
+
     async fn edit_queued_message(
         &self,
         request: crate::SessionQueuedMessageEditRequest,

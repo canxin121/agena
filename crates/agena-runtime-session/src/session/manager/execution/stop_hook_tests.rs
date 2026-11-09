@@ -209,12 +209,15 @@ async fn plan_autorun_dispatches_fresh_stops_without_the_generic_continuation_ca
         temperature: None,
         max_output_tokens: None,
     };
-    let run = manager.supervise(
-        execution.clone(),
-        options,
-        false,
-        manager.reserve_execution().unwrap(),
-    );
+    let run = manager
+        .supervise(
+            execution.clone(),
+            options,
+            false,
+            manager.reserve_execution().unwrap(),
+        )
+        .await
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), run.wait_settled())
         .await
         .expect("the autorun execution must settle");
@@ -313,12 +316,15 @@ async fn model_turn_budget_exhaustion_still_dispatches_the_stop_hook() {
         temperature: None,
         max_output_tokens: None,
     };
-    let run = manager.supervise(
-        execution.clone(),
-        options,
-        false,
-        manager.reserve_execution().unwrap(),
-    );
+    let run = manager
+        .supervise(
+            execution.clone(),
+            options,
+            false,
+            manager.reserve_execution().unwrap(),
+        )
+        .await
+        .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), run.wait_settled())
         .await
         .expect("the autorun execution must settle");

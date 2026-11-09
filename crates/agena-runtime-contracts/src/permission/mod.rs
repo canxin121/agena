@@ -1283,6 +1283,14 @@ struct MatchContext {
 
 impl MatchContext {
     fn new(workspace_root: &Path, target_path: &Path) -> Self {
+        if workspace_root.as_os_str().is_empty() {
+            return Self {
+                absolute_norm: normalize_path_string(target_path),
+                workspace_relative_norm: None,
+                managed_relative_norm: None,
+                in_workspace: false,
+            };
+        }
         let root_absolute = if workspace_root.is_absolute() {
             workspace_root.to_path_buf()
         } else {

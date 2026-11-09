@@ -32,6 +32,10 @@ pub trait ChannelAccessVerifier: std::fmt::Debug + Send + Sync {
 }
 
 pub trait ToolSessionContext {
+    /// True for a trusted session with no project workspace.
+    fn is_global(&self) -> bool {
+        false
+    }
     fn relation_kind(&self) -> agena_domain::SessionRelationKind {
         agena_domain::SessionRelationKind::Root
     }

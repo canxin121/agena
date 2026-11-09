@@ -1,4 +1,4 @@
-use agena_superagent::IntegrationSpec;
+use agena_assistant::IntegrationSpec;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]

@@ -115,6 +115,9 @@ fn resolve(spec: &CliToolSpec, environment: &SearchEnvironment) -> Option<PathBu
     for name in spec.executables {
         let names = executable_names(name, &environment.path_ext, cfg!(windows));
         for directory in std::env::split_paths(path) {
+            if !directory.is_absolute() && !environment.workspace.is_absolute() {
+                continue;
+            }
             let directory = if directory.is_absolute() {
                 directory
             } else {

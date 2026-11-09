@@ -3,6 +3,26 @@ use agena_domain::KernelEpoch;
 use agena_storage::backend::kernel::ChangeFeed;
 use agena_storage::kernel::{CommitPosition, CommitSequence, SessionId};
 
+#[test]
+fn session_scope_receives_global_changes_without_exposing_them_to_project_lists() {
+    let global = Scope::Global;
+    let project = Scope::Workspace { workspace_id: 2 };
+    let owner = Scope::Session { session_id: 7 };
+    let other = Scope::Session { session_id: 8 };
+    for listed in [false, true] {
+        assert!(includes_session_change(&owner, 7, None, listed));
+        assert!(!includes_session_change(&other, 7, None, listed));
+        assert!(!includes_session_change(&project, 7, None, listed));
+        assert!(!includes_session_change(&global, 7, None, listed));
+    }
+    assert!(includes_session_change(&project, 7, Some(2), true));
+    assert!(!includes_session_change(&project, 7, Some(3), true));
+    assert!(!includes_session_change(&project, 7, Some(2), false));
+    assert!(!belongs_to_workspace(2, None));
+    assert!(!belongs_to_workspace(2, Some(3)));
+    assert!(belongs_to_workspace(2, Some(2)));
+}
+
 #[tokio::test]
 async fn reset_recovery_keeps_commits_while_its_notification_is_backpressured() {
     let feed = ChangeFeed::new(KernelEpoch::new(), 4);

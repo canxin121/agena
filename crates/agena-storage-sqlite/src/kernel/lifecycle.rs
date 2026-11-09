@@ -313,11 +313,23 @@ async fn fork(
     through: EntryId,
     rewind: bool,
     conversation_mode: Option<agena_domain::ConversationMode>,
+    management: Option<&ForkGuard>,
 ) -> Result<Mutation> {
     if rewind && conversation_mode.is_some() {
         return Err(invalid("rewind cannot create a conversation branch"));
     }
     let metadata = reads::metadata(connection, session).await?;
+    if let Some(guard) = management {
+        require_management_ancestry(connection, session).await?;
+        if metadata.metadata_version.get() != guard.metadata_version
+            || reads::summary(connection, session).await?.entry_count != guard.entry_count
+        {
+            return Err(KernelError::Conflict(
+                "fork source changed; inspect it and choose a new boundary and request key".into(),
+            ));
+        }
+    }
+
     let row =
         sqlx::query("SELECT kind,body_json,execution_id,generation FROM agena_entries WHERE id=?")
             .bind(through.get())
@@ -374,6 +386,9 @@ async fn fork(
         SessionRelationKind::Fork
     };
     config.agent = None;
+    if management.is_some_and(|guard| guard.title.is_some()) {
+        config.title_state = SessionTitleState::default();
+    }
     // Stop/pause belongs to the source queue, never to a new branch.
     config.message_queue_paused = false;
     // A branch starts a new topic-check schedule. User-assigned names remain
@@ -393,7 +408,7 @@ async fn fork(
     .await
     .map_err(sql_error)?;
     let now = now_ms();
-    let id:i64=sqlx::query_scalar("INSERT INTO agena_sessions (workspace_id,title,selection_json,parent_session_id,root_session_id,depth,relation_kind,configuration_json,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id").bind(metadata.workspace_id).bind(&metadata.title).bind(metadata.selection.as_ref().map(encode).transpose()?).bind(session.get()).bind(row.try_get::<i64,_>("root").map_err(storage)?).bind(row.try_get::<i64,_>("depth").map_err(storage)?+1).bind(config.relation_kind.as_str()).bind(encode(&config)?).bind(now).bind(now).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    let id:i64=sqlx::query_scalar("INSERT INTO agena_sessions (workspace_id,title,selection_json,parent_session_id,root_session_id,depth,relation_kind,configuration_json,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id").bind(metadata.workspace_id).bind(management.and_then(|g| g.title.as_ref()).unwrap_or(&metadata.title)).bind(metadata.selection.as_ref().map(encode).transpose()?).bind(session.get()).bind(row.try_get::<i64,_>("root").map_err(storage)?).bind(row.try_get::<i64,_>("depth").map_err(storage)?+1).bind(config.relation_kind.as_str()).bind(encode(&config)?).bind(now).bind(now).fetch_one(&mut *connection).await.map_err(sql_error)?;
     let target = SessionId::try_from(id).map_err(storage)?;
     sqlx::query("INSERT INTO agena_session_statistics (session_id) VALUES (?)")
         .bind(id)
@@ -468,6 +483,118 @@ async fn withdraw(
     Ok(Mutation::Session(Box::new(
         reads::metadata(connection, session).await?,
     )))
+}
+/// Shared native reader/writer ancestry snapshot. The target must still exist;
+/// retained parent policy remains authoritative after an ordinary soft delete.
+async fn management_ancestry_on(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+) -> Result<Vec<ManagementAncestor>> {
+    reads::metadata(connection, session).await?;
+    let mut current = session;
+    let mut ancestors = Vec::new();
+    for _ in 0..128 {
+        let row = sqlx::query("SELECT workspace_id,configuration_json,parent_session_id,relation_kind FROM agena_sessions WHERE id=?")
+            .bind(current.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?
+            .ok_or_else(||KernelError::NotFound("retained session ancestor".into()))?;
+        let config: SessionConfiguration =
+            decode(row.try_get("configuration_json").map_err(storage)?)?;
+        let relation = SessionRelationKind::parse(row.try_get("relation_kind").map_err(storage)?)
+            .ok_or_else(|| storage("invalid retained ancestor relation"))?;
+        ancestors.push(ManagementAncestor {
+            session: current,
+            workspace_id: row.try_get("workspace_id").map_err(storage)?,
+            effective_workspace_root: config.effective_workspace_root,
+            excluded_scope: relation.is_subagent()
+                || config.conversation.is_some()
+                || config.channel_authority.is_some()
+                || config.agent.is_some(),
+        });
+        match row
+            .try_get::<Option<i64>, _>("parent_session_id")
+            .map_err(storage)?
+        {
+            Some(parent) => current = SessionId::try_from(parent).map_err(storage)?,
+            None => return Ok(ancestors),
+        }
+    }
+    Err(invalid("management ancestry exceeds supported depth"))
+}
+pub(super) async fn management_ancestry(
+    backend: &Backend,
+    session: SessionId,
+) -> Result<ReadView<Vec<ManagementAncestor>>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .control_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    let value = management_ancestry_on(&mut tx, session).await?;
+    tx.rollback().await.map_err(storage)?;
+    let bytes = modeled_read_bytes(&value)?;
+    backend.wrap_read(session, value, bytes)
+}
+async fn require_management_ancestry(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+) -> Result<()> {
+    if management_ancestry_on(connection, session)
+        .await?
+        .iter()
+        .any(|ancestor| ancestor.excluded_scope)
+    {
+        return Err(KernelError::Ownership);
+    }
+    Ok(())
+}
+async fn check_delete(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    guard: &DeleteGuard,
+) -> Result<()> {
+    if session == guard.source_session {
+        return Err(KernelError::Ownership);
+    }
+    require_management_ancestry(connection, session).await?;
+    let metadata = reads::metadata(connection, session).await?;
+    let control: i64 = sqlx::query_scalar("SELECT control_version FROM agena_sessions WHERE id=?")
+        .bind(session.get())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    if metadata.metadata_version.get() != guard.metadata_version
+        || reads::summary(connection, session).await?.entry_count != guard.entry_count
+        || control != guard.control_version
+    {
+        return Err(KernelError::Conflict("delete confirmation is stale: target changed; inspect status and request fresh confirmation".into()));
+    }
+    let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_attempts WHERE session_id=? AND phase IN ('queued','running')) OR EXISTS(SELECT 1 FROM agena_interactions WHERE session_id=? AND decision_json IS NULL) OR EXISTS(SELECT 1 FROM agena_background_activities WHERE session_id=? AND phase='running') OR EXISTS(SELECT 1 FROM agena_sessions child WHERE child.parent_session_id=? AND child.relation_kind='subagent' AND child.deleted_at_ms IS NULL AND (child.agent_status IN ('created','running') OR EXISTS(SELECT 1 FROM agena_attempts a WHERE a.session_id=child.id AND a.phase IN ('queued','running')) OR EXISTS(SELECT 1 FROM agena_interactions i WHERE i.session_id=child.id AND i.decision_json IS NULL) OR EXISTS(SELECT 1 FROM agena_background_activities b WHERE b.session_id=child.id AND b.phase='running')))")
+        .bind(session.get()).bind(session.get()).bind(session.get()).bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    if busy {
+        return Err(KernelError::Conflict(
+            "target or its Subagents have queued, running, background or waiting work; resolve it before deletion".into(),
+        ));
+    }
+    reads::metadata(connection, guard.source_session).await?;
+    let latest = sqlx::query("SELECT e.id,e.revision FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1")
+        .bind(guard.source_session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?;
+    if latest.as_ref().is_none_or(|row| {
+        row.try_get::<i64, _>("id").ok() != Some(guard.source_message.get())
+            || row.try_get::<i64, _>("revision").ok() != Some(guard.source_revision.get())
+    }) {
+        return Err(KernelError::Conflict(
+            "delete confirmation is stale: the human turn changed; request fresh confirmation"
+                .into(),
+        ));
+    }
+    Ok(())
 }
 async fn delete(connection: &mut SqliteConnection, session: SessionId) -> Result<Mutation> {
     let metadata = reads::metadata(connection, session).await?;
@@ -683,12 +810,18 @@ pub(super) async fn apply(
                 // A work report is a system continuation, never a retry of a
                 // user request. Otherwise tools could mistake the old user
                 // anchor for fresh authorization and recursively start work.
-                let continued = if previous
-                    .payload
-                    .get("kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("conversation_work")
-                {
+                let continued = if matches!(
+                    previous
+                        .payload
+                        .get("kind")
+                        .and_then(serde_json::Value::as_str),
+                    Some(
+                        "assistant_notice"
+                            | "integration_notice"
+                            | "integration_instruction"
+                            | "bot_instruction"
+                    )
+                ) {
                     Mutation::Execution(
                         start_control_execution_with_system_origin(
                             connection,
@@ -747,18 +880,31 @@ pub(super) async fn apply(
             Mutation::InteractionView(Box::new(view))
         }
         Command::CreateConfigured {
-            workspace_id,
-            title,
-            configuration: config,
+            workspace_id: _,
+            title: _,
+            configuration: _,
+        }
+        | Command::CreateGlobal {
+            title: _,
+            configuration: _,
         } => {
-            let created = Box::pin(commands::apply(
-                connection,
-                &Command::CreateSession {
-                    workspace_id: *workspace_id,
-                    title: title.clone(),
-                },
-            ))
-            .await?;
+            let (workspace_id, title, config) = match command {
+                Command::CreateConfigured {
+                    workspace_id,
+                    title,
+                    configuration,
+                } => (Some(*workspace_id), title, configuration),
+                Command::CreateGlobal {
+                    title,
+                    configuration,
+                } => (None, title, configuration),
+                _ => unreachable!(),
+            };
+            if workspace_id.is_none() && config.effective_workspace_root.is_some() {
+                return Err(invalid("global sessions cannot have a workspace root"));
+            }
+            let created =
+                commands::create_session(connection, workspace_id, title, now_ms()).await?;
             let Mutation::Session(metadata) = created else {
                 return Err(storage("invalid create result"));
             };
@@ -782,6 +928,70 @@ pub(super) async fn apply(
             )
             .await?;
             Mutation::Session(Box::new(reads::metadata(connection, metadata.id).await?))
+        }
+        Command::DetachGlobal { session, guard } => {
+            let row = sqlx::query("SELECT metadata_version,control_version,parent_session_id,deleted_at_ms FROM agena_sessions WHERE id=?")
+                .bind(session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?
+                .ok_or_else(|| KernelError::NotFound("session".into()))?;
+            let tombstone_guard = guard.metadata_version == 0
+                && guard.control_version == 0
+                && row
+                    .try_get::<Option<i64>, _>("deleted_at_ms")
+                    .map_err(storage)?
+                    .is_some();
+            if !tombstone_guard
+                && (row.try_get::<i64, _>("metadata_version").map_err(storage)?
+                    != guard.metadata_version
+                    || row.try_get::<i64, _>("control_version").map_err(storage)?
+                        != guard.control_version)
+            {
+                return Err(KernelError::Conflict("global detach root changed".into()));
+            }
+            if row
+                .try_get::<Option<i64>, _>("parent_session_id")
+                .map_err(storage)?
+                .is_some()
+            {
+                return Err(KernelError::Conflict(
+                    "global detach requires a registry root".into(),
+                ));
+            }
+            const TREE: &str = "WITH RECURSIVE tree(id) AS (SELECT id FROM agena_sessions WHERE id=? UNION SELECT s.id FROM agena_sessions s JOIN tree t ON s.parent_session_id=t.id)";
+            let invalid: bool = sqlx::query_scalar(&format!("{TREE} SELECT EXISTS(SELECT 1 FROM tree t JOIN agena_sessions s ON s.id=t.id WHERE json_type(s.configuration_json)!='object') OR EXISTS(SELECT 1 FROM tree t JOIN agena_assistant_reminders r ON r.source_session_id=t.id WHERE json_type(r.reminder_json)!='object')"))
+                .bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+            if invalid {
+                return Err(KernelError::Conflict(
+                    "global detach subtree has invalid configuration or reminder payload".into(),
+                ));
+            }
+            let busy_sql = format!(
+                "{TREE} SELECT EXISTS(SELECT 1 FROM tree t JOIN agena_attempts a ON a.session_id=t.id WHERE a.phase IN ('queued','running')) OR EXISTS(SELECT 1 FROM tree t JOIN agena_interactions i ON i.session_id=t.id WHERE i.decision_json IS NULL) OR EXISTS(SELECT 1 FROM tree t JOIN agena_sessions s ON s.id=t.id WHERE s.agent_status IN ('created','running')) OR EXISTS(SELECT 1 FROM tree t JOIN agena_background_activities b ON b.session_id=t.id WHERE b.phase='running') OR EXISTS(SELECT 1 FROM tree t JOIN agena_deliveries d ON d.session_id=t.id WHERE d.state IN ('pending','claimed')) OR EXISTS(SELECT 1 FROM tree t JOIN agena_assistant_reminders r ON r.source_session_id=t.id WHERE r.state='delivering')"
+            );
+            let busy: bool = sqlx::query_scalar(&busy_sql)
+                .bind(session.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            if busy {
+                return Err(KernelError::Conflict(
+                    "global detach subtree has pending or active work".into(),
+                ));
+            }
+            let total: i64 = sqlx::query_scalar(&format!("{TREE} SELECT count(*) FROM tree"))
+                .bind(session.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            let changed = sqlx::query(&format!("{TREE} UPDATE agena_sessions SET workspace_id=NULL,configuration_json=json_set(configuration_json,'$.effective_workspace_root',NULL),metadata_version=metadata_version+1,control_version=control_version+1,updated_at_ms=MAX(updated_at_ms,?) WHERE id IN (SELECT id FROM tree) AND (workspace_id IS NOT NULL OR json_type(configuration_json,'$.effective_workspace_root') NOT IN ('null') AND json_type(configuration_json,'$.effective_workspace_root') IS NOT NULL)"))
+                .bind(session.get()).bind(now_ms()).execute(&mut *connection).await.map_err(sql_error)?.rows_affected();
+            let reminders = sqlx::query(&format!("{TREE} UPDATE agena_assistant_reminders SET workspace_id=NULL,reminder_json=json_set(reminder_json,'$.workspace_id',NULL) WHERE source_session_id IN (SELECT id FROM tree) AND (workspace_id IS NOT NULL OR json_type(reminder_json,'$.workspace_id') IS NOT 'null')"))
+                .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?.rows_affected();
+            Mutation::DetachedGlobal(DetachGlobalResult {
+                root: *session,
+                affected_sessions: total as u64,
+                changed_sessions: changed,
+                changed_reminders: reminders,
+            })
         }
         Command::Configure { session, change } => configure(connection, *session, change).await?,
         Command::FinishAgent {
@@ -819,9 +1029,25 @@ pub(super) async fn apply(
             through,
             rewind,
             conversation_mode,
-        } => fork(connection, *session, *through, *rewind, *conversation_mode).await?,
+            management,
+        } => {
+            fork(
+                connection,
+                *session,
+                *through,
+                *rewind,
+                *conversation_mode,
+                management.as_ref(),
+            )
+            .await?
+        }
         Command::Withdraw { session, message } => withdraw(connection, *session, *message).await?,
-        Command::DeleteSession { session } => delete(connection, *session).await?,
+        Command::DeleteSession { session, guard } => {
+            if let Some(guard) = guard {
+                check_delete(connection, *session, guard).await?;
+            }
+            delete(connection, *session).await?
+        }
         Command::StartControlExecution { session, purpose } => {
             Mutation::Execution(start_control_execution(connection, *session, *purpose).await?)
         }
@@ -859,10 +1085,11 @@ pub(super) async fn apply(
                     // A continuation after control work needs a fresh anchor:
                     // retrying an older user anchor would hide newer context.
                     Mutation::Execution(
-                        start_control_execution(
+                        start_control_execution_with_system_origin(
                             connection,
                             *session,
                             ControlExecutionPurpose::Continuation,
+                            view.purpose != ExecutionPurpose::Message,
                         )
                         .await?,
                     )
@@ -980,6 +1207,8 @@ fn filter<'a>(
     builder.push("s.deleted_at_ms IS NULL");
     if let Some(workspace) = query.workspace_id {
         builder.push(" AND s.workspace_id=").push_bind(workspace);
+    } else if !query.include_global {
+        builder.push(" AND s.workspace_id IS NOT NULL");
     }
     if let Some(parent) = query.parent_id {
         builder
@@ -1043,7 +1272,7 @@ pub(super) async fn query_summaries(
     if query.workspace_id.is_some_and(|id| id <= 0) {
         return Err(invalid("invalid workspace"));
     }
-    let workspace = query.workspace_id.unwrap_or(0);
+    let workspace = query.workspace_id;
     if query
         .before
         .is_some_and(|cursor| cursor.workspace_id != workspace)
@@ -1119,9 +1348,10 @@ pub(super) async fn query_summaries(
     let bytes = modeled_read_bytes(&value)?;
     Ok(ReadView::from_lease(
         value,
-        backend
-            .views
-            .reserve_owned(ReadOwner::Workspace(workspace), bytes)?,
+        backend.views.reserve_owned(
+            workspace.map_or(ReadOwner::Shared, ReadOwner::Workspace),
+            bytes,
+        )?,
     ))
 }
 pub(super) async fn activity_summary(
@@ -1177,9 +1407,7 @@ pub(super) async fn activity_summary(
     let bytes = modeled_read_bytes(&value)?;
     Ok(ReadView::from_lease(
         value,
-        backend
-            .views
-            .reserve_owned(ReadOwner::Workspace(0), bytes)?,
+        backend.views.reserve_owned(ReadOwner::Shared, bytes)?,
     ))
 }
 
@@ -1230,9 +1458,7 @@ pub(super) async fn workspace_statistics(
     let bytes = modeled_read_bytes(&value)?;
     Ok(ReadView::from_lease(
         value,
-        backend
-            .views
-            .reserve_owned(ReadOwner::Workspace(0), bytes)?,
+        backend.views.reserve_owned(ReadOwner::Shared, bytes)?,
     ))
 }
 pub(super) async fn rounds(
@@ -1608,9 +1834,7 @@ pub(super) async fn background_activities(
     } else {
         Ok(ReadView::from_lease(
             value,
-            backend
-                .views
-                .reserve_owned(ReadOwner::Workspace(0), bytes)?,
+            backend.views.reserve_owned(ReadOwner::Shared, bytes)?,
         ))
     }
 }

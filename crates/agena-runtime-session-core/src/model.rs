@@ -17,7 +17,7 @@ pub struct Session {
     pub parent_id: Option<i64>,
     pub root_id: i64,
     pub depth: i64,
-    pub workspace_id: i64,
+    pub workspace_id: Option<i64>,
     pub title: String,
     pub favorite: bool,
     pub pinned: bool,
@@ -54,6 +54,8 @@ impl Session {
 /// A request-scoped execution context; it carries policy and routing only.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SessionExecutionContext {
+    #[serde(default)]
+    pub global: bool,
     pub scope_session_id: Option<i64>,
     #[serde(default)]
     pub relation_kind: SessionRelationKind,
@@ -72,6 +74,9 @@ pub struct SessionExecutionContext {
     pub effective_workspace_root: Option<PathBuf>,
 }
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
+    fn is_global(&self) -> bool {
+        self.global
+    }
     fn relation_kind(&self) -> SessionRelationKind {
         self.relation_kind
     }

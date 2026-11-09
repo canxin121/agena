@@ -307,6 +307,7 @@ impl CommitFence {
             sessions.is_some_and(|sessions| match key.owner() {
                 ReadOwner::Session(session) => !sessions.contains(&session),
                 ReadOwner::Workspace(workspace) => !workspaces.contains(&workspace),
+                ReadOwner::Shared => false,
             })
         });
         state.rebuild_event_index();

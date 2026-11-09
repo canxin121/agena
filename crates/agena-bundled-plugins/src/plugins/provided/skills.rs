@@ -221,6 +221,23 @@ impl Plugin for SkillsPlugin {
 
     async fn tool_invoke(&self, input: ToolInvokeInput) -> SdkResult<ToolInvokeOutput> {
         let value = input.input;
+        if Self::is_global_session()
+            && matches!(
+                input.tool_name.as_str(),
+                "create"
+                    | "update"
+                    | "remove"
+                    | "set_enabled"
+                    | "write_resource"
+                    | "remove_resource"
+                    | "preview_install"
+                    | "install"
+            )
+        {
+            return Err(PluginError::invalid_params(
+                "Select a project conversation to modify or install skills.",
+            ));
+        }
         match input.tool_name.as_str() {
             "list" => {
                 let input: ListInput = parse(value)?;
@@ -536,7 +553,19 @@ impl SkillsPlugin {
         Self::default()
     }
 
+    fn is_global_session() -> bool {
+        agena_plugin_host::sdk::host_api::current_host_callback_context().is_some_and(|context| {
+            context.session_id.is_some()
+                && context.workspace_root.as_deref().is_none_or(str::is_empty)
+        })
+    }
+
     fn workspace_root(&self) -> SdkResult<PathBuf> {
+        if Self::is_global_session() {
+            return Err(PluginError::invalid_params(
+                "Select a project conversation to access workspace skills.",
+            ));
+        }
         agena_plugin_host::sdk::host_api::current_host_callback_context()
             .and_then(|context| context.workspace_root)
             .filter(|root| !root.is_empty())
@@ -555,6 +584,13 @@ impl SkillsPlugin {
             return Ok(host
                 .host_handle()
                 .scoped_host_client_for_scope(SKILLS_PLUGIN_ID.to_owned(), plugin.effect_scope()));
+        }
+        if agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .is_some_and(|context| context.session_id.is_some())
+        {
+            return Err(PluginError::internal(
+                "skills host for this session is unavailable",
+            ));
         }
         self.initial_host
             .get()
@@ -594,15 +630,22 @@ impl SkillsPlugin {
                 }
             }
         }
-        Ok(SkillManager::new(
-            self.workspace_root()?,
-            agena_storage_layout::StorageLayout::current()
-                .root()
-                .join("skills"),
-        )
-        .with_additional_roots(additional)
-        .with_declared_skills(declared)
-        .with_disabled_names(disabled))
+        let instance_root = agena_storage_layout::StorageLayout::current()
+            .root()
+            .to_path_buf();
+        let workspace = if Self::is_global_session() {
+            instance_root.join("global-skill-workspace")
+        } else {
+            self.workspace_root()?
+        };
+        let mut manager = SkillManager::new(workspace, instance_root.join("skills"))
+            .with_additional_roots(additional)
+            .with_declared_skills(declared)
+            .with_disabled_names(disabled);
+        if Self::is_global_session() {
+            manager = manager.with_instance_only_roots();
+        }
+        Ok(manager)
     }
 
     async fn run<T: Send + 'static>(
@@ -764,4 +807,35 @@ fn output(title: &str, value: impl Serialize, changed: bool) -> SdkResult<ToolIn
         metadata,
         Vec::new(),
     ))
+}
+
+#[cfg(test)]
+mod global_scope_tests {
+    use super::*;
+    use agena_plugin_host::sdk::host_api::{
+        HostCallbackContext, run_in_isolated_host_callback_context,
+    };
+
+    #[tokio::test]
+    async fn global_session_has_only_instance_skill_root_and_no_workspace() {
+        run_in_isolated_host_callback_context(
+            HostCallbackContext {
+                session_id: Some(1),
+                ..Default::default()
+            },
+            async {
+                let plugin = SkillsPlugin::new();
+                assert!(plugin.workspace_root().is_err());
+                let roots = plugin.manager().unwrap().roots();
+                assert_eq!(roots.len(), 1);
+                assert_eq!(
+                    PathBuf::from(&roots[0].path),
+                    agena_storage_layout::StorageLayout::current()
+                        .root()
+                        .join("skills")
+                );
+            },
+        )
+        .await;
+    }
 }

@@ -1123,12 +1123,29 @@ pub fn render_session_hub(
     let block = Block::default().borders(Borders::ALL).title(title);
     frame.render_widget(block, area);
     let search_visible = search_active || !query.is_empty();
-    let [views, search, content, details, footer] = hub_layout(
+    let [views, search, content, details, footer, bot] = hub_layout(
         area,
         error.is_some(),
         presentation.view(),
         search_visible,
         i18n,
+    );
+    let bot_width = bot.width / 2;
+    frame.render_widget(
+        Paragraph::new(i18n.text("hub-bot-entry")).style(
+            Style::default()
+                .fg(accent_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Rect::new(bot.x, bot.y, bot_width, bot.height),
+    );
+    frame.render_widget(
+        Paragraph::new(i18n.text("hub-bot-list")).style(
+            Style::default()
+                .fg(accent_color())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Rect::new(bot.x + bot_width, bot.y, bot.width - bot_width, bot.height),
     );
     for (view, rect, label) in hub_view_tabs(views, i18n) {
         frame.render_widget(
@@ -1195,13 +1212,14 @@ fn hub_layout(
     view: HubView,
     search_visible: bool,
     i18n: &I18n,
-) -> [Rect; 5] {
+) -> [Rect; 6] {
     let inner = Block::default().borders(Borders::ALL).inner(area);
     let details_height = if inner.height >= 12 { 2 } else { 0 };
     let footer_height = footer::Footer::new(view, None, search_visible, i18n)
         .height(inner.width)
         .min((inner.height / 2).max(1));
     let rows = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(u16::from(search_visible)),
         Constraint::Length(u16::from(has_error)),
@@ -1210,7 +1228,7 @@ fn hub_layout(
         Constraint::Length(footer_height),
     ])
     .split(inner);
-    [rows[0], rows[1], rows[3], rows[4], rows[5]]
+    [rows[1], rows[2], rows[4], rows[5], rows[6], rows[0]]
 }
 
 /// Size independently paged project buckets from the actual list rectangle,
@@ -1252,6 +1270,18 @@ fn hub_view_tabs(area: Rect, i18n: &I18n) -> Vec<(HubView, Rect, String)> {
     tabs
 }
 
+/// The fixed Bot entry is available even before the first catalog arrives.
+pub fn hub_bot_hit_test(area: Rect, column: u16, row: u16) -> bool {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    Rect::new(
+        inner.x,
+        inner.y,
+        inner.width / 2,
+        u16::from(inner.height > 0),
+    )
+    .contains((column, row).into())
+}
+
 pub fn hub_view_hit_test(
     area: Rect,
     has_error: bool,
@@ -1265,6 +1295,19 @@ pub fn hub_view_hit_test(
     )
     .into_iter()
     .find_map(|(view, rect, _)| rect.contains((column, row).into()).then_some(view))
+}
+
+/// Explicit named Bot selector, including on an empty Hub.
+pub fn hub_bot_list_hit_test(area: Rect, column: u16, row: u16) -> bool {
+    let inner = Block::default().borders(Borders::ALL).inner(area);
+    let half = inner.width / 2;
+    Rect::new(
+        inner.x + half,
+        inner.y,
+        inner.width - half,
+        u16::from(inner.height > 0),
+    )
+    .contains((column, row).into())
 }
 
 /// Geometry is shared by rendering and hit testing, including sticky column

@@ -476,7 +476,6 @@ pub struct App {
     pub(super) session_plan: crate::app_session_plan::SessionPlanState,
     pub(crate) integration_panels: BTreeMap<i64, crate::app_integrations::IntegrationState>,
     pub(crate) assistant_panels: BTreeMap<i64, crate::app_assistant::AssistantState>,
-    pub(crate) task_boards: BTreeMap<i64, crate::app_tasks::TaskBoardState>,
     pub(super) route_stack: Vec<Route>,
     pub(super) overlay: Option<Overlay>,
     pub(super) overlay_stack: Vec<Overlay>,
@@ -574,6 +573,7 @@ pub struct App {
     /// Monotonic id for session-hub overview loads. Kept on the app so a late
     /// response from an older hub cannot overwrite a freshly refreshed one.
     pub(super) next_hub_request_id: u64,
+    pub(super) bot: crate::app_bot::BotState,
     pub(super) session_mark_writes: crate::app_session_marks::SessionMarkWrites,
     /// Forwarder task that pumps `app_backend::live_events::subscribe_session_events` into
     /// [`AppMessage::SessionEventArrived`]. Aborted whenever the active
@@ -608,6 +608,7 @@ pub struct App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.bot.cancel();
         self.rx.close();
         if let Some(actor) = self.command_actor.take() {
             actor.abort();
@@ -693,6 +694,10 @@ pub(super) enum AppMessage {
     UsageStatsLoaded {
         request_id: u64,
         result: UiResult<UsageStats>,
+    },
+    BotSessionReady {
+        request_id: u64,
+        result: UiResult<crate::app_bot::BotReply>,
     },
     HubCatalogLoaded {
         request_id: u64,
@@ -1104,7 +1109,6 @@ pub(super) enum Route {
     Usage(UsageDashboardState),
     Activities(ActivitiesState),
     PlanViewer(PlanViewerState),
-    Tasks(i64),
     Assistant(i64),
     Integrations(i64),
     /// Full-screen session work surface (tasks / files / status).
@@ -1117,6 +1121,7 @@ pub(super) enum Route {
     PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),
     Hub(HubState),
+    BotEntry(u64),
     CommandPalette(CommandPaletteOverlay),
     SessionNavigation(SessionNavigationOverlay),
     SelectionPicker(SelectionPickerOverlay),

@@ -1,7 +1,7 @@
 # Reference integration plugins
 
-These are external Python **stdio plugins**, not code linked into Agena's Task
-controller. They use only the Python standard library and the SDK-generated
+These are external Python **stdio plugins** connected to Agena's integration
+dispatcher. They use only the Python standard library and the SDK-generated
 `agena.integration` service contract.
 
 | Plugin | Export | Purpose |
@@ -21,8 +21,12 @@ prompt or an integration rule.
 
 Installing a source does **not** authorize work. Save a proposal and explicitly
 enable its finite grant in Web/TUI `/integrations`. New matches can then run
-automatically within that grant. For private repository triage, use a dedicated
-workspace/session with the desired tool permissions.
+automatically in the selected existing project session within that grant. Choose
+`mode: "session"` and a finite `max_execution_seconds` budget (30–3600 seconds).
+The event is untrusted data inside a typed integration instruction; the grant
+supplies authority, and the session retains its current tools, model and native
+Subagents. People can continue the same visible conversation. Pause, revocation
+and expiry cancel only the event’s recorded execution and generation.
 
 `spool_only=true` in the chat plugin is an explicit local demonstration mode.
 It does not send a message to a real app. The end-to-end product test uses an

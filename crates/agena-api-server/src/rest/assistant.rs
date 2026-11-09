@@ -7,19 +7,19 @@ use axum::{
     extract::{Path, State},
 };
 use uuid::Uuid;
-fn error(e: agena_superagent::Error) -> ServerError {
+fn error(e: agena_assistant::Error) -> ServerError {
     match e {
-        agena_superagent::Error::Invalid(s) => ServerError::bad_request(s),
-        agena_superagent::Error::Conflict(s) => ServerError::conflict(s),
-        agena_superagent::Error::NotFound => {
+        agena_assistant::Error::Invalid(s) => ServerError::bad_request(s),
+        agena_assistant::Error::Conflict(s) => ServerError::conflict(s),
+        agena_assistant::Error::NotFound => {
             ServerError::not_found("assistant resource not found in this workspace")
         }
-        agena_superagent::Error::Unavailable(s) => ServerError::service_unavailable(s),
-        agena_superagent::Error::Policy(s) => ServerError::bad_request_with_diagnostic(
+        agena_assistant::Error::Unavailable(s) => ServerError::service_unavailable(s),
+        agena_assistant::Error::Policy(s) => ServerError::bad_request_with_diagnostic(
             "invalid channel access policy; check identities, owners, role capabilities and limits",
             s,
         ),
-        agena_superagent::Error::Storage(s) => ServerError::internal(s),
+        agena_assistant::Error::Storage(s) => ServerError::internal(s),
     }
 }
 pub async fn get_assistant(
@@ -27,7 +27,7 @@ pub async fn get_assistant(
     Path(source): Path<i64>,
 ) -> Result<Json<AssistantSnapshot>, ServerError> {
     s.application()
-        .superagent()?
+        .assistant_service()?
         .assistant(source)
         .await
         .map(Json)
@@ -39,7 +39,7 @@ pub async fn put_assistant(
     Json(r): Json<AssistantUpdate>,
 ) -> Result<Json<AssistantProfile>, ServerError> {
     s.application()
-        .superagent()?
+        .assistant_service()?
         .update_assistant(source, r)
         .await
         .map(Json)
@@ -51,7 +51,7 @@ pub async fn control_assistant_reminder(
     Json(r): Json<ReminderControl>,
 ) -> Result<Json<Reminder>, ServerError> {
     s.application()
-        .superagent()?
+        .assistant_service()?
         .control_reminder(source, id, r)
         .await
         .map(Json)
@@ -63,7 +63,7 @@ pub async fn edit_assistant_memory(
     Json(r): Json<AssistantMemoryUpdate>,
 ) -> Result<Json<Option<AssistantMemory>>, ServerError> {
     s.application()
-        .superagent()?
+        .assistant_service()?
         .change_assistant_memory(source, r)
         .await
         .map(Json)

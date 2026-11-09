@@ -98,6 +98,7 @@ use agena_tui_platform::terminal::TerminalRuntime;
 mod app_activities;
 mod app_assistant;
 mod app_backend;
+mod app_bot;
 mod app_btw;
 mod app_choice_helpers;
 mod app_clipboard;
@@ -141,7 +142,6 @@ mod app_settings_helpers;
 mod app_status_context;
 mod app_studio_overlays;
 mod app_studio_state_impls;
-mod app_tasks;
 mod app_terminal_integration;
 
 mod app_timeline_helpers;

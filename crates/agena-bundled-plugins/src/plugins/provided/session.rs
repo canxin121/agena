@@ -306,15 +306,23 @@ impl SessionPlugin {
         )
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
-        self.host
-            .get()
-            .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?
-            .require_path_permission(agena_plugin_host::sdk::host_api::PathPermissionQuery::read(
-                context.workspace_root,
-            ))
-            .await?;
+        if !context.is_global() {
+            self.host
+                .get()
+                .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?
+                .require_path_permission(
+                    agena_plugin_host::sdk::host_api::PathPermissionQuery::read(
+                        context.workspace_root,
+                    ),
+                )
+                .await?;
+        }
         let workspace_root = context.workspace_root.to_string();
-        let mut lines = vec![format!("Working directory: {workspace_root}")];
+        let mut lines = vec![if context.is_global() {
+            "Working directory: none".into()
+        } else {
+            format!("Working directory: {workspace_root}")
+        }];
         let mut git_branch = None::<String>;
         let mut git_short_sha = None::<String>;
         let mut git_dirty = None;
@@ -328,9 +336,14 @@ impl SessionPlugin {
                     &error,
                 ))
             })?;
+        let is_global = context.is_global();
         let facts = tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
-            git_facts(Path::new(&git_workspace))
+            if is_global {
+                Ok(None)
+            } else {
+                git_facts(Path::new(&git_workspace))
+            }
         })
         .await
         .map_err(|error| {
@@ -493,6 +506,11 @@ impl SessionPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ExecutablesInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        if context.is_global() && input.probe_versions {
+            return Err(PluginError::invalid_params(
+                "version probes require a project working directory",
+            ));
+        }
         if input.probe_versions && (input.names.is_empty() || input.names.len() > 8) {
             return Err(PluginError::invalid_params(
                 "probe_versions requires 1–8 names",

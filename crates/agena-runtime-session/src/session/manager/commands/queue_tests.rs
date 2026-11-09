@@ -358,7 +358,8 @@ async fn tool_authorization_uses_session_workspace_rules_without_default_fallbac
         .metadata(session_a)
         .await
         .unwrap()
-        .workspace_id;
+        .workspace_id
+        .expect("project fixture workspace");
     // This is the server's already-resolved default workspace. It deliberately
     // differs from B, whose persisted rule must govern B's tools.
     manager.workspace.set(workspace_a).unwrap();

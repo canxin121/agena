@@ -178,13 +178,18 @@ fn patch(base: &AssistantPreferences, p: &AssistantPreferences) -> AssistantPatc
 
 impl App {
     pub(crate) fn open_assistant(&mut self) {
-        let active = self.current_or_selected_session_id().unwrap_or(0);
-        let source = self
-            .task_boards
-            .values()
-            .flat_map(|b| b.items.iter())
-            .find(|t| t.worker_session_id == Some(active))
-            .map_or(active, |t| t.source_session_id);
+        if self.is_bot_session() {
+            self.open_bot_persona();
+            return;
+        }
+        if self.current_or_selected_session_id().is_some() {
+            self.refresh_bot_registry(true);
+        } else {
+            self.flash_warning(self.i18n.text("assistant-noSession"));
+        }
+    }
+    pub(crate) fn open_workspace_assistant(&mut self) {
+        let source = self.current_or_selected_session_id().unwrap_or(0);
         if source <= 0 {
             self.flash_warning(self.i18n.text("assistant-noSession"));
             return;

@@ -19,6 +19,8 @@ pub(super) async fn apply(
         Command::RecordCompaction { .. }
         | Command::PresentInteraction { .. }
         | Command::CreateConfigured { .. }
+        | Command::CreateGlobal { .. }
+        | Command::DetachGlobal { .. }
         | Command::Configure { .. }
         | Command::FinishAgent { .. }
         | Command::Fork { .. }
@@ -39,24 +41,18 @@ pub(super) async fn apply(
             if *workspace_id <= 0 || title.len() > 4096 {
                 return Err(invalid("invalid workspace or title"));
             }
-            let id: i64 = sqlx::query_scalar("INSERT INTO agena_sessions (workspace_id,title,created_at_ms,updated_at_ms) VALUES (?,?,?,?) RETURNING id")
-                .bind(workspace_id).bind(title).bind(now).bind(now).fetch_one(&mut *connection).await.map_err(sql_error)?;
-            sqlx::query("INSERT INTO agena_session_statistics (session_id) VALUES (?)")
-                .bind(id)
-                .execute(&mut *connection)
-                .await
-                .map_err(sql_error)?;
-            sqlx::query("INSERT INTO agena_prompt_windows (session_id) VALUES (?)")
-                .bind(id)
-                .execute(&mut *connection)
-                .await
-                .map_err(sql_error)?;
-            Ok(Mutation::Session(Box::new(
-                reads::metadata(connection, SessionId::try_from(id).map_err(storage)?).await?,
-            )))
+            create_session(connection, Some(*workspace_id), title, now).await
         }
         Command::Metadata { session, change } => {
             let mut metadata = reads::metadata(connection, *session).await?;
+            if change
+                .expected_version
+                .is_some_and(|version| version != metadata.metadata_version.get())
+            {
+                return Err(KernelError::Conflict(
+                    "session metadata changed; inspect before renaming".into(),
+                ));
+            }
             let original = metadata.clone();
             let mut config = lifecycle::configuration(connection, *session).await?;
             let original_config = config.clone();
@@ -153,39 +149,18 @@ pub(super) async fn apply(
             Ok(Mutation::Session(Box::new(metadata)))
         }
         Command::Selection { session, change } => {
-            let mut metadata = reads::metadata(connection, *session).await?;
-            let mut selection = metadata.selection.clone().unwrap_or_default();
-            match change {
-                SelectionChange::Model(model) => {
-                    selection.provider = model.as_ref().map(|m| m.provider_id.to_string());
-                    selection.adapter = model
-                        .as_ref()
-                        .and_then(|m| m.adapter_id.as_ref().map(ToString::to_string));
-                    selection.model = model.as_ref().map(|m| m.model_id.to_string());
-                }
-                SelectionChange::ThinkingMode(value) => selection.thinking_mode.clone_from(value),
-                SelectionChange::SpeedMode(value) => selection.speed_mode.clone_from(value),
-                SelectionChange::Verbosity(value) => selection.verbosity.clone_from(value),
-                SelectionChange::ParallelToolCalls(value) => selection.parallel_tool_calls = *value,
-            }
-            selection.normalize();
-            let selection = (!selection.is_empty()).then_some(selection);
-            if selection != metadata.selection {
-                metadata.metadata_version = metadata.metadata_version.next().map_err(storage)?;
-                metadata.selection = selection;
-                sqlx::query(
-                    "UPDATE agena_sessions SET selection_json=?,metadata_version=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?",
-                )
-                .bind(metadata.selection.as_ref().map(encode).transpose()?)
-                .bind(metadata.metadata_version.get())
-                .bind(now)
-                .bind(session.get())
-                .execute(&mut *connection)
-                .await
-                .map_err(sql_error)?;
-            }
-            Ok(Mutation::Session(Box::new(metadata)))
+            patch_selection(connection, *session, None, std::slice::from_ref(change)).await
         }
+        Command::SelectionPatch {
+            session,
+            expected_version,
+            changes,
+        } => patch_selection(connection, *session, Some(*expected_version), changes).await,
+        Command::QueueControl {
+            session,
+            expected_control_version,
+            change,
+        } => control_queue(connection, *session, *expected_control_version, change).await,
         Command::Send {
             session,
             document,
@@ -808,6 +783,32 @@ pub(super) async fn apply(
     }
 }
 
+pub(super) async fn create_session(
+    connection: &mut SqliteConnection,
+    workspace_id: Option<i64>,
+    title: &str,
+    now: i64,
+) -> Result<Mutation> {
+    if workspace_id.is_some_and(|id| id <= 0) || title.len() > 4096 {
+        return Err(invalid("invalid workspace or title"));
+    }
+    let id: i64 = sqlx::query_scalar("INSERT INTO agena_sessions (workspace_id,title,created_at_ms,updated_at_ms) VALUES (?,?,?,?) RETURNING id")
+        .bind(workspace_id).bind(title).bind(now).bind(now).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query("INSERT INTO agena_session_statistics (session_id) VALUES (?)")
+        .bind(id)
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    sqlx::query("INSERT INTO agena_prompt_windows (session_id) VALUES (?)")
+        .bind(id)
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(Mutation::Session(Box::new(
+        reads::metadata(connection, SessionId::try_from(id).map_err(storage)?).await?,
+    )))
+}
+
 pub(super) fn enum_text<T: serde::Serialize>(value: &T) -> Result<String> {
     serde_json::to_value(value)
         .map_err(storage)?
@@ -1063,7 +1064,12 @@ async fn remember_rule(
 ) -> Result<()> {
     let (session, workspace) = match remember.scope {
         PermissionScope::Session => (Some(metadata.id.get()), None),
-        PermissionScope::Workspace => (None, Some(metadata.workspace_id)),
+        PermissionScope::Workspace => (
+            None,
+            Some(metadata.workspace_id.ok_or_else(|| {
+                invalid("global sessions do not have a workspace permission scope")
+            })?),
+        ),
         PermissionScope::Global => (None, None),
     };
     let scope = enum_text(&remember.scope)?;
@@ -1312,4 +1318,180 @@ async fn begin_round(
         .await
         .map_err(sql_error)?;
     Ok(Mutation::Round(RoundId::try_from(id).map_err(storage)?))
+}
+
+/// Merge under the writer transaction; no detached session value can overwrite
+/// another client's fields, and a multi-field patch has one version increment.
+async fn patch_selection(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    expected: Option<i64>,
+    changes: &[SelectionChange],
+) -> Result<Mutation> {
+    let mut metadata = reads::metadata(connection, session).await?;
+    if expected.is_some_and(|version| version != metadata.metadata_version.get()) {
+        return Err(KernelError::Conflict(
+            "session selection changed; inspect before configuring".into(),
+        ));
+    }
+    let mut selection = metadata.selection.clone().unwrap_or_default();
+    for change in changes {
+        match change {
+            SelectionChange::Model(model) => {
+                selection.provider = model.as_ref().map(|m| m.provider_id.to_string());
+                selection.adapter = model
+                    .as_ref()
+                    .and_then(|m| m.adapter_id.as_ref().map(ToString::to_string));
+                selection.model = model.as_ref().map(|m| m.model_id.to_string());
+            }
+            SelectionChange::ThinkingMode(value) => selection.thinking_mode.clone_from(value),
+            SelectionChange::SpeedMode(value) => selection.speed_mode.clone_from(value),
+            SelectionChange::Verbosity(value) => selection.verbosity.clone_from(value),
+            SelectionChange::ParallelToolCalls(value) => selection.parallel_tool_calls = *value,
+        }
+    }
+    selection.normalize();
+    let selection = (!selection.is_empty()).then_some(selection);
+    if selection != metadata.selection {
+        metadata.metadata_version = metadata.metadata_version.next().map_err(storage)?;
+        metadata.selection = selection;
+        sqlx::query("UPDATE agena_sessions SET selection_json=?,metadata_version=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?")
+            .bind(metadata.selection.as_ref().map(encode).transpose()?)
+            .bind(metadata.metadata_version.get()).bind(now_ms()).bind(session.get())
+            .execute(connection).await.map_err(sql_error)?;
+    }
+    Ok(Mutation::Session(Box::new(metadata)))
+}
+
+async fn control_queue(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    expected: i64,
+    change: &QueueChange,
+) -> Result<Mutation> {
+    let version: i64 = sqlx::query_scalar(
+        "SELECT control_version FROM agena_sessions WHERE id=? AND deleted_at_ms IS NULL",
+    )
+    .bind(session.get())
+    .fetch_optional(&mut *connection)
+    .await
+    .map_err(sql_error)?
+    .ok_or_else(|| KernelError::NotFound("session".into()))?;
+    if expected != version {
+        return Err(KernelError::Conflict(
+            "message queue changed; inspect before modifying".into(),
+        ));
+    }
+    match change {
+        QueueChange::Pause(paused) => {
+            // Delegate to the ordinary configuration writer, in this transaction.
+            let command = Command::Configure {
+                session,
+                change: SessionConfigurationChange {
+                    message_queue_paused: Some(*paused),
+                    ..Default::default()
+                },
+            };
+            lifecycle::apply(connection, &command)
+                .await?
+                .ok_or_else(|| invalid("queue pause command was not handled"))?;
+        }
+        QueueChange::EditText {
+            execution,
+            generation,
+            text,
+        } => {
+            let (view, _) = reads::execution(connection, session, *execution).await?;
+            check_queued_attempt(&view, *generation)?;
+            let row = sqlx::query("SELECT body_json,EXISTS(SELECT 1 FROM agena_attempts WHERE execution_id=? AND started_at_ms IS NOT NULL) AS started FROM agena_entries WHERE id=?")
+                .bind(execution.to_string()).bind(view.message_id.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+            if row.try_get::<bool, _>("started").map_err(storage)? {
+                return Err(KernelError::Conflict(
+                    "the queued input has already run; text edit refused".into(),
+                ));
+            }
+            let frozen: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_round_inputs WHERE entry_id=?) OR EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE m.entry_id=? AND s.session_id!=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+                .bind(view.message_id.get()).bind(view.message_id.get()).bind(session.get())
+                .fetch_one(&mut *connection).await.map_err(sql_error)?;
+            if frozen {
+                return Err(KernelError::Conflict(
+                    "input is already shared with another conversation or model round".into(),
+                ));
+            }
+            let mut document: agena_domain::ComposerDocument =
+                serde_json::from_str(&row.try_get::<String, _>("body_json").map_err(storage)?)
+                    .map_err(storage)?;
+            if text.trim().is_empty() || text.len() > 16 * 1024 {
+                return Err(invalid("queued text must be nonempty and within 16 KiB"));
+            }
+            if document.text() == *text {
+                return Ok(Mutation::Session(Box::new(
+                    reads::metadata(connection, session).await?,
+                )));
+            }
+            // Keep activities byte-for-byte and never delete/re-publish blob references.
+            // Place replacement text at the first original text position.
+            let mut replaced = false;
+            document.0.retain_mut(|node| match node {
+                agena_domain::ComposerNode::Text { text: original } if !replaced => {
+                    original.clone_from(text);
+                    replaced = true;
+                    true
+                }
+                agena_domain::ComposerNode::Text { .. } => false,
+                _ => true,
+            });
+            if !replaced {
+                document
+                    .0
+                    .insert(0, agena_domain::ComposerNode::Text { text: text.clone() });
+            }
+            let body = encode(&document)?;
+            if body.len() > 256 * 1024 {
+                return Err(invalid("composer document exceeds 256 KiB"));
+            }
+            sqlx::query("UPDATE agena_entries SET body_json=?,revision=revision+1 WHERE id=?")
+                .bind(body)
+                .bind(view.message_id.get())
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            sqlx::query(
+                "UPDATE agena_sessions SET updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?",
+            )
+            .bind(now_ms())
+            .bind(session.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+        }
+        QueueChange::Remove {
+            execution,
+            generation,
+        } => {
+            let (view, _) = reads::execution(connection, session, *execution).await?;
+            check_queued_attempt(&view, *generation)?;
+            finish(connection, view, ExecutionPhase::Cancelled).await?;
+        }
+    }
+    Ok(Mutation::Session(Box::new(
+        reads::metadata(connection, session).await?,
+    )))
+}
+
+fn check_queued_attempt(view: &ExecutionView, generation: AttemptGeneration) -> Result<()> {
+    if view.generation != generation {
+        return Err(KernelError::StaleAttempt);
+    }
+    if view.phase != ExecutionPhase::Queued {
+        return Err(KernelError::Conflict(
+            "the queued message has already started or been removed".into(),
+        ));
+    }
+    if view.purpose != ExecutionPurpose::Message {
+        return Err(invalid(
+            "only native queued user messages support edit/remove",
+        ));
+    }
+    Ok(())
 }

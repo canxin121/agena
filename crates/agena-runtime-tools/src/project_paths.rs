@@ -64,6 +64,85 @@ fn managed_attachment_root_in(
     .find(|root| target.starts_with(root))
 }
 
+/// Authorize only this native session's private upload/artifact boundary.
+/// The boundary is storage and must never be installed as a tool cwd.
+pub fn managed_session_attachment_root(session_id: i64, target: &Path) -> Option<PathBuf> {
+    if session_id <= 0 {
+        return None;
+    }
+    let layout = agena_storage_layout::StorageLayout::current();
+    [
+        layout.session_uploads_dir(session_id),
+        layout.session_artifacts_dir(session_id),
+    ]
+    .into_iter()
+    .filter_map(|root| {
+        root.canonicalize()
+            .ok()
+            .filter(|canonical| *canonical == root)
+    })
+    .find(|root| target.starts_with(root))
+}
+
+/// Extract the immutable SHA-256 content identity of a native session
+/// upload. Both model input preparation and HTTP download must validate the
+/// same canonical `<hyphenated UUID>-<sha256>-<name>` filename; using separate
+/// parsers previously made one of those paths reject a valid uploaded file.
+///
+/// This deliberately does not accept the obsolete 32-character UUID layout.
+pub fn managed_session_upload_digest(path: &Path) -> Option<&str> {
+    let name = path.file_name()?.to_str()?;
+    let token = name.get(..36)?;
+    uuid::Uuid::parse_str(token).ok()?;
+    if name.as_bytes().get(36) != Some(&b'-') || name.as_bytes().get(101) != Some(&b'-') {
+        return None;
+    }
+    let digest = name.get(37..101)?;
+    if digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && name.get(102..).is_some_and(|rest| !rest.is_empty())
+    {
+        Some(digest)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod session_upload_identity_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_uuid_and_content_digest_have_one_identity_across_read_and_model_use() {
+        let token = uuid::Uuid::nil();
+        let hash = "abcdef0123456789".repeat(4);
+        let path = PathBuf::from(format!(
+            "/session-assets/4/uploads/{token}-{hash}-image.png"
+        ));
+        assert_eq!(managed_session_upload_digest(&path), Some(hash.as_str()));
+        assert!(
+            managed_session_upload_digest(&PathBuf::from(format!(
+                "/session-assets/4/uploads/{}-{hash}-image.png",
+                token.simple()
+            )))
+            .is_none()
+        );
+        assert!(
+            managed_session_upload_digest(&PathBuf::from(format!(
+                "/session-assets/4/uploads/{token}-{}-image.png",
+                "g".repeat(64)
+            )))
+            .is_none()
+        );
+        assert!(
+            managed_session_upload_digest(&PathBuf::from(format!(
+                "/session-assets/4/uploads/{token}-{hash}-"
+            )))
+            .is_none()
+        );
+        assert!(managed_session_upload_digest(Path::new("/uploads/unmanaged.png")).is_none());
+    }
+}
+
 /// Stable location for a generated image that belongs to one tool call.
 /// Runtime owns this process-managed artifact convention so tool/session
 /// implementations do not need their own path convention.
@@ -94,7 +173,28 @@ pub async fn persist_generated_image_artifact(
     filename_hint: Option<&str>,
     uri: &str,
 ) -> Result<Option<ManagedGeneratedImageArtifact>, ManagedGeneratedImageError> {
-    let workspace = workspace_root.to_owned();
+    persist_generated_image_artifact_scoped(
+        Some(workspace_root),
+        session_id,
+        artifact_id,
+        media_index,
+        mime_type,
+        filename_hint,
+        uri,
+    )
+    .await
+}
+
+pub async fn persist_generated_image_artifact_scoped(
+    workspace_root: Option<&Path>,
+    session_id: i64,
+    artifact_id: &str,
+    media_index: usize,
+    mime_type: &str,
+    filename_hint: Option<&str>,
+    uri: &str,
+) -> Result<Option<ManagedGeneratedImageArtifact>, ManagedGeneratedImageError> {
+    let workspace = workspace_root.map(Path::to_path_buf);
     let artifact_id = artifact_id.to_owned();
     let mime_type = mime_type.to_owned();
     let filename_hint = filename_hint.map(ToOwned::to_owned);
@@ -102,7 +202,7 @@ pub async fn persist_generated_image_artifact(
     GENERATED_IMAGE_WORKERS
         .run(move || {
             persist_generated_image_artifact_sync(
-                &workspace,
+                workspace.as_deref(),
                 session_id,
                 &artifact_id,
                 media_index,
@@ -116,7 +216,7 @@ pub async fn persist_generated_image_artifact(
 }
 
 fn persist_generated_image_artifact_sync(
-    workspace_root: &Path,
+    workspace_root: Option<&Path>,
     session_id: i64,
     artifact_id: &str,
     media_index: usize,
@@ -159,12 +259,21 @@ fn persist_generated_image_artifact_sync(
     } else {
         format!("{artifact_id}-{media_index}")
     };
-    let path = generated_image_artifact_path(
-        workspace_root,
-        session_id,
-        artifact_id.as_str(),
-        extension.as_str(),
-    );
+    let path = match workspace_root {
+        Some(root) => generated_image_artifact_path(
+            root,
+            session_id,
+            artifact_id.as_str(),
+            extension.as_str(),
+        ),
+        None => agena_storage_layout::StorageLayout::current()
+            .session_artifacts_dir(session_id)
+            .join(format!(
+                "{}.{}",
+                sanitize_component(artifact_id.as_str(), "generated-image"),
+                extension
+            )),
+    };
     if let Some(parent) = path.parent() {
         agena_storage_layout::secure_directory(parent)?;
     }

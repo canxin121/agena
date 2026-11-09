@@ -1,10 +1,11 @@
 impl App {
     pub(crate) fn transcript_header_height(&self, total_height: u16) -> u16 {
-        // Reserve a subtitle row only when there is a path to show. The
-        // final row is also the inline history control/separator.
-        let subtitle = self
-            .current_session_path_label()
-            .is_some_and(|path| !path.trim().is_empty());
+        // Bot conversations use this row for navigation hints; project
+        // conversations use it for the session path.
+        let subtitle = self.is_bot_session()
+            || self
+                .current_session_path_label()
+                .is_some_and(|path| !path.trim().is_empty());
         min(2 + u16::from(subtitle), total_height)
     }
 

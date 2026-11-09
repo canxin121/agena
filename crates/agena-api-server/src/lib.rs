@@ -86,6 +86,11 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/health", get(rest::health))
             .route("/api/v1/changes/revisions", get(rest::resource_revisions))
             .route("/api/v1/runtime", get(rest::get_runtime_status))
+            .route("/api/v1/bot/session", post(rest::ensure_bot_session))
+            .route("/api/v1/bots", get(rest::list_bots).post(rest::create_bot))
+            .route("/api/v1/bots/{id}", get(rest::get_bot).put(rest::update_bot))
+            .route("/api/v1/bots/{id}/archive", post(rest::archive_bot))
+            .route("/api/v1/bots/{id}/session", post(rest::ensure_named_bot_session))
             .route("/api/v1/sessions/{session_id}/assistant",get(rest::get_assistant).put(rest::put_assistant))
             .route("/api/v1/sessions/{session_id}/assistant/reminders/{reminder_id}",post(rest::control_assistant_reminder))
             .route("/api/v1/sessions/{session_id}/assistant/memory",post(rest::edit_assistant_memory))
@@ -93,12 +98,6 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/sessions/{session_id}/integrations/{binding_id}",get(rest::integration_detail))
             .route("/api/v1/sessions/{session_id}/integrations/{binding_id}/control",post(rest::control_integration))
             .route("/api/v1/sessions/{session_id}/integrations/{binding_id}/access",axum::routing::put(rest::update_channel_access))
-            .route("/api/v1/tasks", get(rest::list_tasks).post(rest::create_task))
-            .route("/api/v1/tasks/{task_id}", get(rest::get_task))
-            .route("/api/v1/tasks/{task_id}/cancel", post(rest::cancel_task))
-            .route("/api/v1/tasks/{task_id}/resume", post(rest::resume_task))
-            .route("/api/v1/tasks/{task_id}/accept", post(rest::accept_task))
-            .route("/api/v1/chatbot/messages", post(rest::chatbot_message))
             .route("/api/v1/usage", get(rest::get_usage_stats))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
             .route(
@@ -142,6 +141,10 @@ pub fn router(state: AppState) -> Router {
             .route(
                 "/api/v1/sessions/{session_id}/media",
                 get(rest::download_session_media_file),
+            )
+            .route(
+                "/api/v1/sessions/{session_id}/attachments",
+                post(rest::upload_session_file).layer(axum::extract::DefaultBodyLimit::max(72 * 1024 * 1024)),
             )
             .route("/api/v1/git/status", get(rest::get_git_status))
             .route("/api/v1/git/stage", post(rest::stage_git_changes))

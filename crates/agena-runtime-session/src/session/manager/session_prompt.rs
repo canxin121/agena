@@ -20,6 +20,7 @@ pub(super) struct PromptInputs<'a> {
     pub model: &'a ModelRef,
     pub session_id: i64,
     pub workspace: String,
+    pub global: bool,
     pub tools_enabled: bool,
 }
 
@@ -117,17 +118,23 @@ fn resolve_prompt_layers(
     let mut global_library = config
         .library(PromptScope::Global)
         .unwrap_or_else(|_| BTreeMap::new());
-    let mut workspace_library = config
-        .library(PromptScope::Workspace)
-        .unwrap_or_else(|_| BTreeMap::new());
+    let mut workspace_library = if inputs.global {
+        BTreeMap::new()
+    } else {
+        config
+            .library(PromptScope::Workspace)
+            .unwrap_or_else(|_| BTreeMap::new())
+    };
     // Saved prompts (and legacy inline definitions) are shared by reference.
     // A narrower workspace definition shadows a global definition with the
     // same id, while an inline fragment in the current layer wins locally.
     for fragment in &config.global.inline {
         global_library.insert(fragment.id.clone(), fragment.clone());
     }
-    for fragment in &config.workspace.inline {
-        workspace_library.insert(fragment.id.clone(), fragment.clone());
+    if !inputs.global {
+        for fragment in &config.workspace.inline {
+            workspace_library.insert(fragment.id.clone(), fragment.clone());
+        }
     }
     let mut shared_library = global_library.clone();
     shared_library.extend(workspace_library.clone());
@@ -135,14 +142,26 @@ fn resolve_prompt_layers(
     let global_layer = config.global.layer();
     let workspace_layer = config.workspace.layer();
     let empty_layer = PromptLayer::default();
-    let mut sources = vec![
-        LayerSource::new(PromptScope::Global, &global_layer, &global_library),
-        LayerSource::new(PromptScope::Workspace, &workspace_layer, &shared_library),
-    ];
+    let mut sources = vec![LayerSource::new(
+        PromptScope::Global,
+        &global_layer,
+        &global_library,
+    )];
+    if !inputs.global {
+        sources.push(LayerSource::new(
+            PromptScope::Workspace,
+            &workspace_layer,
+            &shared_library,
+        ));
+    }
     // A model layer keeps its own scope's library so it can reference
     // fragments declared beside it.
     let global_model_layers = matching_layers(&config.global.models, &route);
-    let workspace_model_layers = matching_layers(&config.workspace.models, &route);
+    let workspace_model_layers = if inputs.global {
+        Vec::new()
+    } else {
+        matching_layers(&config.workspace.models, &route)
+    };
     for layer in &global_model_layers {
         sources.push(LayerSource::new(PromptScope::Model, layer, &global_library));
     }

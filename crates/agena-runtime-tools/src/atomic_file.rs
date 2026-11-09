@@ -30,7 +30,9 @@ const FILE_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(10);
 /// Resolve every existing component while retaining a missing output suffix.
 /// Permission checks and actual mutation must use the same path identity.
 pub fn canonicalize_mutation_path(path: &Path) -> PathBuf {
-    let original = path.clean();
+    // Resolve existing components before collapsing `..`: a symlink changes
+    // which directory a following parent component refers to.
+    let original = path.to_path_buf();
     let mut current = original.clone();
     let mut missing = Vec::<OsString>::new();
     loop {
@@ -39,7 +41,7 @@ pub fn canonicalize_mutation_path(path: &Path) -> PathBuf {
                 for component in missing.iter().rev() {
                     resolved.push(component);
                 }
-                return resolved;
+                return resolved.clean();
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 let Some(name) = current.file_name().map(OsString::from) else {

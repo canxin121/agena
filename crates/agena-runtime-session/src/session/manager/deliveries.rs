@@ -53,6 +53,9 @@ impl SessionManager {
             ));
         }
         let session = session_id(id)?;
+        let dispatch = self.session_dispatch(session);
+        let _submission = dispatch.submission.lock().await;
+        self.require_writable_bot_history(id).await?;
         let payload = serde_json::json!({"kind":"scheduler","job_id":job,"delivery_key":delivery,"text":prompt,"launch_provenance":provenance});
         if serde_json::to_vec(&payload)?.len() > 64 * 1024 {
             return Err(AppError::Config(
@@ -127,6 +130,7 @@ impl SessionManager {
             .kernel()
             .reader
             .query_summaries(SummaryQuery {
+                include_global: true,
                 before,
                 limit: limit.clamp(1, 128),
                 ..Default::default()
@@ -141,6 +145,14 @@ impl SessionManager {
             let Ok(_submission) = dispatch.submission.try_lock() else {
                 continue;
             };
+            match self.require_writable_bot_history(summary.id.get()).await {
+                Ok(()) => {}
+                Err(AppError::PersistenceConflict(reason)) => {
+                    tracing::debug!(session_id = summary.id.get(), %reason, "archived Bot delivery recovery deferred");
+                    continue;
+                }
+                Err(error) => return Err(error),
+            }
             let Ok(_guard) = dispatch.execution.try_lock() else {
                 continue;
             };
@@ -197,11 +209,13 @@ impl SessionManager {
                 .metadata(summary.id)
                 .await
                 .map_err(kernel_error)?;
-            let options =
-                match self.options_for_selection(&metadata.selection.clone().unwrap_or_default()) {
-                    Ok(options) => options,
-                    Err(_) => continue,
-                };
+            let options = match self
+                .options_for_session(summary.id, &metadata.selection.clone().unwrap_or_default())
+                .await
+            {
+                Ok(options) => options,
+                Err(_) => continue,
+            };
             let Some(fallback) = self.latest_origin_message(summary.id).await? else {
                 continue;
             };
@@ -251,7 +265,7 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?
             .value;
-            self.supervise(execution, options, false, permit);
+            self.supervise(execution, options, false, permit).await?;
             recovered += 1;
         }
         Ok(recovered)
@@ -264,6 +278,7 @@ impl SessionManager {
         &self,
         session: SessionId,
     ) -> Result<usize, AppError> {
+        self.require_writable_bot_history(session.get()).await?;
         let snapshot = self
             .kernel()
             .reader
@@ -293,12 +308,16 @@ impl SessionManager {
                 continue;
             }
             let options = self
-                .options_for_selection(&snapshot.metadata.selection.clone().unwrap_or_default())?;
+                .options_for_session(
+                    session,
+                    &snapshot.metadata.selection.clone().unwrap_or_default(),
+                )
+                .await?;
             let permit = self.reserve_execution()?;
             // A queued maintenance action keeps its purpose across pause,
             // shutdown and recovery. It must not turn into an ordinary reply.
             let compact = execution.purpose == ExecutionPurpose::Compaction;
-            self.supervise(execution, options, compact, permit);
+            self.supervise(execution, options, compact, permit).await?;
             recovered += 1;
         }
         Ok(recovered)
@@ -577,8 +596,33 @@ pub(super) fn delivery_text(payload: &Value) -> Result<String, AppError> {
             "text",
             "ready",
         )?),
-        "conversation_work" => Some(delivery_system_notification(
-            payload, "task", "work_id", "text", "updated",
+        "bot_instruction" => Some(delivery_system_notification(
+            payload,
+            "operator_bot",
+            "source_session_id",
+            "text",
+            "instruction",
+        )?),
+        "integration_instruction" => Some(delivery_system_notification(
+            payload,
+            "integration",
+            "binding_id",
+            "text",
+            "instruction",
+        )?),
+        "assistant_notice" => Some(delivery_system_notification(
+            payload,
+            "assistant",
+            "notice_id",
+            "text",
+            "updated",
+        )?),
+        "integration_notice" => Some(delivery_system_notification(
+            payload,
+            "integration",
+            "notice_id",
+            "text",
+            "updated",
         )?),
         "agent_result" => Some(delivery_system_notification(
             payload,
@@ -811,6 +855,25 @@ mod delivery_text_tests {
         assert_eq!(agent.status, "failed");
         assert_eq!(agent.extra["run_id"], "run_1");
         assert_eq!(agent.extra["failure"]["code"], "provider.failed");
+    }
+
+    #[test]
+    fn assistant_and_integration_notices_keep_their_typed_identities() {
+        for (kind, operation) in [
+            ("assistant_notice", "assistant"),
+            ("integration_notice", "integration"),
+        ] {
+            let text = delivery_text(&serde_json::json!({
+                "kind": kind, "notice_id":"contact-42", "origin_message_id":12,
+                "text":"Scheduled contact data"
+            }))
+            .unwrap();
+            let notification = decode(&text);
+            assert_eq!(notification.operation_kind, operation);
+            assert_eq!(notification.operation_id, "contact-42");
+            assert_eq!(notification.body, "Scheduled contact data");
+            assert_eq!(notification.extra["origin_message_id"], 12);
+        }
     }
 
     #[test]

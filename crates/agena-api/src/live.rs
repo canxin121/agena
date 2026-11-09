@@ -217,7 +217,7 @@ pub enum SessionChangeResource {
     },
     SessionDeleted {
         session_id: i64,
-        workspace_id: i64,
+        workspace_id: Option<i64>,
     },
 }
 
@@ -229,6 +229,27 @@ impl SessionChangeResource {
             | Self::PartRemoved { session_id, .. }
             | Self::SessionDeleted { session_id, .. }
             | Self::SessionMetaUpdated { session_id, .. } => *session_id,
+        }
+    }
+}
+
+#[cfg(test)]
+mod session_change_tests {
+    use super::*;
+
+    #[test]
+    fn deleted_session_preserves_nullable_workspace_identity() {
+        for workspace_id in [None, Some(42)] {
+            let change = SessionChangeResource::SessionDeleted {
+                session_id: 7,
+                workspace_id,
+            };
+            let value = serde_json::to_value(&change).unwrap();
+            assert_eq!(value["workspace_id"], serde_json::json!(workspace_id));
+            assert_eq!(
+                serde_json::from_value::<SessionChangeResource>(value).unwrap(),
+                change
+            );
         }
     }
 }

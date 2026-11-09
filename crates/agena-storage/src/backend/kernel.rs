@@ -73,6 +73,14 @@ pub enum Command {
         title: String,
         configuration: SessionConfiguration,
     },
+    CreateGlobal {
+        title: String,
+        configuration: SessionConfiguration,
+    },
+    DetachGlobal {
+        session: SessionId,
+        guard: DetachGlobalGuard,
+    },
     Configure {
         session: SessionId,
         change: SessionConfigurationChange,
@@ -89,6 +97,8 @@ pub enum Command {
         through: EntryId,
         rewind: bool,
         conversation_mode: Option<agena_domain::ConversationMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        management: Option<ForkGuard>,
     },
     Withdraw {
         session: SessionId,
@@ -96,6 +106,8 @@ pub enum Command {
     },
     DeleteSession {
         session: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        guard: Option<DeleteGuard>,
     },
     Continue {
         session: SessionId,
@@ -146,6 +158,16 @@ pub enum Command {
     Metadata {
         session: SessionId,
         change: MetadataChange,
+    },
+    SelectionPatch {
+        session: SessionId,
+        expected_version: i64,
+        changes: Vec<SelectionChange>,
+    },
+    QueueControl {
+        session: SessionId,
+        expected_control_version: i64,
+        change: QueueChange,
     },
     Selection {
         session: SessionId,
@@ -417,6 +439,7 @@ impl KernelMaintenance {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
+    DetachedGlobal(DetachGlobalResult),
     PromptWindowStatus(PromptWindowStatus),
     InteractionView(Box<InteractionView>),
     Configuration(Box<SessionConfiguration>),
@@ -506,6 +529,10 @@ pub trait KernelBackend: Send + Sync {
         generation: AttemptGeneration,
     ) -> Result<ReadView<Option<ProviderRoundView>>>;
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>>;
+    async fn management_ancestry(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Vec<ManagementAncestor>>>;
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>>;
     async fn activity_summary(&self) -> Result<ReadView<SessionActivitySummary>>;
     async fn workspace_statistics(

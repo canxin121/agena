@@ -99,6 +99,11 @@ pub enum AppError {
     },
     #[error("session {0} has no active execution")]
     NoActiveExecution(i64),
+    #[error("{0}")]
+    BotNotFound(String),
+    /// Controlled registry reasons are safe to show directly; never raw DB diagnostics.
+    #[error("{0}")]
+    BotConflict(&'static str),
     #[error("{request_kind} request is no longer pending in this session: {request_id}")]
     InteractiveRequestNotPending {
         request_kind: String,
@@ -202,6 +207,8 @@ impl AppError {
                 "The conversation is too large for the selected model. Compact the conversation or choose a model with a larger context window."
             }
             Self::NoActiveExecution(_) => "This session has no active response.",
+            Self::BotNotFound(_) => "No active Bot; select a Bot or create one.",
+            Self::BotConflict(reason) => reason,
             Self::InteractiveRequestNotPending { .. } => {
                 "This request is no longer pending. Refresh to see its current status."
             }
@@ -519,6 +526,20 @@ impl AppError {
                 Retry::AfterUserAction,
                 Recovery::None,
             ),
+            Self::BotNotFound(_) => (
+                "bot.not_found",
+                Category::NotFound,
+                Responsibility::Caller,
+                Retry::AfterRefresh,
+                Recovery::Refresh,
+            ),
+            Self::BotConflict(_) => (
+                "bot.conflict",
+                Category::Conflict,
+                Responsibility::Caller,
+                Retry::AfterRefresh,
+                Recovery::Refresh,
+            ),
             Self::NoActiveExecution(_) => (
                 "execution.not_active",
                 Category::NotFound,
@@ -634,7 +655,10 @@ impl AppError {
             // Manager-level configuration stops carry the actionable reason
             // (repeat guard, continuation limit, turn cap). Keep the generic
             // static prose for settings-validation errors only.
-            Self::Config(detail) => UserPresentation::validated_with_context(code, detail),
+            Self::Config(detail) | Self::BotNotFound(detail) => {
+                UserPresentation::validated_with_context(code, detail)
+            }
+            Self::BotConflict(reason) => UserPresentation::validated_with_context(code, *reason),
             Self::ConfigErr(error) => UserPresentation::validated_with_context(
                 code,
                 agena_failure::diagnostic::format_error_chain(error.as_ref()),
@@ -969,6 +993,32 @@ mod permission_tests {
         assert_eq!(
             unexpected.category,
             agena_failure::FailureCategory::Internal
+        );
+    }
+}
+
+#[cfg(test)]
+mod bot_registry_failure_tests {
+    #[test]
+    fn registry_conflicts_preserve_the_actionable_controlled_reason() {
+        for reason in [
+            "an active Bot already has this name",
+            "Bot must be idle with no queued executions or pending native interactions before archiving",
+            "stale Bot revision; reload the profile before editing",
+        ] {
+            let failure = super::AppError::BotConflict(reason).failure();
+            assert_eq!(failure.code.as_str(), "bot.conflict");
+            assert_eq!(failure.category, agena_failure::FailureCategory::Conflict);
+            assert!(failure.user.fallback.contains(reason));
+        }
+        let private =
+            super::AppError::PersistenceConflict("private SQL diagnostic sentinel".into())
+                .failure();
+        assert!(
+            !private
+                .user
+                .fallback
+                .contains("private SQL diagnostic sentinel")
         );
     }
 }

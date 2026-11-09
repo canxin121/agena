@@ -36,7 +36,7 @@ pub(super) async fn summaries(
     if workspace_id <= 0 {
         return Err(invalid("invalid workspace"));
     }
-    if before.is_some_and(|cursor| cursor.workspace_id != workspace_id) {
+    if before.is_some_and(|cursor| cursor.workspace_id != Some(workspace_id)) {
         return Err(KernelError::Ownership);
     }
     let limit = limit.clamp(1, 200);
@@ -58,7 +58,7 @@ pub(super) async fn summaries(
     let next = has_more
         .then(|| {
             sessions.last().map(|last| SessionSummaryCursor {
-                workspace_id,
+                workspace_id: Some(workspace_id),
                 updated_at_ms: last.updated_at_ms,
                 id: last.id,
             })
@@ -66,7 +66,7 @@ pub(super) async fn summaries(
         .flatten();
     Ok(SessionSummaryPage {
         total: None,
-        workspace_id,
+        workspace_id: Some(workspace_id),
         sessions,
         next,
         has_more,

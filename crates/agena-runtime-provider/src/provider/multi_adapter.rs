@@ -374,10 +374,9 @@ impl ModelRuntime for MultiAdapterProvider {
              _provider_native_tools,
              definition,
              adapter| {
-                agena_provider::apply_configured_modes(
+                agena_provider::apply_configured_speed_modes(
                     adapter.model_speed_modes(target_model),
-                    definition.speed_modes.iter(),
-                    |configured, existing| configured.apply_to_mode(existing),
+                    &definition.speed_modes,
                 )
             },
         )
@@ -559,6 +558,25 @@ impl ModelRuntime for MultiAdapterProvider {
             },
         )
         .flatten()
+    }
+
+    fn configured_models(&self) -> Vec<Model> {
+        self.routes
+            .iter()
+            .filter_map(|((adapter, model), route)| {
+                if !route.enabled {
+                    return None;
+                }
+                let adapter_id = AdapterId::new(adapter.clone());
+                let runtime = self.adapters.get(adapter)?;
+                Some(self.synthesize_model(
+                    &ModelId::new(model.clone()),
+                    &adapter_id,
+                    runtime.as_ref(),
+                    &route.definition,
+                ))
+            })
+            .collect()
     }
 
     async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {

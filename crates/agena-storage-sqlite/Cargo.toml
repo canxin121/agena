@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-agena-superagent = { workspace = true }
+agena-assistant = { workspace = true }
 agena-async = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }

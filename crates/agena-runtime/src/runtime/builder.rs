@@ -190,7 +190,7 @@ impl AgenaRuntime {
                 agent_bridge: Arc::new(std::sync::Mutex::new(None)),
                 background_completion,
                 automatic_maintenance,
-                superagent: Default::default(),
+                assistant_service: Default::default(),
                 shutdown_completion: Default::default(),
             }),
         };
@@ -227,17 +227,15 @@ impl AgenaRuntime {
         {
             let host_handle = initial_snapshot.plugin_manager().host_handle();
             initial_snapshot.host_client.bind_runtime(&runtime);
+            initial_snapshot.global_host_client.bind_runtime(&runtime);
             super::host_client::install_plugin_host_event_publisher(host_handle, &runtime);
         }
 
         if let (Some(database), Some(_)) =
             (runtime.inner.database.as_ref(), runtime.session_manager())
         {
-            let tasks = super::superagent::SuperagentRuntime::new(
+            let assistant = super::assistant::AssistantRuntime::new(
                 runtime.downgrade(),
-                Arc::new(agena_storage_sqlite::SqliteTaskRepository::new(
-                    database.clone(),
-                )),
                 Arc::new(agena_storage_sqlite::SqliteCompanionRepository::new(
                     database.clone(),
                 )),
@@ -245,8 +243,8 @@ impl AgenaRuntime {
                     database.clone(),
                 )),
             );
-            let _ = runtime.superagent.set(tasks.clone());
-            tasks.start(runtime.task_control_handle());
+            let _ = runtime.assistant_service.set(assistant.clone());
+            assistant.start(runtime.task_control_handle());
         }
 
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
@@ -259,6 +257,7 @@ impl AgenaRuntime {
         runtime.start_scheduler_activity_bridge();
         runtime.spawn_background_delivery_recovery();
         agena_runtime::install_plugin_host(initial_snapshot.plugin_manager());
+        agena_runtime::install_global_plugin_host(initial_snapshot.global_plugin_manager());
         Ok(runtime)
     }
 
@@ -2146,7 +2145,7 @@ pub(crate) struct AgenaRuntimeShared {
     /// their own outcomes directly through the same kernel delivery port.
     background_completion: crate::activity::BackgroundCompletionBridge,
     automatic_maintenance: bool,
-    superagent: std::sync::OnceLock<Arc<super::superagent::SuperagentRuntime>>,
+    assistant_service: std::sync::OnceLock<Arc<super::assistant::AssistantRuntime>>,
     shutdown_completion: crate::bootstrap_result::RuntimeShutdownCompletion,
 }
 
@@ -2180,10 +2179,8 @@ impl AgenaRuntime {
     /// Assemble application-facing runtime capabilities once at the concrete
     /// composition boundary. Application consumers receive the runtime-owned
     /// result rather than converting this concrete handle independently.
-    pub(super) fn conversation_work_service(
-        &self,
-    ) -> Option<Arc<super::superagent::SuperagentRuntime>> {
-        self.superagent.get().cloned()
+    pub(super) fn assistant_service(&self) -> Option<Arc<super::assistant::AssistantRuntime>> {
+        self.assistant_service.get().cloned()
     }
 
     pub fn application_services(&self) -> agena_runtime::RuntimeApplicationServices {
@@ -2237,10 +2234,10 @@ impl AgenaRuntime {
                     .as_ref()
                     .map(|kernel| kernel.instance_state.clone()),
                 repositories,
-                superagent: self
-                    .superagent
+                assistant_service: self
+                    .assistant_service
                     .get()
-                    .map(|service| service.clone() as Arc<dyn agena_superagent::SuperagentService>),
+                    .map(|service| service.clone() as Arc<dyn agena_assistant::AssistantService>),
                 provider_catalog: Arc::new(self.clone()),
                 model_catalog: Arc::new(self.clone()),
                 plugins: Arc::new(self.clone()),
@@ -2466,12 +2463,14 @@ impl AgenaRuntime {
             // ready with the snapshot swap. Shutdown cannot overtake this
             // synchronous publication after the final lifecycle check.
             next.host_client.bind_runtime(self);
+            next.global_host_client.bind_runtime(self);
             next.publish_session_configuration();
             let _ = self.inner.control_state.swap_snapshot(next.clone());
             self.start_scheduler_activity_bridge();
             let host_handle = next.plugin_manager().host_handle();
             super::host_client::install_plugin_host_event_publisher(host_handle, self);
             agena_runtime::install_plugin_host(next.plugin_manager());
+            agena_runtime::install_global_plugin_host(next.global_plugin_manager());
         }
         if let Err(error) =
             self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System)

@@ -222,6 +222,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -236,6 +237,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -502,6 +504,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &WriteFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -701,6 +704,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ReplaceFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -846,6 +850,9 @@ impl FsPlugin {
         input: &ReadManyInput,
     ) -> SdkResult<ToolInvokeOutput> {
         for path in &input.paths {
+            require_global_absolute_path(context, path)?;
+        }
+        for path in &input.paths {
             self.permissions
                 .path(agena_domain::PathKind::Read, path)
                 .await?;
@@ -965,6 +972,7 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &StatInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_global_absolute_path(context, &input.path)?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -1114,6 +1122,18 @@ where
 
 fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
     serde_json::to_value(input).map_err(|err| PluginError::invalid_params_error(&err))
+}
+
+pub(super) fn require_global_absolute_path(
+    context: &ToolInvokeContext<'_>,
+    path: &str,
+) -> SdkResult<()> {
+    if context.is_global() && !Path::new(path).is_absolute() {
+        return Err(PluginError::invalid_params(
+            "global sessions require an explicit absolute path",
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_path(workspace_root: &str, path: &str) -> PathBuf {
@@ -1268,4 +1288,30 @@ fn fs_error(error: std::io::Error) -> PluginError {
         "filesystem operation failed",
         &error,
     ))
+}
+
+#[cfg(test)]
+mod global_path_tests {
+    use super::*;
+
+    #[test]
+    fn global_paths_are_validated_before_permission_queries() {
+        let global = ToolInvokeContext {
+            tool_name: "test",
+            session_id: 1,
+            call_id: 1,
+            workspace_root: "",
+            cancellation: Default::default(),
+        };
+        for path in ["relative", "./file", "~", "~/file"] {
+            assert!(require_global_absolute_path(&global, path).is_err());
+        }
+        assert!(require_global_absolute_path(&global, "").is_err());
+        assert!(require_global_absolute_path(&global, "/tmp/file").is_ok());
+        let project = ToolInvokeContext {
+            workspace_root: "/tmp/project",
+            ..global
+        };
+        assert!(require_global_absolute_path(&project, "relative").is_ok());
+    }
 }

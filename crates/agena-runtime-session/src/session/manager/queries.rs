@@ -115,16 +115,32 @@ impl SessionManager {
     /// session, not the server's default executor or a child task's cwd.
     /// Resolve the same durable identity used by the session-media reader.
     pub async fn session_workspace_root(&self, id: i64) -> Result<std::path::PathBuf, AppError> {
+        self.session_workspace_root_optional(id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Config(
+                    "This session has no project workspace; select an explicit project.".into(),
+                )
+            })
+    }
+
+    pub async fn session_workspace_root_optional(
+        &self,
+        id: i64,
+    ) -> Result<Option<std::path::PathBuf>, AppError> {
         let metadata = self
             .kernel()
             .reader
             .metadata(session_id(id)?)
             .await
             .map_err(kernel_error)?;
-        self.workspace_root_by_id(metadata.workspace_id).await
+        match metadata.workspace_id {
+            Some(workspace) => self.workspace_root_by_id(workspace).await.map(Some),
+            None => Ok(None),
+        }
     }
 
-    async fn workspace_root_by_id(
+    pub(super) async fn workspace_root_by_id(
         &self,
         workspace_id: i64,
     ) -> Result<std::path::PathBuf, AppError> {
@@ -142,15 +158,16 @@ impl SessionManager {
 
     async fn execution_workspace_root(
         &self,
-        workspace_id: i64,
+        workspace_id: Option<i64>,
         configured: Option<&std::path::Path>,
-    ) -> Result<std::path::PathBuf, AppError> {
-        match configured {
-            Some(path) => Ok(path.to_path_buf()),
+    ) -> Result<Option<std::path::PathBuf>, AppError> {
+        match (workspace_id, configured) {
+            (None, _) => Ok(None),
+            (Some(_), Some(path)) => Ok(Some(path.to_path_buf())),
             // HTTP-created and imported sessions may omit the override. Their
             // tools still belong to their recorded workspace, not the default
             // executor's workspace or whichever session ran most recently.
-            None => self.workspace_root_by_id(workspace_id).await,
+            (Some(workspace), None) => self.workspace_root_by_id(workspace).await.map(Some),
         }
     }
 
@@ -166,12 +183,17 @@ impl SessionManager {
         let summary = &snapshot.summary;
         let configuration = &snapshot.configuration;
         let (root_id, depth) = (summary.root_session_id.get(), i64::from(summary.depth));
-        let state = self.state.load_full();
+        let state = if summary.workspace_id.is_none() {
+            self.global_state.load_full()
+        } else {
+            self.state.load_full()
+        };
         let selection = state
             .config
             .default_selection
             .overlay_with_cascade(&metadata.selection.clone().unwrap_or_default());
         let context = ToolContext {
+            global: metadata.workspace_id.is_none(),
             scope_session_id: Some(id),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
@@ -185,13 +207,12 @@ impl SessionManager {
             channel_authority: configuration.channel_authority.clone(),
             channel_verifier: self.channel_verifier.get().cloned(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
-            effective_workspace_root: Some(
-                self.execution_workspace_root(
+            effective_workspace_root: self
+                .execution_workspace_root(
                     metadata.workspace_id,
                     configuration.effective_workspace_root.as_deref(),
                 )
                 .await?,
-            ),
         };
         let agent = configuration.agent.as_ref();
         Ok(Session {
@@ -222,8 +243,8 @@ impl SessionManager {
         &self,
         id: SessionId,
     ) -> Result<ToolContext, AppError> {
-        self.execution_context_with_state(id, &self.state.load_full())
-            .await
+        let state = self.state_for_session(id).await?;
+        self.execution_context_with_state(id, &state).await
     }
 
     /// Resolve the additional-instruction layers for a preview, using the same
@@ -233,21 +254,29 @@ impl SessionManager {
         id: SessionId,
         model: &agena_domain::ModelRef,
     ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
-        let state = self.state.load_full();
+        let state = self.state_for_session(id).await?;
         let configuration = self
             .kernel()
             .reader
             .configuration(id)
             .await
             .map_err(kernel_error)?;
+        let global = self
+            .kernel()
+            .reader
+            .metadata(id)
+            .await
+            .map_err(kernel_error)?
+            .workspace_id
+            .is_none();
         let tools_enabled = state
             .providers
             .agena_tool_mode(model)
             .map(|mode| !mode.is_disabled())
             .unwrap_or(true);
-        let workspace = configuration
-            .effective_workspace_root
-            .as_ref()
+        let workspace = (!global)
+            .then_some(configuration.effective_workspace_root.as_ref())
+            .flatten()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
         let inputs = super::session_prompt::PromptInputs {
@@ -256,6 +285,7 @@ impl SessionManager {
             model,
             session_id: id.get(),
             workspace,
+            global,
             tools_enabled,
         };
         super::session_prompt::prompt_preview(&state, &inputs).map_err(|error| {
@@ -283,6 +313,7 @@ impl SessionManager {
                 .map_err(AppError::Config)?;
         }
         Ok(ToolContext {
+            global: metadata.workspace_id.is_none(),
             scope_session_id: Some(id.get()),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
@@ -299,13 +330,12 @@ impl SessionManager {
             channel_authority: configuration.channel_authority.clone(),
             channel_verifier: self.channel_verifier.get().cloned(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
-            effective_workspace_root: Some(
-                self.execution_workspace_root(
+            effective_workspace_root: self
+                .execution_workspace_root(
                     metadata.workspace_id,
                     configuration.effective_workspace_root.as_deref(),
                 )
                 .await?,
-            ),
         })
     }
     pub async fn list_session_summaries(
@@ -378,6 +408,13 @@ impl SessionManager {
     }
     pub async fn list_session_tree(&self, root: i64) -> Result<Vec<SessionSummary>, AppError> {
         let root = session_id(root)?;
+        let workspace = self
+            .kernel()
+            .reader
+            .metadata(root)
+            .await
+            .map_err(kernel_error)?
+            .workspace_id;
         let mut frontier = std::collections::VecDeque::from([root]);
         let mut result = Vec::new();
         let mut visited = std::collections::BTreeSet::new();
@@ -399,7 +436,8 @@ impl SessionManager {
                     .kernel()
                     .reader
                     .query_summaries(SummaryQuery {
-                        workspace_id: Some(self.current_workspace_id().await?),
+                        workspace_id: workspace,
+                        include_global: workspace.is_none(),
                         parent_id: Some(id),
                         before,
                         limit: 200,
@@ -443,7 +481,11 @@ impl SessionManager {
         ))
     }
     pub async fn session_usage_async(&self, session: &Session) -> Result<SessionUsage, AppError> {
-        let state = self.state.load_full();
+        let state = if session.execution.global {
+            self.global_state.load_full()
+        } else {
+            self.state.load_full()
+        };
         let model = state
             .providers
             .resolve_default_model_selection(&session.execution.selection)?;
@@ -491,8 +533,14 @@ impl SessionManager {
         &self,
         session: &Session,
     ) -> Result<agena_domain::ModelSelectionConfig, AppError> {
-        let mut options = self.options_for_selection(&session.execution.selection)?;
-        self.apply_model_mode_requests(&mut options)?;
+        let state = if session.execution.global {
+            self.global_state.load_full()
+        } else {
+            self.state.load_full()
+        };
+        let mut options =
+            self.options_for_selection_with_state(&session.execution.selection, &state)?;
+        self.apply_model_modes_with_state(&mut options, &state)?;
         Ok(agena_domain::ModelSelectionConfig {
             provider: Some(options.model.provider_id.to_string()),
             adapter: options.model.adapter_id.map(|a| a.to_string()),
@@ -649,21 +697,7 @@ impl SessionManager {
         &self,
         root: &SessionControlSnapshot,
     ) -> Result<Vec<PendingInteractiveRequestContext>, AppError> {
-        use agena_superagent::TaskRepository as _;
-        // Independent task workers still surface their questions and approval
-        // cards in the source conversation, just like delegated subagents.
-        // This read model changes no execution identity or permission owner.
-        let task_repository =
-            agena_storage_sqlite::SqliteTaskRepository::new(self.kernel_runtime.database.clone());
-        let task_workers = task_repository
-            .active_workers(root.metadata.id.get())
-            .await
-            .map_err(|error| AppError::Internal(error.to_string()))?;
         let mut sessions = std::collections::VecDeque::from([root.metadata.id]);
-        for id in &task_workers {
-            sessions.push_back(session_id(*id)?);
-        }
-
         let mut visited = std::collections::BTreeSet::new();
         let mut result = Vec::new();
         while let Some(session) = sessions.pop_front() {
@@ -722,15 +756,8 @@ impl SessionManager {
                 };
                 result.push(PendingInteractiveRequestContext {
                     session_id: id,
-                    parent_session_id: config
-                        .parent_session_id
-                        .map(SessionId::get)
-                        .or_else(|| task_workers.contains(&id).then_some(root.metadata.id.get())),
-                    agent_name: config.agent.as_ref().map(|t| t.name.clone()).or_else(|| {
-                        task_workers
-                            .contains(&id)
-                            .then_some(snapshot.metadata.title.clone())
-                    }),
+                    parent_session_id: config.parent_session_id.map(SessionId::get),
+                    agent_name: config.agent.as_ref().map(|agent| agent.name.clone()),
                     request,
                 });
                 if result.len() >= 128 {
@@ -801,7 +828,7 @@ impl SessionQueryService for SessionManager {
             .execution_context_value(session)
             .await
             .map_err(query_error)?;
-        let state = self.state.load_full();
+        let state = self.state_for_session(session).await.map_err(query_error)?;
         let model = state
             .providers
             .resolve_default_model_selection(&context.selection)
@@ -905,7 +932,11 @@ impl SessionQueryService for SessionManager {
         &self,
         snapshot: &SessionControlSnapshot,
     ) -> Result<SessionExecutionContext, SessionQueryError> {
-        let state = self.state.load_full();
+        let state = if snapshot.metadata.workspace_id.is_none() {
+            self.global_state.load_full()
+        } else {
+            self.state.load_full()
+        };
         let configuration = &snapshot.configuration;
         let selection = state
             .config
@@ -930,10 +961,12 @@ impl SessionQueryService for SessionManager {
             model_speed_mode: selection.speed_mode,
             model_verbosity: selection.verbosity,
             model_parallel_tool_calls: selection.parallel_tool_calls,
-            effective_workspace_root: configuration
-                .effective_workspace_root
-                .as_ref()
-                .map(|p| p.to_string_lossy().into()),
+            effective_workspace_root: snapshot.metadata.workspace_id.and(
+                configuration
+                    .effective_workspace_root
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into()),
+            ),
             agent_name: agent.map(|agent| agent.name.clone()),
             agent_status: agent.map(|agent| agent.status),
             agent_started_at: agent.and_then(|agent| agent.started_at_ms).map(timestamp),

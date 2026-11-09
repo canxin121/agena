@@ -281,10 +281,12 @@ impl ApplicationService {
         let mut context = session_queries
             .execution_context(&snapshot)
             .map_err(session_query_error)?;
-        if context.effective_workspace_root.is_none() {
+        if context.effective_workspace_root.is_none()
+            && let Some(workspace_id) = snapshot.metadata.workspace_id
+        {
             context.effective_workspace_root = Some(
                 self.workspace_repository
-                    .path_by_id(snapshot.metadata.workspace_id)
+                    .path_by_id(workspace_id)
                     .await
                     .map_err(|error| ApplicationError::internal_error(&error))?
                     .ok_or_else(|| {

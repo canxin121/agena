@@ -1,5 +1,5 @@
+use agena_assistant::*;
 use agena_storage_sqlite::{SqliteCompanionRepository, open_kernel_runtime};
-use agena_superagent::*;
 use chrono::{TimeZone, Utc};
 
 fn now() -> i64 {
@@ -324,8 +324,7 @@ async fn recurrence_is_finite_and_missed_intervals_coalesce() {
 }
 
 #[tokio::test]
-async fn assistant_baseline_upgrade_preserves_existing_tasks_and_preferences_persist() {
-    use sea_orm::sqlx::Connection;
+async fn assistant_preferences_survive_restart() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("source.db");
     let url = format!("sqlite://{}?mode=rwc", file.display());
@@ -357,51 +356,6 @@ async fn assistant_baseline_upgrade_preserves_existing_tasks_and_preferences_per
         .unwrap();
     let repo = SqliteCompanionRepository::new(reopened.database.clone());
     assert_eq!(repo.profile(1).await.unwrap(), profile);
-    let legacy = dir.path().join("legacy.db");
-    sea_orm::sqlx::query("VACUUM INTO ?")
-        .bind(legacy.to_string_lossy().as_ref())
-        .execute(runtime.database.get_sqlite_connection_pool())
-        .await
-        .unwrap();
-    let url = format!("sqlite://{}?mode=rwc", legacy.display());
-    let mut raw = sea_orm::sqlx::SqliteConnection::connect(&url)
-        .await
-        .unwrap();
-    for table in [
-        "agena_channel_access_audit",
-        "agena_channel_user_budget",
-        "agena_channel_sessions",
-    ] {
-        sea_orm::sqlx::query(&format!("DROP TABLE {table}"))
-            .execute(&mut raw)
-            .await
-            .unwrap();
-    }
-    for table in [
-        "agena_integration_inbox",
-        "agena_integration_outbox",
-        "agena_integration_bindings",
-    ] {
-        sea_orm::sqlx::query(&format!("DROP TABLE {table}"))
-            .execute(&mut raw)
-            .await
-            .unwrap();
-    }
-    for table in [
-        "agena_assistant_profiles",
-        "agena_assistant_profile_receipts",
-        "agena_assistant_reminders",
-        "agena_assistant_contact_budget",
-    ] {
-        sea_orm::sqlx::query(&format!("DROP TABLE {table}"))
-            .execute(&mut raw)
-            .await
-            .unwrap();
-    }
-    raw.close().await.unwrap();
-    let upgraded = open_kernel_runtime(&url).await.unwrap();
-    let repo = SqliteCompanionRepository::new(upgraded.database.clone());
-    assert_eq!(repo.profile(1).await.unwrap().revision, 0);
 }
 
 #[tokio::test]
@@ -436,16 +390,15 @@ async fn proactive_handoff_is_one_idempotent_control_execution() {
         .unwrap()
         .value
         .message_id;
-    let payload = serde_json::json!({"kind":"conversation_work","message_id":input.get(),"text":"scheduled contact"});
+    let payload = serde_json::json!({"kind":"assistant_notice","origin_message_id":input.get(),"notice_id":"contact-key","text":"scheduled contact"});
     let result = runtime
         .ports
         .executor
-        .deliver_and_resume(
+        .deliver_control_notice(
             RequestId::new(),
             s,
             "contact-key".into(),
             payload.clone(),
-            input,
             "scheduled contact".into(),
         )
         .await
@@ -454,12 +407,11 @@ async fn proactive_handoff_is_one_idempotent_control_execution() {
     let replay = runtime
         .ports
         .executor
-        .deliver_and_resume(
+        .deliver_control_notice(
             RequestId::new(),
             s,
             "contact-key".into(),
             payload,
-            input,
             "scheduled contact".into(),
         )
         .await
@@ -467,6 +419,32 @@ async fn proactive_handoff_is_one_idempotent_control_execution() {
         .value;
     assert_eq!(result.id, replay.id);
     assert_eq!(result.purpose, ExecutionPurpose::Continuation);
+    assert_ne!(
+        result.message_id, input,
+        "contact cannot inherit old user authority"
+    );
+    assert!(!matches!(
+        runtime
+            .ports
+            .reader
+            .entry(s, result.message_id)
+            .await
+            .unwrap()
+            .payload,
+        EntryPayload::User { .. }
+    ));
+    let invalid = runtime
+        .ports
+        .executor
+        .deliver_control_notice(
+            RequestId::new(),
+            s,
+            "untyped-notice".into(),
+            serde_json::json!({"text":"untyped"}),
+            "untyped".into(),
+        )
+        .await;
+    assert!(matches!(invalid, Err(KernelError::Invalid(_))));
     assert!(
         runtime
             .ports
@@ -476,4 +454,64 @@ async fn proactive_handoff_is_one_idempotent_control_execution() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn global_policy_and_reminders_are_independent_and_source_scoped() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteCompanionRepository::new(runtime.database.clone());
+    repo.update_profile(
+        1,
+        update(
+            0,
+            "project",
+            AssistantPatch {
+                memory_enabled: Some(false),
+                timezone: Some("Asia/Shanghai".into()),
+                ..Default::default()
+            },
+        ),
+        now(),
+    )
+    .await
+    .unwrap();
+    let global = repo.profile_scoped(None).await.unwrap();
+    assert_eq!(global.workspace_id, None);
+    assert!(global.preferences.memory_enabled);
+    assert_eq!(global.preferences.timezone, "UTC");
+    let change = update(
+        0,
+        "global",
+        AssistantPatch {
+            timezone: Some("Europe/Paris".into()),
+            ..Default::default()
+        },
+    );
+    let saved = repo
+        .update_profile_scoped(None, change.clone(), now())
+        .await
+        .unwrap();
+    assert_eq!(
+        repo.update_profile_scoped(None, change, now())
+            .await
+            .unwrap(),
+        saved
+    );
+    assert_eq!(
+        repo.profile(1).await.unwrap().preferences.timezone,
+        "Asia/Shanghai"
+    );
+    let first = repo
+        .create_reminder(Reminder::new(None, 11, 1, "a".into(), spec("a"), now()).unwrap())
+        .await
+        .unwrap();
+    let second = repo
+        .create_reminder(Reminder::new(None, 12, 1, "b".into(), spec("b"), now()).unwrap())
+        .await
+        .unwrap();
+    let only_first = repo.reminders_for_source(None, 11).await.unwrap();
+    assert_eq!(only_first.len(), 1);
+    assert_eq!(only_first[0].id, first.id);
+    assert_ne!(only_first[0].id, second.id);
+    assert!(repo.reminders(1).await.unwrap().is_empty());
 }

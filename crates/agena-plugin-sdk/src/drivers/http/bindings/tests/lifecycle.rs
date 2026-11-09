@@ -240,7 +240,7 @@ async fn successful_instance_replacement_keeps_exact_binding_retirement_evidence
     let fixture = Fixture::start().await;
     fixture.fork().await;
     ok(fixture
-        .initialize("owner-b", "successor", &fixture.new.binding)
+        .initialize("owner-a", "successor", &fixture.new.binding)
         .await);
     for id in ["old", "new"] {
         let retired = fixture.wire.retire(id).await;
@@ -271,7 +271,7 @@ async fn successful_instance_replacement_keeps_exact_binding_retirement_evidence
         ok(fixture
             .wire
             .send(
-                Wire::headers("owner-b", Some("successor")),
+                Wire::headers("owner-a", Some("successor")),
                 method::HOOK_TOOL_INVOKE,
                 invocation(51, json!({})),
                 None
@@ -282,7 +282,7 @@ async fn successful_instance_replacement_keeps_exact_binding_retirement_evidence
     ok(fixture
         .wire
         .send(
-            Wire::headers("owner-b", Some("successor")),
+            Wire::headers("owner-a", Some("successor")),
             method::META_SHUTDOWN,
             json!({}),
             None,
@@ -298,7 +298,7 @@ async fn failed_instance_cleanup_does_not_claim_successful_binding_retirement() 
     fixture.control.fail_shutdown.store(true, Ordering::SeqCst);
     let failed = error(
         fixture
-            .initialize("owner-b", "successor", &fixture.new.binding)
+            .initialize("owner-a", "successor", &fixture.new.binding)
             .await,
     );
     let failed: PluginError = serde_json::from_value(failed.data.unwrap()).unwrap();
@@ -464,4 +464,185 @@ async fn abort_fences_never_evict_and_capacity_closes_only_future_forks() {
     drop(bindings.admit(Some("live")).await.unwrap());
     assert!(bindings.retire("aborted-0").await.is_err());
     assert!(bindings.retire("live").await.unwrap().last);
+}
+
+#[tokio::test]
+async fn independent_owners_share_endpoint_without_sharing_callbacks_or_lifecycle() {
+    let fixture = Fixture::start().await;
+    ok(fixture
+        .initialize("project", "project-binding", &fixture.new.binding)
+        .await);
+    let state = |owner: &'static str| {
+        fixture.wire.send(
+            Wire::headers(owner, None),
+            method::META_HTTP_STATE,
+            json!({}),
+            None,
+        )
+    };
+    let (global_state, project_state) = tokio::join!(state("owner-a"), state("project"));
+    let global_revision = ok(global_state)["revision"].as_str().unwrap().to_owned();
+    let project_revision = ok(project_state)["revision"].as_str().unwrap().to_owned();
+    assert_ne!(global_revision, project_revision);
+    assert!(
+        ok(fixture
+            .wire
+            .send(HeaderMap::new(), method::META_HTTP_STATE, json!({}), None)
+            .await)["revision"]
+            .is_null()
+    );
+    let invoke = |owner: &'static str, binding: &'static str, id| {
+        fixture.wire.send(
+            Wire::headers(owner, Some(binding)),
+            method::HOOK_TOOL_INVOKE,
+            invocation(id, json!({})),
+            Some(HostCallbackContext {
+                authority_token: Some(format!("authority-{binding}")),
+                ..Default::default()
+            }),
+        )
+    };
+    let (global, project) = tokio::join!(
+        invoke("owner-a", "old", 101),
+        invoke("project", "project-binding", 102)
+    );
+    assert_eq!(ok(global)["output_text"], "old");
+    assert_eq!(ok(project)["output_text"], "new");
+    for (peer, binding) in [(&fixture.old, "old"), (&fixture.new, "project-binding")] {
+        let records = peer.requests.lock().unwrap();
+        let context = &records.last().unwrap().params.as_ref().unwrap()["context"];
+        assert_eq!(context["http_binding_id"], binding);
+        assert_eq!(context["authority_token"], format!("authority-{binding}"));
+    }
+    error(
+        fixture
+            .wire
+            .send(
+                HeaderMap::new(),
+                method::HOOK_TOOL_INVOKE,
+                invocation(103, json!({})),
+                None,
+            )
+            .await,
+    );
+    error(invoke("project", "old", 104).await);
+    let saved = fixture.control.saved_hosts.lock().unwrap()[0].clone();
+    ok(fixture
+        .wire
+        .call("old", method::META_SHUTDOWN, json!({}))
+        .await);
+    assert_eq!(
+        saved.read_config(None).await.unwrap_err().kind,
+        PluginErrorKind::HostUnavailable
+    );
+    assert_eq!(
+        ok(invoke("project", "project-binding", 105).await)["output_text"],
+        "new"
+    );
+    assert_eq!(ok(state("owner-a").await)["revision"], global_revision);
+    ok(fixture
+        .initialize("owner-a", "global-restart", &fixture.old.binding)
+        .await);
+    assert_ne!(ok(state("owner-a").await)["revision"], global_revision);
+    assert_eq!(ok(state("project").await)["revision"], project_revision);
+    error(invoke("owner-a", "old", 106).await);
+    error(
+        fixture
+            .wire
+            .call("old", method::META_SHUTDOWN, json!({}))
+            .await,
+    );
+    assert_eq!(
+        ok(invoke("owner-a", "global-restart", 107).await)["output_text"],
+        "old"
+    );
+    assert_eq!(
+        ok(invoke("project", "project-binding", 108).await)["output_text"],
+        "new"
+    );
+    ok(fixture
+        .wire
+        .send(
+            Wire::headers("owner-a", Some("global-restart")),
+            method::META_SHUTDOWN,
+            json!({}),
+            None,
+        )
+        .await);
+    ok(fixture
+        .wire
+        .send(
+            Wire::headers("project", Some("project-binding")),
+            method::META_SHUTDOWN,
+            json!({}),
+            None,
+        )
+        .await);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn explicitly_unowned_instance_coexists_without_borrowing_named_owners() {
+    let fixture = Fixture::start().await;
+    let init = serde_json::to_value(InitContext {
+        agena_version: "protocol-test".into(),
+        workspace_root: "/tmp".into(),
+        plugin_id: "test.callback-generations".parse().unwrap(),
+        host_callback_url: fixture.new.binding.url.clone(),
+        host_callback_token: fixture.new.binding.token.clone(),
+        settings: json!({}),
+        protocol_version: crate::rpc::PROTOCOL_VERSION,
+    })
+    .unwrap();
+    ok(fixture
+        .wire
+        .send(HeaderMap::new(), method::META_INIT, init, None)
+        .await);
+    assert!(
+        ok(fixture
+            .wire
+            .send(HeaderMap::new(), method::META_HTTP_STATE, json!({}), None)
+            .await)["revision"]
+            .is_string()
+    );
+    assert_eq!(
+        ok(fixture
+            .wire
+            .send(
+                HeaderMap::new(),
+                method::HOOK_TOOL_INVOKE,
+                invocation(111, json!({})),
+                None
+            )
+            .await)["output_text"],
+        "new"
+    );
+    assert_eq!(
+        ok(fixture.wire.invoke("old", 112, json!({})).await)["output_text"],
+        "old"
+    );
+    ok(fixture
+        .wire
+        .send(HeaderMap::new(), method::META_SHUTDOWN, json!({}), None)
+        .await);
+    error(
+        fixture
+            .wire
+            .send(
+                HeaderMap::new(),
+                method::HOOK_TOOL_INVOKE,
+                invocation(113, json!({})),
+                None,
+            )
+            .await,
+    );
+    assert_eq!(
+        ok(fixture.wire.invoke("old", 114, json!({})).await)["output_text"],
+        "old"
+    );
+    ok(fixture
+        .wire
+        .call("old", method::META_SHUTDOWN, json!({}))
+        .await);
+    fixture.finish().await;
 }

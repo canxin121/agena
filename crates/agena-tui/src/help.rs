@@ -43,6 +43,7 @@ pub enum ContextHelpPreset {
     Settings,
     ActionPane,
     Hub,
+    Bots,
     PermissionRule,
     Provider,
     ProviderModel,
@@ -548,12 +549,27 @@ pub fn preset_specs(
             )],
             tips,
         )),
+        Bots => Some((
+            "bot-manager-title",
+            vec![(
+                navigation,
+                vec![
+                    ("/bot list", "bot-list-keys"),
+                    ("/bot edit", "bot-form-keys"),
+                    ("Ctrl+B", "bot-entry-keys"),
+                ],
+            )],
+            tips,
+        )),
         Hub => Some((
             "context-help-summary-hub",
             vec![
                 (
                     navigation,
                     vec![
+                        ("b / Ctrl+B", "command-bot-summary"),
+                        ("l / /bot list", "bot-manager-title"),
+                        ("Ctrl+G", "command-hub-summary"),
                         ("Tab / Shift+Tab", "context-help-key-hub-view"),
                         ("↑ / ↓", "context-help-key-move"),
                         ("Enter", "context-help-key-open"),

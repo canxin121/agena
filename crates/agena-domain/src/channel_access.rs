@@ -103,13 +103,12 @@ pub enum ChannelTrigger {
 #[serde(default, deny_unknown_fields)]
 pub struct ChannelGrant {
     /// Exact canonical tool IDs only; empty means no tools. Scope-preserving
-    /// work/companion helpers are derived from the booleans below, not freely
+    /// memory/companion helpers are derived from the booleans below, not freely
     /// assigned management-tool names.
     pub tools: BTreeSet<String>,
     /// Fine-grained MCP server -> exact remote tool names. The generic MCP
     /// gateway and connection-management tools are never directly grantable.
     pub mcp_tools: BTreeMap<String, BTreeSet<String>>,
-    pub background_work: bool,
     pub private_memory: bool,
     pub source_workspace: bool,
     /// No network by default, including loopback/private targets. Explicit
@@ -126,7 +125,6 @@ impl ChannelGrant {
     pub fn has_effects(&self) -> bool {
         !self.tools.is_empty()
             || !self.mcp_tools.is_empty()
-            || self.background_work
             || self.private_memory
             || self.source_workspace
             || !self.network_hosts.is_empty()
@@ -171,7 +169,7 @@ impl ChannelGrant {
                     | "agena.secret"
                     | "agena.secrets"
                     | "agena.session"
-                    | "agena.work"
+                    | "agena.bot"
                     | "agena.companion"
                     | "agena.memory"
                     | "agena.cron"
@@ -207,9 +205,6 @@ impl ChannelGrant {
         if !self.mcp_tools.is_empty() {
             tools.insert("agena.mcp.tools.call".into());
             tools.insert("agena.mcp.tools.search".into());
-        }
-        if self.background_work {
-            tools.insert("agena.work.manage".into());
         }
         if self.private_memory {
             for name in ["list", "get", "search", "write", "delete"] {
@@ -543,7 +538,7 @@ mod tests {
         p.grants.insert(
             ChannelRole::Owner,
             ChannelGrant {
-                background_work: true,
+                tools: BTreeSet::from(["agena.agent.spawn".into()]),
                 ..Default::default()
             },
         );
@@ -552,13 +547,27 @@ mod tests {
         assert!(p.validate(1).is_ok());
     }
     #[test]
+    fn native_subagents_need_exact_tools_and_no_implicit_background_grant() {
+        let grant = ChannelGrant {
+            tools: BTreeSet::from(["agena.agent.spawn".into(), "agena.agent.cancel".into()]),
+            ..Default::default()
+        };
+        assert!(grant.validate().is_ok());
+        assert_eq!(grant.allowed_tools(), grant.tools);
+        assert!(ChannelGrant::default().allowed_tools().is_empty());
+        assert!(
+            serde_json::from_value::<ChannelGrant>(serde_json::json!({"background_work":true}))
+                .is_err()
+        );
+    }
+    #[test]
     fn role_labels_do_not_grant_machine_permissions() {
         let p = policy();
         for actor in ["owner", "admin", "member"] {
             assert!(p.member(actor, 1).unwrap().1.allowed_tools().is_empty());
         }
         let grant = ChannelGrant {
-            tools: BTreeSet::from(["agena.work.connections".into()]),
+            tools: BTreeSet::from(["agena.bot.connections".into()]),
             ..Default::default()
         };
         assert!(grant.validate().is_err());

@@ -1,6 +1,6 @@
 # Agena 助手：人格、记忆、主动交互与持续工作
 
-Web 和 TUI 使用同一套 Agena Runtime。日常入口是普通聊天：助手负责维护偏好、记忆、提醒和后台工作，不要求用户创建或维护 Task。
+Web 和 TUI 使用同一套 Agena Runtime。日常入口是普通聊天：助手负责维护偏好、记忆和提醒；AI Bot 直接管理项目与普通会话。
 
 ## 直接聊天
 
@@ -21,7 +21,7 @@ Web 和 TUI 使用同一套 Agena Runtime。日常入口是普通聊天：助手
 先停下刚才的检查。
 ```
 
-明确的多步骤工作由 `agena.work` 委派到独立执行会话；前台仍可以聊天。结果、补充要求和后台提问回到原会话。权限审批仍由用户通过原聊天中的真实审批卡片操作。详细工作流见 [自然聊天持续工作](conversation-work.md)。
+AI Bot 通过独立的 `/bot` 聊天入口管理项目和普通会话：查询项目、新建会话、继续已有对话、查看进度或停止执行。Web 与 TUI 共用同一个 Bot 对话。项目会话直接执行工作并复用现有 Subagent，你可以随时从项目列表打开并继续。权限审批保留原生卡片。详细用法见 [AI Bot](ai-bot.md)。
 
 ## 人格与长期记忆
 
@@ -85,19 +85,19 @@ Web 和 TUI 的普通聊天通过以下组件执行：
 | --- | --- |
 | `agena.companion` | 人格、经授权的提醒和跟进 |
 | `agena.memory` | 记忆查询、读取、写入、纠正、删除和自动召回 |
-| `agena.work` | 识别交办、关联原工作、跟进和自动回报 |
+| `agena.bot` | 查看项目、创建/继续普通会话、读取进展、管理接入草稿 |
 | Agena Runtime | Session、权限、后台记忆整理、工具、Subagent 和 MCP |
 
 主要代码位置：
 
 | 层次 | 位置 |
 |---|---|
-| 人格和提醒领域、时间策略 | `crates/agena-superagent/src/companion.rs` |
+| 人格和提醒领域、时间策略 | `crates/agena-assistant/src/companion.rs` |
 | 持久配置、回执、提醒、配额 | `crates/agena-storage-sqlite/src/companion_repository.rs` |
-| 运行时操作与主动投递 | `crates/agena-runtime/src/runtime/superagent/companion.rs` |
+| 运行时操作与主动投递 | `crates/agena-runtime/src/runtime/assistant/companion.rs` |
 | 自然聊天工具与提示 | `crates/agena-bundled-plugins/src/plugins/provided/companion.rs`、`assets/prompts/companion.md` |
 | 权限感知记忆 | `crates/agena-bundled-plugins/src/memory/plugin.rs` |
-| 原子提醒投递 | `SessionManager::deliver_companion_notice`、`ExecutorCommands::deliver_and_resume` |
+| 原子提醒投递 | `SessionManager::deliver_companion_notice`、`ExecutorCommands::deliver_control_notice` |
 | Web 页面 | `packages/agena-web/src/features/assistant/` |
 | TUI 面板 | `crates/agena-tui-app/src/app_assistant.rs` |
 
@@ -117,8 +117,8 @@ POST /api/v1/sessions/{source}/assistant/reminders/{id}
 ## 验证入口
 
 ```sh
-cargo test -p agena-superagent --lib --offline --locked
-cargo test -p agena-storage-sqlite --test companion --test superagent_tasks --offline --locked
+cargo test -p agena-assistant --lib --offline --locked
+cargo test -p agena-storage-sqlite --test companion --offline --locked
 cargo test -p agena-tui-app app_assistant --lib --offline --locked
 cargo test -p agena --test system scenarios::assistant --offline --locked -- --test-threads=1
 
@@ -135,32 +135,8 @@ bun run build
 
 测试模型是本地脚本化服务，验证真实产品在相应模型决策下的行为，不代表已完成不同真实模型的意图识别质量评测。自然交办仍由模型理解；执行、权限、状态、时间、版本和投递由宿主系统约束。
 
-本轮不接 QQ 和飞书。主动回报的目标是原 Agena 会话，不是外部渠道或手机系统推送。现有单实例、单操作者和顶层任务保守串行策略保持不变。
-
-## 本轮实际验证记录
-
-| 验证 | 结果 |
-|---|---|
-| 完整产品系统测试 | 112 通过、0 失败；6 个真实 UI 用例另行执行 |
-| 三组真实 Web/TUI 流程 | 6 通过：任务面板、自然持续工作、完整助手；包含真实 Chrome、私有 tmux 和产品服务 |
-| 最终助手界面复验 | TUI 通过；Web 增加旧快照回放、并发配置冲突、保持其他新字段、刷新后状态恢复后再次通过 |
-| 全部内置插件行为 | 76 通过，包括真实 Agent 生命周期、MCP 握手/发现/调用、记忆权限与 Cron 投递 |
-| 原生库回归 | 9 个库测试集共 500 通过，1 项既有测试默认忽略；后续新增 TUI 冲突保护专项 3 项复验通过 |
-| 存储集成 | 73 通过，1 项既有测试默认忽略；其中助手存储、策略和原子投递专项 7 项复验通过 |
-| 最终自然助手核心流程 | 5 通过，含跨会话人格、工作区隔离、记忆纠正/关闭/删除、提醒重启和授权拒绝 |
-| Web 行为测试 | 315 通过、0 失败 |
-| Web 生产构建、类型、模块与语言检查 | 通过 |
-| 相关 Rust 严格 Clippy | 通过，使用 `-D warnings` |
-
-不同测试集存在重叠，不能把这些数字简单相加当作独立功能覆盖率。系统测试中的真实 UI 用例默认忽略，是因为需要 Chrome/tmux；本轮已经用 `--ignored` 实际运行，而不是只登记。
-
-验收中发现并修复了设置保存与迟到读取的竞争：草稿保留原始版本，只提交真正修改的字段，冲突后明确重新确认，不会用旧表单覆盖其他并发更新。浏览器刷新探针也已改成等待新文档加载，避免误读即将卸载的旧 DOM。
-
-可追溯日志位于开发主机 `/tmp/agena-assistant-final/`，汇总为 `validation-summary.json`。`real-ui.log`、`assistant-ui-final.log`、`web-assistant-verified.log` 包含实际界面证据目录。旧失败日志保留用于审计，以最终复验结果为准。
-
-没有提交或推送 Git，没有重启用户现有服务，也没有迁移真实会话数据库。启用这些能力需要运行包含本工作区改动的新构建；默认插件 `agena.companion` 与 `agena.work` 随该构建加载。
-
+本轮不接 QQ 和飞书。主动回报的目标是原 Agena 会话，不是外部渠道或手机系统推送。项目执行使用原有会话队列与并发边界。
 
 ## 插件接入与外部事件
 
-聊天渠道与事件源现可通过 `agena.integration` v1 插件服务扩展。`work.connections` 可以在自然聊天中发现插件、提出规则草稿或暂停规则；Web/TUI `/integrations` 提供一次性授权确认和事件/投递审计。GitHub 新 Issue 及签名聊天桥的独立进程参考实现见 `examples/integration-plugins/`。完整契约、安装和安全边界见 `docs/integrations.md`。这增加的是通用扩展层，不表示已经连接用户真实 GitHub 或实现 QQ/飞书专用协议。
+聊天渠道与事件源现可通过 `agena.integration` v1 插件服务扩展。`bot.connections` 可以在自然聊天中发现插件、提出规则草稿或暂停规则；Web/TUI `/integrations` 提供一次性授权确认和事件/投递审计。GitHub 新 Issue 及签名聊天桥的独立进程参考实现见 `examples/integration-plugins/`。完整契约、安装和安全边界见 `docs/integrations.md`。这增加的是通用扩展层，不表示已经连接用户真实 GitHub 或实现 QQ/飞书专用协议。

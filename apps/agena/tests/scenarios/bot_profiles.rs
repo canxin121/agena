@@ -819,11 +819,22 @@ async fn long_persona_is_stored_and_a_small_context_model_reports_a_readable_bud
                 ..Default::default()
             }).await?;
 
-            session.send("long-persona-turn").await?.wait_settled().await?.assert_failed()?;
-            let state = resource(&case, bot.session_id).await?;
-            let detail = state["state"]["last_failure"].to_string();
-            ensure!(detail.contains("instructions") && detail.contains("tokens") && detail.contains("context window"),
-                "the budget error should name the instructions, their token cost and the remedy: {detail}");
+            let outcome = session.send("long-persona-turn").await?.wait_settled().await?;
+            outcome.assert_failed()?;
+            // The manager-level failure is projected as a durable error notice
+            // on the session transcript.
+            let all = session.client().session_all_parts(bot.session_id).await?;
+            let notice = all
+                .iter()
+                .filter_map(|part| part.content.get("message").and_then(Value::as_str))
+                .find(|text| text.contains("prompt budget"))
+                .with_context(|| format!("no budget-error notice in transcript: {all:?}"))?;
+            ensure!(
+                notice.contains("additional system instructions")
+                    && notice.contains("tokens")
+                    && notice.contains("larger context window"),
+                "the budget error should name the instructions, their token cost and the remedy: {notice}"
+            );
             // The oversized prompt must not have been sent to the provider.
             ensure!(case.model().requests().is_empty(), "an oversized prompt still reached the provider");
             Ok(())

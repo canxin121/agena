@@ -34,7 +34,10 @@ REQUIRED = {
         r'fn install_global_plugin_host\(',
         r'current_host_callback_context\(',
     ],
-    'packages/agena-web/src/layout/BotSidebar.vue': [r'SidebarBots'],
+    'packages/agena-web/src/layout/BotSidebar.vue': [
+        r'data-testid="bot-sidebar"',
+        r'BotSidebarRow',
+    ],
     'packages/agena-web/src/layout/MainLayout.vue': [
         r'<BotSidebar v-if="route.path === \'/bot\'"',
     ],

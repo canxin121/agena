@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded, type RouteRecordRaw } from 'vue-router'
 import { sessionStorageKeys } from '@/lib/persistence/storageKeys'
+import { botIdQuery, isBotId } from '@/lib/bots'
 import { hasEmbeddedWorkspacePaneQuery } from '@/app/windowScope'
 
 const CHUNK_RECOVERY_KEY = sessionStorageKeys.app.chunkRecoveryReloaded
@@ -21,12 +22,16 @@ function isProbablyLazyChunkError<T>(err: T): boolean {
 }
 
 const routes: RouteRecordRaw[] = [
-  { path: '/integrations', component: () => import('./pages/IntegrationsPage.vue'), meta: { shellSidebar: 'none', mobilePanel: 'integrations' } },
-  { path: '/assistant', component: () => import('./pages/AssistantPage.vue'), meta: { shellSidebar: 'none', mobilePanel: 'assistant' } },
+  { path: '/bot', component: () => import('./pages/ChatPage.vue'), meta: { shellSidebar: 'chat', mobilePanel: 'bot' } },
   {
-    path: '/tasks',
-    component: () => import('./pages/TasksPage.vue'),
-    meta: { shellSidebar: 'none', mobilePanel: 'tasks' },
+    path: '/integrations',
+    component: () => import('./pages/IntegrationsPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'integrations' },
+  },
+  {
+    path: '/assistant',
+    component: () => import('./pages/AssistantPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'assistant' },
   },
   {
     path: '/',
@@ -74,7 +79,10 @@ export const router = createRouter({
   routes,
 })
 
-router.beforeEach((to) => {
+router.beforeEach((to, from) => {
+  if (to.path === '/assistant' && from.path === '/bot' && isBotId(botIdQuery(from.query))) {
+    return { path: '/bot', query: { ...from.query, editPersona: '1' } }
+  }
   if (!hasEmbeddedWorkspacePaneQuery(to.query)) return true
 
   const nextQuery: Record<string, string> = {}

@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RiArrowLeftSLine, RiPlayListAddLine, RiQuestionLine, RiMapPin2Line, RiSettings3Line } from '@remixicon/vue'
 import { cn } from '@/lib/utils'
-import { isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useUiStore } from '@/stores/ui'
 import { useHealthStore } from '@/stores/health'
@@ -48,23 +47,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('orientationchange', updateHeaderHeight)
 })
 
-// Sync Route -> UI Store (for mobile title / persistence + workspace windows)
-watch(
-  () => ({ path: route.path, query: route.query, hash: route.hash }),
-  ({ path, query, hash }) => {
-    const normalized = String(path || '').toLowerCase()
-    if (!isWorkspaceMainTabPath(normalized)) return
-
-    const next = mainTabFromPath(normalized)
-    ui.syncActiveWorkspaceWindowFromRoute(next, query, { path, hash })
-  },
-  { immediate: true, deep: true },
-)
-
 const mobileTitle = computed(() => {
   const panelMap: Record<string, string> = {
     settings: String(t('nav.settings')),
-    tasks: String(t('tasks.title')),
+    bot: String(t('bot.title')),
     assistant: String(t('assistant.title')),
     integrations: String(t('integrations.title')),
     sessions: String(t('nav.chat')),
@@ -215,7 +201,7 @@ function openHelpDialog() {
           </IconButton>
 
           <IconButton
-            v-if="chat.selectedSessionId"
+            v-if="chat.selectedSessionId && route.path !== '/bot'"
             size="lg"
             :tooltip="String(t('header.locateSession'))"
             :is-touch-pointer="ui.isTouchPointer"

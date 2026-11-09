@@ -55,7 +55,7 @@ export function useAppRuntime() {
     async () => {
       chat.reconcileLiveState()
       invalidateResources()
-      directorySessions.scheduleSidebarRecoverySync('stream-connected', 0, { force: true })
+      if (route.path !== '/bot') directorySessions.scheduleSidebarRecoverySync('stream-connected', 0, { force: true })
       activity.invalidate()
       await settings.refresh()
     },
@@ -217,8 +217,10 @@ export function useAppRuntime() {
           activity.applyEvent(evt)
           applyResourceEvent(evt)
           chat.applyEvent(evt)
-          directory.applyGlobalEvent(evt)
-          directorySessions.applyGlobalEvent(evt)
+          if (route.path !== '/bot') {
+            directory.applyGlobalEvent(evt)
+            directorySessions.applyGlobalEvent(evt)
+          }
         },
         onError: (err) => {
           // Recovery needs a live connection. Retrying snapshots while the
@@ -237,6 +239,8 @@ export function useAppRuntime() {
   }
 
   async function ensureSelectedSessionFromQuery() {
+    // /bot owns its binding through the canonical endpoint, never a URL query.
+    if (route.path === '/bot') return
     const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
 
     // If the URL includes a session id, treat it as an explicit deep link.
@@ -285,6 +289,9 @@ export function useAppRuntime() {
     if (disposed) return
     notifications.offerPermission()
     void notifications.syncPush()
+    // The Files surface falls back to the user's home when no project is
+    // selected, so resolve it once for the whole shell.
+    void directory.refreshHome()
     // Keep sessions available for all views.
     await chat.refreshSessions().catch(() => {})
     if (disposed) return

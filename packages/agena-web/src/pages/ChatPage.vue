@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { loadTaskDraft, saveTaskDraft } from '@/features/tasks/taskDraft'
-import { newTaskForm } from '@/features/tasks/taskBoard'
 import { createFailedAttachmentDraftSlot } from './chat/failedAttachmentDrafts'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
+import { useBotConversation } from './chat/useBotConversation'
 import ChatPageView from './chat/ChatPageView.vue'
+import BotControls from './chat/BotControls.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
+import { deferKeyboardFocus } from '@/lib/deferredKeyboardFocus'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { apiJson } from '@/lib/api'
 import { createSkillsClient } from '@/lib/skillsApi'
@@ -132,6 +133,71 @@ const settings = useSettingsStore()
 const ui = useUiStore()
 const toasts = useToastsStore()
 const { t } = useI18n()
+const bot = useBotConversation()
+const botControls = ref<InstanceType<typeof BotControls> | null>(null)
+const openBotEditor = () => {
+  void botControls.value?.edit()
+}
+watch(
+  [bot.ready, () => route.query.editPersona],
+  async ([ready, edit]) => {
+    if (!ready || !bot.isBot.value || edit !== '1') return
+    await botControls.value?.edit()
+    if (route.path !== '/bot' || route.query.editPersona !== '1') return
+    const { editPersona: _edit, ...query } = route.query
+    await router.replace({ path: '/bot', query })
+  },
+  { flush: 'post' },
+)
+async function retryBotConversation() {
+  const origin = document.activeElement
+  const resolved = await bot.retry()
+  if (!resolved) return
+  // Binding a default can move the shell to an existing named tab and remount
+  // this page. Keep the focus request tied to the resolved route, not its old ref.
+  deferKeyboardFocus(() => {
+    const url = new URL(window.location.href)
+    if (
+      url.pathname !== '/bot' ||
+      url.searchParams.get('botId') !== resolved.bot_id ||
+      url.searchParams.get('sessionId') !== String(resolved.session_id)
+    )
+      return null
+    const windowId = url.searchParams.get('windowId')
+    const surface = windowId
+      ? document.querySelector(`[data-workspace-pane-window="${CSS.escape(windowId)}"]`)
+      : document
+    return (
+      Array.from(surface?.querySelectorAll<HTMLElement>('[data-chat-input="true"]') || []).find(
+        (element) => element.getClientRects().length > 0,
+      ) || null
+    )
+  }, origin)
+}
+async function openBotProjects() {
+  await router.push('/chat')
+  if (ui.isCompactLayout) ui.setSessionSwitcherOpen(true)
+  else ui.setSidebarOpen(true, { preserveWidth: true })
+}
+watch(
+  () => route.fullPath,
+  (_path, _previous, onCleanup) => {
+    if (route.path !== '/chat') return
+    const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+    if (!sid) return
+    let current = true
+    onCleanup(() => {
+      current = false
+    })
+    void chat
+      .hydrateSession(sid, {
+        ...paneWindowScope(),
+        isCurrent: () => current && bot.ownsConversation(),
+      })
+      .catch(() => {})
+  },
+  { immediate: true },
+)
 
 const orphanDraft = ref('')
 const draft = computed<string>({
@@ -176,6 +242,7 @@ function discardFailedAttachmentDraft() {
 }
 
 const composerRef = ref<ComposerExpose | null>(null)
+
 const submittingAttachmentUrls = new Set<string>()
 const attachments = useChatAttachments({
   toasts,
@@ -211,7 +278,11 @@ const {
   openProjectAttachDialog,
   addProjectAttachment,
 } = attachments
-const sessionDirectory = computed(() => chat.selectedSessionDirectory || directoryStore.currentDirectory || '')
+const sessionDirectory = computed(() =>
+  bot.isBot.value || (chat.selectedSessionId && (!chat.selectedSession || chat.selectedSession.workspace_id == null))
+    ? ''
+    : chat.selectedSessionDirectory || directoryStore.currentDirectory || '',
+)
 const skillCatalog = ref<SkillCatalogEntry[]>([])
 const skillCatalogLoading = ref(false)
 let skillCatalogDirectory: string | null = null
@@ -327,10 +398,10 @@ const workspaceChatTabTitle = computed(() => {
 })
 
 watch(
-  () => [route.path, route.query, workspaceChatTabTitle.value] as const,
-  ([path, _query, title]) => {
-    if (!String(path || '').startsWith('/chat')) return
-    ui.setWorkspaceWindowTitleFromRoute(route.query, title)
+  () => [route.path, route.query, workspaceChatTabTitle.value, bot.name.value] as const,
+  ([path, _query, title, botName]) => {
+    if (path !== '/chat' && path !== '/bot') return
+    ui.setWorkspaceWindowTitleFromRoute(route.query, path === '/bot' ? botName || String(t('bot.title')) : title)
   },
   { immediate: true, deep: true },
 )
@@ -1690,20 +1761,16 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'integrations':
       await router.push({ path: '/integrations', query: sid ? { source: sid } : {} })
       return
+    case 'bot':
+      await router.push('/bot')
+      return
     case 'assistant':
+      if (bot.isBot.value) {
+        openBotEditor()
+        break
+      }
       await router.push({ path: '/assistant', query: sid ? { source: sid } : {} })
       return
-    case 'tasks':
-      await router.push({ path: '/tasks', query: sid ? { source: sid } : {} })
-      return
-    case 'task': {
-      if (!sid) throw new Error(String(t('tasks.noSession')))
-      const source = Number(sid)
-      const unfinished = loadTaskDraft(source)
-      if (!unfinished?.submitted) saveTaskDraft(source, newTaskForm('create', source, null, args))
-      await router.push({ path: '/tasks', query: { source: sid, compose: '1' } })
-      return
-    }
     case 'timeline':
       await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
       return
@@ -1857,11 +1924,18 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'inline-ui': {
       const reference = args.trim()
       const candidates = Array.from(pageRef.value?.querySelectorAll<HTMLElement>('[data-inline-embed]') || [])
-      const target = reference ? candidates.find((node) => node.dataset.inlineReference === reference) : candidates.at(-1)
+      const target = reference
+        ? candidates.find((node) => node.dataset.inlineReference === reference)
+        : candidates.at(-1)
       if (!target) toasts.push('info', String(t('inlineUi.referenceUnavailable')))
       else {
-        target.scrollIntoView({ block: 'center', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
-        target.querySelector<HTMLElement>('button, input, select, summary, [tabindex="0"]')?.focus({ preventScroll: true })
+        target.scrollIntoView({
+          block: 'center',
+          behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+        })
+        target
+          .querySelector<HTMLElement>('button, input, select, summary, [tabindex="0"]')
+          ?.focus({ preventScroll: true })
       }
       return
     }
@@ -1932,6 +2006,7 @@ async function handleCommandSelected(command: Command) {
 }
 
 async function send() {
+  if (!bot.canSendConversation()) return
   if (failedDraftSlot.peek()) {
     toasts.push('info', String(t('chat.attachments.recoverBeforeSend')))
     return
@@ -1943,7 +2018,7 @@ async function send() {
   sending.value = true
   try {
     await waitForAttachments()
-    if (chat.selectedSessionId !== sid || attachmentGeneration() !== generation) return
+    if (!bot.canSendConversation() || chat.selectedSessionId !== sid || attachmentGeneration() !== generation) return
     if (preparationErrorCount() !== errors) {
       toasts.push('info', String(t('chat.attachments.preparationFailed')))
       return
@@ -1983,15 +2058,9 @@ async function sendReady(sid: string | null) {
   if (text && filesSnapshot.length === 0) {
     try {
       if (commands.value.length === 0) await loadCommands()
+      if (!bot.canSendConversation() || chat.selectedSessionId !== sid) return
       const matchedCommand = matchSlashCommand(commands.value, text)
       if (matchedCommand?.command.kind === 'builtin') {
-        // Preserve the visible draft until the task request has a UI owner.
-        if (matchedCommand.command.action === 'task' || matchedCommand.command.action === 'tasks') {
-          await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
-          if (draft.value === draftSnapshot) draft.value = ''
-          closeCommandPalette()
-          return
-        }
         draft.value = ''
         closeCommandPalette()
         await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
@@ -2015,7 +2084,7 @@ async function sendReady(sid: string | null) {
     }
   }
 
-  if (!sid || chat.selectedSessionId !== sid) return
+  if (!bot.canSendConversation() || !sid || chat.selectedSessionId !== sid) return
 
   if (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value) {
     toasts.push('error', t('chat.toasts.selectModelBeforeSending'))
@@ -2062,7 +2131,7 @@ async function sendReady(sid: string | null) {
     // placeholder per inline attachment, so the transcript renders the
     // attachments together above the text the user actually typed.
     const parts: JsonValue[] = []
-    const workspace = filesSnapshot.some((file) => file.composerKind !== 'skill_ref')
+    const workspace = filesSnapshot.some((file) => file.composerKind !== 'skill_ref' && !file.composerNode && !file.url && !!file.serverPath)
       ? await chat.resolveSessionWorkspace(sid)
       : null
     const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
@@ -2105,6 +2174,9 @@ async function sendReady(sid: string | null) {
       )
     }
 
+    if (!bot.canSendConversation() || chat.selectedSessionId !== sid) {
+      throw new DOMException('Conversation changed before sending', 'AbortError')
+    }
     await chat.sendMessage(sid, { ...runCfg, parts })
 
     // Match the TUI: only a successfully submitted plain-text draft enters
@@ -2179,24 +2251,27 @@ watch(
   { immediate: true, flush: 'post' },
 )
 
+let pageDisposed = false
+onBeforeUnmount(() => {
+  pageDisposed = true
+})
 onMounted(async () => {
   await transcriptPreferences.refresh()
+  if (pageDisposed) return
   // MainLayout already refreshes these, but keep Chat resilient on direct navigation.
   if (!chat.sessions.length) await chat.refreshSessions().catch(() => {})
 
-  const sidFromQuery = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
-  if (sidFromQuery) {
-    await chat.selectSession(sidFromQuery).catch(() => {})
-  }
-
+  if (pageDisposed) return
   const sid = (chat.selectedSessionId || '').trim()
   if (sid && !pendingInitialScrollSessionId.value) {
     requestInitialScroll(sid)
   }
 
   await modelSelection.loadProvidersAndModels()
+  if (pageDisposed) return
   modelSelection.applySessionSelection()
   await loadCommands()
+  if (pageDisposed) return
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
 
   commandPointerHandler = (event: MouseEvent | TouchEvent) => {
@@ -2357,6 +2432,15 @@ const viewCtx = {
   toggleEditorFullscreen,
 
   // Header.
+  isBot: bot.isBot,
+  botName: bot.name,
+  openBotEditor,
+  openBotProjects,
+  fillBotSuggestion: (text: string) => {
+    if (!bot.ownsConversation()) return
+    draft.value = draft.value.trim() ? `${draft.value}\n\n${text}` : text
+    void nextTick(() => getComposerInput(composerRef.value)?.focus())
+  },
   sessionEnded,
   canAbort,
   abortRun,
@@ -2497,5 +2581,52 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <ChatPageView :ctx="viewCtx" />
+  <div class="flex h-full min-h-0 flex-col">
+    <div v-if="bot.isBot.value" class="shrink-0 border-b border-border/70 bg-background/95 px-3 py-2 sm:px-4">
+      <div class="mx-auto w-full max-w-4xl">
+        <BotControls
+          ref="botControls"
+          :bot-id="bot.botId.value"
+          :name="bot.name.value"
+          :disabled="!bot.ready.value"
+          @select="bot.select"
+          @updated="bot.updateProfile"
+          @unavailable="bot.retry"
+        />
+      </div>
+    </div>
+    <ChatPageView v-if="bot.ready.value" :ctx="viewCtx" />
+    <section
+      v-else
+      class="flex h-full flex-col items-center justify-center gap-4 px-6 text-center"
+      :aria-busy="bot.loading.value"
+      data-testid="bot-loading"
+    >
+      <div class="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary" aria-hidden="true">
+        <span class="text-xl">✦</span>
+      </div>
+      <h1 class="text-lg font-semibold">{{ t('bot.title') }}</h1>
+      <p v-if="!bot.error.value" role="status" aria-live="polite" class="text-sm text-muted-foreground">
+        {{ t('bot.loading') }}
+      </p>
+      <div v-else role="alert" class="max-w-sm space-y-3">
+        <p class="text-sm font-medium">{{ t('bot.loadFailed') }}</p>
+        <p class="break-words text-xs text-muted-foreground">{{ bot.error.value }}</p>
+        <button
+          type="button"
+          class="min-h-11 rounded-lg bg-primary px-5 text-sm text-primary-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          @click="retryBotConversation"
+        >
+          {{ t('common.retry') }}
+        </button>
+      </div>
+      <button
+        type="button"
+        class="min-h-11 rounded-lg px-4 text-sm text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+        @click="openBotProjects"
+      >
+        {{ t('bot.projects') }}
+      </button>
+    </section>
+  </div>
 </template>

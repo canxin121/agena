@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:bot": "bun test ./tests/botConversation.test.ts ./tests/namedBots.test.ts ./tests/chatConsistency.test.ts ./tests/conversationRouting.test.ts ./tests/taskRetirement.test.ts",
+    "test:bot:browser": "node ./scripts/probe-bot.cjs",
     "test:mcp:browser": "node ./scripts/probe-mcp.cjs",
     "test:attachments:browser": "node ./scripts/probe-attachments.cjs",
     "test:viewport:browser": "node ./scripts/probe-viewport.cjs",
@@ -34,7 +36,8 @@
     "test:inline-ui": "bun test ./tests/inlineUi.test.ts ./tests/inlineUiReferences.test.ts ./tests/inlineUiProgram.test.ts",
     "test:inline-ui:browser": "node ./scripts/probe-inline-ui.cjs",
     "test:inline-ui:live": "node ./scripts/probe-stateful-ui.cjs",
-    "test:inline-ui:layout": "node ./scripts/probe-inline-ui-layout.cjs"
+    "test:inline-ui:layout": "node ./scripts/probe-inline-ui-layout.cjs",
+    "test:assistant:browser": "node ./scripts/probe-assistant.cjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

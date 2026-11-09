@@ -1,9 +1,23 @@
 <script setup lang="ts">
 import { useToastsStore } from '../stores/toasts'
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import Sonner from './ui/Sonner.vue'
 
 const store = useToastsStore()
+const route = useRoute()
+// The permanent Bot composer must remain usable while the first-visit
+// notification offer is open. Keep transient notices below the top chrome.
+const isBot = computed(() => route.path === '/bot')
+const botDesktopToastOffset = {
+  right: 'calc(var(--oc-safe-area-right, 0px) + 12px)',
+  top: 'calc(var(--oc-safe-area-top, 0px) + 84px)',
+}
+const botMobileToastOffset = {
+  left: 'calc(var(--oc-safe-area-left, 0px) + 10px)',
+  right: 'calc(var(--oc-safe-area-right, 0px) + 10px)',
+  top: 'calc(var(--oc-safe-area-top, 0px) + var(--oc-header-height, 48px) + 48px)',
+}
 
 const desktopToastOffset = {
   right: 'calc(var(--oc-safe-area-right, 0px) + 12px)',
@@ -26,9 +40,9 @@ onMounted(() => {
   <Teleport to="body">
     <Sonner
       class="oc-toaster"
-      position="bottom-right"
-      :offset="desktopToastOffset"
-      :mobile-offset="mobileToastOffset"
+      :position="isBot ? 'top-right' : 'bottom-right'"
+      :offset="isBot ? botDesktopToastOffset : desktopToastOffset"
+      :mobile-offset="isBot ? botMobileToastOffset : mobileToastOffset"
     />
   </Teleport>
 </template>

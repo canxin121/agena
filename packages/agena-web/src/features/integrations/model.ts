@@ -24,7 +24,7 @@ export function integrationTemplate(provider: IntegrationProvider, now = Date.no
     expires_at_ms: now + 7 * 86400000,
     daily_limit: 5,
     total_limit: 50,
-    max_task_seconds: 300,
+    max_execution_seconds: 300,
     use_source_permissions: false,
     channel_policy: channel ? channelPolicyTemplate() : undefined,
   }
@@ -32,6 +32,43 @@ export function integrationTemplate(provider: IntegrationProvider, now = Date.no
 export function parseIntegration(text: string): IntegrationSpec {
   const value: unknown = JSON.parse(text)
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Integration JSON must be an object')
+  const spec = value as Record<string, unknown>
+  if (!['notify', 'session', 'channel'].includes(String(spec.mode)))
+    throw new Error('Integration mode must be notify, session or channel')
+  const fields = new Set([
+    'actors',
+    'channel_policy',
+    'config',
+    'daily_limit',
+    'event_types',
+    'expires_at_ms',
+    'instruction',
+    'max_execution_seconds',
+    'mode',
+    'poll_seconds',
+    'provider',
+    'resource',
+    'thread',
+    'title',
+    'total_limit',
+    'use_source_permissions',
+  ])
+  if (Object.keys(spec).some((key) => !fields.has(key)))
+    throw new Error('Integration JSON contains an unsupported field')
+  if (!Number.isSafeInteger(spec.max_execution_seconds) || Number(spec.max_execution_seconds) <= 0)
+    throw new Error('max_execution_seconds must be a positive integer')
+  const policy = spec.channel_policy as ChannelAccessPolicy | undefined
+  if (policy && typeof policy === 'object') {
+    for (const grant of [...Object.values(policy.grants || {}), policy.service_grant]) {
+      if (
+        grant &&
+        Object.keys(grant).some(
+          (key) => !['tools', 'mcp_tools', 'network_hosts', 'private_memory', 'source_workspace'].includes(key),
+        )
+      )
+        throw new Error('Use explicit tool grants, including Subagent, for channel capabilities')
+    }
+  }
   return value as IntegrationSpec
 }
 
@@ -48,7 +85,6 @@ export function channelPolicyTemplate(): ChannelAccessPolicy {
     allow_automated_reports: false,
     service_grant: {
       tools: [],
-      background_work: false,
       private_memory: false,
       source_workspace: false,
       network_hosts: [],

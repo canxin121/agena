@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiTaskLine } from '@remixicon/vue'
+import { RiRobot2Line } from '@remixicon/vue'
 import { computed, type Component } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -12,7 +12,7 @@ const { t } = useI18n()
 
 const TAB_ICONS: Record<NavigationMainTabId, Component> = {
   chat: RiChat4Line,
-  tasks: RiTaskLine,
+  bot: RiRobot2Line,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,

@@ -1,5 +1,6 @@
 import { activityEquals, activityIsActive, type SessionActivity } from '@/types/activity'
 import { defineStore } from 'pinia'
+import { useUiStore } from './ui'
 import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
 
@@ -1977,6 +1978,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       session = await chatApi.getSession(sid)
       upsertSessionCache(session)
     }
+    if (session.workspace_id == null) return await chatApi.uploadSessionFile(Number(sid), input)
     const workspaceId = Number(session.workspace_id)
     if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) {
       throw new Error(i18n.global.t('chat.errors.sessionWorkspaceInvalid'))
@@ -2573,6 +2575,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
   // Different consumers of the same pane share selection ownership. A late
   // hydration may fill its own session cache, but cannot navigate the pane.
   const beginSelection = createLatestRequestGuard(() => pane.windowId.value, pane)
+  const ui = useUiStore()
   function selectedSessionId(): string | null {
     return readSessionIdFromQuery(pane.route.value.query) || null
   }
@@ -2580,11 +2583,19 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
   async function selectSession(id: string | null) {
     const sid = String(id || '').trim()
     const ownsSelection = beginSelection()
-    const initialRoute = pane.route.value
-    const isCurrent = () =>
-      ownsSelection() &&
-      (pane.route.value === initialRoute ||
-        (pane.route.value.path === '/chat' && (readSessionIdFromQuery(pane.route.value.query) || '') === sid))
+    // Scoped routes are shallow reactive objects mutated in place by the pane.
+    // Snapshot values, and also check the intended tab route while its lazy load
+    // is pending. Object identity alone cannot establish navigation ownership.
+    const initialPath = pane.route.value.path
+    const initialSession = readSessionIdFromQuery(pane.route.value.query) || ''
+    const matches = (path: string, session: string) =>
+      (path === initialPath && session === initialSession) || (path === '/chat' && session === sid)
+    const isCurrent = () => {
+      if (!ownsSelection() || !matches(pane.route.value.path, readSessionIdFromQuery(pane.route.value.query) || ''))
+        return false
+      const target = ui.getWorkspaceWindowById(pane.windowId.value)
+      return !target || matches(target.routePath, target.routeQuery.sessionId || '')
+    }
     if (sid) await store.hydrateSession(sid, { windowId: pane.windowId.value, isCurrent })
     if (!isCurrent()) return
 

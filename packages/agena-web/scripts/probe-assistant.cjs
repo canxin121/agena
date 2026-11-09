@@ -104,33 +104,20 @@ class Cdp {
 
 async function main() {
   assert(!process.versions.bun, 'Run this Vite/CDP probe with Node, not Bun')
-  const backend = process.env.TASKS_BACKEND?.replace(/\/$/, '')
-  const source = Number(process.env.TASKS_SOURCE)
+  const backend = process.env.ASSISTANT_BACKEND?.replace(/\/$/, '')
+  const source = Number(process.env.ASSISTANT_SOURCE)
   assert(
     backend && ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(backend).hostname),
     'Use an isolated local Agena fixture',
   )
-  assert(Number.isSafeInteger(source) && source > 0, 'TASKS_SOURCE must name the fixture conversation')
+  assert(Number.isSafeInteger(source) && source > 0, 'ASSISTANT_SOURCE must name the fixture conversation')
   const web = path.resolve(__dirname, '..')
-  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'agena-task-browser-'))
-  const evidence = process.env.TASKS_EVIDENCE || temporary
+  const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'agena-assistant-browser-'))
+  const evidence = process.env.ASSISTANT_EVIDENCE || temporary
   await fs.mkdir(evidence, { recursive: true })
   let server, chrome, cdp
   const errors = [],
     external = []
-  async function tasks() {
-    const response = await fetch(`${backend}/api/v1/tasks?source_session_id=${source}`)
-    assert(response.ok, `task query: ${response.status}`)
-    const value = await response.json()
-    assert(Array.isArray(value), `task query returned ${JSON.stringify(value).slice(0, 500)}`)
-    return value
-  }
-  async function taskState(state, attempt) {
-    return wait(
-      async () => (await tasks()).find((task) => task.state === state && (!attempt || task.attempt === attempt)),
-      `task ${state}, attempt ${attempt || '*'}`,
-    )
-  }
   try {
     const { createServer } = await import('vite')
     server = await createServer({
@@ -432,7 +419,11 @@ async function main() {
       assert.equal(state.reminders.filter((r) => r.state === 'completed').length, 1)
       const future = state.reminders.find((r) => r.state === 'active')
       assert(future, 'future reminder')
-      await cdp.click('[data-testid="chat-assistant"]')
+      // The project chat header no longer exposes Assistant settings; the
+      // panel is a standalone route (also reachable via the /assistant slash
+      // command) and must not be entangled with project session chrome.
+      await cdp.send('Page.navigate', { url: `${base}/assistant?source=${source}` })
+      await wait(() => cdp.evaluate(`location.pathname==='/assistant'`), 'assistant route')
       // The panel shell renders before its asynchronous profile request settles.
       // Wait for the visible form and completed initial load before reading values.
       await wait(
@@ -558,207 +549,7 @@ async function main() {
       )
       return
     }
-    if (process.env.CONVERSATION_WORK_PROBE === '1') {
-      await cdp.send('Page.navigate', { url: `${base}/chat?sessionId=${source}` })
-      await wait(
-        () => cdp.evaluate(`Boolean(document.querySelector('[data-chat-input="true"]'))`),
-        'ordinary chat input',
-        90000,
-      )
-      await cdp.evaluate(`(() => {
-        const original=window.fetch; window.__manualTaskWrites=[];
-        window.fetch=async (...args) => {
-          const url=String(args[0]), method=String(args[1]?.method || 'GET').toUpperCase();
-          if (method!=='GET' && (url.includes('/api/v1/tasks') || url.includes('/api/v1/chatbot'))) window.__manualTaskWrites.push({url,method});
-          return original(...args);
-        };
-      })()`)
-      await cdp.fill('[data-chat-input="true"]', '请后台检查测试并把结果告诉我')
-      await cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        key: 'Enter',
-        code: 'Enter',
-        windowsVirtualKeyCode: 13,
-        modifiers: 2,
-      })
-      await cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: 'Enter',
-        code: 'Enter',
-        windowsVirtualKeyCode: 13,
-        modifiers: 2,
-      })
-      await wait(
-        () => cdp.evaluate(`document.body.innerText.includes('natural-ui-delivery-one')`),
-        'automatic result in original chat',
-        60000,
-      )
-      const first = await taskState('completed', 1)
-      assert.equal(await cdp.evaluate('location.pathname'), '/chat')
-      assert.equal((await tasks()).length, 1)
-      await cdp.fill('[data-chat-input="true"]', '再补一下取消请求的测试')
-      await cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyDown',
-        key: 'Enter',
-        code: 'Enter',
-        windowsVirtualKeyCode: 13,
-        modifiers: 2,
-      })
-      await cdp.send('Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: 'Enter',
-        code: 'Enter',
-        windowsVirtualKeyCode: 13,
-        modifiers: 2,
-      })
-      await wait(
-        () => cdp.evaluate(`document.body.innerText.includes('natural-ui-delivery-two')`),
-        'natural follow-up result in original chat',
-        60000,
-      )
-      const second = await taskState('completed', 2)
-      assert.equal(second.id, first.id)
-      assert.equal(second.worker_session_id, first.worker_session_id)
-      assert.equal((await tasks()).length, 1)
-      assert.deepEqual(
-        await cdp.evaluate('window.__manualTaskWrites'),
-        [],
-        'UI used manual Task control instead of ordinary conversation',
-      )
-      assert.equal(await cdp.evaluate('location.pathname'), '/chat')
-      await cdp.screenshot(path.join(evidence, 'natural-chat-desktop.png'))
-      await cdp.send('Emulation.setDeviceMetricsOverride', {
-        width: 375,
-        height: 812,
-        deviceScaleFactor: 1,
-        mobile: true,
-      })
-      assert(await cdp.evaluate('document.documentElement.scrollWidth <= innerWidth+1'), 'mobile chat overflow')
-      await cdp.screenshot(path.join(evidence, 'natural-chat-mobile.png'))
-      assert.deepEqual(errors, [])
-      assert.deepEqual(external, [])
-      console.log(
-        JSON.stringify({
-          ok: true,
-          source,
-          task: first.id,
-          worker: first.worker_session_id,
-          checks: [
-            'ordinary chat creation',
-            'automatic completion report',
-            'natural follow-up',
-            'same worker',
-            'no Task UI or task mutations',
-            'mobile chat',
-          ],
-          evidence,
-        }),
-      )
-      return
-    }
-    await cdp.send('Page.navigate', { url: `${base}/tasks?source=${source}` })
-    await wait(
-      () => cdp.evaluate(`Boolean(document.querySelector('[data-testid="task-board"]'))`),
-      'full Vue task page',
-      90000,
-    )
-    // Drop the first receipt AFTER the real API accepted the task. The UI
-    // must retry the same key rather than create another task/model request.
-    await cdp.evaluate(`(() => { const original = window.fetch; window.__taskCreates = []; let drop = true;
-      window.fetch = async (...args) => { const input = String(args[0]); const init = args[1] || {};
-        const result = await original(...args);
-        if (input.endsWith('/api/v1/tasks') && init.method === 'POST') {
-          window.__taskCreates.push(JSON.parse(init.body));
-          if (drop && result.ok) { drop = false; throw new TypeError('fixture-lost-accepted-receipt'); }
-        } return result; }; })()`)
-    await cdp.click('[data-testid="task-new"]')
-    await cdp.fill('[role="dialog"] textarea', 'browser-task-marker 中文任务\n保留重试标识')
-    await cdp.click('[data-testid="task-submit"]')
-    await wait(
-      () => cdp.evaluate(`document.body.innerText.includes('fixture-lost-accepted-receipt')`),
-      'retained error',
-    )
-    assert.equal(
-      await cdp.evaluate(`document.querySelector('[role="dialog"] textarea').value`),
-      'browser-task-marker 中文任务\n保留重试标识',
-    )
-    await cdp.click('[data-testid="task-submit"]')
-    const first = await taskState('review', 1)
-    assert.equal((await tasks()).length, 1, 'lost receipt produced duplicate work')
-    const creates = await cdp.evaluate('window.__taskCreates')
-    assert.equal(creates.length, 2)
-    assert.deepEqual(creates[0], creates[1])
-    await wait(() => cdp.evaluate(`!document.querySelector('[role="dialog"]')`), 'create dialog closes')
-    await cdp.click(`[data-task-id="${first.id}"]`)
-    await cdp.click('[data-testid="task-worker"]')
-    await wait(
-      () => cdp.evaluate(`location.pathname === '/chat' && document.body.innerText.includes('browser-evidence-one')`),
-      'real worker transcript',
-      90000,
-    )
-    await cdp.click('[data-testid="chat-tasks"]')
-    await wait(
-      () => cdp.evaluate(`Boolean(document.querySelector('[data-testid="task-resume"]'))`),
-      'back-link returns to original task',
-    )
-    await cdp.click('[data-testid="task-resume"]')
-    await cdp.fill('[role="dialog"] textarea', 'browser-followup-marker 补充验证')
-    await cdp.click('[data-testid="task-submit"]')
-    const resumed = await taskState('review', 2)
-    assert.equal(resumed.worker_session_id, first.worker_session_id, 'feedback created a different worker')
-    await wait(() => cdp.evaluate(`!document.querySelector('[role="dialog"]')`), 'resume dialog closes')
-    await cdp.click('[data-testid="task-accept"]')
-    await cdp.click('[data-testid="task-submit"]')
-    await taskState('completed', 2)
-    await wait(() => cdp.evaluate(`!document.querySelector('[role="dialog"]')`), 'accept dialog closes')
-    await cdp.screenshot(path.join(evidence, 'tasks-desktop.png'))
-    await cdp.send('Emulation.setDeviceMetricsOverride', {
-      width: 375,
-      height: 812,
-      deviceScaleFactor: 1,
-      mobile: true,
-    })
-    await cdp.click('.task-back')
-    await cdp.click(`[data-task-id="${first.id}"]`)
-    assert(await cdp.evaluate(`document.documentElement.scrollWidth <= window.innerWidth + 1`), 'mobile page overflow')
-    await cdp.screenshot(path.join(evidence, 'tasks-mobile.png'))
-    await cdp.click('[data-testid="task-new"]')
-    await cdp.fill('[role="dialog"] textarea', '未提交草稿 draft-recovery')
-    await cdp.key('Tab', 'Tab', 9)
-    assert(
-      await cdp.evaluate(`Boolean(document.activeElement.closest('[role="dialog"]'))`),
-      'dialog lost focus containment',
-    )
-    await cdp.send('Page.reload')
-    await wait(
-      () => cdp.evaluate(`document.querySelector('[role="dialog"] textarea')?.value === '未提交草稿 draft-recovery'`),
-      'reload restores draft',
-      90000,
-    )
-    await cdp.key('Escape', 'Escape', 27)
-    await wait(() => cdp.evaluate(`!document.querySelector('[role="dialog"]')`), 'Escape closes dialog')
-    assert.equal((await tasks()).length, 1, 'unsubmitted draft created work')
-    assert.deepEqual(external, [], 'browser attempted external requests')
-    assert.deepEqual(errors, [], 'uncaught browser exceptions')
-    console.log(
-      JSON.stringify({
-        ok: true,
-        task: first.id,
-        worker: first.worker_session_id,
-        checks: [
-          'real Vue page',
-          'lost receipt dedupe',
-          'worker navigation',
-          'feedback',
-          'acceptance',
-          'mobile layout',
-          'focus trap',
-          'draft reload',
-        ],
-        evidence,
-      }),
-    )
-    if (chromeErrors.includes('FATAL:')) throw new Error(chromeErrors)
+    throw new Error('Choose ASSISTANT_PROBE=1, INTEGRATIONS_PROBE=1 or CHANNEL_ACCESS_PROBE=1')
   } catch (error) {
     if (cdp) {
       await fs.writeFile(path.join(evidence, 'browser-errors.json'), JSON.stringify({ errors, external }, null, 2))

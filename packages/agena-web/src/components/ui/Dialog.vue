@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { DialogRoot, DialogContent, DialogOverlay, DialogPortal } from 'radix-vue'
-import { computed } from 'vue'
+import { computed, nextTick } from 'vue'
 import { cn } from '@/lib/utils'
 import DialogHeader from '@/components/ui/DialogHeader.vue'
 import { useUiStore } from '@/stores/ui'
@@ -15,6 +15,8 @@ const props = withDefaults(
     mobileFullscreen?: boolean
     /** The child owns scrolling (editors, plan viewers, split panes). */
     bodyScroll?: boolean
+    /** Explicit trigger for dialogs opened without a Radix DialogTrigger. */
+    returnFocus?: HTMLElement | null
   }>(),
   {
     // Vue casts an absent Boolean prop to false. Scrolling must be opt-out;
@@ -33,8 +35,28 @@ function onUpdateOpen(open: boolean) {
   emit('update:open', open)
 }
 
+function handleEscape(event: KeyboardEvent) {
+  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.altKey || event.metaKey) return
+  const target = event.target
+  // Portalled nested dialogs and pickers own their dismissal. A focused native
+  // dialog handles its own Escape without waiting on the shared layer registry.
+  if (!(target instanceof Element) || target.closest('[role="dialog"]') !== event.currentTarget) return
+  event.preventDefault()
+  event.stopPropagation()
+  onUpdateOpen(false)
+}
+
 const ui = useUiStore()
 const onCloseAutoFocus = useDialogReturnFocus(() => props.open)
+function handleCloseAutoFocus(event: Event) {
+  const target = props.returnFocus
+  if (target?.isConnected && target.getClientRects().length && !target.closest('[inert]')) {
+    event.preventDefault()
+    void nextTick(() => target.focus({ preventScroll: true }))
+    return
+  }
+  onCloseAutoFocus(event)
+}
 const useMobileFullscreen = computed(() => Boolean(props.mobileFullscreen && ui.isCompactTouch))
 const contentClass = computed(() =>
   cn(
@@ -53,7 +75,7 @@ const contentClass = computed(() =>
       <DialogOverlay
         class="fixed inset-0 z-[70] pointer-events-auto bg-black/55 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
       />
-      <DialogContent :class="contentClass" @close-auto-focus="onCloseAutoFocus">
+      <DialogContent :class="contentClass" @close-auto-focus="handleCloseAutoFocus" @keydown.esc="handleEscape">
         <DialogHeader :title="title" :description="description" @close="onUpdateOpen(false)" />
         <div
           data-dialog-body

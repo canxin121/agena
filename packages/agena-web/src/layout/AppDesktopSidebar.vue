@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiTaskLine } from '@remixicon/vue'
+import { RiRobot2Line } from '@remixicon/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -15,6 +15,7 @@ import {
 } from '@remixicon/vue'
 
 import ChatSidebar from '@/layout/ChatSidebar.vue'
+import BotSidebar from '@/layout/BotSidebar.vue'
 import { WORKSPACE_MAIN_TABS, mainTabFromPath, type MainTabId } from '@/app/navigation/mainTabs'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_ID } from '@/layout/workspaceSidebarHost'
 import { cn } from '@/lib/utils'
@@ -56,9 +57,17 @@ const { t } = useI18n()
 
 const SETTINGS_LAST_ROUTE_KEY = localStorageKeys.settings.lastRoute
 
+const activeTab = computed<MainTabId>(() => {
+  const focusedMainTab = ui.activeWorkspaceWindow?.mainTab
+  if (focusedMainTab) return focusedMainTab
+  const fallbackMainTab = ui.activeMainTab
+  if (fallbackMainTab) return fallbackMainTab
+  return mainTabFromPath(String(route.path || ''))
+})
+
 const NAV_ICONS: Record<MainTabId, Component> = {
+  bot: RiRobot2Line,
   chat: RiChat4Line,
-  tasks: RiTaskLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,
@@ -91,7 +100,7 @@ function routeForTab(tabId: MainTabId): string {
 
 function refreshDiffFileCount() {
   const dir = directoryStore.currentDirectory
-  if (!dir || document.visibilityState === 'hidden') {
+  if (activeTab.value === 'bot' || !dir || document.visibilityState === 'hidden') {
     stopDiffWatch()
     diffFileCount.value = 0
     return
@@ -105,21 +114,13 @@ onMounted(() => {
 })
 
 watch(
-  () => directoryStore.currentDirectory,
+  () => [directoryStore.currentDirectory, activeTab.value],
   () => void refreshDiffFileCount(),
 )
 
 onBeforeUnmount(() => {
   stopDiffWatch()
   document.removeEventListener('visibilitychange', refreshDiffFileCount)
-})
-
-const activeTab = computed<MainTabId>(() => {
-  const focusedMainTab = ui.activeWorkspaceWindow?.mainTab
-  if (focusedMainTab) return focusedMainTab
-  const fallbackMainTab = ui.activeMainTab
-  if (fallbackMainTab) return fallbackMainTab
-  return mainTabFromPath(String(route.path || ''))
 })
 
 const navItems = computed<NavItem[]>(() =>
@@ -136,6 +137,7 @@ const primaryRailItems = computed(() => navItems.value.filter((item) => item.id 
 const settingsNavItem = computed(() => navItems.value.find((item) => item.id === 'settings') || null)
 const hasFilesProjectRoot = computed(() => {
   if (String(directoryStore.currentDirectory || '').trim()) return true
+  if (String(directoryStore.homeDirectory || '').trim()) return true
   const projects = Array.isArray(settings.data?.projects) ? settings.data.projects : []
   return projects.some((entry) => Boolean(String(entry?.path || '').trim()))
 })
@@ -179,7 +181,7 @@ function railItemAriaLabel(item: NavItem): string {
 }
 
 async function activateRailItem(tabId: MainTabId) {
-  if (tabId === 'chat' && String(chat.selectedSessionId || '').trim()) {
+  if (tabId === 'chat' && activeTab.value !== 'bot' && String(chat.selectedSessionId || '').trim()) {
     await locateCurrentSessionInSidebar()
     return
   }
@@ -289,12 +291,13 @@ async function activateRailItem(tabId: MainTabId) {
       <div v-if="activeTab === 'chat'" class="min-h-0 flex-1 overflow-hidden">
         <ChatSidebar class="h-full" />
       </div>
+      <BotSidebar v-else-if="activeTab === 'bot'" class="min-h-0 flex-1" />
 
       <!-- Keep teleport target stable to avoid non-chat sidebar blanking on route switches. -->
       <div
         :id="WORKSPACE_SIDEBAR_PANEL_HOST_ID"
         class="h-full min-h-0 flex-1 overflow-hidden"
-        :class="activeTab === 'chat' ? 'hidden' : ''"
+        :class="activeTab === 'chat' || activeTab === 'bot' ? 'hidden' : ''"
       />
     </div>
   </div>

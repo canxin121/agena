@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import BotManagerHost from '@/features/bots/BotManagerHost.vue'
 import HelpDialog from '@/components/HelpDialog.vue'
 import ImageViewerDialog from '@/components/ImageViewerDialog.vue'
 import McpDialog from '@/components/McpDialog.vue'
@@ -7,6 +8,7 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import AppDesktopSidebar from '@/layout/AppDesktopSidebar.vue'
 import AppHeader from '@/layout/AppHeader.vue'
 import ChatSidebar from '@/layout/ChatSidebar.vue'
+import BotSidebar from '@/layout/BotSidebar.vue'
 import BottomNav from '@/layout/BottomNav.vue'
 import WorkspaceEditorGroupPane from '@/layout/WorkspaceEditorGroupPane.vue'
 import WorkspacePaneHost from '@/layout/WorkspacePaneHost.vue'
@@ -19,7 +21,7 @@ import {
   withEmbeddedWorkspaceScopeQuery,
 } from '@/app/windowScope'
 import { WORKSPACE_SIDEBAR_HOST_ID } from '@/layout/workspaceSidebarHost'
-import { mainTabFromPath } from '@/app/navigation/mainTabs'
+import { isConversationSettingsPath, isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
 import type { MainTabId } from '@/app/navigation/mainTabs'
 import {
   hasWorkspaceWindowDragDataTransfer,
@@ -44,6 +46,16 @@ const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
+// Route ownership belongs to the shell, before runtime hydration or pane mounts.
+// Apply explicit deep links before any saved active window can restore its URL.
+watch(
+  () => ({ path: route.path, query: route.query, hash: route.hash }),
+  ({ path, query, hash }) => {
+    if (isEmbeddedWorkspacePaneContext(query) || !isWorkspaceMainTabPath(path)) return
+    ui.syncActiveWorkspaceWindowFromRoute(mainTabFromPath(path), query, { path, hash })
+  },
+  { immediate: true, deep: true, flush: 'sync' },
+)
 useAppRuntime()
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
@@ -130,7 +142,10 @@ const mobileBottomNavInset =
 const showBottomNav = computed(() => ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
 const compactBottomInset = computed(() => (showBottomNav.value ? mobileBottomNavInset : '0px'))
 const showDesktopSidebarHost = computed(() => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
-const useWorkspaceWindowLayout = computed(() => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value)
+const isConversationSettings = computed(() => isConversationSettingsPath(route.path))
+const useWorkspaceWindowLayout = computed(
+  () => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value && !isConversationSettings.value,
+)
 const workspaceGroupPaneIds = computed(() =>
   ui.workspaceGroups.map((group) => String(group.id || '').trim()).filter(Boolean),
 )
@@ -189,6 +204,7 @@ type WorkspaceDropSource =
 
 function matchKeysForTab(tab: MainTabId): string[] {
   if (tab === 'chat') return ['sessionId']
+  if (tab === 'bot') return ['botId']
   if (tab === 'files') return ['filePath']
   return []
 }
@@ -522,23 +538,6 @@ onMounted(() => {
   window.addEventListener('drop', handleGlobalWorkspaceDragTerminateFallback, true)
   window.addEventListener('blur', handleGlobalWorkspaceDragTerminateFallback)
 
-  if (!ui.workspaceWindows.length) {
-    const tab = mainTabFromPath(route.path)
-    const sessionId = Array.isArray(route.query.sessionId)
-      ? String(route.query.sessionId.find((value) => String(value || '').trim()) || '').trim()
-      : String(route.query.sessionId || '').trim()
-    // `/` is the unscoped empty workspace. Only create a chat workspace when
-    // the route already identifies a real session; otherwise booting would
-    // fabricate a chat tab that belongs to no directory.
-    if (route.path !== '/' && (tab !== 'chat' || sessionId)) {
-      ui.openWorkspaceWindow(tab, {
-        activate: true,
-        path: route.path,
-        query: route.query,
-        hash: route.hash,
-      })
-    }
-  }
   void syncRouteToActiveWorkspaceWindow()
 })
 
@@ -685,6 +684,7 @@ watch(
     @dragstart="handleGlobalWorkspaceDragStart"
     @dragend="handleGlobalWorkspaceDragEnd"
   >
+    <BotManagerHost v-if="!isEmbeddedWorkspacePane" />
     <HelpDialog v-if="!isEmbeddedWorkspacePane" />
     <McpDialog v-if="!isEmbeddedWorkspacePane" />
     <ImageViewerDialog />
@@ -750,7 +750,8 @@ watch(
             data-keyboard-sidebar
             tabindex="-1"
           >
-            <ChatSidebar mobile-variant />
+            <BotSidebar v-if="route.path === '/bot'" />
+            <ChatSidebar v-else mobile-variant />
           </div>
 
           <main
@@ -770,7 +771,10 @@ watch(
                 : undefined
             "
           >
-            <div v-if="isGroupPaneMode" class="relative h-full min-h-0">
+            <div v-if="isConversationSettings" class="relative h-full min-h-0">
+              <router-view />
+            </div>
+            <div v-else-if="isGroupPaneMode" class="relative h-full min-h-0">
               <div v-show="!isAnySidebarResizing" class="h-full min-h-0">
                 <MultiPaneHorizontalSplit
                   v-if="isGroupPaneMode"

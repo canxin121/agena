@@ -293,6 +293,25 @@ describe('chat session consistency', () => {
     expect(navigations).toHaveLength(1)
   })
 
+  test('an in-place route change from chat to Bot invalidates a pending pane selection', async () => {
+    const raw = useChatStoreUnscoped(pinia)
+    raw.cacheSessions([{ id: '1' }])
+    const older = deferred<chatApi.TranscriptMessageListResponse>()
+    const page = { entries: [], userMessageCount: 0, hasMore: false }
+    const reads = spyOn(chatApi, 'listMessages').mockImplementation(() => older.promise)
+    spyOn(chatApi, 'getSessionExecutionStatus').mockImplementation(async () => status(execution(12)))
+    const { chat, route, navigations } = paneStore()
+    const pending = chat.selectSession('1')
+    await until(() => reads.mock.calls.length > 0)
+    // WorkspacePaneView uses Object.assign on a stable shallowReactive route.
+    Object.assign(route.value, { path: '/bot', query: { sessionId: '42' } })
+    older.resolve(page)
+    await pending
+    expect(route.value.path).toBe('/bot')
+    expect(route.value.query.sessionId).toBe('42')
+    expect(navigations).toEqual([])
+  })
+
   test('a slower workspace lookup cannot change the directory of the newly selected pane', async () => {
     const raw = useChatStoreUnscoped(pinia)
     raw.cacheSessions([
@@ -319,6 +338,21 @@ describe('chat session consistency', () => {
     await until(() => raw.getSessionDirectory('1') === '/first-workspace')
     expect(route.value.query.sessionId).toBe('2')
     expect(directory.getDirectoryForWindow('chat-pane')).toBe('/second-workspace')
+  })
+
+  test('global hydration preserves remembered project directories', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    const directory = useDirectoryStoreUnscoped(pinia)
+    directory.setDirectory('/remembered-project')
+    directory.setDirectoryForWindow('project-pane', '/project-pane')
+    chat.cacheSessions([{ id: '42', workspace_id: null }])
+    const workspace = spyOn(chatApi, 'getWorkspace')
+    spyOn(chatApi, 'listMessages').mockResolvedValue({ entries: [], userMessageCount: 0, hasMore: false })
+    await chat.hydrateSession('42', { windowId: 'bot-pane' })
+    expect(workspace).not.toHaveBeenCalled()
+    expect(directory.currentDirectory).toBe('/remembered-project')
+    expect(directory.getDirectoryForWindow('project-pane')).toBe('/project-pane')
+    expect(chat.getSessionDirectory('42')).toBeNull()
   })
 
   test('an older session load cannot clear the new selected session loading indicator', async () => {

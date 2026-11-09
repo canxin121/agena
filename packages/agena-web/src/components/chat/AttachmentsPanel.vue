@@ -36,6 +36,7 @@ const props = withDefaults(
     desktopViewportMarginPx?: number
     title?: string
     providerLabel?: string
+    allowProject?: boolean
   }>(),
   {
     busy: false,
@@ -45,6 +46,7 @@ const props = withDefaults(
     desktopGapPx: 8,
     desktopViewportMarginPx: 8,
     title: '',
+    allowProject: true,
   },
 )
 
@@ -569,7 +571,7 @@ useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosi
             <RiFileUploadLine class="h-4 w-4 mr-1.5" />
             {{ t('chat.attachments.actions.addFromComputer') }}
           </Button>
-          <Button size="xs" variant="outline" class="h-8" @click="$emit('attachProject')">
+          <Button v-if="allowProject" size="xs" variant="outline" class="h-8" @click="$emit('attachProject')">
             <RiFileLine class="h-4 w-4 mr-1.5" />
             {{ t('chat.attachments.actions.addFromProject') }}
           </Button>
@@ -747,7 +749,7 @@ useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosi
                 <RiFileUploadLine class="h-4 w-4 mr-2" />
                 {{ t('chat.attachments.actions.addFromComputer') }}
               </Button>
-              <Button size="sm" variant="outline" class="h-9" @click="$emit('attachProject')">
+              <Button v-if="allowProject" size="sm" variant="outline" class="h-9" @click="$emit('attachProject')">
                 <RiFileLine class="h-4 w-4 mr-2" />
                 {{ t('chat.attachments.actions.addFromProject') }}
               </Button>

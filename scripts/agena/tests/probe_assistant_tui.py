@@ -1,7 +1,7 @@
 """Drive the actual Agena TUI in a private tmux server against a local fixture.
 
 No global tmux session, production instance, or real model is touched. Every
-assertion combines rendered terminal text with an independent HTTP task fact.
+assertion combines rendered terminal text with an independent HTTP assistant or integration fact.
 """
 from __future__ import annotations
 
@@ -17,13 +17,13 @@ import urllib.request
 
 
 def main() -> None:
-    endpoint = os.environ["TASKS_BACKEND"].rstrip("/")
+    endpoint = os.environ["ASSISTANT_BACKEND"].rstrip("/")
     assert urllib.parse.urlparse(endpoint).hostname in {"localhost", "127.0.0.1", "::1"}
-    source = int(os.environ["TASKS_SOURCE"])
+    source = int(os.environ["ASSISTANT_SOURCE"])
     binary = Path(os.environ["AGENA_TEST_BINARY"]).resolve(strict=True)
-    evidence = Path(os.environ["TASKS_EVIDENCE"])
+    evidence = Path(os.environ["ASSISTANT_EVIDENCE"])
     evidence.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="agena-tui-task-") as root:
+    with tempfile.TemporaryDirectory(prefix="agena-tui-assistant-") as root:
         root = Path(root)
         socket = root / "tmux.sock"
         env = os.environ.copy()
@@ -41,7 +41,7 @@ def main() -> None:
             return result.stdout
 
         def capture() -> str:
-            return tmux("capture-pane", "-p", "-t", "tasks:0.0", "-S", "-80")
+            return tmux("capture-pane", "-p", "-t", "assistant:0.0", "-S", "-80")
 
         def wait(check, name: str, seconds: float = 30):
             until = time.monotonic() + seconds
@@ -54,20 +54,11 @@ def main() -> None:
             (evidence / "terminal-failure.txt").write_text(text)
             raise AssertionError(f"timeout waiting for {name}\n{text}")
 
-        def tasks():
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            with opener.open(f"{endpoint}/api/v1/tasks?source_session_id={source}", timeout=5) as response:
-                return json.load(response)
-
-        def state(name: str, attempt: int):
-            return wait(lambda: next((task for task in tasks() if task["state"] == name and task["attempt"] == attempt), None),
-                        f"HTTP task {name}, attempt {attempt}")
-
         def keys(*values: str):
-            tmux("send-keys", "-t", "tasks:0.0", *values)
+            tmux("send-keys", "-t", "assistant:0.0", *values)
 
         def text(value: str):
-            tmux("send-keys", "-t", "tasks:0.0", "-l", "--", value)
+            tmux("send-keys", "-t", "assistant:0.0", "-l", "--", value)
 
         def command(value: str):
             keys("Escape")
@@ -85,9 +76,9 @@ def main() -> None:
                                      "--log-file", str(evidence / "tui.log")])
             # Retain an early CLI failure frame instead of losing the entire
             # private tmux server when its only pane exits.
-            tmux("new-session", "-d", "-s", "tasks", "-x", "110", "-y", "34")
-            tmux("set-option", "-t", "tasks", "remain-on-exit", "on")
-            tmux("respawn-pane", "-k", "-t", "tasks:0.0", invocation)
+            tmux("new-session", "-d", "-s", "assistant", "-x", "110", "-y", "34")
+            tmux("set-option", "-t", "assistant", "remain-on-exit", "on")
+            tmux("respawn-pane", "-k", "-t", "assistant:0.0", invocation)
             wait(lambda: "Agena" in capture() or "Session" in capture(), "initial terminal frame", 45)
             if os.environ.get("CHANNEL_ACCESS_PROBE") == "1":
                 def channel_detail():
@@ -114,12 +105,12 @@ def main() -> None:
                 assert result["access_audit"][0]["actor"]=="instance_operator"
                 wait(lambda:"a access" in capture() and "Saving" not in capture() and "Loading" not in capture(),"native policy callback settled")
                 (evidence/"channel-access-tui-wide.txt").write_text(capture())
-                tmux("resize-window","-t","tasks:0","-x","48","-y","20")
+                tmux("resize-window","-t","assistant:0","-x","48","-y","20")
                 def resized_access_panel():
                     # tmux resize updates pane geometry before the app handles
                     # SIGWINCH. Wait for a NEW 48-column frame, not matching
                     # text still visible in the old wide frame/scrollback.
-                    frame=tmux("capture-pane","-p","-t","tasks:0.0")
+                    frame=tmux("capture-pane","-p","-t","assistant:0.0")
                     lines=frame.splitlines()
                     return bool(lines and len(lines[0])==48 and "a access" in frame and "Saving" not in frame and "Loading" not in frame)
                 wait(resized_access_panel,"native panel actually redrawn at 48 columns")
@@ -127,7 +118,7 @@ def main() -> None:
                 wait(lambda:"Ctrl+Enter" in capture(),"narrow access editor")
                 (evidence/"channel-access-tui-narrow.txt").write_text(capture())
                 keys("Escape")
-                assert tmux("display-message","-p","-t","tasks:0.0","#{pane_dead}").strip()=="0"
+                assert tmux("display-message","-p","-t","assistant:0.0","#{pane_dead}").strip()=="0"
                 print(json.dumps({"ok":True,"source":source,"checks":["native policy editor","actual role assignment","per-user limit","audit","resize"],"evidence":str(evidence)}))
                 return
             if os.environ.get("INTEGRATIONS_PROBE") == "1":
@@ -154,10 +145,10 @@ def main() -> None:
                 keys("Enter")
                 wait(lambda: integrations()["bindings"][0]["state"] == "paused", "pause grant")
                 (evidence / "integrations-tui-wide.txt").write_text(capture())
-                tmux("resize-window", "-t", "tasks:0", "-x", "48", "-y", "20")
+                tmux("resize-window", "-t", "assistant:0", "-x", "48", "-y", "20")
                 wait(lambda: "automation" in capture(), "integration panel after resize")
                 (evidence / "integrations-tui-narrow.txt").write_text(capture())
-                assert tmux("display-message", "-p", "-t", "tasks:0.0", "#{pane_dead}").strip() == "0"
+                assert tmux("display-message", "-p", "-t", "assistant:0.0", "#{pane_dead}").strip() == "0"
                 print(json.dumps({"ok": True, "source": source, "binding": created["id"], "checks": ["external provider", "disabled draft", "explicit enable", "pause", "resize"], "evidence": str(evidence)}))
                 return
             if os.environ.get("ASSISTANT_PROBE") == "1":
@@ -207,71 +198,13 @@ def main() -> None:
                 wait(lambda: "Apply this change" in capture(), "reminder cancellation confirmation")
                 keys("Enter")
                 wait(lambda: any(r["id"] == future["id"] and r["state"] == "cancelled" for r in assistant()["reminders"]), "terminal cancel schedule")
-                tmux("resize-window", "-t", "tasks:0", "-x", "48", "-y", "20")
+                tmux("resize-window", "-t", "assistant:0", "-x", "48", "-y", "20")
                 wait(lambda: "Assistant" in capture(), "compact assistant panel")
                 (evidence / "assistant-tui-narrow.txt").write_text(capture())
-                assert tmux("display-message", "-p", "-t", "tasks:0.0", "#{pane_dead}").strip() == "0"
+                assert tmux("display-message", "-p", "-t", "assistant:0.0", "#{pane_dead}").strip() == "0"
                 print(json.dumps({"ok": True, "source": source, "checks": ["natural persona", "natural memory", "proactive original-chat reminder", "native profile editor", "memory edit/delete", "cancel reminder", "resize"], "evidence": str(evidence)}, ensure_ascii=False))
                 return
-            if os.environ.get("CONVERSATION_WORK_PROBE") == "1":
-                def chat(value: str):
-                    keys("Escape")
-                    keys("i")
-                    text(value)
-                    wait(lambda: value in capture(), "composed natural request")
-                    keys("Enter")
-                chat("请后台检查测试并把结果告诉我")
-                wait(lambda: "natural-ui-delivery-one" in capture(), "automatic result in original chat", 60)
-                first = state("completed", 1)
-                chat("再补一下取消请求的测试")
-                wait(lambda: "natural-ui-delivery-two" in capture(), "follow-up delivered in original chat", 60)
-                second = state("completed", 2)
-                assert first["id"] == second["id"]
-                assert first["worker_session_id"] == second["worker_session_id"]
-                assert len(tasks()) == 1
-                screen = capture()
-                assert "Task list" not in screen, "natural chat opened the manual task workbench"
-                (evidence / "natural-chat-tui-wide.txt").write_text(screen)
-                tmux("resize-window", "-t", "tasks:0", "-x", "50", "-y", "22")
-                wait(lambda: "delivery-two" in capture() and "补充测试" in capture(), "natural answer after terminal resize")
-                (evidence / "natural-chat-tui-narrow.txt").write_text(capture())
-                print(json.dumps({"ok": True, "source": source, "task": first["id"],
-                    "checks": ["normal conversation", "automatic result", "natural follow-up", "same worker", "no Task board", "Unicode", "resize"], "evidence": str(evidence)}, ensure_ascii=False))
-                return
-            # A terminal command must reach the catalog-owned local action.
-            command("/tasks")
-            wait(lambda: "Task list" in capture() or "No tasks in this view" in capture(), "task workbench")
-            keys("n")
-            wait(lambda: "New task" in capture(), "task editor")
-            text("tui-task-marker 中文任务")
-            keys("M-Enter")
-            first = state("review", 1)
-            wait(lambda: "Ready for review" in capture(), "review row")
-            (evidence / "tasks-tui-wide.txt").write_text(capture())
-            keys("u")
-            wait(lambda: "Additional instructions" in capture(), "feedback editor")
-            text("tui-followup-marker 补充测试")
-            keys("M-Enter")
-            second = state("review", 2)
-            assert first["worker_session_id"] == second["worker_session_id"]
-            wait(lambda: "Ready for review" in capture(), "second review row")
-            keys("Enter")
-            wait(lambda: "tui-evidence-two" in capture(), "worker transcript")
-            command("/tasks")
-            wait(lambda: "Ready for review" in capture(), "return to original task from worker")
-            keys("a")
-            wait(lambda: "Have you checked" in capture(), "accept confirmation")
-            keys("Enter")
-            completed = state("completed", 2)
-            wait(lambda: "Completed" in capture(), "completed row")
-            tmux("resize-window", "-t", "tasks:0", "-x", "42", "-y", "18")
-            wait(lambda: "Tasks" in capture(), "narrow terminal frame")
-            assert tmux("display-message", "-p", "-t", "tasks:0.0", "#{pane_dead}").strip() == "0"
-            (evidence / "tasks-tui-narrow.txt").write_text(capture())
-            assert len(tasks()) == 1
-            print(json.dumps({"ok": True, "task": completed["id"], "worker": first["worker_session_id"],
-                              "checks": ["catalog command", "Unicode entry", "create", "feedback", "worker navigation", "accept", "terminal resize"],
-                              "evidence": str(evidence)}, ensure_ascii=False))
+            raise AssertionError("select CHANNEL_ACCESS_PROBE, INTEGRATIONS_PROBE or ASSISTANT_PROBE")
         finally:
             tmux("kill-server", check=False)
 

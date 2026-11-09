@@ -332,8 +332,7 @@ function restoreExplorerState(rootPath: string): boolean {
 
     const selectedPath =
       typeof uiState.selectedPath === 'string' ? normalizePath(String(uiState.selectedPath || '').trim()) : ''
-    restoredSelectedFilePath.value =
-      selectedPath && withinWorkspace(selectedPath, base) ? selectedPath : ''
+    restoredSelectedFilePath.value = selectedPath && withinWorkspace(selectedPath, base) ? selectedPath : ''
   }
 
   const cacheKey = storageKey(STORAGE_FILES_EXPLORER_CACHE_PREFIX, base)
@@ -963,11 +962,7 @@ const filesImageGalleryItems = computed<ImageViewerItem[]>(() => {
   }
 
   const selectedPath = normalizePath(String(selectedFile.value?.path || '').trim())
-  if (
-    selectedPath &&
-    !seen.has(selectedPath) &&
-    detectPreviewMode(selectedPath) === 'image'
-  ) {
+  if (selectedPath && !seen.has(selectedPath) && detectPreviewMode(selectedPath) === 'image') {
     const label = String(selectedFile.value?.name || selectedPath.split('/').filter(Boolean).pop() || selectedPath)
     items.push({
       src: buildWorkspaceRawFileUrl(workspaceRoot, selectedPath),
@@ -1342,8 +1337,14 @@ function navigateRootUp() {
 
 watch(
   () =>
-    [preferredProjectRoot.value, configuredProjectRoots.value, route.query.directory, route.query.filePath] as const,
-  ([preferred, configured]) => {
+    [
+      preferredProjectRoot.value,
+      configuredProjectRoots.value,
+      directoryStore.homeDirectory,
+      route.query.directory,
+      route.query.filePath,
+    ] as const,
+  ([preferred, configured, home]) => {
     if (route.query.filePath || route.query.gitPath) {
       explorerRootPath.value = resourceDirectory(route.query, preferred)
       return
@@ -1356,7 +1357,13 @@ watch(
     const fallback = configured.find((path) => Boolean(path)) || ''
     if (fallback) {
       explorerRootPath.value = fallback
+      return
     }
+    // No project selected: browse the user's home directory instead of an
+    // empty tree so opening Files always shows something. Only adopt it while
+    // the explorer has no root yet, never over a folder the user chose.
+    const homePath = trimTrailingSlashes(normalizePath(String(home || '').trim()))
+    if (homePath && !root.value) explorerRootPath.value = homePath
   },
   { immediate: true, deep: true },
 )

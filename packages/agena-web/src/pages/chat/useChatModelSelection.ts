@@ -85,6 +85,10 @@ function withSelectedMode(options: ModelModeOption[], selected: string): ModelMo
   return [...options, { value, label: value, description: '', isDefault: false }]
 }
 
+// All pane composers share the native per-session preference map. Independent
+// snapshots would overwrite another pane's model choice when either persists.
+let sharedSessionManualModels: Ref<Record<string, string>> | null = null
+
 export function useChatModelSelection(opts: {
   chat: ChatLike
   composerPickerOpen: Ref<null | PickerKind>
@@ -110,12 +114,12 @@ export function useChatModelSelection(opts: {
   const thinkingModeSource = ref<'empty' | 'session' | 'default' | 'model' | 'manual'>('empty')
   const speedModeSource = ref<'empty' | 'session' | 'default' | 'model' | 'manual'>('empty')
 
-  const sessionManualModelBySession = ref<Record<string, string>>(
+  const sessionManualModelBySession = (sharedSessionManualModels ??= ref<Record<string, string>>(
     loadStringMapFromStorage(
       localStorageKeys.chat.sessionManualModelBySession,
       normalizeSessionManualModelStorageEntry,
     ),
-  )
+  ))
   const sessionManualModelPersister = createStringMapPersister({
     storageKey: localStorageKeys.chat.sessionManualModelBySession,
     getValue: () => sessionManualModelBySession.value,

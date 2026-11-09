@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
@@ -297,18 +297,14 @@ onBeforeUnmount(() => {
           <p class="text-xs break-all">{{ event.event.id }} · {{ event.state }} · {{ event.event.actor }}</p>
           <p class="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm">{{ event.event.text }}</p>
           <p v-if="event.note" class="mt-2 text-xs text-muted-foreground">{{ event.note }}</p>
-          <button
-            v-if="event.task_id"
+          <RouterLink
+            v-if="event.session_id"
             class="mt-2 text-xs underline"
-            @click="
-              router.push({
-                path: '/tasks',
-                query: { source: String(detail.binding.source_session_id), task: event.task_id },
-              })
-            "
+            :to="{ path: '/chat', query: { sessionId: String(event.session_id) } }"
+            data-testid="integration-event-session"
           >
-            {{ t('tasks.details') }}
-          </button>
+            {{ t('assistant.openChat') }}
+          </RouterLink>
         </article>
         <h3 class="font-medium">{{ t('integrations.deliveries') }}</h3>
         <article v-for="d in detail.deliveries" :key="d.id" class="rounded border border-border p-3">
@@ -339,7 +335,7 @@ onBeforeUnmount(() => {
           />
         </label>
         <p v-if="error" class="text-sm text-destructive" role="alert">{{ error }}</p>
-        <p v-if="form.request && error" class="text-xs">{{ t('tasks.uncertain') }}</p>
+        <p v-if="form.request && error" class="text-xs">{{ t('integrations.retryHint') }}</p>
         <div class="flex justify-end gap-2">
           <Button type="button" variant="ghost" :disabled="busy" @click="form = null">{{ t('assistant.close') }}</Button
           ><Button type="submit" :disabled="busy" data-testid="integration-create">{{ t('assistant.save') }}</Button>

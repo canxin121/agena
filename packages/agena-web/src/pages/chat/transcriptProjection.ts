@@ -592,6 +592,24 @@ function expandComposerActivities(part: MessagePartLike): MessagePartLike[] {
   return [...activities, part]
 }
 
+// Earlier versions persisted routine hook observations as transcript parts.
+// Keep them in history, but do not render empty successful dispatch notices.
+// Explicit decisions, continuations, and failures still appear.
+function isRoutineHookPart(part: MessagePartLike): boolean {
+  if (durablePartKind(part) !== 'hook') return false
+  const content = durablePartContent(part)
+  if (firstText(content, ['detail', 'message'])) return false
+
+  const status = text(content.status).toLowerCase()
+  if (status === 'failed' || status === 'timed_out') return false
+  if (status === 'applied' || status === 'skipped') return true
+
+  // Older hook part resources did not expose the status field.
+  const hook = text(content.hook)
+  const summary = firstText(content, ['summary']) || text(part.agenaSummary)
+  return summary === `${hook} hook ran` || summary === `${hook} hook notified`
+}
+
 export function projectTranscriptBlocks(
   messages: MessageLike[],
   options: TranscriptProjectionOptions = { showReasoning: true },
@@ -602,6 +620,7 @@ export function projectTranscriptBlocks(
     const ordered = role === 'user' ? message.parts.flatMap(expandComposerActivities) : message.parts
     const answerId = finalAnswerPartId(role, ordered)
     const displayParts = ordered
+      .filter((part) => !isRoutineHookPart(part))
       .map((part) => project(part, role, answerId, options.labels))
       .filter((part) => {
         if (part.kind === 'reasoning') return options.showReasoning

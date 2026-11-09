@@ -145,6 +145,7 @@ function readMatchQueryValue(record: Record<string, string> | null | undefined, 
 
 function defaultMatchKeysForMainTab(tab: MainTab): string[] {
   if (tab === 'chat') return ['sessionId']
+  if (tab === 'bot') return ['botId']
   return []
 }
 
@@ -175,6 +176,8 @@ function buildWorkspaceWindowIdentity(
   matchKeys?: string[],
 ): string {
   const normalizedPath = normalizeMainTabPath(tab, path)
+  // A resolved session may be recovered; the stable profile is the tab identity.
+  if (tab === 'bot') return `bot::/bot::${readMatchQueryValue(query, 'botId')}`
   const keys = normalizeMatchKeys(matchKeys)
   if (keys.length > 0) {
     const values = keys.map((key) => readMatchQueryValue(query, key))
@@ -353,7 +356,8 @@ export const useUiStore = defineStore('ui', () => {
     if (!id) return null
 
     const mainTabRaw = String(source.mainTab || '').trim()
-    const mainTab: MainTab = isMainTabId(mainTabRaw) ? mainTabRaw : 'chat'
+    if (!isMainTabId(mainTabRaw)) return null
+    const mainTab: MainTab = mainTabRaw
     const title = String(source.title || '').trim()
     const routePath = normalizeMainTabPath(mainTab, String(source.routePath || ''))
     const routeQuery = normalizeRouteQueryRecord(source.routeQuery)
@@ -1515,6 +1519,10 @@ export const useUiStore = defineStore('ui', () => {
     for (const item of candidates) {
       if (item.mainTab !== tab) continue
       if (path && item.routePath !== path) continue
+      if (tab === 'bot') {
+        if (readMatchQueryValue(item.routeQuery, 'botId') === readMatchQueryValue(query, 'botId')) return item
+        continue
+      }
 
       if (!matchKeys.length) {
         if (areStringRecordsEqual(item.routeQuery || {}, query)) return item

@@ -775,7 +775,8 @@ export async function getRuntimeWorkspaceRoot(): Promise<string> {
 
 export type WorkspaceFileUpload = {
   sha256?: string
-  workspace_id: number
+  workspace_id: number | null
+  session_id?: number
   path: string
   name: string
   mime?: string | null
@@ -802,6 +803,36 @@ export async function uploadWorkspaceFile(
   const dataBase64 = String(input.dataBase64 || '').trim()
   if (!filename || !dataBase64) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
   return await apiJson<WorkspaceFileUpload>(`/api/v1/workspaces/${encodeURIComponent(String(workspaceId))}/files`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      filename,
+      data_base64: dataBase64,
+      ...(String(input.mime || '').trim() ? { mime: String(input.mime).trim() } : {}),
+    }),
+  })
+}
+
+/** POST /api/v1/workspaces — create a workspace (project) by path. Returns the new workspace id. */
+export async function uploadSessionFile(
+  sessionId: number,
+  input: { filename: string; dataBase64?: string; blob?: Blob; mime?: string },
+): Promise<WorkspaceFileUpload> {
+  if (!Number.isSafeInteger(sessionId) || sessionId <= 0)
+    throw new Error(i18n.global.t('chat.errors.sessionIdRequired'))
+  const filename = String(input.filename || '').trim()
+  if (input.blob) {
+    if (!filename || !input.blob.size) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
+    const query = new URLSearchParams({ filename, ...(input.mime ? { mime: input.mime } : {}) })
+    return await apiJson<WorkspaceFileUpload>(`/api/v1/sessions/${sessionId}/attachments?${query}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/octet-stream' },
+      body: input.blob,
+    })
+  }
+  const dataBase64 = String(input.dataBase64 || '').trim()
+  if (!filename || !dataBase64) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
+  return await apiJson<WorkspaceFileUpload>(`/api/v1/sessions/${encodeURIComponent(String(sessionId))}/attachments`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({

@@ -12,7 +12,7 @@ import {
   type Router,
 } from 'vue-router'
 
-import { mainTabFromPath, mainTabPath } from '@/app/navigation/mainTabs'
+import { isConversationSettingsPath, mainTabFromPath, mainTabPath } from '@/app/navigation/mainTabs'
 import { workspacePaneContextKey } from '@/app/workspace/workspacePaneContext'
 import { useUiStore } from '@/stores/ui'
 import { afterPaint } from '@/lib/afterPaint'
@@ -39,6 +39,7 @@ const isVisible = computed(() => props.visible !== false)
 
 function focusResource() {
   ui.setFocusedWorkspaceWindow(windowId.value)
+  if (windowTab.value?.mainTab === 'bot') return
   const directory = resourceDirectory(
     windowTab.value?.routeQuery || {},
     directories.getDirectoryForWindow(windowId.value) || '',
@@ -147,6 +148,11 @@ async function navigate(to: RouteLocationRaw, replace = false): Promise<unknown>
   if (!targetId || !ui.getWorkspaceWindowById(targetId)) return undefined
 
   const resolved = globalRouter.resolve(to, scopedRoute)
+  // Settings inspect the selected conversation without replacing its pane.
+  if (isConversationSettingsPath(resolved.path)) {
+    if (!isFocused.value) return undefined
+    return replace ? globalRouter.replace(to) : globalRouter.push(to)
+  }
   const mainTab = mainTabFromPath(resolved.path)
   const query = normalizeQuery(resolved.query)
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { appConversationLink } from '@/app/navigation/appConversationLink'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import { onClickOutside } from '@vueuse/core'
 import { RiListUnordered } from '@remixicon/vue'
@@ -689,6 +690,7 @@ function resolveImageSrcForViewer(rawSrc: string): string {
 }
 
 function protectedMarkdownLink(href: string): string {
+  if (appConversationLink(href, window.location.origin)) return ''
   if (isAuthenticatedResourceUrl(href)) return href
   if (!mediaSessionId.value) return ''
   if (href.startsWith('agena:media:')) return attachmentPreviewUrl({ url: href, sessionId: mediaSessionId.value })
@@ -856,6 +858,22 @@ async function handleRootClick(event: Event) {
   const link = target.closest('a')
   if (link) {
     const href = link.getAttribute('data-oc-resource-href') || link.getAttribute('href')
+    const conversation = href && appConversationLink(href, window.location.origin)
+    if (conversation) {
+      // Keep modifier/new-tab gestures native; a normal click opens the
+      // explicit project conversation without rebinding the Bot pane.
+      const mouse = event as MouseEvent
+      if (mouse.metaKey || mouse.ctrlKey || mouse.shiftKey || mouse.altKey) return
+      event.preventDefault()
+      const url = new URL(conversation, window.location.origin)
+      void workspaceNavigation.openWorkspaceLocation('chat', {
+        path: url.pathname,
+        query: Object.fromEntries(url.searchParams),
+        hash: url.hash,
+        matchKeys: ['sessionId'],
+      })
+      return
+    }
     if (href && isAuthenticatedResourceUrl(href)) {
       event.preventDefault()
       try {

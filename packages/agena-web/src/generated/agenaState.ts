@@ -157,18 +157,10 @@ export type AssistantProfile = {
   preferences: AssistantPreferences
   revision: number
   updated_at_ms: number
-  workspace_id: number
+  workspace_id?: number | null
 }
 
 export type AssistantTone = 'balanced' | 'warm' | 'direct' | 'playful'
-
-export type AutomationTask = {
-  authorized_until_ms: number
-  binding_id: string
-  epoch: number
-  event_id: string
-  max_seconds: number
-}
 
 export type BindingState = 'disabled' | 'enabled' | 'paused' | 'expired' | 'faulted'
 
@@ -222,7 +214,6 @@ export type ChannelEnvelope = {
 }
 
 export type ChannelGrant = {
-  background_work?: boolean
   mcp_tools?: Record<string, string[]>
   network_hosts?: string[]
   private_memory?: boolean
@@ -268,17 +259,6 @@ export type ChannelSessionRecord = {
 export type ChannelThreadMode = 'exact' | 'per_thread'
 
 export type ChannelTrigger = 'direct_or_mention' | 'every_message'
-
-export type ConversationWork = {
-  attention_id?: string | null
-  cancel_acknowledged_in_chat?: boolean
-  completion_acknowledged_in_chat?: boolean
-  last_intent: string
-  last_message_id: number
-  origin_message_id: number
-  require_review: boolean
-  updates?: WorkUpdate[]
-}
 
 export type ExternalEvent = {
   actor: string
@@ -417,14 +397,15 @@ export type IntegrationEvent = {
   binding_id: string
   epoch: number
   event: ExternalEvent
+  execution_generation?: number | null
   execution_id?: string | null
   note?: string | null
   received_at_ms: number
+  session_id?: number | null
   state: string
-  task_id?: string | null
 }
 
-export type IntegrationMode = 'channel' | 'notify' | 'task'
+export type IntegrationMode = 'channel' | 'notify' | 'session'
 
 export type IntegrationProvider = {
   adapter: AdapterDescription
@@ -440,7 +421,7 @@ export type IntegrationSpec = {
   event_types: string[]
   expires_at_ms: number
   instruction: string
-  max_task_seconds: number
+  max_execution_seconds: number
   mode: IntegrationMode
   poll_seconds: number
   provider: string
@@ -473,9 +454,11 @@ export type MemoryMetadata = {
 /** Who last changed these bytes; only intact Derived records may be auto-updated. */
 export type MemoryOrigin = 'external' | 'explicit' | 'derived'
 
-/** Scope always remains inside the owning workspace's permission boundary. */
+/** Scope remains inside its owning project or instance storage boundary. */
 export type MemoryScope = {
   kind: 'workspace'
+} | {
+  kind: 'global'
 } | {
   kind: 'session'
   instance_id: string
@@ -511,7 +494,7 @@ export type Reminder = {
   spec: ReminderSpec
   state: ReminderState
   updated_at_ms: number
-  workspace_id: number
+  workspace_id?: number | null
 }
 
 export type ReminderControlAction = 'pause' | 'resume' | 'cancel'
@@ -528,8 +511,6 @@ export type ReminderSpec = {
 }
 
 export type ReminderState = 'active' | 'paused' | 'delivering' | 'completed' | 'cancelled'
-
-export type TaskState = 'queued' | 'starting' | 'running' | 'waiting' | 'review' | 'completed' | 'interrupted' | 'failed' | 'cancelling' | 'cancelled'
 
 export type UiAction = {
   key: string
@@ -583,9 +564,48 @@ export type UiStateField = {
 
 export type UiStateKind = 'boolean' | 'number' | 'text' | 'choice' | 'selection'
 
-export type WorkUpdate = {
-  instruction: string
-  message_id: number
+export type BotSession = {
+  bot_id: string
+  name: string
+  session_id: number
+}
+
+export type BotPersona = {
+  instructions: string
+}
+
+export type BotProfile = {
+  archived: boolean
+  created_at_ms: number
+  id: string
+  name: string
+  persona: BotPersona
+  revision: number
+  session_id: number
+  updated_at_ms: number
+}
+
+export type BotList = {
+  default_bot_id?: string | null
+  items: BotProfile[]
+}
+
+export type BotCreate = {
+  name: string
+  persona?: BotPersona
+  request_key: string
+}
+
+export type BotUpdate = {
+  expected_revision: number
+  name: string
+  persona: BotPersona
+  request_key: string
+}
+
+export type BotArchive = {
+  expected_revision: number
+  request_key: string
 }
 
 export type ChannelPolicyUpdate = {
@@ -645,40 +665,6 @@ export type AssistantMemoryUpdate = {
 export type ReminderControl = {
   action: ReminderControlAction
   expected_revision: number
-}
-
-export type Task = {
-  attempt: number
-  attempt_generation?: number | null
-  automation?: AutomationTask
-  conversation?: ConversationWork
-  created_at_ms: number
-  execution_id?: string | null
-  goal: string
-  id: string
-  instruction: string
-  note?: string | null
-  request_key: string
-  resume_from_revision?: number | null
-  resume_key?: string | null
-  revision: number
-  source_session_id: number
-  state: TaskState
-  updated_at_ms: number
-  worker_session_id?: number | null
-  workspace_id: number
-}
-
-export type CreateTask = {
-  goal: string
-  request_key: string
-  source_session_id: number
-}
-
-export type ResumeTask = {
-  expected_revision: number
-  instruction: string
-  request_key: string
 }
 
 /** Current processing state of a session. This is the single client-facing execution state. Durable session facts are derived from durable parts; the optional live execution and workflow payloads are attached by the application service when it has a full execution snapshot. */

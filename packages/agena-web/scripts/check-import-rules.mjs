@@ -27,6 +27,15 @@ async function checkFile(filePath) {
   const relPath = path.relative(process.cwd(), filePath).replace(/\\/g, '/')
   const text = await readFile(filePath, 'utf8')
 
+  if (relPath !== 'src/generated/agenaState.ts') {
+    if (/['"][^'"\n]*(?:features\/tasks(?:\/|['"])|lib\/taskApi(?:['"]|\.))/.test(text)) {
+      violations.push(`${relPath}: retired Task UI/API imports are not allowed`)
+    }
+    if (/\/api\/v1\/(?:tasks|chatbot\/messages)(?:[/'"?`]|$)/.test(text)) {
+      violations.push(`${relPath}: retired Task/chatbot endpoints are not allowed`)
+    }
+  }
+
   if (TYPE_IMPORT_FROM_VUE_RE.test(text)) {
     violations.push(`${relPath}: type import from .vue is not allowed`)
   }

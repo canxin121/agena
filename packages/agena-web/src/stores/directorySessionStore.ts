@@ -1909,7 +1909,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
         row.rootId = agenaSessionId(root)
         const previousRow = knownSidebarRowBySessionId()[row.id]
         if (!row.isExpanded) {
-          // A parent can briefly report zero children while the task-created
+          // A parent can briefly report zero children while a delegated
           // child row is committing. Keep its disclosure affordance through a
           // collapse so the user can retry the branch after the count catches up.
           if (previousRow?.isParent) row.isParent = true

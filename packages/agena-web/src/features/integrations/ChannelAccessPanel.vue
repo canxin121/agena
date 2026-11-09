@@ -23,7 +23,6 @@ const grantRoles: ChannelRole[] = ['member', 'operator', 'administrator', 'owner
 const emptyGrant = (): ChannelGrant => ({
   tools: [],
   mcp_tools: {},
-  background_work: false,
   private_memory: false,
   source_workspace: false,
   network_hosts: [],
@@ -301,9 +300,6 @@ onBeforeUnmount(() => {
               <template v-if="draft.grants?.[role]"
                 ><div class="flex flex-wrap gap-3 text-xs">
                   <label
-                    ><input type="checkbox" v-model="draft.grants[role]!.background_work" />
-                    {{ t('channelAccess.work') }}</label
-                  ><label
                     ><input type="checkbox" v-model="draft.grants[role]!.private_memory" />
                     {{ t('channelAccess.memory') }}</label
                   ><label
@@ -316,6 +312,7 @@ onBeforeUnmount(() => {
                   }}<textarea
                     rows="3"
                     :value="draft.grants[role]!.tools?.join('\n')"
+                    :data-testid="`channel-tools-${role}`"
                     @input="lines(role, 'tools', $event)"
                   /></label
                 ><label class="channel-field"

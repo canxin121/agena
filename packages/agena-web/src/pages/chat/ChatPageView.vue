@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { useRouter as useTaskRouter, useRoute as useTaskRoute } from 'vue-router'
-import { RiTaskLine } from '@remixicon/vue'
+import { RiRobot2Line, RiFolder6Line } from '@remixicon/vue'
 import { computed, defineAsyncComponent, isRef, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -22,6 +21,7 @@ import {
   RiGitBranchLine,
 } from '@remixicon/vue'
 
+import BotWelcome from './BotWelcome.vue'
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import QueuedMessages from '@/components/chat/QueuedMessages.vue'
@@ -102,6 +102,10 @@ const {
   formatTime,
   copiedMessageId,
   revertBusyMessageId,
+  isBot,
+  botName,
+  openBotProjects,
+  fillBotSuggestion,
   sessionEnded,
   currentPhase,
   showRunLoading,
@@ -384,14 +388,6 @@ void modelTriggerRef
 void thinkingTriggerRef
 void speedTriggerRef
 const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
-
-const taskRouter = useTaskRouter(), taskRoute = useTaskRoute()
-function openTaskBoard() {
-  void taskRouter.push({ path: '/tasks', query: {
-    source: String(taskRoute.query.taskSource || chat.selectedSessionId || ''),
-    ...(typeof taskRoute.query.taskId === 'string' ? { task: taskRoute.query.taskId } : {}),
-  } })
-}
 </script>
 
 <template>
@@ -409,11 +405,17 @@ function openTaskBoard() {
         <div class="relative flex h-full min-h-0 flex-col" data-vim-chat-surface="true">
           <header class="shrink-0 border-b border-border/70 bg-background/92 backdrop-blur">
             <div class="chat-message-column flex min-h-10 items-center gap-3 py-1">
-              <div class="min-w-0 flex-1">
-                <div class="truncate text-sm font-semibold">
-                  {{ sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat')) }}
+              <div v-if="!isBot" class="min-w-0 flex-1">
+                <div class="flex items-center gap-2 truncate text-sm font-semibold">
+                  <RiRobot2Line v-if="isBot" class="h-4 w-4 shrink-0 text-primary" />
+                  {{
+                    isBot
+                      ? botName
+                      : sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat'))
+                  }}
                 </div>
-                <div v-if="sessionDirectory" class="truncate font-mono text-[10px] text-muted-foreground">
+                <div v-if="isBot" class="text-[11px] leading-4 text-muted-foreground">{{ t('bot.sidebarHint') }}</div>
+                <div v-else-if="sessionDirectory" class="truncate font-mono text-[10px] text-muted-foreground">
                   {{ sessionDirectory }}
                 </div>
               </div>
@@ -431,10 +433,16 @@ function openTaskBoard() {
                     >{{ transcriptVimModeLabel }}</span
                   >
                 </template>
-                <button v-if="chat.selectedSessionId" class="rounded-md border border-border px-2 py-1 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" @click="taskRouter.push({ path: '/assistant', query: { source: String(taskRoute.query.taskSource || chat.selectedSessionId) } })" data-testid="chat-assistant">{{ t('assistant.title') }}</button>
-                <button v-if="chat.selectedSessionId" class="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" @click="openTaskBoard" data-testid="chat-tasks">
-                  <RiTaskLine class="h-3.5 w-3.5" />{{ t('tasks.title') }}
-                </button>
+                <template v-if="isBot">
+                  <IconButton
+                    class="h-9 w-9"
+                    :tooltip="String(t('bot.projects'))"
+                    :aria-label="String(t('bot.projects'))"
+                    :is-touch-pointer="ui.isTouchPointer"
+                    @click="openBotProjects"
+                    ><RiFolder6Line class="h-4 w-4"
+                  /></IconButton>
+                </template>
                 <IconButton
                   v-if="chat.selectedSessionId"
                   class="h-6 w-6"
@@ -449,7 +457,7 @@ function openTaskBoard() {
             </div>
 
             <TranscriptKeyboardToolbar
-              v-if="chat.selectedSessionId && !transcriptVimEnabled"
+              v-if="chat.selectedSessionId && !transcriptVimEnabled && (!isBot || chat.messages.length)"
               :root="pageRef"
               :has-older="!chat.selectedHistory.exhausted"
               :load-older="ctx.loadOlderHistory"
@@ -519,6 +527,17 @@ function openTaskBoard() {
             >
               <div ref="contentEl" class="min-w-0 py-1">
                 <div class="chat-message-column">
+                  <BotWelcome
+                    :name="botName"
+                    v-if="
+                      isBot &&
+                      !chat.messages.length &&
+                      !chat.messagesLoading &&
+                      !chat.selectedAttention &&
+                      !showRunLoading
+                    "
+                    @suggestion="fillBotSuggestion"
+                  />
                   <div v-if="chat.messages.length" class="min-h-6 px-2 pb-1" data-transcript-chrome="true">
                     <button
                       v-if="!chat.selectedHistory.exhausted || loadingOlder"
@@ -1030,6 +1049,7 @@ function openTaskBoard() {
     :desktop-gap-px="COMPOSER_DESKTOP_MENU_GAP_PX"
     :desktop-viewport-margin-px="COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX"
     :attached-files="attachedFiles"
+    :allow-project="!isBot && (!chat.selectedSessionId || chat.selectedSession?.workspace_id != null)"
     :provider-label="String(unref(modelStatusLabel) || t('chat.selectedModelFallback'))"
     @delivery="
       (id, delivery) => {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiTaskLine } from '@remixicon/vue'
+import { RiRobot2Line } from '@remixicon/vue'
 import { computed, nextTick, ref, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -41,8 +41,8 @@ const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
 
 const TAB_ICONS: Record<MainTabId, Component> = {
+  bot: RiRobot2Line,
   chat: RiChat4Line,
-  tasks: RiTaskLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,
@@ -267,6 +267,7 @@ function getWorkspaceWindowGroupId(windowId: string): string {
 
 function matchKeysForTab(tab: MainTabId): string[] {
   if (tab === 'chat') return ['sessionId']
+  if (tab === 'bot') return ['botId']
   if (tab === 'files') return ['filePath']
   return []
 }

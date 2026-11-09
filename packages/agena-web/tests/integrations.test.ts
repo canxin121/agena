@@ -16,9 +16,11 @@ const source: IntegrationProvider = {
 }
 
 describe('plugin integration authorization proposals', () => {
-  test('a source proposal defaults to notification and never opts into worker authority', () => {
+  test('a source proposal defaults to notification and requires explicit session execution consent', () => {
     const draft = integrationTemplate(source, 1000)
     expect(draft.mode).toBe('notify')
+    expect(draft.max_execution_seconds).toBe(300)
+    expect('max_task_seconds' in draft).toBe(false)
     expect(draft.use_source_permissions).toBe(false)
     expect(draft.poll_seconds).toBe(120)
     expect(draft.expires_at_ms).toBe(1000 + 7 * 86400000)
@@ -80,4 +82,20 @@ describe('channel MCP server/tool authorization', () => {
     ])
       expect(() => parseMcpAllowlist(value)).toThrow()
   })
+})
+
+test('session execution proposals use the current JSON contract and reject retired grants', () => {
+  const draft = { ...integrationTemplate(source, 1000), mode: 'session' }
+  expect(parseIntegration(JSON.stringify(draft))).toEqual(draft)
+  expect(() => parseIntegration(JSON.stringify({ ...draft, mode: 'task' }))).toThrow()
+  expect(() => parseIntegration(JSON.stringify({ ...draft, max_task_seconds: 300 }))).toThrow()
+  for (const max_execution_seconds of [0, -1, 1.5, null, '300'])
+    expect(() => parseIntegration(JSON.stringify({ ...draft, max_execution_seconds }))).toThrow()
+  const channel_policy = { grants: { operator: { tools: ['Subagent'], background_work: true } } }
+  expect(() => parseIntegration(JSON.stringify({ ...draft, channel_policy }))).toThrow()
+  expect(() =>
+    parseIntegration(JSON.stringify({ ...draft, channel_policy: { service_grant: { background_work: false } } })),
+  ).toThrow()
+  const valid = { grants: { operator: { tools: ['Subagent'] } } }
+  expect(parseIntegration(JSON.stringify({ ...draft, channel_policy: valid })).channel_policy).toEqual(valid)
 })

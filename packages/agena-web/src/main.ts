@@ -124,4 +124,7 @@ if (stored && stored.at > 0 && Date.now() - stored.at < 30_000) {
   handleAuthRequired(stored.detail)
 }
 
-app.mount('#app')
+// Resolve the explicit document URL before the shell restores workspace panes.
+// Otherwise a fast boot probe can mount MainLayout on START_LOCATION (`/`)
+// and replace a still-loading /chat deep link with the saved active Bot tab.
+void router.isReady().then(() => app.mount('#app'))

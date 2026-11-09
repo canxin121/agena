@@ -15,7 +15,7 @@ export async function loadSidebarSessionPage(
   let page = Math.max(0, Math.floor(requestedPage))
   const size = Math.max(1, Math.min(200, Math.floor(pageSize)))
   // Root/bucket lists omit delegated sessions, but a parent's children must
-  // include them. Applying the root filter to this query hides every task.
+  // include them. Applying the root filter here hides delegated child sessions.
   const parentId = Number(options.parentId)
   const excludeSubagents = options.excludeSubagents ?? !(Number.isSafeInteger(parentId) && parentId > 0)
   const fetchPage = () => {

@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { RiAddLine, RiCloseLine, RiListCheck3, RiRefreshLine } from '@remixicon/vue'
+import {
+  RiAddLine,
+  RiCloseLine,
+  RiListCheck3,
+  RiRefreshLine,
+} from '@remixicon/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 

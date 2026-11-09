@@ -54,14 +54,40 @@ pub(crate) async fn append_execution_failures(
     // A bounded history window often contains only the newest entries of a
     // long run. The boundary entry is then absent from `parts`, so recover the
     // failed run identity from every loaded entry of the window.
+    //
+    // `response_entry_id` is the run's first committed assistant entry. A run
+    // that failed before committing anything (for example a provider that
+    // rejects the very first request) has no reply anchor at all: its user
+    // input's anchor is deliberately cleared. Nothing else belongs to that
+    // attempt, so only such a run needs the synthetic standalone error below.
+    // A user entry reports the execution's *current* generation while content
+    // entries report their own, so the generation is not part of this identity.
+    let mut failed_without_reply = std::collections::HashSet::new();
+    let mut executions_with_reply = std::collections::HashSet::new();
+    for entry in entries {
+        if entry.response_entry_id.is_some() {
+            executions_with_reply.insert(entry.execution_id);
+        }
+        if entry.execution_phase != ExecutionPhase::Failed || entry.response_entry_id.is_some() {
+            continue;
+        }
+        failed_without_reply.insert(entry.execution_id);
+    }
     let mut candidates = Vec::new();
     let mut seen_runs = std::collections::HashSet::new();
     for entry in entries {
         if entry.execution_phase != ExecutionPhase::Failed {
             continue;
         }
-        let Some(run_id) = entry.response_entry_id else {
-            continue;
+        let (run_id, standalone) = match entry.response_entry_id {
+            Some(reply) => (reply.get(), false),
+            None if matches!(entry.payload, EntryPayload::User { .. })
+                && failed_without_reply.contains(&entry.execution_id)
+                && !executions_with_reply.contains(&entry.execution_id) =>
+            {
+                (entry.id.get(), true)
+            }
+            None => continue,
         };
         if !seen_runs.insert(run_id) {
             continue;
@@ -69,16 +95,19 @@ pub(crate) async fn append_execution_failures(
         // A forked session reads entries owned by its ancestor. The failed
         // attempt therefore belongs to the entry owner, not the reader.
         candidates.push((
-            run_id.get(),
+            run_id,
             entry.execution_id,
             entry.generation,
             entry.origin_session_id,
             entry.created_at_ms,
             entry.message_id.get(),
+            standalone,
         ));
     }
     let mut failures = Vec::new();
-    for (run_id, execution, generation, owner, candidate_created_at_ms, message_id) in candidates {
+    for (run_id, execution, generation, owner, candidate_created_at_ms, message_id, standalone) in
+        candidates
+    {
         if parts.iter().any(|existing| {
             existing.kind == "error"
                 && existing.run_id == Some(run_id)
@@ -129,14 +158,22 @@ pub(crate) async fn append_execution_failures(
             },
             None => (manager_failure_content()?, run_id, candidate_created_at_ms),
         };
-        failures.push((run_id, source_id, created_at_ms, content, owner, message_id));
+        failures.push((
+            run_id,
+            source_id,
+            created_at_ms,
+            content,
+            owner,
+            message_id,
+            standalone,
+        ));
     }
 
     let mut used_ids = parts
         .iter()
         .map(|part| part.part_id)
         .collect::<std::collections::HashSet<_>>();
-    for (run_id, round_id, created_at_ms, content, owner, message_id) in failures {
+    for (run_id, round_id, created_at_ms, content, owner, message_id, standalone) in failures {
         // Synthetic ids stay out of the durable entry range while remaining
         // decimal, which the Web message index requires. A pathological
         // durable-id collision simply advances to the next free value.
@@ -144,6 +181,12 @@ pub(crate) async fn append_execution_failures(
         while !used_ids.insert(part_id) {
             part_id += 1;
         }
+        // A run that never committed assistant content has no reply entry to
+        // attach the failure to. The error part must then stand on its own as
+        // that run's assistant message, otherwise the transcript shows a
+        // failed session with nothing in it. Clients attach content by
+        // `run_id == marker.part_id`, so the synthetic identity is both.
+        let standalone_reply = standalone.then_some(part_id);
         parts.push(PartResource {
             part_id,
             kind: "error".into(),
@@ -152,7 +195,8 @@ pub(crate) async fn append_execution_failures(
             run_state: Some("failed".into()),
             content,
             visibility: "both".into(),
-            run_id: Some(run_id),
+            message_boundary: standalone,
+            run_id: standalone_reply.or(Some(run_id)),
             message_id: Some(message_id),
             origin_session_id: owner.get(),
             revision: 1,
@@ -1981,6 +2025,227 @@ mod tool_input_projection_tests {
         assert_eq!(
             parts.iter().filter(|part| part.kind == "tool_call").count(),
             7
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_run_without_a_reply_anchor_projects_a_standalone_error_part() {
+        use agena_failure::{
+            Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+            RecoveryDirective, RetryDirective, UserPresentation,
+        };
+        use agena_storage::kernel::ExecutionPhase;
+
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/failed-run-without-reply-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Summarize the attached notes".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        // The provider rejects the very first request, so this run commits no
+        // assistant entry at all: the user input keeps no reply anchor.
+        let failure = Failure::new(
+            FailureCode::new("provider.request_failed"),
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::ChooseAlternative,
+            FailureImpact::RequestRejected,
+            UserPresentation::new(
+                "provider.request_failed",
+                "The provider rejected the request.",
+            ),
+        );
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        round
+            .finish(
+                RequestId::new(),
+                Some(json!({ "failure": failure.clone() })),
+                false,
+            )
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let reader = &runtime.ports.reader;
+        let history = reader.history_window(session, None, &[], 64).await.unwrap();
+        let mut parts = Vec::new();
+        for entry in &history.entries {
+            parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
+        }
+        append_execution_failures(reader, &history.entries, &mut parts)
+            .await
+            .unwrap();
+
+        let errors = parts
+            .iter()
+            .filter(|part| part.kind == "error")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            errors.len(),
+            1,
+            "a failed run that produced no reply must still explain itself"
+        );
+        let error = errors[0];
+        let expected = serde_json::to_value(agena_failure::UserProblem::from(&failure)).unwrap();
+        assert_eq!(error.content["problem"], expected);
+        // Clients attach content to a run by `run_id == marker.part_id`. With
+        // no durable reply entry the synthetic error is its own boundary, or
+        // the transcript shows a failed session with nothing in it.
+        assert!(error.message_boundary);
+        assert_eq!(error.run_id, Some(error.part_id));
+        assert_eq!(error.state, "failed");
+        assert_eq!(error.run_state.as_deref(), Some("failed"));
+        assert!(
+            parts
+                .iter()
+                .any(|part| part.message_boundary && part.run_state.as_deref() == Some("failed")),
+            "the failure marker must reach the message list"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_run_with_committed_content_projects_exactly_one_error_part() {
+        use agena_failure::{
+            Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+            RecoveryDirective, RetryDirective, UserPresentation,
+        };
+        use agena_storage::kernel::ExecutionPhase;
+
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/failed-run-with-content-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = runtime
+            .ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Explain the failure".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, execution)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let reply = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        reply.append("Partial answer").await.unwrap();
+        reply.finish(RequestId::new()).await.unwrap();
+        let reply = reply.entry_id();
+        let failure = Failure::new(
+            FailureCode::new("provider.request_failed"),
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::ChooseAlternative,
+            FailureImpact::RequestRejected,
+            UserPresentation::new(
+                "provider.request_failed",
+                "The provider rejected the request.",
+            ),
+        );
+        round
+            .finish(RequestId::new(), Some(json!({ "failure": failure })), false)
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let reader = &runtime.ports.reader;
+        let history = reader.history_window(session, None, &[], 64).await.unwrap();
+        let mut parts = Vec::new();
+        for entry in &history.entries {
+            parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
+        }
+        append_execution_failures(reader, &history.entries, &mut parts)
+            .await
+            .unwrap();
+        let errors = parts
+            .iter()
+            .filter(|part| part.kind == "error")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            errors.len(),
+            1,
+            "a run that committed a reply must not gain a second, duplicate error"
+        );
+        // The committed reply keeps its own boundary; the error joins it.
+        assert!(!errors[0].message_boundary);
+        assert_eq!(errors[0].run_id, Some(reply.get()));
+        assert!(
+            parts
+                .iter()
+                .any(|part| part.message_boundary && part.run_state.as_deref() == Some("failed"))
         );
     }
 

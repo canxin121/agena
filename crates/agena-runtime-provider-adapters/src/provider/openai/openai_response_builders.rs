@@ -309,6 +309,20 @@ impl OpenAiTransport {
                     item.summary_label()
                 ),
             },
+            // `input_file` is the Responses document channel: a gateway parses
+            // it as a PDF/Office document. Sending a user-selected text
+            // resource (for example a long clipboard paste prepared as a
+            // bounded UTF-8 text file) there failed the whole request with
+            // "Invalid PDF input", so text-like files must reach the model as
+            // text, exactly like the Chat Completions adapter. Binary
+            // documents keep the `file` shape.
+            AttachmentKind::File if wire_message::attachment_is_text_like(item) => {
+                wire_message::attachment_text(item)
+                    .map(|text| OpenAiInputContent::InputText { text })
+                    .unwrap_or_else(|| OpenAiInputContent::InputText {
+                        text: wire_message::hint_text(item),
+                    })
+            }
             AttachmentKind::Pdf | AttachmentKind::File => Self::responses_file_content(item)
                 .unwrap_or_else(|| OpenAiInputContent::InputText {
                     text: wire_message::hint_text(item),
@@ -952,5 +966,71 @@ impl OpenAiTransport {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod responses_attachment_tests {
+    use super::*;
+
+    fn attachment(kind: AttachmentKind, mime: &str, filename: &str, body: &str) -> AttachmentItem {
+        AttachmentItem {
+            kind,
+            mime: mime.to_owned(),
+            source: AttachmentSource::ProviderData {
+                route: "media-route:test".to_owned(),
+                // Pre-encoded payloads keep this test independent of the
+                // adapter crate's dependency graph.
+                data: body.to_owned(),
+            },
+            filename: Some(filename.to_owned()),
+            title: None,
+            size_bytes: Some(body.len() as u64),
+            sha256: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            page_count: None,
+        }
+    }
+
+    /// `input_file` is the Responses document channel and the gateway parses
+    /// those bytes as a PDF/Office document. A text resource (for example a
+    /// long clipboard paste prepared as a UTF-8 text file) sent there failed
+    /// the entire request with "Invalid PDF input", so the user's message and
+    /// its reply were lost instead of delivered.
+    #[test]
+    fn text_file_attachment_reaches_responses_as_text() {
+        let item = attachment(
+            AttachmentKind::File,
+            "text/plain",
+            "clipboard-paste-1.txt",
+            "cGFzdGVkIGNsaXBib2FyZCB0YXNrIGJvZHk=",
+        );
+        let content = OpenAiTransport::responses_content_from_attachment(&item);
+        let value = serde_json::to_value(&content).unwrap();
+        assert_eq!(
+            value["type"], "input_text",
+            "plain text must not use input_file"
+        );
+        assert_eq!(value["text"], "pasted clipboard task body");
+    }
+
+    #[test]
+    fn binary_document_attachment_keeps_the_responses_file_channel() {
+        let item = attachment(
+            AttachmentKind::Pdf,
+            "application/pdf",
+            "report.pdf",
+            "JVBERi0xLjQK",
+        );
+        let content = OpenAiTransport::responses_content_from_attachment(&item);
+        let value = serde_json::to_value(&content).unwrap();
+        assert_eq!(value["type"], "input_file");
+        assert!(
+            value["file_data"]
+                .as_str()
+                .is_some_and(|data| data.starts_with("data:application/pdf;base64,"))
+        );
     }
 }

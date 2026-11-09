@@ -521,9 +521,15 @@ pub fn base64_with_mime(item: &AttachmentItem) -> Option<(String, String)> {
     }
 }
 
-pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
+/// Whether this attachment's bytes are text that every protocol can carry as
+/// ordinary message text.
+///
+/// One rule for every adapter: a text-like file must never be handed to a
+/// document channel (`input_file`, PDF parts), because those channels parse
+/// the bytes as a document and reject plain text.
+pub fn attachment_is_text_like(item: &AttachmentItem) -> bool {
     let mime = item.mime.trim().to_ascii_lowercase();
-    let is_text_like = mime.starts_with("text/")
+    mime.starts_with("text/")
         || matches!(
             mime.as_str(),
             "application/json"
@@ -531,8 +537,11 @@ pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
                 | "application/yaml"
                 | "application/x-yaml"
                 | "application/javascript"
-        );
-    if !is_text_like {
+        )
+}
+
+pub fn attachment_text(item: &AttachmentItem) -> Option<String> {
+    if !attachment_is_text_like(item) {
         return None;
     }
 

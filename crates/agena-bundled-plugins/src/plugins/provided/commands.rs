@@ -148,7 +148,7 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         action: "rewind",
         slash: "/rewind",
         aliases: &["backtrack"],
-        usage: None,
+        usage: Some("[message_id] [in-place]"),
         summary_key: "command-rewind-summary",
     },
     BuiltInCommand {
@@ -178,6 +178,13 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         aliases: &["config"],
         usage: None,
         summary_key: "command-settings-summary",
+    },
+    BuiltInCommand {
+        action: "session-settings",
+        slash: "/session_setting",
+        aliases: &["session-settings", "session-config"],
+        usage: None,
+        summary_key: "command-session-settings-summary",
     },
     BuiltInCommand {
         action: "model",

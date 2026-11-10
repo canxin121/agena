@@ -31,7 +31,18 @@ impl App {
             ClientCommandAction::Sessions => self.open_resume_session_picker(),
             ClientCommandAction::Hub => self.open_hub(),
             ClientCommandAction::Lineage => self.open_lineage_picker(),
-            ClientCommandAction::Rewind => self.open_rewind_messages_picker(),
+            ClientCommandAction::Rewind => {
+                // The TUI always picks the target message interactively; the
+                // `/rewind <id> in-place` arguments are the Web contract.
+                if args.trim().is_empty() {
+                    self.open_rewind_messages_picker();
+                } else {
+                    self.flash_warning(self.i18n.text_args(
+                        "flash-command-usage",
+                        &agena_tui::fl_args!("usage" => format!("/{}", command.name())),
+                    ));
+                }
+            }
             ClientCommandAction::Rename => self.open_rename_session_overlay(),
             ClientCommandAction::Favorite => {
                 if !args.trim().is_empty() {
@@ -45,6 +56,12 @@ impl App {
             }
             ClientCommandAction::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
             ClientCommandAction::Settings => self.open_settings_studio(),
+            ClientCommandAction::SessionSettings => {
+                // Session settings are one scope of the ordinary settings
+                // studio, so this opens that studio on the session workbench
+                // rather than a second, parallel screen.
+                self.open_settings_studio_on_session_scope()
+            }
             ClientCommandAction::Model => self.open_session_model_chooser(),
             ClientCommandAction::Commit => self.handle_commit_command(args),
             ClientCommandAction::Pr => self.handle_pr_command(args),

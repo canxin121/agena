@@ -48,8 +48,8 @@ const PERMISSION_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   },
 ]
 
-// Model selections share the effective, global, and workspace layers. A session
-// model is selected in the conversation rather than persisted on this page.
+// Model selections compare all four layers, including a conversation's own
+// persisted selection.
 const MODEL_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   {
     id: 'effective',
@@ -65,6 +65,11 @@ const MODEL_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
     id: 'workspace',
     label: () => st('Workspace layer'),
     description: () => st('Overrides for this workspace.'),
+  },
+  {
+    id: 'session',
+    label: () => st('Current session'),
+    description: () => st('Applies only to the selected conversation.'),
   },
 ]
 

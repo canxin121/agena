@@ -10,7 +10,7 @@ const PermissionsOverviewPanel = defineAsyncComponent(
 
 const pages = computed(() => buildSettingsSubpages('permissions'))
 // The permission workbench owns the scope selector and forwards its route-backed value.
-defineProps<{ activePage: string; scope: string }>()
+defineProps<{ activePage: string; scope: string; sessionId?: string }>()
 const studio = ref<{ refresh: () => Promise<void> } | null>(null)
 defineExpose({ refresh: () => studio.value?.refresh() })
 </script>
@@ -25,7 +25,13 @@ defineExpose({ refresh: () => studio.value?.refresh() })
     :default-page="SETTINGS_DEFAULT_SUBPAGE.permissions"
     v-slot="{ activePage }"
   >
-    <PermissionsOverviewPanel v-if="activePage === 'overview'" ref="studio" />
-    <PermissionStudioPanel v-else ref="studio" :scope="scope" :section="activePage" />
+    <PermissionsOverviewPanel v-if="activePage === 'overview'" ref="studio" :session-id="sessionId" />
+    <PermissionStudioPanel
+      v-else
+      ref="studio"
+      :scope="scope"
+      :section="activePage"
+      :session-id="sessionId"
+    />
   </SettingsSectionWorkbench>
 </template>

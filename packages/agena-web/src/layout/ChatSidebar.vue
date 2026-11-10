@@ -13,6 +13,7 @@ import {
   RiPushpinFill,
   RiPushpinLine,
   RiRefreshLine,
+  RiSettings3Line,
 } from '@remixicon/vue'
 
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
@@ -588,6 +589,12 @@ const directoryActionsDialogItems = computed<DirectoryDialogActionItem[]>(() => 
       icon: RiClipboardLine,
     },
     {
+      id: 'project-settings',
+      label: String(t('chat.sidebar.sessionActions.projectSettings.label')),
+      description: String(t('chat.sidebar.sessionActions.projectSettings.description')),
+      icon: RiSettings3Line,
+    },
+    {
       id: 'refresh',
       label: String(t('chat.sidebar.directoryActions.refresh.label')),
       description: String(t('chat.sidebar.directoryActions.refresh.description')),
@@ -752,7 +759,10 @@ function menuItemsById(items: OptionMenuItem[], ids: string[]): OptionMenuItem[]
 const directoryActionMenuGroups = computed<OptionMenuGroup[]>(() => {
   const items = filteredDirectoryActionsDialogItems.value as OptionMenuItem[]
   return [
-    { id: 'directory-location', items: menuItemsById(items, ['open-files', 'toggle-collapse', 'copy-path']) },
+    {
+      id: 'directory-location',
+      items: menuItemsById(items, ['open-files', 'toggle-collapse', 'copy-path', 'project-settings']),
+    },
     {
       id: 'directory-session-actions',
       items: menuItemsById(items, ['refresh', 'toggle-session-multi-select', 'new-session']),
@@ -765,7 +775,10 @@ const sessionActionMenuGroups = computed<OptionMenuGroup[]>(() => {
   const items = filteredSessionActionsDialogItems.value as OptionMenuItem[]
   return [
     { id: 'session-open', items: menuItemsById(items, ['open']) },
-    { id: 'session-organize', items: menuItemsById(items, ['toggle-pin', 'toggle-favorite', 'rename']) },
+    {
+      id: 'session-organize',
+      items: menuItemsById(items, ['toggle-pin', 'toggle-favorite', 'rename', 'session-settings']),
+    },
     { id: 'session-content', items: menuItemsById(items, ['copy-transcript', 'export-transcript', 'fork']) },
     { id: 'session-danger', items: menuItemsById(items, ['delete']) },
   ].filter((group) => group.items.length > 0)
@@ -931,6 +944,16 @@ async function runDirectoryDialogAction(item: DirectoryDialogActionItem) {
     if (!target) return
     const ok = await copyTextToClipboard(target.path)
     toasts.push(ok ? 'success' : 'error', String(t(ok ? 'common.copied' : 'common.failedToCopyToClipboard')))
+    return
+  }
+  if (item.id === 'project-settings') {
+    const target = directoryActionsTarget.value
+    directoryActionsOpen.value = false
+    if (!target) return
+    await selectDirectory(target.id, target.path)
+    await workspaceNavigation.openMainTab('settings', {
+      path: '/settings/permissions?view=filesystem&scope=workspace',
+    })
     return
   }
   if (item.id === 'refresh') {

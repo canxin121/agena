@@ -9,7 +9,7 @@ const ModelSettingsPanel = defineAsyncComponent(() => import('@/components/setti
 
 const pages = computed(() => buildSettingsSubpages('models-providers'))
 // Both model selections share one page and the workbench's layer selector.
-defineProps<{ activePage: string; scope: string }>()
+defineProps<{ activePage: string; scope: string; sessionId?: string }>()
 const editor = ref<{ refresh: () => Promise<void> } | null>(null)
 defineExpose({
   refresh: async () => {
@@ -30,6 +30,6 @@ defineExpose({
   >
     <ProviderStudioPanel ref="editor" v-if="activePage === 'provider-studio'" />
     <ModelCatalogPanel ref="editor" v-else-if="activePage === 'model-catalog'" />
-    <ModelSettingsPanel ref="editor" v-else :scope="scope" />
+    <ModelSettingsPanel ref="editor" v-else :scope="scope" :session-id="sessionId" />
   </SettingsSectionWorkbench>
 </template>

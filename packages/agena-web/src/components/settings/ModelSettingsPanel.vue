@@ -5,7 +5,7 @@ import ModelSelectionSettings from './ModelSelectionSettings.vue'
 import { confirmAction } from '@/lib/appConfirm'
 import { settingsText as st } from '@/i18n/settingsText'
 
-withDefaults(defineProps<{ scope?: string }>(), { scope: 'effective' })
+withDefaults(defineProps<{ scope?: string; sessionId?: string }>(), { scope: 'effective' })
 
 type ModelEditor = {
   refresh: () => Promise<void>
@@ -58,8 +58,13 @@ defineExpose({
 
 <template>
   <div class="grid min-w-0 gap-5" data-model-settings>
-    <ModelSelectionSettings ref="defaultEditor" purpose="default" :scope="scope" />
-    <ModelSelectionSettings ref="approvalEditor" purpose="approval" :scope="scope" />
-    <ModelSelectionSettings ref="auxiliaryEditor" purpose="auxiliary" :scope="scope" />
+    <ModelSelectionSettings ref="defaultEditor" purpose="default" :scope="scope" :session-id="sessionId" />
+    <!-- A conversation persists only its run model. The approval and auxiliary
+         roles stay configuration layers, so they keep their own scope value.
+         -->
+    <template v-if="scope !== 'session'">
+      <ModelSelectionSettings ref="approvalEditor" purpose="approval" :scope="scope" :session-id="sessionId" />
+      <ModelSelectionSettings ref="auxiliaryEditor" purpose="auxiliary" :scope="scope" :session-id="sessionId" />
+    </template>
   </div>
 </template>

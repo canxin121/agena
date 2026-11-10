@@ -24,11 +24,18 @@ import {
 } from '@/pages/chat/modelSelectionCatalog'
 import { encodeModelSelectionKey, parseModelSlug } from '@/pages/chat/modelSelectionDefaults'
 import { useToastsStore } from '@/stores/toasts'
+import { getSessionExecution, setSessionSelection, type RunOptionsPayload } from '@/stores/chat/api'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
-const props = defineProps<{ scope: string; purpose: 'default' | 'approval' | 'auxiliary' }>()
-const scope = computed(() => (props.scope === 'global' || props.scope === 'workspace' ? props.scope : 'effective'))
+const props = defineProps<{
+  scope: string
+  purpose: 'default' | 'approval' | 'auxiliary'
+  sessionId?: string
+}>()
+const scope = computed(() =>
+  props.scope === 'global' || props.scope === 'workspace' || props.scope === 'session' ? props.scope : 'effective',
+)
 const approval = computed(() => props.purpose === 'approval')
 const auxiliary = computed(() => props.purpose === 'auxiliary')
 const path = computed(() =>
@@ -41,7 +48,8 @@ const path = computed(() =>
 const title = computed(() =>
   auxiliary.value ? st('Auxiliary model') : approval.value ? st('Automatic approval model') : st('Default model'),
 )
-const editable = computed(() => scope.value !== 'effective')
+const sessionTarget = computed(() => String(props.sessionId || '').trim())
+const editable = computed(() => scope.value !== 'effective' && (scope.value !== 'session' || Boolean(sessionTarget.value)))
 const catalog = useModelSelectionCatalog()
 const toasts = useToastsStore()
 const loading = ref(false)
@@ -49,6 +57,9 @@ const saving = ref(false)
 const error = ref('')
 const saveError = ref('')
 const sources = ref<RuntimeSettingsReadBundle | null>(null)
+// A conversation's selection is stored on the session itself, not in a
+// configuration layer, so it is read from the session state projection.
+const sessionSelection = ref<JsonValue | undefined>(undefined)
 const modelKey = ref('')
 const thinkingMode = ref('')
 const speedMode = ref('')
@@ -61,12 +72,32 @@ let disposed = false
 function record(value: JsonValue | undefined): Record<string, JsonValue> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
 }
+
+/** Project the session's persisted model selection into the editor shape. */
+function sessionRecord(state: Awaited<ReturnType<typeof getSessionExecution>> | null): JsonValue | undefined {
+  const execution = state?.execution
+  if (!execution?.model_provider_id || !execution.model_id) return undefined
+  return {
+    provider: execution.model_provider_id,
+    model: execution.model_id,
+    ...(execution.model_adapter_id ? { adapter: execution.model_adapter_id } : {}),
+    ...(execution.model_thinking_mode ? { thinking_mode: execution.model_thinking_mode } : {}),
+    ...(execution.model_speed_mode ? { speed_mode: execution.model_speed_mode } : {}),
+    ...(execution.model_verbosity ? { verbosity: execution.model_verbosity } : {}),
+  }
+}
 function fingerprint() {
   return JSON.stringify([modelKey.value, thinkingMode.value, speedMode.value, verbosity.value, resetPending.value])
 }
 const dirty = computed(() => editable.value && !!savedState.value && fingerprint() !== savedState.value)
 const disabled = computed(() => !editable.value || loading.value || saving.value || !sources.value)
-const persisted = computed(() => editable.value && hasPersistedSetting(sources.value?.[scope.value]))
+const layerValue = computed<JsonValue | undefined>(() =>
+  scope.value === 'session' ? sessionSelection.value : sources.value?.[scope.value]?.value,
+)
+const persisted = computed(() => {
+  if (!editable.value) return false
+  return scope.value === 'session' ? Boolean(modelKey.value) : hasPersistedSetting(sources.value?.[scope.value])
+})
 const identity = computed(() => parseModelSlug(modelKey.value))
 const selectedModel = computed(() =>
   catalog.modelMetaFor(identity.value.provider, identity.value.model, identity.value.adapter),
@@ -108,7 +139,7 @@ const verbosityOptions = computed(() => withSelected(verbosityOptionsForModel(se
 const modelName = computed(() => modelOptions.value.find((option) => option.value === modelKey.value)?.label || '')
 
 function syncEditor() {
-  const value = record(sources.value?.[scope.value]?.value)
+  const value = record(layerValue.value)
   modelKey.value = encodeModelSelectionKey({
     provider: String(value.provider || ''),
     adapter: String(value.adapter || ''),
@@ -138,12 +169,16 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [bundle] = await Promise.all([
+    const [bundle, state] = await Promise.all([
       readRuntimeSettingSources(path.value, request.signal),
+      scope.value === 'session' && sessionTarget.value
+        ? getSessionExecution(sessionTarget.value).catch(() => null)
+        : Promise.resolve(null),
       catalog.loadProvidersAndModels(),
     ])
     if (disposed || request.signal.aborted) return
     sources.value = bundle
+    sessionSelection.value = sessionRecord(state)
     if (!dirty.value) syncEditor()
   } catch (reason) {
     if (!disposed && !request.signal.aborted) error.value = reason instanceof Error ? reason.message : String(reason)
@@ -154,6 +189,7 @@ async function refresh() {
 async function save() {
   const layer = scope.value
   if (disabled.value || layer === 'effective' || !dirty.value) return
+  if (layer === 'session') return saveSessionSelection()
   const selected = identity.value
   if (modelKey.value && (!selected.provider || !selected.model)) {
     saveError.value = st('Select a configured model.')
@@ -194,7 +230,42 @@ async function save() {
     saving.value = false
   }
 }
-watch(scope, syncEditor)
+async function saveSessionSelection() {
+  const sid = sessionTarget.value
+  const selected = identity.value
+  if (!sid) return
+  if (modelKey.value && (!selected.provider || !selected.model)) {
+    saveError.value = st('Select a configured model.')
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  controller?.abort()
+  try {
+    const options: RunOptionsPayload = {}
+    if (modelKey.value) {
+      options.model = {
+        provider_id: selected.provider,
+        ...(selected.adapter ? { adapter_id: selected.adapter } : {}),
+        model_id: selected.model,
+      }
+      if (thinkingMode.value) options.thinking_mode = thinkingMode.value
+      if (speedMode.value) options.speed_mode = speedMode.value
+      if (verbosity.value) options.verbosity = verbosity.value
+    }
+    const state = await setSessionSelection(sid, options)
+    if (disposed) return
+    sessionSelection.value = sessionRecord(state)
+    syncEditor()
+    toasts.push('success', st('Model settings saved'))
+  } catch (reason) {
+    if (!disposed) saveError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    saving.value = false
+  }
+}
+
+watch([scope, sessionTarget], syncEditor)
 onMounted(() => void refresh())
 onBeforeUnmount(() => {
   disposed = true

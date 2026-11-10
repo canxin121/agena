@@ -54,7 +54,7 @@ type PermissionRulePage = {
 
 const PERMISSION_RULE_BATCH_SIZE = 200
 
-const props = defineProps<{ scope: PermissionScope }>()
+const props = defineProps<{ scope: PermissionScope; sessionId?: string }>()
 const toasts = useToastsStore()
 const chat = useChatStore()
 const directory = useDirectoryStore()
@@ -80,7 +80,9 @@ const stateOptions = computed(() => [
   { value: 'revoked', label: st('revoked') },
 ])
 const activeSessionId = computed(() => {
-  const id = Number(chat.selectedSessionId)
+  // A settings page names the conversation it edits; the chat selection is only
+  // the fallback when this panel is embedded in a conversation surface.
+  const id = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
 })
 const activeWorkspaceId = computed(() => {

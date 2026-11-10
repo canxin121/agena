@@ -24,6 +24,14 @@ workspace and session layers can select global and workspace prompts. A
 workspace entry with the same id takes precedence where both scopes are
 available. Existing inline fragments remain editable for compatibility.
 
+The session layer is edited on the same page as the other layers: choose the
+**current session** scope, then pick the conversation in the selector above the
+editor. It defaults to the conversation this client used last and records the
+choice in `?sessionId=`. The Web session menu's **Session settings** item and
+`/session_setting` open the permission page in that same session scope, so
+permissions and instructions for a conversation are reached from one place
+rather than a separate settings surface.
+
 Saved entries live in the `library` array of the existing `prompts`
 configuration, separate from `order` and `inline`:
 

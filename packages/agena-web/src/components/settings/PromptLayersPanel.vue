@@ -53,7 +53,7 @@ type CachedDraft = LoadedLayer & {
 }
 
 const SETTING_PATH = 'prompts'
-const props = defineProps<{ scope: string }>()
+const props = defineProps<{ scope: string; sessionId?: string }>()
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
@@ -64,7 +64,9 @@ const scope = computed<PromptLayerScope>(() =>
   props.scope === 'global' || props.scope === 'workspace' || props.scope === 'session' ? props.scope : 'effective',
 )
 const sessionId = computed(() => {
-  const id = Number(chat.selectedSessionId)
+  // An explicit target lets the session settings surface edit a conversation
+  // that is not the one currently open in the chat pane.
+  const id = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? String(id) : null
 })
 const needsSession = computed(() => scope.value === 'session' || scope.value === 'effective')

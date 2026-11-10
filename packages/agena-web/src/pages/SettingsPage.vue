@@ -31,6 +31,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
 import { settingsQueryForDestination } from '@/components/settings/settingsDestination'
 import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
+import { useSettingsSessionTarget } from '@/components/settings/settingsSessionScope'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import {
   resolveSettingsSubpage,
@@ -138,6 +139,11 @@ const activeScope = computed(() => {
   } catch {}
   return resolveSettingsScope(route.query.scope, remembered, activeScopes.value)
 })
+
+// Session-scoped pages edit one explicit conversation. The picker and these
+// panels share one resolution, so the header, the selector and the editor never
+// disagree about which session is being changed.
+const sessionTarget = useSettingsSessionTarget()
 
 // The active subpage declares whether it owns the whole content area (dense
 // master/detail pages such as the Model Catalog do) or scrolls inside it like
@@ -846,6 +852,7 @@ const dirtyHint = computed(
             ref="modelsProvidersPanel"
             :active-page="activeView"
             :scope="activeScope"
+            :session-id="sessionTarget.sessionId.value"
             v-else-if="activeSection === 'models-providers'"
           />
 
@@ -854,6 +861,7 @@ const dirtyHint = computed(
             ref="permissionsPanel"
             :active-page="activeView"
             :scope="activeScope"
+            :session-id="sessionTarget.sessionId.value"
             v-else-if="activeSection === 'permissions'"
           />
 
@@ -888,6 +896,7 @@ const dirtyHint = computed(
             ref="runtimeSessionPanel"
             :active-page="activeView"
             :scope="activeScope"
+            :session-id="sessionTarget.sessionId.value"
             v-else-if="activeSection === 'runtime-session'"
           />
 

@@ -1023,6 +1023,7 @@ flash-settings-cleared = gelöscht {$path}
 flash-provider-save-error-settings-object = bestehende Providereinstellungen müssen ein JSON-Objekt sein
 
 command-settings-summary = Öffnen Sie die Workbench für einheitliche Einstellungen für Modelle, Berechtigungen, Plugins, Laufzeit, Sitzungen, Schnittstelle und Diagnose
+command-session-settings-summary = Berechtigungen und zusätzliche Anweisungen dieser Unterhaltung öffnen
 
 settings-mcp-public-url-updated = Agena-Zugriffsadresse aktualisiert.
 
@@ -2138,7 +2139,7 @@ command-pr-summary = Pull Request mit minimalen gh-Optionen erstellen
 
 command-rename-summary = Aktuelle oder ausgewählte Sitzung umbenennen
 
-command-rewind-summary = Benutzernachricht und alle folgenden Nachrichten in einen neuen Zweig zurücknehmen
+command-rewind-summary = Benutzernachricht und alle folgenden Nachrichten als neuen Zweig oder direkt in der Sitzung zurücknehmen
 
 command-sessions-summary = Sitzungsumschalter öffnen
 
@@ -2464,6 +2465,14 @@ overlay-session-search-footer-local = Bereich {$scope} · {$total} Ergebnisse
 overlay-session-search-footer-remote = Bereich {$scope} · {$loaded} geladen · {$tail}
 overlay-lineage-empty = Keine zugehörigen Sitzungszweige gefunden
 overlay-rewind-empty = Keine abgeschlossenen Benutzernachrichten zum Zurücknehmen
+overlay-rewind-mode-title = Zug zurücknehmen
+overlay-rewind-mode-prompt = Wie soll „{$target}“ zurückgenommen werden?
+overlay-rewind-mode-fork-label = Zweig behalten
+overlay-rewind-mode-fork-detail = Einen neuen Chat mit dem Verlauf vor dieser Nachricht erstellen; die ursprüngliche Sitzung bleibt unverändert.
+overlay-rewind-mode-in-place-label = Diese Sitzung bearbeiten
+overlay-rewind-mode-in-place-detail = Diese Nachricht und alles danach aus dieser Sitzung entfernen.
+overlay-rewind-confirm-in-place-warning = Diese Nachricht und alle folgenden Nachrichten werden aus dieser Sitzung entfernt. Das kann nicht rückgängig gemacht werden.
+overlay-rewind-confirm-in-place-draft = Die zurückgenommene Benutzernachricht wird im Eingabefeld dieser Sitzung wiederhergestellt.
 overlay-rewind-confirm-title = Zurücksetzen bestätigen
 overlay-rewind-confirm-keep = {$target} und alle folgenden Nachrichten zurücknehmen
 overlay-rewind-confirm-warning = Ein neuer Zweig enthält nur den Verlauf vor dieser Benutzernachricht.
@@ -2735,6 +2744,7 @@ flash-session-favorited = „{$title}“ zu den Favoriten hinzugefügt
 flash-session-unfavorited = „{$title}“ aus den Favoriten entfernt
 flash-session-compacted = Sitzungskontext zusammengefasst
 flash-session-rewound = Zweig erstellt, nachdem {$target} zurückgenommen wurde; Nachricht im Eingabefeld wiederhergestellt
+flash-session-rewound-in-place = {$target} und alles danach zurückgenommen; die Nachricht wurde im Eingabefeld wiederhergestellt
 flash-large-paste-no-file-view = Große eingefügte Textblöcke können entfernt werden, haben aber keine Dateiansicht.
 flash-config-dir-prepare-failed = Konfigurationsverzeichnis {$path} konnte nicht vorbereitet werden: {$error}
 flash-config-file-create-failed = Konfigurationsdatei {$path} konnte nicht erstellt werden: {$error}

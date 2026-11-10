@@ -60,8 +60,29 @@ impl App {
     }
 
     pub(crate) fn open_settings_studio(&mut self) {
+        self.open_settings_studio_at(None, SettingsStudioFocus::Navigation);
+    }
+
+    /// Open the unified studio on the current conversation's settings, so the
+    /// client offers one settings surface instead of a second session-only one.
+    pub(crate) fn open_settings_studio_on_session_scope(&mut self) {
+        if self.current_or_selected_session_id().is_none() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        }
+        self.open_settings_studio_at(
+            Some(SettingsStudioSectionId::Permissions),
+            SettingsStudioFocus::Items,
+        );
+    }
+
+    fn open_settings_studio_at(
+        &mut self,
+        section: Option<SettingsStudioSectionId>,
+        focus: SettingsStudioFocus,
+    ) {
         self.request_settings_async_context();
-        match self.build_settings_studio_overlay(None, None, SettingsStudioFocus::Navigation) {
+        match self.build_settings_studio_overlay(section, None, focus) {
             Ok(dialog) => {
                 self.route_stack.clear();
                 self.current_route = Route::SettingsStudio(dialog);
@@ -70,7 +91,7 @@ impl App {
         }
     }
 
-    fn request_settings_async_context(&mut self) {
+    pub(crate) fn request_settings_async_context(&mut self) {
         let session_id = self.current_or_selected_session_id();
         self.dispatch_backend_operation(
             move |application| async move {

@@ -6,6 +6,10 @@ import { settingsQueryForDestination } from '../settingsDestination'
 import type { SettingsTab } from '../sidebar/settingsSidebarNavigation'
 import { buildSettingsScopes, findSettingsScope } from '../settingsScopeCatalog'
 import { resolveSettingsSubpage, type SettingsSubpageDefinition } from './settingsSectionNavigation'
+import SettingsProjectPicker from '../SettingsProjectPicker.vue'
+import SettingsSessionPicker from '../SettingsSessionPicker.vue'
+import { useDirectorySessionStore } from '@/stores/directorySessionStore'
+import { useDirectoryStore } from '@/stores/directory'
 
 const props = defineProps<{
   section: SettingsTab
@@ -32,6 +36,21 @@ const activeScopeLabel = computed(
 // A viewport-filling page keeps its own scrolling panes, so the workbench must
 // stop contributing page scroll and hand it the remaining height instead.
 const fillsViewport = computed(() => activeDefinition.value?.fillsViewport === true)
+// A session layer always names its conversation; a workspace layer names its
+// project. Both controls sit in the same place so every scoped page reads the
+// same way, and the session picker defaults to the most recently used one.
+const sessionScope = computed(() => props.activeScope === 'session')
+const workspaceScope = computed(() => props.activeScope === 'workspace')
+const directory = useDirectoryStore()
+const directories = useDirectorySessionStore()
+
+// Selecting a project makes that directory the active workspace, because the
+// workspace configuration layer is always the composed runtime's project.
+function selectProject(id: string) {
+  const entry = directories.directoriesById[String(id || '').trim()]
+  if (!entry?.path) return
+  directory.setDirectory(entry.path)
+}
 
 // Sidebar tasks that contain several legacy pages expose their secondary
 // destinations here rather than adding another sidebar navigation level.
@@ -161,6 +180,20 @@ function selectScope(scope: string) {
             {{ scope.label }}
           </button>
         </nav>
+        <SettingsSessionPicker v-if="sessionScope" class="mb-4" />
+        <div
+          v-else-if="workspaceScope"
+          class="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2"
+        >
+          <span class="text-xs font-medium text-muted-foreground">{{ $st('Project') }}</span>
+          <SettingsProjectPicker class="min-w-0 flex-1" @select="selectProject" />
+          <span
+            v-if="directory.currentDirectory"
+            class="min-w-0 truncate font-mono text-[10px] text-muted-foreground"
+            :title="directory.currentDirectory"
+            >{{ directory.currentDirectory }}</span
+          >
+        </div>
         <div :class="cn('min-w-0', fillsViewport ? 'min-h-0 flex-1' : '')">
           <slot :active-page="activePage" :active-definition="activeDefinition" />
         </div>

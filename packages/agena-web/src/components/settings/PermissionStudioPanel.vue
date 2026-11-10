@@ -72,7 +72,7 @@ type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?:
 const SHELL_LAUNCH_TOOLS = ['agena.shell.exec', 'agena.shell.spawn', 'agena.shell.watch', 'agena.shell.open'] as const
 const SHELL_CAPABLE_TOOLS = [...SHELL_LAUNCH_TOOLS, 'agena.shell.write'] as const
 
-const props = defineProps<{ section: string; scope: string }>()
+const props = defineProps<{ section: string; scope: string; sessionId?: string }>()
 const chat = useChatStore()
 const directory = useDirectoryStore()
 const toasts = useToastsStore()
@@ -130,7 +130,9 @@ const toolQuery = ref('')
 const commandQuery = ref('')
 
 const activeSessionId = computed(() => {
-  const value = Number(chat.selectedSessionId)
+  // An explicit target lets a settings surface describe a conversation other
+  // than whichever chat tab last loaded; otherwise the current selection owns it.
+  const value = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
   return Number.isSafeInteger(value) && value > 0 ? value : null
 })
 const canEdit = computed(
@@ -1788,7 +1790,12 @@ onBeforeUnmount(() => {
         </details>
       </template>
 
-      <PermissionsPanel v-if="selectedSection === 'tools'" :scope="selectedSource" ref="rulesPanel" />
+      <PermissionsPanel
+        v-if="selectedSection === 'tools'"
+        :scope="selectedSource"
+        :session-id="sessionId"
+        ref="rulesPanel"
+      />
 
       <details
         class="permission-details group"

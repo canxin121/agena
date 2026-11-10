@@ -11,6 +11,9 @@ const rootFiles = [
   'src/pages/SettingsPage.vue',
   'src/components/McpDialog.vue',
   'src/components/MemoryMetadataView.vue',
+  // The composer's context-usage popover renders the same usage labels the
+  // settings usage report does, so both catalogs are checked together.
+  'src/components/chat/ContextUsageChip.vue',
   'src/lib/mcpConnections.ts',
 ].sort()
 const vueFiles = rootFiles.filter((file) => file.endsWith('.vue'))

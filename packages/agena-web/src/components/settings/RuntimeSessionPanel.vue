@@ -97,7 +97,7 @@ async function refreshClientVersions() {
     refreshBusy.value = false
   }
 }
-defineProps<{ activePage: string; scope: string }>()
+defineProps<{ activePage: string; scope: string; sessionId?: string }>()
 </script>
 
 <template>
@@ -152,7 +152,12 @@ defineProps<{ activePage: string; scope: string }>()
       </SettingsCard>
     </div>
     <PromptLibraryPanel v-else-if="activePage === 'prompt-library'" ref="promptLibraryPanel" :scope="scope" />
-    <PromptLayersPanel v-else-if="activePage === 'prompt-layers'" ref="promptPanel" :scope="scope" />
+    <PromptLayersPanel
+      v-else-if="activePage === 'prompt-layers'"
+      ref="promptPanel"
+      :scope="scope"
+      :session-id="sessionId"
+    />
     <div v-else class="space-y-4">
       <SettingsCard :title="$st('Automatic session titles')" :icon="RiCpuLine">
         <ServerSettingField v-for="field in titleOptions" :key="field.path" ref="titleFields" v-bind="field" compact />

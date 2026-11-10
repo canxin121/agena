@@ -36,6 +36,7 @@ type SessionStateResponse = {
   }
 }
 
+const props = defineProps<{ sessionId?: string }>()
 const route = useRoute()
 const router = useRouter()
 const chat = useChatStore()
@@ -43,7 +44,7 @@ const busy = ref(false)
 const error = ref('')
 const permission = ref<PermissionConfig>({})
 const sessionId = computed(() => {
-  const id = Number(chat.selectedSessionId)
+  const id = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
 })
 let controller: AbortController | undefined

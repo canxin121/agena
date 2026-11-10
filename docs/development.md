@@ -626,8 +626,11 @@ layout, budgets, CLI, API, and editor semantics. Model overlays live under the
 compaction uses the same resolution as ordinary requests.
 Only `SessionRelationKind::Subagent` selects the delegated role; ordinary
 children, forks, rewinds, and side conversations retain their user-facing
-role and applicable conversation boundaries. The Agent roster carries
-routing and state, not a second set of tool instructions.
+role and applicable conversation boundaries. The Agent roster carries routing
+and membership, not a second set of tool instructions and not live execution
+state: a peer status that changed every turn would rewrite the cached prompt
+prefix. Live state comes from the agent tools that report it, and finished
+child work is delivered automatically.
 
 Subagents report user decisions and authorization needs to the parent.
 The scoped executor excludes direct user interaction, plan creation,

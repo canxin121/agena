@@ -430,24 +430,75 @@ impl AssistantRuntime {
         }
 
         let enabled = self.require_companion_owner(source).await.is_ok();
-        let reminders = if enabled {
-            self.companion.reminders_for_source(workspace, source).await?.into_iter()
-                .filter(|r|r.source_session_id==source).take(32).map(|r| {
-                    let text=r.spec.text.chars().take(256).collect::<String>();
-                    json!({"id":r.id,"text":text,"state":r.state,"revision":r.revision,"next_due_ms":r.next_due_ms,
-                        "kind":r.spec.kind,"repeat_seconds":r.spec.repeat_seconds,"occurrences":r.spec.occurrences,"delivered":r.delivered})
-                }).collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        Ok(
-            json!({"enabled":enabled,"profile":profile,"reminders":reminders,"utc_now":Utc::now().to_rfc3339(),
+        Ok(json!({"enabled":enabled,"profile":profile,
             "profile_scope":if bot.is_some() {"bot"} else {"workspace"},
             "bot":bot.as_ref().map(|bot| json!({"id":bot.id,"name":bot.name,"revision":bot.revision})),
             "memory_workspace_root":memory_root,"memory_global":workspace.is_none(),"memory_instance_id":memory_instance_id,"memory_checkpoint_entry_id":memory_checkpoint_entry_id,"channel_authority":channel,
             "memory_scope":"this private workspace only; never combine direct, group, tenant or user memories",
-            "proactive_scope":"only explicit finite schedules; no autonomous creation of new goals"}),
-        )
+            "proactive_scope":"only explicit finite schedules; no autonomous creation of new goals"}))
+    }
+
+    /// Live clock and source schedules for one conversation.
+    ///
+    /// This is deliberately separate from [`Self::companion_context`], which
+    /// feeds the system prompt on every turn. A provider caches the prompt
+    /// prefix only while it stays byte-identical, so a live clock or a mutating
+    /// reminder row in that text would invalidate the entire cache on each
+    /// request. The model reads this document on demand through
+    /// `companion.manage` action `reminders` instead.
+    pub(crate) async fn companion_live_state(&self, source: i64) -> Result<Value> {
+        let (workspace, _) = self.assistant_scope(source).await?;
+        let enabled = self.require_companion_owner(source).await.is_ok();
+        let reminders = if enabled {
+            self.companion
+                .reminders_for_source(workspace, source)
+                .await?
+                .into_iter()
+                .filter(|r| r.source_session_id == source)
+                .take(32)
+                .map(|r| {
+                    let text = r.spec.text.chars().take(256).collect::<String>();
+                    json!({"id":r.id,"text":text,"state":r.state,"revision":r.revision,"next_due_ms":r.next_due_ms,
+                        "kind":r.spec.kind,"repeat_seconds":r.spec.repeat_seconds,"occurrences":r.spec.occurrences,"delivered":r.delivered})
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        Ok(json!({"utc_now":Utc::now().to_rfc3339(),"reminders":reminders}))
+    }
+
+    /// The live profile document returned by `companion.manage` action
+    /// `profile`.
+    ///
+    /// The system prompt keeps only the presentation preferences, so the
+    /// revision a write must quote, the update time and the Bot identity are
+    /// served here, when the model actually needs them.
+    pub(crate) async fn companion_profile_state(&self, source: i64) -> Result<Value> {
+        let (workspace, _) = self.assistant_scope(source).await?;
+        let enabled = self.require_companion_owner(source).await.is_ok();
+        let (mut profile, bot) = self.source_assistant_profile(source, workspace).await?;
+        // Report the same effective value the reply actually used: a channel
+        // without private-memory permission never gets automatic recall, so the
+        // model must not quote a stale `memory_enabled` back into a write.
+        let channel = self
+            .manager()?
+            .get_session(source)
+            .await
+            .map_err(runtime_error)?
+            .execution
+            .channel_authority;
+        if channel.as_ref().is_some_and(|a| !a.grant.private_memory) {
+            profile.preferences.memory_enabled = false;
+        }
+        let scope = if bot.is_some() { "bot" } else { "workspace" };
+        Ok(json!({
+            "utc_now": Utc::now().to_rfc3339(),
+            "enabled": enabled,
+            "profile_scope": scope,
+            "profile": profile,
+            "bot": bot.as_ref().map(|bot| json!({"id":bot.id,"name":bot.name,"revision":bot.revision})),
+        }))
     }
 
     pub(crate) async fn authorize_companion(
@@ -494,7 +545,14 @@ impl AssistantRuntime {
             request.action,
             CompanionAction::Profile | CompanionAction::Reminders
         ) {
-            return self.companion_context(source).await;
+            // The system prompt carries only the stable profile, so the live
+            // clock, current revision and reminder rows are returned here,
+            // when actually asked.
+            return if request.action == CompanionAction::Profile {
+                self.companion_profile_state(source).await
+            } else {
+                self.companion_live_state(source).await
+            };
         }
         let message = self.authorize_companion(source, call, &request).await?;
         let (workspace, _) = self.assistant_scope(source).await?;
@@ -602,9 +660,8 @@ impl AssistantRuntime {
                     .await?;
                 Ok(json!({"updated":true,"reminder":r}))
             }
-            CompanionAction::Profile | CompanionAction::Reminders => {
-                self.companion_context(source).await
-            }
+            CompanionAction::Profile => self.companion_profile_state(source).await,
+            CompanionAction::Reminders => self.companion_live_state(source).await,
         }
     }
 

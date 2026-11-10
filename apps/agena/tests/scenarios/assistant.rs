@@ -37,6 +37,69 @@ fn notice(marker: &'static str) -> RequestMatch {
     })
 }
 
+fn instructions(request: &agena_testkit::ModelRequest) -> Result<String> {
+    request
+        .body
+        .get("instructions")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .context("model request has no instructions")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_system_prompt_stays_byte_identical_across_turns_and_carries_no_tool_contracts()
+-> TestResult {
+    fixture()
+        .run(|case| async move {
+            let model = case.model();
+            let user = case.user().new_session().await?;
+            let mut seen = Vec::new();
+            for marker in ["prompt-stability-first", "prompt-stability-second"] {
+                model
+                    .expect(RequestMatch::user_text(marker))
+                    .check(|request| {
+                        let prompt = instructions(request)?;
+                        // Contracts arrive through tools_help, and plugin-private
+                        // data through the tool that owns it; neither belongs in a
+                        // cached system prefix.
+                        for absent in [
+                            "\"$defs\"",
+                            "input schema",
+                            "memory_instance_id",
+                            "memory_checkpoint_entry_id",
+                            "utc_now",
+                            "Agent roster",
+                        ] {
+                            ensure!(!prompt.contains(absent), "prompt carries {absent}");
+                        }
+                        ensure!(
+                            prompt.contains("Current assistant presentation preferences"),
+                            "presentation preferences missing from the prompt"
+                        );
+                        Ok(())
+                    })
+                    .reply(Reply::text(format!("reply to {marker}")));
+                user.send(marker)
+                    .await?
+                    .wait_settled()
+                    .await?
+                    .assert_succeeded()?;
+            }
+            for request in model.requests() {
+                if request.body.get("instructions").is_some() {
+                    seen.push(instructions(&request)?);
+                }
+            }
+            ensure!(seen.len() >= 2, "captured requests: {}", seen.len());
+            ensure!(
+                seen.iter().all(|prompt| *prompt == seen[0]),
+                "the system prompt changed between turns, invalidating the provider prefix cache"
+            );
+            Ok(())
+        })
+        .await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn persona_is_applied_across_conversations_persists_and_does_not_cross_workspaces()
 -> TestResult {

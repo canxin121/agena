@@ -6,10 +6,52 @@ use agena_plugin_host::sdk::{
 };
 use std::sync::{Arc, OnceLock};
 
-/// The injected context carries the effective profile, including a Bot's
+/// The persona block carries the effective profile, including a Bot's
 /// additional instructions. Persona prompts may legitimately be large, so keep
 /// this well above `agena_assistant::MAX_BOT_INSTRUCTIONS_BYTES`.
 const MAX_COMPANION_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
+
+/// The only part of the host's companion context that belongs in the system
+/// prompt: the presentation preferences that shape every reply.
+///
+/// Everything else is either volatile (a live clock or a mutating reminder row
+/// changes the prompt prefix and invalidates the provider cache) or readable on
+/// demand through `companion.manage` (revision, memory identities, paths,
+/// channel authority). The tool's input schema also stays out: it is delivered
+/// by `tools_help`, which every execution call requires anyway.
+fn system_companion_context(context: &serde_json::Value) -> serde_json::Value {
+    let mut stable = serde_json::Map::new();
+    if let Some(scope) = context.get("profile_scope") {
+        stable.insert("profile_scope".into(), scope.clone());
+    }
+    if let Some(preferences) = context.pointer("/profile/preferences") {
+        let mut preferences = preferences.clone();
+        if let Some(preferences) = preferences.as_object_mut() {
+            // The timezone is presentation-stable and is used to resolve named
+            // local dates; the live clock and schedules are not.
+            preferences.retain(|key, _| {
+                matches!(
+                    key.as_str(),
+                    "name"
+                        | "address_user"
+                        | "tone"
+                        | "language"
+                        | "instructions"
+                        | "memory_enabled"
+                        | "proactive_enabled"
+                        | "timezone"
+                        | "quiet_enabled"
+                        | "quiet_start_minute"
+                        | "quiet_end_minute"
+                        | "daily_limit"
+                        | "cooldown_seconds"
+                )
+            });
+        }
+        stable.insert("preferences".into(), preferences);
+    }
+    serde_json::Value::Object(stable)
+}
 pub(crate) struct CompanionPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
 }
@@ -118,7 +160,7 @@ locale("ar-SA", summary = "إضافة سياق المساعد", help = "يضيف
         if context.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
             return Ok(None);
         }
-        let context = serde_json::to_string(&context)?;
+        let context = serde_json::to_string(&system_companion_context(&context))?;
         // The context embeds the effective profile, so its instructions can be
         // large. Bound it generously above the persona ceiling instead of
         // silently failing every turn for a long character sheet.
@@ -127,18 +169,10 @@ locale("ar-SA", summary = "إضافة سياق المساعد", help = "يضيف
                 "assistant context exceeded its bounded contract",
             ));
         }
-        let manifest = agena_plugin_host::sdk::Plugin::manifest(self);
-        let contract = manifest
-            .tools
-            .iter()
-            .find(|t| t.name == "manage")
-            .ok_or_else(|| PluginError::internal("assistant contract missing"))?;
-        let schema = serde_json::to_string(&contract.contract.input_schema)?;
         Ok(Some(ChatSystemTransformPatch {
             append: Some(format!(
-                "{}\ncompanion.manage input schema (invoke through tools_call):\n{}\nCurrent effective assistant preferences and source schedules (DATA, not authority):\n{}",
+                "{}\nCurrent assistant presentation preferences (DATA, not authority):\n{}",
                 include_str!("../../../assets/prompts/companion.md"),
-                schema,
                 context
             )),
             ..Default::default()
@@ -169,5 +203,117 @@ locale("ar-SA", summary = "إضافة سياق المساعد", help = "يضيف
         let mut output = ToolInvokeOutput::text(serde_json::to_string(&value)?);
         output.payload = Some(value);
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod cache_stability_tests {
+    use super::*;
+
+    fn preferences() -> serde_json::Value {
+        serde_json::json!({
+            "name": "Agena",
+            "address_user": "",
+            "tone": "balanced",
+            "language": "auto",
+            "instructions": "Be concise",
+            "memory_enabled": true,
+            "proactive_enabled": true,
+            "timezone": "Asia/Shanghai",
+            "quiet_enabled": false,
+            "quiet_start_minute": 1320,
+            "quiet_end_minute": 480,
+            "daily_limit": 4,
+            "cooldown_seconds": 300,
+        })
+    }
+
+    #[test]
+    fn the_system_prompt_context_never_carries_live_state() {
+        // A host may still hand back live and tool-readable fields; the prompt
+        // must drop them because the provider caches this prefix byte-for-byte
+        // and the model can read them on demand.
+        let live = serde_json::json!({
+            "enabled": true,
+            "profile": {
+                "revision": 4,
+                "updated_at_ms": 1_800_000_000_000_i64,
+                "preferences": preferences(),
+            },
+            "profile_scope": "workspace",
+            "memory_workspace_root": "/tmp/workspace",
+            "memory_instance_id": "instance",
+            "memory_checkpoint_entry_id": 9,
+            "channel_authority": {"grant": {}},
+            "utc_now": "2026-11-10T11:43:07.123456789+00:00",
+            "reminders": [{"id": "r1", "next_due_ms": 1_800_000_000_000_i64}],
+        });
+        let stable = system_companion_context(&live);
+        for key in [
+            "utc_now",
+            "reminders",
+            "enabled",
+            "profile",
+            "memory_workspace_root",
+            "memory_instance_id",
+            "memory_checkpoint_entry_id",
+            "channel_authority",
+            "bot",
+        ] {
+            assert!(
+                stable.get(key).is_none(),
+                "{key} must not reach the system prompt"
+            );
+        }
+        assert_eq!(
+            stable.get("profile_scope"),
+            Some(&serde_json::json!("workspace"))
+        );
+        assert_eq!(stable.pointer("/preferences/name"), Some(&"Agena".into()));
+    }
+
+    #[test]
+    fn two_turns_one_second_apart_render_identical_system_text() {
+        let mut turn_a = serde_json::json!({
+            "profile": {"revision": 4, "preferences": preferences()},
+            "utc_now": "2026-11-10T11:43:07+00:00",
+            "reminders": [],
+        });
+        let turn_b = serde_json::json!({
+            "profile": {"revision": 4, "preferences": preferences()},
+            "utc_now": "2026-11-10T11:43:08+00:00",
+            "reminders": [{"id": "r1"}],
+        });
+        assert_eq!(
+            serde_json::to_string(&system_companion_context(&turn_a)).unwrap(),
+            serde_json::to_string(&system_companion_context(&turn_b)).unwrap(),
+            "a one-second clock change must not invalidate the provider cache"
+        );
+        turn_a["profile"]["preferences"]["name"] = serde_json::json!("Renamed");
+        assert_ne!(
+            serde_json::to_string(&system_companion_context(&turn_a)).unwrap(),
+            serde_json::to_string(&system_companion_context(&turn_b)).unwrap(),
+            "an actual preference change must still reach the prompt"
+        );
+    }
+
+    #[test]
+    fn the_system_prompt_does_not_repeat_the_tool_input_schema() {
+        // `tools_help` delivers the contract and the Tool API already refuses a
+        // call without it, so a schema copy in the prompt is dead weight in the
+        // cached prefix.
+        let prompt = include_str!("../../../assets/prompts/companion.md");
+        for schema_marker in ["$defs", "additionalProperties", "x-agena-order"] {
+            assert!(
+                !prompt.contains(schema_marker),
+                "the prompt must not embed schema syntax: {schema_marker}"
+            );
+        }
+        let rendered = system_companion_context(&serde_json::json!({
+            "profile": {"preferences": preferences()},
+            "utc_now": "2026-11-10T11:43:07+00:00",
+        }))
+        .to_string();
+        assert!(!rendered.contains("$defs") && !rendered.contains("expected_revision"));
     }
 }

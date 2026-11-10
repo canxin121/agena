@@ -1271,15 +1271,30 @@ impl MemoryPlugin {
             scoped_out_records = recall.scoped_out_records, selected_records = recall.items.len(),
             estimated_tokens = estimated_tokens(&context), "memory context assembled");
         let mut messages = input.messages;
-        let insert_at = messages
-            .iter()
-            .take_while(|message| message.role == "system")
-            .count();
+        let insert_at = recall_insert_index(&messages);
         messages.insert(insert_at, ChatMessage::system(context));
         Ok(Some(ChatMessagesTransformPatch {
             messages: Some(messages),
         }))
     }
+}
+
+/// Where automatic recall belongs in the provider projection.
+///
+/// Recall serves the current request, so it goes immediately before the latest
+/// user message — never at the start of the transcript. A front insertion makes
+/// a turn whose recall changed rewrite every earlier message in the
+/// provider-cached prefix, exactly as if the conversation had been edited.
+fn recall_insert_index(messages: &[ChatMessage]) -> usize {
+    messages
+        .iter()
+        .rposition(|message| message.role == "user")
+        .unwrap_or_else(|| {
+            messages
+                .iter()
+                .take_while(|message| message.role == "system")
+                .count()
+        })
 }
 
 fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {

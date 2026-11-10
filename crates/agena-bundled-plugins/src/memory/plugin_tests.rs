@@ -559,3 +559,37 @@ fn list_and_record_display_fields_are_bounded_even_with_huge_frontmatter() {
     );
     assert_eq!(navigation["read"]["name"], "paged-record");
 }
+
+#[test]
+fn recall_lands_before_the_current_request_and_never_rewrites_history() {
+    // Two turns of a real conversation. Recall for turn two belongs just before
+    // turn two's user message; placing it at index 0 would move every earlier
+    // message and invalidate the provider-cached prefix.
+    let messages = vec![
+        ChatMessage::system("base system"),
+        ChatMessage::user("first request"),
+        ChatMessage::assistant("first answer"),
+        ChatMessage::user("second request"),
+    ];
+    let insert_at = recall_insert_index(&messages);
+    assert_eq!(insert_at, 3);
+    let mut projected = messages.clone();
+    projected.insert(insert_at, ChatMessage::system("recalled context"));
+    assert_eq!(
+        projected[..insert_at]
+            .iter()
+            .map(|message| &message.content)
+            .collect::<Vec<_>>(),
+        messages[..insert_at]
+            .iter()
+            .map(|message| &message.content)
+            .collect::<Vec<_>>(),
+        "everything before the current request must stay byte-identical"
+    );
+    assert_eq!(projected[insert_at].content, json!("recalled context"));
+    assert_eq!(projected[insert_at + 1].content, json!("second request"));
+
+    // A request with no user message still gets recall after the system runs.
+    let system_only = vec![ChatMessage::system("base system")];
+    assert_eq!(recall_insert_index(&system_only), 1);
+}

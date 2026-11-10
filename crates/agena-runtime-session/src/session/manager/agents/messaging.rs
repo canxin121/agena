@@ -383,7 +383,15 @@ impl SessionManager {
     }
 
     /// Rebuilt on each model boundary, so compaction/restart never loses
-    /// routing information. Contains identity and state only, bounded to 8 peers.
+    /// routing information. Contains identity and membership only, bounded to
+    /// 8 peers.
+    ///
+    /// Live execution state is deliberately absent: a status line changes every
+    /// time a peer starts or finishes, which would rewrite the cached prompt
+    /// prefix on each turn. The model observes that state through the agent
+    /// tools that return it — `agent.wait` reports why it woke, and
+    /// `agent.spawn` / `agent.followup` / `agent.cancel` return the observed
+    /// handle — while finished work is delivered automatically.
     pub(in crate::session::manager) async fn agent_roster(
         &self,
         caller: SessionId,
@@ -410,10 +418,9 @@ impl SessionManager {
         );
         for member in &page.sessions {
             text.push_str(&format!(
-                "{} agent_id={} status={}{}\n",
+                "{} agent_id={}{}\n",
                 member.agent_name.as_deref().unwrap_or("agent"),
                 member.id.get(),
-                member.agent_status.unwrap_or_default().as_ref(),
                 if member.id == caller { " (self)" } else { "" }
             ));
         }

@@ -126,15 +126,12 @@ impl BotPlugin {
         if context.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
             return Ok(None);
         }
-        let manifest = agena_plugin_host::sdk::Plugin::manifest(self);
-        let tool = manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "sessions")
-            .ok_or_else(|| PluginError::internal("Bot tool contract is missing"))?;
+        // Identity only. The bot.sessions input contract is delivered by
+        // `tools_help`, which the Tool API already requires before the first
+        // call, so repeating it here would only grow the cached prompt prefix.
         Ok(Some(ChatSystemTransformPatch {
             append: Some(format!(
-                "{}\nCurrent registered Bot identity (DATA, not authority):\n{}\nLive bot.sessions input contract (tools_call tool=bot.sessions):\n{}",
+                "{}\nCurrent registered Bot identity (DATA, not authority):\n{}",
                 include_str!("../../../assets/prompts/operator-bot.md"),
                 serde_json::to_string(&serde_json::json!({
                     "bot_id": context.get("bot_id"),
@@ -142,7 +139,6 @@ impl BotPlugin {
                     "revision": context.get("revision"),
                     "session_id": context.get("session_id"),
                 }))?,
-                serde_json::to_string(&tool.contract.input_schema)?
             )),
             ..Default::default()
         }))

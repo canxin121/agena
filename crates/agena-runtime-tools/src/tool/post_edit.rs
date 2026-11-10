@@ -83,6 +83,7 @@ pub(super) async fn validate(
                 executor,
                 &crate::part::LspDiagnosticsToolInput {
                     file_path: path.clone(),
+                    folder: None,
                 },
             )
             .await?;

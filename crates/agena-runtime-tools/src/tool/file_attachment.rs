@@ -45,11 +45,13 @@ impl PreparedFileAttachment {
     }
 }
 
-pub(super) fn execute_for_read_attachment(
+/// Same result, for a caller that already resolved its own folder-aware target.
+pub(super) fn execute_for_read_attachment_at(
     executor: &ToolExecutor,
+    target: &Path,
     path: &str,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let prepared = prepare_file_attachment(executor, path)?;
+    let prepared = prepare_file_attachment(executor, target, path)?;
     let output = ToolPayloadOutput::Read {
         read_info: None,
         preview: None,
@@ -76,10 +78,9 @@ pub(super) fn should_attach_in_read_auto(path: &Path, bytes: &[u8]) -> bool {
 
 fn prepare_file_attachment(
     executor: &ToolExecutor,
+    target: &Path,
     input_path: &str,
 ) -> Result<PreparedFileAttachment, ToolError> {
-    let target = executor.resolve_target_path(input_path);
-
     if !target.exists() {
         return Err(ToolError::invalid_input(format!(
             "file attachment target does not exist: {}",
@@ -94,7 +95,7 @@ fn prepare_file_attachment(
         )));
     }
 
-    let bytes = read_bounded(&target, MAX_FILE_BYTES)?;
+    let bytes = read_bounded(target, MAX_FILE_BYTES)?;
     if bytes.is_empty() {
         return Err(ToolError::invalid_input(format!(
             "file attachment target is empty: {}",
@@ -102,7 +103,7 @@ fn prepare_file_attachment(
         )));
     }
 
-    Ok(build_file_attachment(executor, &target, &bytes))
+    Ok(build_file_attachment(executor, target, &bytes))
 }
 
 fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ToolError> {

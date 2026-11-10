@@ -26,6 +26,10 @@ pub(crate) struct CodePlugin {
 struct CodeSearchAstInput {
     #[arg(trim, non_empty)]
     path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     /// Simple ast-grep pattern; provide exactly one of pattern or rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 16384)]
@@ -45,6 +49,10 @@ struct CodeSearchAstInput {
 struct CodeSyntaxTreeInput {
     #[arg(trim, non_empty)]
     path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     language: Option<CodeLanguage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -201,11 +209,17 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        super::fs::require_global_absolute_path(context, &input.path)?;
+        super::fs::require_global_absolute_path_or_folder(
+            context,
+            &input.path,
+            input.folder.as_deref(),
+        )?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
-        let workspace_root = context.workspace_root.to_owned();
+        let workspace_root = super::fs::effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let access = self.permissions.read_filter(true)?;
         let predicate = access.predicate();
         let result = run_code_blocking(move || {
@@ -277,11 +291,17 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        super::fs::require_global_absolute_path(context, &input.path)?;
+        super::fs::require_global_absolute_path_or_folder(
+            context,
+            &input.path,
+            input.folder.as_deref(),
+        )?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
-        let workspace_root = context.workspace_root.to_owned();
+        let workspace_root = super::fs::effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         run_code_blocking(move || Self::invoke_syntax_tree(&workspace_root, input)).await
     }
 
@@ -347,7 +367,11 @@ impl CodePlugin {
         context: &ToolInvokeContext<'_>,
         input: CodeRewriteInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        super::fs::require_global_absolute_path(context, &input.path)?;
+        super::fs::require_global_absolute_path_or_folder(
+            context,
+            &input.path,
+            input.folder.as_deref(),
+        )?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -356,7 +380,9 @@ impl CodePlugin {
                 .path(agena_domain::PathKind::Write, &input.path)
                 .await?;
         }
-        let workspace = context.workspace_root.to_owned();
+        let workspace = super::fs::effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         run_code_blocking(move || invoke_rewrite(Path::new(&workspace), input)).await
     }
 

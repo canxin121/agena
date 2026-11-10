@@ -32,7 +32,7 @@ use crate::part::{ShellToolInput, ShellWatchInput, ShellWatchPolicy};
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary};
 
 use super::shell_tools::{
-    inherited_environment, prepare_posix_launch, resolve_workdir, shell_settings,
+    inherited_environment, prepare_posix_launch, resolve_workdir_in_folder, shell_settings,
     validate_declared_filesystem_effects,
 };
 use super::{
@@ -340,7 +340,11 @@ async fn execute_managed_launch_async(
     let effects = command.filesystem_effects();
     let tool_name = mode.tool_name();
     validate_declared_filesystem_effects(tool_name, command.command.as_str(), &effects)?;
-    let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
+    let cwd = resolve_workdir_in_folder(
+        executor,
+        command.workdir.as_deref(),
+        command.folder.as_deref(),
+    )?;
     let activity_kind = if matches!(&mode, ManagedLaunch::Open(_)) {
         agena_storage::kernel::BackgroundActivityKind::Terminal
     } else {

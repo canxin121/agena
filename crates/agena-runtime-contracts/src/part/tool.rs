@@ -44,6 +44,11 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub workdir: Option<String>,
+    /// Base folder for this command when no `workdir` is given. Only global
+    /// (Bot) sessions use it; a project session keeps its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
     /// Files and directories the command may read. Declare only the actual
     /// files/directories affected - never the executables, interpreters, or
     /// tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or
@@ -387,6 +392,12 @@ pub struct ReadToolInput {
     /// workspace root.
     #[arg(trim, non_empty)]
     pub file_path: String,
+    /// Base folder for a relative `file_path`. Only global (Bot) sessions,
+    /// which have no project folder of their own, use it; a project session
+    /// always resolves against its project root and ignores this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
     /// 1-based offset for file lines or directory entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
@@ -414,6 +425,11 @@ pub struct ReadMediaInput {
     /// against the active workspace, like the other filesystem tools.
     #[arg(trim, non_empty)]
     pub path: String,
+    /// Base folder for a relative `path`. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
     /// Optional revision guard from fs.stat or a previous read_media result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
@@ -436,6 +452,11 @@ pub struct GlobToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub path: Option<String>,
+    /// Base folder for a relative `path`. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
     /// Number of matching paths to skip before returning results.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
@@ -510,6 +531,11 @@ pub struct GrepToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub path: Option<String>,
+    /// Base folder for a relative `path`. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
     /// Optional glob filter applied before matching lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
@@ -825,6 +851,11 @@ pub struct InteractionNotifyToolInput {
 pub struct ApplyPatchToolInput {
     /// Unified patch text to apply to the workspace.
     pub patch: String,
+    /// Base folder for relative patch paths. Only global (Bot) sessions use
+    /// it; a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
 }
 
 /// Input for the built-in `web_fetch` tool.
@@ -997,6 +1028,11 @@ impl Default for CronHistoryToolInput {
 pub struct LspPositionToolInput {
     #[arg(trim, non_empty)]
     pub file_path: String,
+    /// Base folder for a relative `file_path`. Only global (Bot) sessions use
+    /// it; a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
     /// Zero-based source line.
     pub line: u32,
     /// Zero-based UTF-16 code-unit offset within the line (LSP default encoding).
@@ -1042,6 +1078,11 @@ pub struct LspHoverToolInput {
 pub struct LspDiagnosticsToolInput {
     #[arg(trim, non_empty)]
     pub file_path: String,
+    /// Base folder for a relative `file_path`. Only global (Bot) sessions use
+    /// it; a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

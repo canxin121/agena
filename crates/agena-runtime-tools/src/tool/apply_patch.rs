@@ -93,32 +93,38 @@ pub fn execute(
         )));
     }
 
+    let folder = input.folder.as_deref();
     let lock_paths = ops
         .iter()
         .flat_map(|op| match op {
             PatchOp::Add { path, .. } | PatchOp::Delete { path } => {
-                vec![executor.resolve_target_path(path)]
+                vec![executor.resolve_target_path_in_folder(path, folder)]
             }
             PatchOp::Update { path, move_to, .. } => {
-                let mut paths = vec![executor.resolve_target_path(path)];
+                let mut paths = vec![executor.resolve_target_path_in_folder(path, folder)];
                 if let Some(target) = move_to {
-                    paths.push(executor.resolve_target_path(target));
+                    paths.push(executor.resolve_target_path_in_folder(target, folder));
                 }
                 paths
             }
         })
         .collect::<Vec<_>>();
 
-    crate::with_file_mutation_locks(lock_paths.as_slice(), || execute_locked(executor, ops))?
+    crate::with_file_mutation_locks(lock_paths.as_slice(), || {
+        execute_locked(executor, ops, folder)
+    })?
 }
 
 fn execute_locked(
     executor: &ToolExecutor,
     ops: Vec<PatchOp>,
+    folder: Option<&str>,
 ) -> Result<ApplyPatchExecution, ToolError> {
     // Resolve every hunk and validate every source/target before the first
     // mutation so a deterministic validation failure cannot partially apply.
-    let prepared = prepare_operations(ops, |path| executor.resolve_target_path(path))?;
+    let prepared = prepare_operations(ops, |path| {
+        executor.resolve_target_path_in_folder(path, folder)
+    })?;
 
     let mut changed_files = Vec::new();
     let mut diff_sections = Vec::new();

@@ -56,6 +56,11 @@ impl NotebookCellType {
 #[serde(deny_unknown_fields)]
 struct NotebookEditInput {
     path: String,
+
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     action: NotebookEditAction,
     cell_index: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,7 +218,11 @@ impl NotebookPlugin {
         context: &ToolInvokeContext<'_>,
         input: &NotebookEditInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        super::fs::require_global_absolute_path(context, &input.path)?;
+        super::fs::require_global_absolute_path_or_folder(
+            context,
+            &input.path,
+            input.folder.as_deref(),
+        )?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
@@ -225,7 +234,9 @@ impl NotebookPlugin {
                 "notebook source exceeds the 16 MiB byte limit",
             ));
         }
-        let workspace_root = context.workspace_root.to_string();
+        let workspace_root = super::fs::effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let input = input.clone();
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()

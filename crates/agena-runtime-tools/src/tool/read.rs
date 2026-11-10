@@ -22,7 +22,7 @@ pub(super) fn execute(
     input: &ReadToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     executor.ensure_not_cancelled()?;
-    let target = executor.resolve_target_path(&input.file_path);
+    let target = executor.resolve_target_path_in_folder(&input.file_path, input.folder.as_deref());
 
     if !target.exists() {
         return Err(ToolError::invalid_field(
@@ -96,13 +96,18 @@ pub(super) fn execute(
     }
 
     if matches!(input.mode, ReadMode::Attachment) {
-        return file_attachment::execute_for_read_attachment(executor, input.file_path.as_str());
+        return file_attachment::execute_for_read_attachment_at(
+            executor,
+            &target,
+            input.file_path.as_str(),
+        );
     }
     if matches!(input.mode, ReadMode::Auto) {
         let prefix = read_prefix(&target, AUTO_DETECT_BYTES)?;
         if file_attachment::should_attach_in_read_auto(&target, &prefix) {
-            return file_attachment::execute_for_read_attachment(
+            return file_attachment::execute_for_read_attachment_at(
                 executor,
+                &target,
                 input.file_path.as_str(),
             );
         }

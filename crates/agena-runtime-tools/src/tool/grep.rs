@@ -149,8 +149,8 @@ pub(super) fn execute(
     let base_path = input
         .path
         .as_deref()
-        .map(|path| executor.resolve_target_path(path))
-        .unwrap_or_else(|| executor.workspace_root().to_path_buf());
+        .map(|path| executor.resolve_target_path_in_folder(path, input.folder.as_deref()))
+        .unwrap_or_else(|| executor.resolve_folder_base(input.folder.as_deref()));
     let limits = SearchLimits {
         max_results: input.max_results.unwrap_or(MAX_MATCHES as u32) as usize,
         ..SearchLimits::default()

@@ -22,6 +22,10 @@ enum Backend {
 pub(super) struct DocumentInput {
     #[arg(trim, non_empty)]
     pub(super) path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) folder: Option<String>,
     #[serde(default)]
     backend: Backend,
     #[serde(default, skip_serializing_if = "Option::is_none")]

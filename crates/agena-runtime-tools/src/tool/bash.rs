@@ -1,6 +1,6 @@
 use super::shell_tools::{
     ExitInterpretation, analyze_command, inherited_environment, prepare_posix_launch,
-    resolve_workdir, shell_settings, validate_declared_filesystem_effects,
+    resolve_workdir_in_folder, shell_settings, validate_declared_filesystem_effects,
 };
 use agena_tool::{
     ShellOutput, ShellRequest,
@@ -24,7 +24,8 @@ pub(super) async fn prepare_command_async(
     call_id: i64,
     tool_name: &str,
 ) -> Result<Option<PreparedShellCommand>, ToolError> {
-    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
+    let cwd =
+        resolve_workdir_in_folder(executor, input.workdir.as_deref(), input.folder.as_deref())?;
     let mut env = inherited_environment();
     // Resolved before plugin overrides so the precedence is
     // inherited < snapshot < plugin `shell.env`/`command.before` values.
@@ -126,7 +127,8 @@ pub(super) async fn execute_async(
     let analysis = analyze_command(input.command.as_str());
     let effects = input.filesystem_effects();
     validate_declared_filesystem_effects("bash", input.command.as_str(), &effects)?;
-    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
+    let cwd =
+        resolve_workdir_in_folder(executor, input.workdir.as_deref(), input.folder.as_deref())?;
     let prepared = match context.prepared_shell_command {
         Some(prepared) => Some(prepared),
         None => match (context.session_id, context.call_id) {

@@ -29,8 +29,12 @@ pub(super) async fn execute(
     let binder = executor.media_input_binder.clone().ok_or_else(|| {
         ToolError::invalid_input("fs.read_media requires an active conversation model route")
     })?;
-    let root = executor.workspace_root().to_path_buf();
-    let display_path = executor.display_path(&executor.resolve_target_path(&input.path));
+    // A global (Bot) session resolves relative paths against its named folder;
+    // a project session keeps its project root and ignores the folder.
+    let root = executor.resolve_folder_base(input.folder.as_deref());
+    let display_path = executor.display_path(
+        &executor.resolve_target_path_in_folder(&input.path, input.folder.as_deref()),
+    );
     let (prepared, item) = MEDIA_READ_WORKERS
         .run(move || {
             let prepared =

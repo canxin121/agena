@@ -41,9 +41,10 @@ impl ToolExecutor {
         };
         if prepared_shell.command == process_input.command
             && prepared_shell.cwd
-                == crate::tool::shell_tools::resolve_workdir(
+                == crate::tool::shell_tools::resolve_workdir_in_folder(
                     self,
                     process_input.workdir.as_deref(),
+                    process_input.folder.as_deref(),
                 )?
         {
             return Ok((invocation.clone(), Some(prepared_shell)));

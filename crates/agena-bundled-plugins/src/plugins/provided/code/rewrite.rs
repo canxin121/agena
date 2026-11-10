@@ -11,6 +11,10 @@ use sha2::{Digest, Sha256};
 pub(super) struct CodeRewriteInput {
     #[arg(trim, non_empty)]
     pub(super) path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) folder: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 16384)]
     pattern: Option<String>,

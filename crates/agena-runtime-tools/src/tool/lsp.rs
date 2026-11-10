@@ -27,7 +27,11 @@ pub(super) async fn execute_definition_async(
     executor: &ToolExecutor,
     input: &LspDefinitionToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let path = lsp_target(executor, &input.position.file_path)?;
+    let path = lsp_target(
+        executor,
+        &input.position.file_path,
+        input.position.folder.as_deref(),
+    )?;
     let registry = registry(executor)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
@@ -68,7 +72,11 @@ pub(super) async fn execute_references_async(
     executor: &ToolExecutor,
     input: &LspReferencesToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let path = lsp_target(executor, &input.position.file_path)?;
+    let path = lsp_target(
+        executor,
+        &input.position.file_path,
+        input.position.folder.as_deref(),
+    )?;
     let registry = registry(executor)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
@@ -112,7 +120,11 @@ pub(super) async fn execute_hover_async(
     executor: &ToolExecutor,
     input: &LspHoverToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let path = lsp_target(executor, &input.position.file_path)?;
+    let path = lsp_target(
+        executor,
+        &input.position.file_path,
+        input.position.folder.as_deref(),
+    )?;
     let registry = registry(executor)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
@@ -155,7 +167,7 @@ pub(super) async fn execute_diagnostics_async(
     executor: &ToolExecutor,
     input: &LspDiagnosticsToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
-    let path = lsp_target(executor, &input.file_path)?;
+    let path = lsp_target(executor, &input.file_path, input.folder.as_deref())?;
     let registry = registry(executor)?;
     let uri = path_to_uri(&path)?;
 
@@ -221,13 +233,16 @@ pub(super) async fn execute_diagnostics_async(
 pub(super) fn lsp_target(
     executor: &ToolExecutor,
     raw: &str,
+    folder: Option<&str>,
 ) -> Result<std::path::PathBuf, ToolError> {
-    if executor.is_global() && !Path::new(raw).is_absolute() {
+    let relative_in_folder =
+        executor.is_global() && folder.is_some_and(|folder| !folder.trim().is_empty());
+    if executor.is_global() && !Path::new(raw).is_absolute() && !relative_in_folder {
         return Err(ToolError::invalid_input(
             "global sessions require an explicit full absolute path",
         ));
     }
-    Ok(executor.resolve_target_path(raw))
+    Ok(executor.resolve_target_path_in_folder(raw, folder))
 }
 
 pub(super) async fn client_for_target(

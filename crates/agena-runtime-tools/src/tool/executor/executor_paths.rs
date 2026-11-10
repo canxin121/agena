@@ -60,6 +60,51 @@ impl ToolExecutor {
         self.resolve_target_path_with_context(raw_path, None)
     }
 
+    /// The base folder a tool's relative argument resolves against when the
+    /// caller may name one. A project session always keeps its project root;
+    /// only a global (Bot) session, which has none, may substitute an absolute
+    /// folder.
+    pub fn resolve_folder_base(&self, folder: Option<&str>) -> PathBuf {
+        if self.is_global()
+            && let Some(folder) = folder.map(str::trim).filter(|value| !value.is_empty())
+            && Path::new(folder).is_absolute()
+        {
+            return canonicalize_path_for_execution(Path::new(folder));
+        }
+        self.workspace_root().to_path_buf()
+    }
+
+    /// Resolve a tool's path argument when the caller may name a base folder.
+    ///
+    /// A project session owns exactly one project root, so its tools always
+    /// resolve there; the folder argument is deliberately ignored. A global
+    /// (Bot) session has no project of its own, so it may pass an absolute
+    /// `folder` plus a relative path and work inside that folder instead of
+    /// duplicating the prefix on every argument.
+    pub fn resolve_target_path_in_folder(&self, raw_path: &str, folder: Option<&str>) -> PathBuf {
+        let candidate = PathBuf::from(raw_path);
+        if !self.is_global() || candidate.is_absolute() {
+            return self.resolve_target_path_with_context(raw_path, None);
+        }
+        if folder.is_none_or(|value| value.trim().is_empty()) {
+            return self.resolve_target_path_with_context(raw_path, None);
+        }
+        canonicalize_path_for_execution(&self.resolve_folder_base(folder).join(candidate))
+    }
+
+    /// An effect declaration is resolved against the same folder-aware base
+    /// that the tool itself used, so a Bot's relative `reads`/`writes` never
+    /// fall back to a project root it does not have.
+    pub(crate) fn shell_effect_base_path_in_folder(
+        &self,
+        workdir: Option<&str>,
+        folder: Option<&str>,
+    ) -> PathBuf {
+        workdir
+            .map(|workdir| self.resolve_target_path_in_folder(workdir, folder))
+            .unwrap_or_else(|| self.resolve_folder_base(folder))
+    }
+
     pub(crate) fn resolve_target_path_with_context(
         &self,
         raw_path: &str,
@@ -73,13 +118,12 @@ impl ToolExecutor {
         if candidate.is_absolute() {
             return canonicalize_path_for_execution(&candidate);
         }
+        // A global session has no root of its own; joining a relative path
+        // there would only produce a filesystem-root path by accident.
+        if self.is_global() {
+            return canonicalize_path_for_execution(&candidate);
+        }
         canonicalize_path_for_execution(&workspace_root.join(candidate))
-    }
-
-    pub(crate) fn shell_effect_base_path(&self, workdir: Option<&str>) -> PathBuf {
-        workdir
-            .map(|workdir| self.resolve_target_path(workdir))
-            .unwrap_or_else(|| self.workspace_root().to_path_buf())
     }
 
     pub(crate) fn resolve_filesystem_effect_path(

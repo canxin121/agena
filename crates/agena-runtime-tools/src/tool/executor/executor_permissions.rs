@@ -139,12 +139,17 @@ impl ToolExecutor {
                 invocation.input.clone(),
             ))
             .map_err(|error| self.plugin_error_or_cancelled(error))?;
-            if self.is_global() && !std::path::Path::new(&input.path).is_absolute() {
+            let folder = input.folder.as_deref();
+            if self.is_global()
+                && !std::path::Path::new(&input.path).is_absolute()
+                && !has_folder(folder)
+            {
                 return Err(ToolError::invalid_input(
                     "global sessions require an explicit absolute path",
                 ));
             }
-            self.push_resolved_path_check(checks, AccessKind::Read, &input.path);
+            let target = self.resolve_target_path_in_folder(&input.path, folder);
+            self.push_path_checks(checks, AccessKind::Read, target.as_path());
             return Ok(());
         }
         let Some(payload) =
@@ -154,39 +159,59 @@ impl ToolExecutor {
         };
         let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
         if self.is_global() {
-            let require_path = |path: Option<&str>| -> Result<(), ToolError> {
-                if path.is_some_and(|value| {
-                    !value.trim().is_empty() && std::path::Path::new(value).is_absolute()
-                }) {
-                    Ok(())
-                } else {
-                    Err(ToolError::invalid_input(
-                        "global sessions require an explicit absolute path",
-                    ))
-                }
-            };
+            // A relative path is acceptable in a global session only when the
+            // call names an absolute base folder for it. Everything else keeps
+            // requiring the caller to be explicit, because a Bot has no
+            // project root that could give the path a meaning.
+            let require_path =
+                |path: Option<&str>, folder: Option<&str>| -> Result<(), ToolError> {
+                    if path.is_some_and(|value| {
+                        !value.trim().is_empty() && std::path::Path::new(value).is_absolute()
+                    }) || has_folder(folder)
+                    {
+                        Ok(())
+                    } else {
+                        Err(ToolError::invalid_input(
+                            "global sessions require an explicit absolute path",
+                        ))
+                    }
+                };
             match &payload {
-                ToolPayloadInput::Read(input) => require_path(Some(&input.file_path))?,
-                ToolPayloadInput::Glob(input) => require_path(input.path.as_deref())?,
-                ToolPayloadInput::Grep(input) => require_path(input.path.as_deref())?,
+                ToolPayloadInput::Read(input) => {
+                    require_path(Some(&input.file_path), input.folder.as_deref())?
+                }
+                ToolPayloadInput::Glob(input) => {
+                    require_path(input.path.as_deref(), input.folder.as_deref())?
+                }
+                ToolPayloadInput::Grep(input) => {
+                    require_path(input.path.as_deref(), input.folder.as_deref())?
+                }
                 ToolPayloadInput::ApplyPatch(input) => {
                     for path in crate::tool::apply_patch::planned_paths(&input.patch)? {
-                        require_path(Some(&path))?;
+                        require_path(Some(&path), input.folder.as_deref())?;
                     }
                 }
-                ToolPayloadInput::LspDefinition(input) => {
-                    require_path(Some(&input.position.file_path))?
+                ToolPayloadInput::LspDefinition(input) => require_path(
+                    Some(&input.position.file_path),
+                    input.position.folder.as_deref(),
+                )?,
+                ToolPayloadInput::LspReferences(input) => require_path(
+                    Some(&input.position.file_path),
+                    input.position.folder.as_deref(),
+                )?,
+                ToolPayloadInput::LspHover(input) => require_path(
+                    Some(&input.position.file_path),
+                    input.position.folder.as_deref(),
+                )?,
+                ToolPayloadInput::LspDiagnostics(input) => {
+                    require_path(Some(&input.file_path), input.folder.as_deref())?
                 }
-                ToolPayloadInput::LspReferences(input) => {
-                    require_path(Some(&input.position.file_path))?
-                }
-                ToolPayloadInput::LspHover(input) => require_path(Some(&input.position.file_path))?,
-                ToolPayloadInput::LspDiagnostics(input) => require_path(Some(&input.file_path))?,
                 ToolPayloadInput::Shell(input) => {
                     if let Some((_, command)) = input.launch_command() {
-                        crate::tool::shell_tools::resolve_workdir(
+                        crate::tool::shell_tools::resolve_workdir_in_folder(
                             self,
                             command.workdir.as_deref(),
+                            command.folder.as_deref(),
                         )?;
                     }
                 }
@@ -195,42 +220,70 @@ impl ToolExecutor {
         }
         match payload {
             ToolPayloadInput::Read(input) => {
-                self.push_resolved_path_check(checks, AccessKind::Read, input.file_path.as_str());
+                let folder = input.folder.as_deref();
+                self.push_folder_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.file_path.as_str(),
+                    folder,
+                );
             }
             ToolPayloadInput::Glob(input) => {
-                self.push_optional_read_path_check(checks, input.path.as_deref());
+                self.push_optional_read_path_check(
+                    checks,
+                    input.path.as_deref(),
+                    input.folder.as_deref(),
+                );
             }
             ToolPayloadInput::Grep(input) => {
-                self.push_optional_read_path_check(checks, input.path.as_deref());
+                self.push_optional_read_path_check(
+                    checks,
+                    input.path.as_deref(),
+                    input.folder.as_deref(),
+                );
             }
             ToolPayloadInput::ApplyPatch(input) => {
+                let folder = input.folder.as_deref();
                 for path in crate::tool::apply_patch::planned_paths(input.patch.as_str())? {
-                    self.push_resolved_path_check(checks, AccessKind::Write, path.as_str());
+                    self.push_folder_resolved_path_check(
+                        checks,
+                        AccessKind::Write,
+                        path.as_str(),
+                        folder,
+                    );
                 }
             }
             ToolPayloadInput::LspDefinition(input) => {
-                self.push_resolved_path_check(
+                self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
                     input.position.file_path.as_str(),
+                    input.position.folder.as_deref(),
                 );
             }
             ToolPayloadInput::LspReferences(input) => {
-                self.push_resolved_path_check(
+                self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
                     input.position.file_path.as_str(),
+                    input.position.folder.as_deref(),
                 );
             }
             ToolPayloadInput::LspHover(input) => {
-                self.push_resolved_path_check(
+                self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
                     input.position.file_path.as_str(),
+                    input.position.folder.as_deref(),
                 );
             }
             ToolPayloadInput::LspDiagnostics(input) => {
-                self.push_resolved_path_check(checks, AccessKind::Read, input.file_path.as_str());
+                self.push_folder_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.file_path.as_str(),
+                    input.folder.as_deref(),
+                );
             }
             ToolPayloadInput::Shell(input) => {
                 self.collect_shell_effect_checks(checks, &input)?;
@@ -247,10 +300,32 @@ impl ToolExecutor {
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
         path: Option<&str>,
+        folder: Option<&str>,
     ) {
-        if let Some(path) = path {
-            self.push_resolved_path_check(checks, AccessKind::Read, path);
+        match path {
+            Some(path) => {
+                self.push_folder_resolved_path_check(checks, AccessKind::Read, path, folder)
+            }
+            None => {
+                // No target: the folder itself is what the caller asked to
+                // inspect, so a global session must still authorize it.
+                if has_folder(folder) {
+                    let base = self.resolve_folder_base(folder);
+                    self.push_path_checks(checks, AccessKind::Read, base.as_path());
+                }
+            }
         }
+    }
+
+    fn push_folder_resolved_path_check(
+        &self,
+        checks: &mut Vec<ToolPermissionCheck>,
+        access: AccessKind,
+        raw_path: &str,
+        folder: Option<&str>,
+    ) {
+        let target = self.resolve_target_path_in_folder(raw_path, folder);
+        self.push_path_checks(checks, access, target.as_path());
     }
 
     fn collect_shell_effect_checks(
@@ -280,6 +355,11 @@ impl ToolExecutor {
                     _ => return Ok(()),
                 }
             };
+        // A launch command may also carry an explicit base folder, which is the
+        // only way a Bot session names where its relative effects apply.
+        let folder = input
+            .launch_command()
+            .and_then(|(_, command)| command.folder.as_deref());
         if !command.is_empty() {
             crate::tool::shell_tools::validate_declared_filesystem_effects(
                 "shell", command, &effects,
@@ -287,21 +367,35 @@ impl ToolExecutor {
             self.push_declared_network_checks(checks, command, network)?;
         }
         let base = if self.is_global() && input.launch_command().is_some() {
-            let base = crate::tool::shell_tools::resolve_workdir(self, workdir)?;
+            let base = crate::tool::shell_tools::resolve_workdir_in_folder(self, workdir, folder)?;
             self.push_path_checks(checks, AccessKind::Read, &base);
             base
         } else {
-            self.shell_effect_base_path(workdir)
+            self.shell_effect_base_path_in_folder(workdir, folder)
         };
-        if self.is_global()
-            && input.launch_command().is_none()
+        if input.launch_command().is_none() {
+            if self.is_global()
+                && effects
+                    .to_effects()
+                    .iter()
+                    .any(|effect| !std::path::Path::new(&effect.path).is_absolute())
+            {
+                return Err(ToolError::invalid_input(
+                    "global shell input effects require absolute paths",
+                ));
+            }
+        } else if self.is_global()
             && effects
                 .to_effects()
                 .iter()
                 .any(|effect| !std::path::Path::new(&effect.path).is_absolute())
+            && !has_folder(folder)
+            && !workdir.is_some_and(|value| std::path::Path::new(value).is_absolute())
         {
+            // A Bot launch with relative effects needs a base: the resolved
+            // workdir already covered the absolute cases above.
             return Err(ToolError::invalid_input(
-                "global shell input effects require absolute paths",
+                "global shell effects require an absolute workdir or folder",
             ));
         }
         self.push_filesystem_effect_checks(checks, &effects, base.as_path());
@@ -336,6 +430,15 @@ use super::{
     shell_command_from_invocation, unique_registered_tool_match,
 };
 use agena_domain::PluginInvocation;
+
+/// Whether a call named a usable base folder. A relative folder carries no
+/// meaning for a session that has no root, so it never counts.
+fn has_folder(folder: Option<&str>) -> bool {
+    folder.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && std::path::Path::new(value).is_absolute()
+    })
+}
 
 #[cfg(test)]
 mod snapshot_contract_tests {
@@ -739,10 +842,47 @@ mod session_role_tests {
                 .decision,
             PermissionDecision::Allow
         ));
-        assert!(crate::tool::shell_tools::resolve_workdir(&global, None).is_err());
-        assert!(crate::tool::shell_tools::resolve_workdir(&global, Some("relative")).is_err());
-        assert!(crate::tool::shell_tools::resolve_workdir(&global, Some("/tmp")).is_ok());
-        assert!(crate::tool::shell_tools::resolve_workdir(&base, None).is_ok());
+        assert!(crate::tool::shell_tools::resolve_workdir_in_folder(&global, None, None).is_err());
+        assert!(
+            crate::tool::shell_tools::resolve_workdir_in_folder(&global, Some("relative"), None)
+                .is_err()
+        );
+        assert!(
+            crate::tool::shell_tools::resolve_workdir_in_folder(&global, Some("/tmp"), None)
+                .is_ok()
+        );
+        assert!(crate::tool::shell_tools::resolve_workdir_in_folder(&base, None, None).is_ok());
+        // A global session may name a base folder; a project session cannot use
+        // one to escape the project root it owns.
+        assert!(
+            crate::tool::shell_tools::resolve_workdir_in_folder(&global, None, Some("/tmp"))
+                .is_ok()
+        );
+        assert_eq!(
+            crate::tool::shell_tools::resolve_workdir_in_folder(&global, None, Some("/tmp"))
+                .unwrap(),
+            std::path::PathBuf::from("/tmp")
+        );
+        assert!(
+            crate::tool::shell_tools::resolve_workdir_in_folder(&global, None, Some("tmp"))
+                .is_err()
+        );
+        assert_eq!(
+            global.resolve_target_path_in_folder("file.txt", Some("/tmp/base")),
+            std::path::Path::new("/tmp/base/file.txt")
+        );
+        assert_eq!(
+            base.resolve_target_path_in_folder("file.txt", Some("/tmp/base")),
+            base.workspace_root().join("file.txt")
+        );
+        assert_eq!(
+            global.resolve_target_path_in_folder("/abs/file.txt", Some("/tmp/base")),
+            std::path::Path::new("/abs/file.txt")
+        );
+        assert_eq!(
+            base.resolve_folder_base(Some("/tmp/base")),
+            base.workspace_root()
+        );
         assert!(
             global
                 .project_instruction_section(&[base.workspace_root().to_path_buf()])
@@ -778,7 +918,10 @@ mod session_role_tests {
             })
             .await;
         for raw in ["", "~", "~/file.rs", "./file.rs", "file.rs"] {
-            assert!(crate::tool::lsp::lsp_target(&global, raw).is_err(), "{raw}");
+            assert!(
+                crate::tool::lsp::lsp_target(&global, raw, None).is_err(),
+                "{raw}"
+            );
         }
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("missing.rs");
@@ -805,7 +948,7 @@ mod session_role_tests {
         );
         let file = dir.path().join("valid.rs");
         std::fs::write(&file, "").unwrap();
-        let resolved = crate::tool::lsp::lsp_target(&global, file.to_str().unwrap()).unwrap();
+        let resolved = crate::tool::lsp::lsp_target(&global, file.to_str().unwrap(), None).unwrap();
         let error = crate::tool::lsp::client_for_target(&global, &registry, &resolved)
             .await
             .err()

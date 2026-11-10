@@ -37,6 +37,10 @@ pub(crate) struct FsPlugin {
 #[serde(deny_unknown_fields)]
 struct WriteFileInput {
     path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     content: String,
     #[serde(default)]
     create_parents: bool,
@@ -59,6 +63,10 @@ struct WriteFileInput {
 #[serde(deny_unknown_fields)]
 struct ReplaceFileInput {
     path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     old: String,
     new: String,
     #[serde(default = "default_expected_occurrences")]
@@ -85,6 +93,10 @@ const fn default_expected_occurrences() -> u32 {
 #[serde(deny_unknown_fields)]
 struct ReadManyInput {
     paths: Vec<String>,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     #[serde(default = "default_read_many_budget")]
     max_total_bytes: u32,
 }
@@ -98,6 +110,10 @@ const fn default_read_many_budget() -> u32 {
 #[serde(deny_unknown_fields)]
 struct StatInput {
     path: String,
+    /// Base folder for a relative path. Only global (Bot) sessions use it;
+    /// a project session keeps resolving against its project root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<String>,
     #[serde(default = "default_true")]
     hash: bool,
 }
@@ -222,11 +238,12 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        require_global_absolute_path(context, &input.path)?;
+        require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
-        document::invoke(Path::new(context.workspace_root), input).await
+        let root = effective_root(context, input.folder.as_deref());
+        document::invoke(&root, input).await
     }
 
     /// Streaming variant: extraction shells out to a local converter, so a
@@ -237,12 +254,13 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        require_global_absolute_path(context, &input.path)?;
+        require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
         sink.text("Extracting document text…\n").await;
-        document::invoke(Path::new(context.workspace_root), input).await
+        let root = effective_root(context, input.folder.as_deref());
+        document::invoke(&root, input).await
     }
 
     #[tool(
@@ -504,14 +522,16 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &WriteFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        require_global_absolute_path(context, &input.path)?;
+        require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
         self.permissions
             .path(agena_domain::PathKind::Write, &input.path)
             .await?;
-        let workspace_root = context.workspace_root.to_string();
+        let workspace_root = effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let input = input.clone();
         run_fs_blocking(move || {
             let target = resolve_path(workspace_root.as_str(), input.path.as_str());
@@ -704,14 +724,16 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &ReplaceFileInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        require_global_absolute_path(context, &input.path)?;
+        require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
         self.permissions
             .path(agena_domain::PathKind::Write, &input.path)
             .await?;
-        let workspace_root = context.workspace_root.to_string();
+        let workspace_root = effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let input = input.clone();
         run_fs_blocking(move || {
             let target = resolve_path(workspace_root.as_str(), input.path.as_str());
@@ -850,14 +872,16 @@ impl FsPlugin {
         input: &ReadManyInput,
     ) -> SdkResult<ToolInvokeOutput> {
         for path in &input.paths {
-            require_global_absolute_path(context, path)?;
+            require_global_absolute_path_or_folder(context, path, input.folder.as_deref())?;
         }
         for path in &input.paths {
             self.permissions
                 .path(agena_domain::PathKind::Read, path)
                 .await?;
         }
-        let workspace_root = context.workspace_root.to_string();
+        let workspace_root = effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let input = input.clone();
         run_fs_blocking(move || {
             let mut remaining = input.max_total_bytes as usize;
@@ -972,11 +996,13 @@ impl FsPlugin {
         context: &ToolInvokeContext<'_>,
         input: &StatInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        require_global_absolute_path(context, &input.path)?;
+        require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
         self.permissions
             .path(agena_domain::PathKind::Read, &input.path)
             .await?;
-        let workspace_root = context.workspace_root.to_string();
+        let workspace_root = effective_root(context, input.folder.as_deref())
+            .to_string_lossy()
+            .into_owned();
         let input = input.clone();
         run_fs_blocking(move || {
             let requested = Path::new(&input.path);
@@ -1124,16 +1150,48 @@ fn json_input<T: Serialize>(input: T) -> SdkResult<serde_json::Value> {
     serde_json::to_value(input).map_err(|err| PluginError::invalid_params_error(&err))
 }
 
+#[cfg(test)]
 pub(super) fn require_global_absolute_path(
     context: &ToolInvokeContext<'_>,
     path: &str,
 ) -> SdkResult<()> {
-    if context.is_global() && !Path::new(path).is_absolute() {
+    require_global_absolute_path_or_folder(context, path, None)
+}
+
+/// A global (Bot) session has no project root, so a relative path needs an
+/// absolute base folder in the same call. A project session keeps resolving
+/// against its project root and ignores the folder entirely.
+pub(super) fn require_global_absolute_path_or_folder(
+    context: &ToolInvokeContext<'_>,
+    path: &str,
+    folder: Option<&str>,
+) -> SdkResult<()> {
+    if context.is_global() && !Path::new(path).is_absolute() && !usable_folder(folder) {
         return Err(PluginError::invalid_params(
-            "global sessions require an explicit absolute path",
+            "global sessions require an explicit absolute path or folder",
         ));
     }
     Ok(())
+}
+
+fn usable_folder(folder: Option<&str>) -> bool {
+    folder.is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && Path::new(value).is_absolute()
+    })
+}
+
+/// The root a call's relative path resolves against: its own absolute folder
+/// in a global session, otherwise the session workspace root.
+pub(super) fn effective_root(context: &ToolInvokeContext<'_>, folder: Option<&str>) -> PathBuf {
+    match folder.map(str::trim) {
+        Some(value)
+            if context.is_global() && !value.is_empty() && Path::new(value).is_absolute() =>
+        {
+            PathBuf::from(value)
+        }
+        _ => PathBuf::from(context.workspace_root),
+    }
 }
 
 fn resolve_path(workspace_root: &str, path: &str) -> PathBuf {
@@ -1305,13 +1363,29 @@ mod global_path_tests {
         };
         for path in ["relative", "./file", "~", "~/file"] {
             assert!(require_global_absolute_path(&global, path).is_err());
+            assert!(
+                require_global_absolute_path_or_folder(&global, path, Some("/tmp/base")).is_ok()
+            );
+            assert!(require_global_absolute_path_or_folder(&global, path, Some("base")).is_err());
+            assert!(require_global_absolute_path_or_folder(&global, path, Some("  ")).is_err());
         }
         assert!(require_global_absolute_path(&global, "").is_err());
         assert!(require_global_absolute_path(&global, "/tmp/file").is_ok());
         let project = ToolInvokeContext {
             workspace_root: "/tmp/project",
-            ..global
+            cancellation: global.cancellation.clone(),
+            ..global.clone()
         };
         assert!(require_global_absolute_path(&project, "relative").is_ok());
+        // A project session always resolves against its own root, so a folder
+        // is not a way to redirect it.
+        assert_eq!(
+            effective_root(&project, Some("/tmp/other")),
+            PathBuf::from("/tmp/project")
+        );
+        assert_eq!(
+            effective_root(&global, Some("/tmp/other")),
+            PathBuf::from("/tmp/other")
+        );
     }
 }

@@ -2,7 +2,7 @@ use crate::part::ShellCommandInput;
 use agena_domain::{ProcessShell, ProcessStatus};
 
 use super::shell_tools::{
-    inherited_environment, resolve_workdir, validate_declared_filesystem_effects,
+    inherited_environment, resolve_workdir_in_folder, validate_declared_filesystem_effects,
 };
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
@@ -32,7 +32,8 @@ pub(super) async fn execute_async(
     }
     let effects = input.filesystem_effects();
     validate_declared_filesystem_effects("powershell", input.command.as_str(), &effects)?;
-    let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
+    let cwd =
+        resolve_workdir_in_folder(executor, input.workdir.as_deref(), input.folder.as_deref())?;
     let mut env = inherited_environment();
     env.extend(
         executor

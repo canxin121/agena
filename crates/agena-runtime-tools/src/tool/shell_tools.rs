@@ -107,21 +107,27 @@ pub(crate) fn inherited_environment() -> HashMap<String, String> {
     std::env::vars().collect::<HashMap<_, _>>()
 }
 
-pub(crate) fn resolve_workdir(
+/// Shell working directory with the caller's base folder as the last resort.
+///
+/// A project session keeps requiring nothing special: its project root is the
+/// default. A global (Bot) session has no root to run in, so it must name
+/// either an absolute `workdir` or an absolute `folder`; omitted both stays an
+/// explicit error instead of silently running somewhere meaningless.
+pub(crate) fn resolve_workdir_in_folder(
     executor: &ToolExecutor,
     workdir: Option<&str>,
+    folder: Option<&str>,
 ) -> Result<PathBuf, ToolError> {
-    if executor.is_global()
-        && !workdir
-            .is_some_and(|path| !path.trim().is_empty() && std::path::Path::new(path).is_absolute())
-    {
+    let usable = |path: &str| !path.trim().is_empty() && std::path::Path::new(path).is_absolute();
+    if executor.is_global() && !workdir.is_some_and(usable) && !folder.is_some_and(usable) {
         return Err(ToolError::invalid_input(
-            "global shell execution requires an explicit absolute workdir",
+            "global shell execution requires an explicit absolute workdir or folder",
         ));
     }
-    let cwd = workdir
-        .map(|value| executor.resolve_target_path(value))
-        .unwrap_or_else(|| executor.workspace_root().to_path_buf());
+    let cwd = match workdir {
+        Some(value) => executor.resolve_target_path_in_folder(value, folder),
+        None => executor.resolve_folder_base(folder),
+    };
     Ok(cwd)
 }
 

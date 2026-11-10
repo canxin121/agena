@@ -653,8 +653,8 @@ window.__botProbe = {activeComposerSession: () => {
     await cdp.send('Page.navigate', { url: base + '/chat?sessionId=7' })
     await wait(() => visible('[data-testid="sidebar-bots"]'), 'project Bot section', 90000)
     const row = (id) => `[data-sidebar-bot-id="${id}"]`
-    await wait(() => visible(`${row(botA)} [data-testid="sidebar-bot-open"]`), 'Atlas sidebar row')
-    await wait(() => visible(`${row(botB)} [data-testid="sidebar-bot-open"]`), 'Muse sidebar row')
+    await wait(() => visible(`${row(botA)} [data-oc-list-item-primary]`), 'Atlas sidebar row')
+    await wait(() => visible(`${row(botB)} [data-oc-list-item-primary]`), 'Muse sidebar row')
     const registryOnly = requests.length
     const route = await cdp.evaluate('location.pathname+location.search')
     check(await cdp.evaluate(`(() => {const s=[...document.querySelectorAll('[data-testid="sidebar-bots"]')].find(n=>n.getClientRects().length);return s.innerText.includes('Atlas') && s.innerText.includes('Muse') && s.innerText.includes('2')})()`), 'project sidebar displays named rows and registry count')
@@ -677,7 +677,7 @@ window.__botProbe = {activeComposerSession: () => {
     await wait(()=>cdp.evaluate(`document.activeElement?.matches(${JSON.stringify(`${row(botB)} [data-testid="sidebar-bot-actions"]`)})`), 'row menu Escape focus return')
     check(true, 'keyboard Escape closes row menu and restores focus')
     await cdp.click(`${row(botB)} [data-testid="sidebar-bot-actions"]`)
-    await cdp.click('[data-testid="sidebar-bot-edit"]')
+    await cdp.clickText('[data-option-menu-item]', 'Edit Bot')
     await wait(()=>visible('[data-testid="bot-edit-name"]'), 'sidebar edit ready')
     profiles[1].revision++
     profiles[1].persona.instructions='Remote update'
@@ -693,7 +693,7 @@ window.__botProbe = {activeComposerSession: () => {
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Sidebar persona')
     await cdp.click('[data-testid="bot-save"]')
     await wait(()=>profiles[1].name==='Muse Sidebar', 'unselected row edit saved')
-    await wait(()=>visible(`${row(botB)} [data-testid="sidebar-bot-open"]`), 'edited row')
+    await wait(()=>visible(`${row(botB)} [data-oc-list-item-primary]`), 'edited row')
     await wait(async()=>!(await visible('[data-testid="bot-persona-form"]')), 'saved editor closes')
     check(await cdp.evaluate(`location.pathname+location.search===${JSON.stringify(route)} && [...document.querySelectorAll('[role="dialog"]')].filter(n=>n.getClientRects().length).length===0`), 'row edit updates unselected profile without navigation or duplicate dialogs')
     check(profiles[0].name==='Atlas' && profiles[1].persona.instructions==='Sidebar persona', 'sidebar edit preserves other profile and saves persona')
@@ -721,12 +721,12 @@ window.__botProbe = {activeComposerSession: () => {
     const attempts=profileRequests.filter(r=>r.body.name==='Sidebar Orbit')
     check(attempts.length===2 && attempts[0].body.request_key===attempts[1].body.request_key && profiles.filter(p=>p.id===sidebarId).length===1, 'failed create retries with stable key and creates exactly one Bot')
     await cdp.click(`${row(sidebarId)} [data-testid="sidebar-bot-actions"]`)
-    await cdp.click('[data-testid="sidebar-bot-archive"]')
+    await cdp.clickText('[data-option-menu-item]', 'Archive Bot')
     await cdp.key('Escape','Escape',27)
     await wait(async()=>!(await visible('[data-testid="bot-archive-confirm"]')), 'cancel archive')
     check(!profiles.find(p=>p.id===sidebarId).archived, 'archive cancel retains row')
     await cdp.click(`${row(sidebarId)} [data-testid="sidebar-bot-actions"]`)
-    await cdp.click('[data-testid="sidebar-bot-archive"]')
+    await cdp.clickText('[data-option-menu-item]', 'Archive Bot')
     archiveConflict=true
     await cdp.click('[data-testid="bot-archive-confirm"]')
     await wait(()=>visible('[role="dialog"] [role="alert"]'), 'sidebar busy conflict')
@@ -1355,7 +1355,7 @@ window.__botProbe = {activeComposerSession: () => {
     await wait(()=>visible(`${row(botB)} [data-testid="sidebar-bot-actions"]`), 'mobile sidebar row menu')
     const mobileRoute=await cdp.evaluate('location.pathname+location.search')
     await cdp.click(`${row(botB)} [data-testid="sidebar-bot-actions"]`)
-    await cdp.click('[data-testid="sidebar-bot-edit"]')
+    await cdp.clickText('[data-option-menu-item]', 'Edit Bot')
     await wait(()=>visible('[data-testid="bot-edit-name"]'), 'mobile touch opens row editor')
     check(await cdp.evaluate(`document.documentElement.scrollWidth<=innerWidth+1 && [...document.querySelectorAll('[role="dialog"]')].filter(n=>n.getClientRects().length).every(n=>n.getBoundingClientRect().right<=innerWidth+1)`), '375px touch row menu opens a fitting shared editor')
     check(await cdp.evaluate('location.pathname+location.search')===mobileRoute, 'mobile row action does not open the unselected Bot')

@@ -1,5 +1,14 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
-import { RiClipboardLine, RiEditLine, RiFileUploadLine, RiGitBranchLine, RiStarFill, RiStarLine } from '@remixicon/vue'
+import {
+  RiArchiveLine,
+  RiClipboardLine,
+  RiEditLine,
+  RiFileUploadLine,
+  RiGitBranchLine,
+  RiSettings3Line,
+  RiStarFill,
+  RiStarLine,
+} from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
@@ -25,8 +34,12 @@ export function buildSessionActionItemsForSession(session: SessionLike | null | 
 export function buildSessionActionItemsForSessionI18n(
   t: TFunction,
   session: SessionLike | null | undefined,
+  // A Bot row shows the same conversation actions as a project session row,
+  // with the Bot-specific profile and archive entries in place of "Fork" (a
+  // fork has no project association to inherit).
+  options?: { fork?: boolean; bot?: boolean },
 ): SessionActionItem[] {
-  return [
+  const items: SessionActionItem[] = [
     {
       id: 'toggle-favorite',
       label: String(
@@ -52,6 +65,12 @@ export function buildSessionActionItemsForSessionI18n(
       icon: RiEditLine,
     },
     {
+      id: 'session-settings',
+      label: String(t('chat.sidebar.sessionActions.settings.label')),
+      description: String(t('chat.sidebar.sessionActions.settings.description')),
+      icon: RiSettings3Line,
+    },
+    {
       id: 'copy-transcript',
       label: String(t('chat.sidebar.sessionActions.copyTranscript.label')),
       description: String(t('chat.sidebar.sessionActions.copyTranscript.description')),
@@ -63,19 +82,38 @@ export function buildSessionActionItemsForSessionI18n(
       description: String(t('chat.sidebar.sessionActions.exportTranscript.description')),
       icon: RiFileUploadLine,
     },
-    {
+  ]
+  if (options?.bot) {
+    items.push({
+      id: 'edit-bot',
+      label: String(t('bot.profiles.edit')),
+      description: String(t('bot.profiles.scope')),
+      icon: RiEditLine,
+    })
+    items.push({
+      id: 'archive-bot',
+      label: String(t('bot.profiles.archive')),
+      description: String(t('bot.profiles.archiveHint')),
+      icon: RiArchiveLine,
+    })
+  } else if (options?.fork !== false) {
+    items.push({
       id: 'fork',
       label: String(t('chat.sidebar.sessionActions.fork.label')),
       description: String(t('chat.sidebar.sessionActions.fork.description')),
       icon: RiGitBranchLine,
-    },
-  ]
+    })
+  }
+  return items
 }
 
 export function useSessionActionMenu(opts: {
   chat: { selectedSessionId: string | null }
   ui: { requestSessionAction: (id: string, sessionId?: string) => void }
   selectSession: (sessionId: string) => Promise<void>
+  // Project rows select the conversation before acting; a Bot row already owns
+  // its own pane, so it rides the same menu without changing selection.
+  runAction?: (item: SessionActionItem, target: SessionMenuTarget) => void | Promise<boolean>
 }) {
   const { t } = useI18n()
 
@@ -108,7 +146,11 @@ export function useSessionActionMenu(opts: {
     })
   })
 
-  function openSessionActionMenu(directory: DirectoryEntry, session: SessionLike, event?: MouseEvent | PointerEvent) {
+  function openSessionActionMenu(
+    directory: DirectoryEntry | null,
+    session: SessionLike,
+    event?: MouseEvent | PointerEvent,
+  ) {
     const sid = String(session?.id || '').trim()
     if (!sid) return
     if (sessionActionMenuTarget.value?.session?.id === sid) {
@@ -165,6 +207,9 @@ export function useSessionActionMenu(opts: {
     sessionActionMenuTarget.value = null
     sessionActionMenuAnchorRef.value = null
     sessionActionMenuQuery.value = ''
+    // A caller that owns the action (a Bot row acting on its own conversation)
+    // handles it and reports whether the shared dispatch should stop here.
+    if (target && opts.runAction && (await opts.runAction(item, target))) return
     const targetSessionId = typeof target?.session?.id === 'string' ? target.session.id.trim() : ''
     if (targetSessionId && targetSessionId !== opts.chat.selectedSessionId) {
       await opts.selectSession(targetSessionId)

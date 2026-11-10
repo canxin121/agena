@@ -2,8 +2,7 @@ import { i18n } from '@/i18n'
 import { computed, type ComputedRef, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { formatTranscript } from '@/lib/transcript'
-import { listSessionMessages } from '@/stores/chat/api'
+import { downloadMarkdown, sessionTranscriptText } from '@/lib/sessionTranscript'
 import type { JsonValue } from '@/types/json'
 import type { MessageLike } from '@/components/chat/messageList.types'
 import { isRunInFlight } from '@/lib/chatRunState'
@@ -91,22 +90,7 @@ export function useChatSessionActions(opts: {
   const includeThinking = computed(() => Boolean(showThinking.value))
 
   async function buildTranscriptText(session: SessionLike, title: string): Promise<string> {
-    const options = {
-      thinking: includeThinking.value,
-      toolDetails: false,
-      assistantMetadata: true,
-    }
-    const messages = await listSessionMessages(session.id)
-    if (!messages.length) return ''
-    return formatTranscript(
-      {
-        id: session.id,
-        title: title || session.id,
-        time: session.time,
-      },
-      messages,
-      options,
-    )
+    return sessionTranscriptText(session, title, { thinking: includeThinking.value })
   }
 
   async function copyTranscript() {
@@ -132,15 +116,7 @@ export function useChatSessionActions(opts: {
   }
 
   function downloadTranscript(filename: string, content: string) {
-    const blob = new Blob([content], { type: 'text/markdown' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = filename
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    URL.revokeObjectURL(url)
+    downloadMarkdown(filename, content)
   }
 
   async function exportTranscript() {

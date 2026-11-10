@@ -6,17 +6,30 @@ import { useRoute } from 'vue-router'
 import BotSidebarHeader from '@/features/bots/BotSidebarHeader.vue'
 import BotSidebarRow from '@/features/bots/BotSidebarRow.vue'
 import { searchBots } from '@/features/bots/profiles'
+import { useBotConversationActions } from '@/features/bots/useBotConversationActions'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
+import { copyTextToClipboard } from '@/lib/clipboard'
 import type { BotProfile } from '@/lib/bots'
 import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
+import {
+  buildSessionActionItemsForSessionI18n,
+  useSessionActionMenu,
+  type SessionActionItem,
+} from '@/layout/chatSidebar/useSessionActionMenu'
 import { useBotsStore } from '@/stores/bots'
+import { useChatStore } from '@/stores/chat'
+import { useSettingsStore } from '@/stores/settings'
+import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 
 const PAGE_SIZE = 12
 
 const bots = useBotsStore()
+const chat = useChatStore()
+const settings = useSettingsStore()
+const toasts = useToastsStore()
 const ui = useUiStore()
 const navigation = useWorkspaceNavigation()
 const route = useRoute()
@@ -24,20 +37,6 @@ const { t } = useI18n()
 
 const query = ref('')
 const page = ref(0)
-const menuOpenId = ref('')
-
-function closeMenus(event: PointerEvent) {
-  if (!menuOpenId.value) return
-  const menuPanels = document.querySelectorAll('[data-keyboard-overlay="true"]')
-  if (event.target instanceof Element) {
-    if (event.target.closest('[data-testid="sidebar-bot-actions"]')) return
-    for (const panel of menuPanels) if (panel.contains(event.target)) return
-  }
-  menuOpenId.value = ''
-}
-
-onMounted(() => document.addEventListener('pointerdown', closeMenus))
-onBeforeUnmount(() => document.removeEventListener('pointerdown', closeMenus))
 
 const matched = computed<BotProfile[]>(() => searchBots(bots.profiles, query.value))
 const total = computed(() => matched.value.length)
@@ -49,9 +48,12 @@ watch(total, () => {
   if (page.value > maxPage) page.value = maxPage
 })
 
+// Searching replaces the rows the menu is anchored to, so close it the same way
+// the project sidebar does instead of leaving a detached panel.
 watch(query, () => {
   page.value = 0
-  menuOpenId.value = ''
+  menu.sessionActionMenuTarget.value = null
+  menu.sessionActionMenuAnchorRef.value = null
 })
 
 function isSelected(profile: BotProfile): boolean {
@@ -60,7 +62,6 @@ function isSelected(profile: BotProfile): boolean {
 
 function open(id?: string, name?: string) {
   ui.setSessionSwitcherOpen(false)
-  menuOpenId.value = ''
   if (!id) {
     void navigation.openMainTab('bot')
     return
@@ -68,13 +69,100 @@ function open(id?: string, name?: string) {
   void navigation.openWorkspaceLocation('bot', { query: { botId: id }, title: name, matchKeys: ['botId'] })
 }
 
-function runAction(action: 'edit' | 'rename' | 'refresh' | 'archive', profile: BotProfile) {
-  menuOpenId.value = ''
-  if (action === 'refresh') {
-    void bots.refresh(true)
-    return
+// A Bot row's conversation is the pane the row opens, so every row menu item
+// acts on it. The project sidebar routes the same items through the focused
+// chat page; here the row owns the exact identity, so it runs them directly.
+const conversationActions = useBotConversationActions({
+  chat: {
+    getSessionById: (id) => {
+      const session = chat.getSessionById(id)
+      return session
+        ? { id: session.id, title: session.title, time: session.created_at ? { created: Date.parse(session.created_at) } : undefined }
+        : null
+    },
+    renameSession: (id, title) => chat.renameSession(id, title),
+  },
+  toasts,
+  showThinking: () => settings.data?.showReasoningTraces !== false,
+  copyToClipboard: async (text) => {
+    await copyTextToClipboard(text)
+  },
+})
+
+// The shared menu owns its open/close lifecycle; a Bot row supplies the action
+// handler and keeps every conversation-level item acting on that row's session.
+const menu = useSessionActionMenu({
+  chat: { selectedSessionId: null },
+  ui: { requestSessionAction: () => {} },
+  selectSession: async () => {},
+  runAction: (item, target) => runMenuAction(item, target),
+})
+
+const activeProfile = computed(
+  () => bots.profiles.find((profile) => profile.id === (menu.sessionActionMenuTarget.value?.session?.id || '')) || null,
+)
+
+const menuItems = computed<SessionActionItem[]>(() => {
+  const profile = activeProfile.value
+  if (!profile) return []
+  const session = chat.getSessionById(String(profile.session_id))
+  return buildSessionActionItemsForSessionI18n(
+    t,
+    { id: profile.id, favorite: session?.favorite === true },
+    { bot: true },
+  )
+})
+
+function openMenu(profile: BotProfile, event: MouseEvent | PointerEvent) {
+  menu.openSessionActionMenu(null, { id: profile.id }, event)
+}
+
+async function runMenuAction(item: SessionActionItem, target: { session: { id: string } }): Promise<boolean> {
+  const profile = bots.profiles.find((candidate) => candidate.id === target.session.id)
+  if (!profile) return true
+  if (item.id === 'edit-bot') {
+    bots.open('edit', profile.id)
+    return true
   }
-  bots.open(action, profile.id)
+  if (item.id === 'archive-bot') {
+    bots.open('archive', profile.id)
+    return true
+  }
+  if (item.id === 'rename') {
+    bots.open('rename', profile.id)
+    return true
+  }
+  if (item.id === 'copy-transcript') {
+    await conversationActions.copyTranscript(String(profile.session_id))
+    return true
+  }
+  if (item.id === 'export-transcript') {
+    await conversationActions.exportTranscript(String(profile.session_id))
+    return true
+  }
+  if (item.id === 'toggle-favorite') {
+    await toggleFavorite(profile.session_id)
+    return true
+  }
+  if (item.id === 'session-settings') {
+    // Session settings live in the ordinary settings pages under the session
+    // scope, so the conversation is passed as the selected layer target.
+    void navigation.openMainTab('settings', {
+      path: `/settings/permissions?view=filesystem&scope=session&sessionId=${profile.session_id}`,
+    })
+    return true
+  }
+  return true
+}
+
+async function toggleFavorite(sessionId: number) {
+  const sid = String(sessionId)
+  const current = chat.getSessionById(sid)?.favorite === true
+  try {
+    await chat.updateSessionMetadata(sid, { favorite: !current })
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  }
 }
 </script>
 
@@ -114,10 +202,16 @@ function runAction(action: 'edit' | 'rename' | 'refresh' | 'archive', profile: B
               :selected="isSelected(profile)"
               :ui-is-compact-layout="ui.isCompactLayout"
               :busy="bots.loading"
-              :menu-open="menuOpenId === profile.id"
+              :menu-open="menu.sessionActionMenuTarget.value?.session?.id === profile.id"
+              :menu-query="menu.sessionActionMenuQuery.value"
+              :menu-items="menuItems"
+              :menu-anchor-el="menu.sessionActionMenuAnchorRef.value"
+              :set-menu-ref="menu.setSessionActionMenuRef"
+              :menu-placement="ui.isCompactLayout ? 'top-end' : 'bottom-end'"
               @open="open(profile.id, profile.name)"
-              @update:menu-open="(v) => (menuOpenId = v ? profile.id : menuOpenId === profile.id ? '' : menuOpenId)"
-              @action="(action) => runAction(action, profile)"
+              @open-action-menu="(event) => openMenu(profile, event)"
+              @update:menu-query="(v) => (menu.sessionActionMenuQuery.value = v)"
+              @select="(item) => menu.runSessionActionMenu(item)"
             />
           </li>
         </ul>

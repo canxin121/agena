@@ -13,7 +13,8 @@ export type SidebarSession = {
 }
 
 export type SessionMenuTarget = {
-  directory: DirectoryEntry
+  // Project rows carry their directory; a Bot row has no project and passes null.
+  directory: DirectoryEntry | null
   session: { id: string; favorite?: boolean }
 }
 

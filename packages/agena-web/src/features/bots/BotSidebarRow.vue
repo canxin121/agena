@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed, ref, type ComponentPublicInstance } from 'vue'
-import { RiArchiveLine, RiEditLine, RiRefreshLine, RiRobot2Line } from '@remixicon/vue'
+// A Bot row renders through the same sidebar primitives as a project session
+// row: the shared action-item builder, the shared anchored menu component and
+// the shared menu state machine in `useSessionActionMenu`. Only the handler for
+// the conversation-level actions differs, because a Bot's conversation is
+// already the pane the row opens.
+import { computed, type ComponentPublicInstance } from 'vue'
+import { RiRobot2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
-import IconButton from '@/components/ui/IconButton.vue'
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
-import OptionMenu from '@/components/ui/OptionMenu.vue'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
-import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { formatTime } from '@/features/sessions/model/labels'
 import type { BotProfile } from '@/lib/bots'
+import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
 import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
+import type { MenuRefEl } from '@/layout/chatSidebar/sessionMenu.types'
 
 const props = withDefaults(
   defineProps<{
@@ -19,24 +23,31 @@ const props = withDefaults(
     uiIsCompactLayout: boolean
     busy?: boolean
     menuOpen?: boolean
+    menuQuery?: string
+    menuItems?: SessionActionItem[]
+    menuAnchorEl?: HTMLElement | null
+    setMenuRef?: (el: MenuRefEl) => void
+    menuPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
   }>(),
   {
     selected: false,
     busy: false,
     menuOpen: false,
+    menuQuery: '',
+    menuItems: () => [],
+    menuAnchorEl: null,
+    menuPlacement: 'bottom-end',
   },
 )
 
 const emit = defineEmits<{
   (e: 'open'): void
-  (e: 'update:menuOpen', v: boolean): void
-  (e: 'action', action: 'edit' | 'rename' | 'refresh' | 'archive'): void
+  (e: 'open-action-menu', event: MouseEvent | PointerEvent): void
+  (e: 'update:menuQuery', v: string): void
+  (e: 'select', item: SessionActionItem): void
 }>()
 
 const { t } = useI18n()
-
-const menuAnchorEl = ref<HTMLElement | null>(null)
-const menuQuery = ref('')
 
 const initials = computed(() => Array.from(props.profile.name.trim()).slice(0, 2).join('').toLocaleUpperCase())
 const subtitle = computed(() => {
@@ -54,36 +65,12 @@ const updatedAt = computed(() => {
 const actionsAlwaysVisible = computed(() => props.uiIsCompactLayout)
 const menuLabel = computed(() => String(t('bot.profiles.actions', { name: props.profile.name })))
 
-const actionItems = computed<SessionActionItem[]>(() => [
-  { id: 'edit', label: String(t('bot.profiles.edit')), icon: RiEditLine },
-  { id: 'rename', label: String(t('bot.profiles.rename')), icon: RiEditLine },
-  { id: 'refresh', label: String(t('common.refresh')), icon: RiRefreshLine },
-  { id: 'archive', label: String(t('bot.profiles.archive')), icon: RiArchiveLine },
-])
-
-const visibleGroups = computed<OptionMenuGroup[]>(() => {
-  const q = menuQuery.value.trim().toLowerCase()
-  const items = q
-    ? actionItems.value.filter((item) => item.label.toLowerCase().includes(q) || item.id.includes(q))
-    : actionItems.value
-  return [{ id: 'bot-actions', items: items as OptionMenuItem[] }]
-})
-
 function setMenuRef(el: Element | ComponentPublicInstance | null) {
-  menuAnchorEl.value = el instanceof HTMLElement ? el : el?.$el instanceof HTMLElement ? el.$el : null
+  props.setMenuRef?.(el)
 }
 
-function openMenu(event: MouseEvent) {
-  menuAnchorEl.value = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-  menuQuery.value = ''
-  emit('update:menuOpen', true)
-}
-
-function runAction(action: string) {
-  emit('update:menuOpen', false)
-  if (action === 'edit' || action === 'rename' || action === 'refresh' || action === 'archive') {
-    emit('action', action)
-  }
+function onMenuSelect(item: SessionActionItem) {
+  emit('select', item)
 }
 
 function handleClick() {
@@ -129,39 +116,21 @@ function handleClick() {
           data-testid="sidebar-bot-actions"
           :mobile="uiIsCompactLayout"
           :label="menuLabel"
-          @trigger="openMenu"
+          @trigger="(event) => emit('open-action-menu', event)"
         />
-        <template v-if="!uiIsCompactLayout">
-          <IconButton
-            data-testid="sidebar-bot-settings"
-            size="xs"
-            class="text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6"
-            :disabled="busy"
-            :title="String(t('bot.profiles.edit'))"
-            :aria-label="String(t('bot.profiles.edit'))"
-            @click.stop="emit('action', 'edit')"
-          >
-            <RiEditLine class="h-4 w-4" />
-          </IconButton>
-        </template>
       </template>
     </SidebarListItem>
 
-    <OptionMenu
-      :ref="setMenuRef"
-      :open="menuOpen"
+    <SidebarSessionActionMenu
+      v-if="menuOpen"
+      :open="true"
       :query="menuQuery"
-      :groups="visibleGroups"
-      :title="menuLabel"
-      :searchable="false"
-      :is-compact-touch="false"
-      :desktop-fixed="true"
-      :desktop-anchor-el="menuAnchorEl"
-      desktop-placement="bottom-end"
-      desktop-class="w-56"
-      filter-mode="external"
-      @update:open="(v) => emit('update:menuOpen', v)"
-      @select="(item) => runAction(item.id)"
+      :items="menuItems"
+      :set-menu-ref="setMenuRef"
+      :anchor-el="menuAnchorEl"
+      :desktop-placement="menuPlacement"
+      @update:query="(v) => emit('update:menuQuery', v)"
+      @select="onMenuSelect"
     />
   </div>
 </template>

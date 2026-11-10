@@ -36,6 +36,7 @@ import PromptHistoryPalette from '@/components/chat/PromptHistoryPalette.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
+import ContextUsageChip from '@/components/chat/ContextUsageChip.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
 import type { OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
@@ -57,9 +58,6 @@ const commandListId = `commands-${useId()}`
 function copyKeyboardMessage(id: string) {
   const message = ctx.chat.messages.find((message) => String(message.info.id) === id)
   if (message) ctx.handleCopyMessage(message)
-}
-function focusKeyboardPlan() {
-  ctx.planViewerOpen.value = true
 }
 
 const { t } = useI18n()
@@ -259,6 +257,8 @@ const skillTriggerRef = ref<TooltipAnchorLike>(null)
 const skillPickerOpen = ref(false)
 const skillPickerQuery = ref('')
 const { width: viewportWidth } = useWindowSize()
+// The composer's context chip owns its popover, like the other session chips.
+const contextUsageOpen = ref(false)
 const COMPOSER_DESKTOP_MENU_GAP_PX = 16
 const COMPOSER_DESKTOP_MENU_VIEWPORT_MARGIN_PX = 8
 
@@ -470,11 +470,9 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               :root="pageRef"
               :has-older="!chat.selectedHistory.exhausted"
               :load-older="ctx.loadOlderHistory"
-              :plan-available="ctx.planVisible.value"
-              @copy="copyKeyboardMessage"
-              @search="openTranscriptSearch(true)"
-              @input="getComposerInput(composerRef)?.focus()"
-              @plan="focusKeyboardPlan"
+              :copy-message="copyKeyboardMessage"
+              :search="() => openTranscriptSearch(true)"
+              :input="() => getComposerInput(composerRef)?.focus()"
             />
 
             <div
@@ -803,9 +801,13 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     </template>
                     <template v-if="sessionUsage">
                       <span class="text-muted-foreground/50">|</span>
-                      <span class="text-muted-foreground" :title="sessionUsage.capacityLabel">{{
-                        sessionUsage.percentUsed !== null ? `${sessionUsage.percentUsed}%` : sessionUsage.tokensLabel
-                      }}</span>
+                      <ContextUsageChip
+                        :session-id="chat.selectedSessionId || ''"
+                        :usage="sessionUsage"
+                        :open="contextUsageOpen"
+                        :busy="currentPhase === 'busy'"
+                        @update:open="contextUsageOpen = $event"
+                      />
                     </template>
                     <template v-if="composerStatusExtra">
                       <span class="text-muted-foreground/50">|</span>

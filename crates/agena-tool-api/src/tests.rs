@@ -275,11 +275,28 @@ fn help_returns_live_contracts_and_batch_failures_without_executing() {
             .contains("JSON string encoding that object")
     );
     assert!(response.summary.contains("1 unavailable"));
+    // The session records the taught contracts from this list alone, so an
+    // unavailable name must never appear as if it had been explained.
+    assert_eq!(response.helped_tools, ["agena.fs.read", "fs.read"]);
     assert!(
         catalog()
             .dispatch(&call(ToolApiFunction::Help, json!({"tool":"tools_list"})))
             .is_err()
     );
+}
+
+#[test]
+fn listing_tools_establishes_no_contract() {
+    for function in [ToolApiFunction::List, ToolApiFunction::PluginsList] {
+        let action = catalog().dispatch(&call(function, json!({}))).unwrap();
+        let ToolApiAction::Respond(response) = action else {
+            panic!();
+        };
+        assert!(
+            response.helped_tools.is_empty(),
+            "{function:?} taught a contract without rendering one"
+        );
+    }
 }
 
 #[test]

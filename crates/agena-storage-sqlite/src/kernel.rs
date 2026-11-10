@@ -615,6 +615,21 @@ impl KernelBackend for Backend {
         )
         .await
     }
+    async fn prompt_session(&self, round: RoundId) -> Result<ReadView<PromptView>> {
+        // Uncached on purpose: the session is unknown until the round header is
+        // read, and a cache key must name the lease it charges.
+        self.cache.ensure_open()?;
+        let value = prompt::read_owned(
+            self.reader.get_sqlite_connection_pool(),
+            None,
+            round,
+            self.live.diagnostics(),
+        )
+        .await?;
+        let session = value.metadata.id;
+        let bytes = modeled_read_bytes(&value)?;
+        self.wrap_read(session, value, bytes)
+    }
     async fn text_range_at(
         &self,
         session: SessionId,

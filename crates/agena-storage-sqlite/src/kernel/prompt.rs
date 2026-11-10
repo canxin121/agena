@@ -84,16 +84,31 @@ pub(super) async fn read(
     round: RoundId,
     diagnostics: &KernelDiagnostics,
 ) -> Result<PromptView> {
+    read_owned(pool, Some(session), round, diagnostics).await
+}
+
+/// Session is optional so a caller holding only a round identity can still
+/// recover the frozen input. The recorded round names its own session, and the
+/// ownership/branch checks below run the same way either way.
+pub(super) async fn read_owned(
+    pool: &SqlitePool,
+    session: Option<SessionId>,
+    round: RoundId,
+    diagnostics: &KernelDiagnostics,
+) -> Result<PromptView> {
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.prompt_queries, 1);
-    let header = sqlx::query("SELECT execution.session_id AS owner_session_id,r.execution_id,r.generation FROM agena_rounds r JOIN agena_executions execution ON execution.id=r.execution_id WHERE r.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=execution.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
-        .bind(round.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?
+    let header = sqlx::query("SELECT execution.session_id AS owner_session_id,r.execution_id,r.generation FROM agena_rounds r JOIN agena_executions execution ON execution.id=r.execution_id WHERE r.id=? AND (? IS NULL OR EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=execution.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal))")
+        .bind(round.get()).bind(session.map(SessionId::get)).bind(session.map(SessionId::get)).fetch_optional(&mut *transaction).await.map_err(sql_error)?
         .ok_or_else(|| KernelError::NotFound("provider input".into()))?;
-    if header
+    let owner_session_id = header
         .try_get::<i64, _>("owner_session_id")
-        .map_err(storage)?
-        != session.get()
-    {
+        .map_err(storage)?;
+    let session = match session {
+        Some(session) => session,
+        None => SessionId::try_from(owner_session_id).map_err(storage)?,
+    };
+    if owner_session_id != session.get() {
         let captured: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM agena_branch_rounds WHERE session_id=? AND round_id=?)",
         )

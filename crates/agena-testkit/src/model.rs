@@ -44,6 +44,7 @@ mod request;
 mod wire;
 pub use matcher::RequestMatch;
 pub use protocol::{ModelEvent, ModelProtocol};
+use reply::PreparedReply;
 pub use reply::{FunctionCall, Reply, Usage};
 
 /// The model driver retains ModelHandle as a source-compatible name.
@@ -1000,6 +1001,30 @@ struct Registry {
     requests: VecDeque<Arc<ModelRequest>>,
     failures: VecDeque<String>,
     dropped_request_records: u64,
+    /// A `tools_call` reply held back until the runtime has the tool's help.
+    /// The next request that carries the synthetic `tools_help` output
+    /// receives exactly this prepared reply.
+    help_answer: Option<PendingHelpAnswer>,
+}
+
+/// A scripted `tools_call` reply waiting for its contract round trip.
+struct PendingHelpAnswer {
+    /// Tools whose contract the synthetic `tools_help` round taught.
+    taught_tools: Vec<String>,
+    step_id: u64,
+    planned: PreparedReply,
+}
+
+impl PendingHelpAnswer {
+    /// A request carries the taught contracts when it shows their rendered
+    /// first line. Call IDs cannot identify this: a protocol such as Ollama
+    /// numbers calls by position, so the synthetic id never reaches the wire.
+    fn matches(&self, observed: &ModelRequest) -> bool {
+        let body = observed.body.to_string();
+        self.taught_tools
+            .iter()
+            .any(|tool| body.contains(&format!("Tool: {tool}")))
+    }
 }
 
 struct ModelState {
@@ -1014,6 +1039,42 @@ struct ModelState {
     connections: Arc<Semaphore>,
     shutdown: CancellationToken,
     fatal: CancellationToken,
+}
+
+impl ModelState {
+    fn hold_help_answer(&self, answer: PendingHelpAnswer) {
+        lock(&self.registry).help_answer = Some(answer);
+    }
+
+    /// Whether this request is the one that shows the held help output.
+    fn help_answer_matches(&self, observed: &ModelRequest) -> bool {
+        let registry = lock(&self.registry);
+        registry
+            .help_answer
+            .as_ref()
+            .is_some_and(|answer| answer.matches(observed))
+    }
+
+    fn held_step_id(&self) -> Option<u64> {
+        lock(&self.registry)
+            .help_answer
+            .as_ref()
+            .map(|answer| answer.step_id)
+    }
+
+    /// Take the held reply when this request is the one that shows the help
+    /// output. A different request leaves it waiting.
+    fn take_help_answer(&self, observed: &ModelRequest) -> Option<PendingHelpAnswer> {
+        let mut registry = lock(&self.registry);
+        if !registry
+            .help_answer
+            .as_ref()
+            .is_some_and(|answer| answer.matches(observed))
+        {
+            return None;
+        }
+        registry.help_answer.take()
+    }
 }
 
 impl ModelState {
@@ -1293,6 +1354,19 @@ async fn handle_request(
         body_preview: String::new(),
         step_id: None,
     };
+    // The request that carries a taught help output receives the reply the
+    // scripted step was holding; it must be answered before script matching,
+    // because the scenario only registered the eventual tool output.
+    if state.help_answer_matches(&observed) {
+        observed.step_id = state.held_step_id();
+        state.record(Arc::new(
+            observed.retained(&bytes, state.options.max_record_bytes),
+        ));
+        let answer = state
+            .take_help_answer(&observed)
+            .expect("held help answer must survive its match");
+        return Ok(prepared_response(answer.planned, &state));
+    }
     let step = match state.claim(&observed) {
         Ok(step) => step,
         Err(error) => {
@@ -1317,6 +1391,8 @@ async fn handle_request(
     step.signals
         .progress
         .send_modify(|progress| progress.observed = Some(retained));
+    // Checks run for every request that claims the step, including the proxied
+    // help round: a step's assertions are about this request, not its reply.
     for check in &step.checks {
         let checked = std::panic::catch_unwind(AssertUnwindSafe(|| check(&observed)));
         let error = match checked {
@@ -1331,6 +1407,69 @@ async fn handle_request(
         };
         state.fail(error.clone());
         return Ok(error_response(StatusCode::BAD_REQUEST, &error));
+    }
+    // A scripted tools_call must read the target's help first, because the
+    // runtime refuses to execute a tool whose contract is not in context.
+    // Hold this reply, answer the help round trip, then release it.
+    if step.reply.reads_required_help() {
+        let prepared = match step.reply.prepare(&observed, step.id, &state.options) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let error = format!(
+                    "step {} ({:?}) reply is invalid: {error:#}",
+                    step.id, step.name
+                );
+                state.fail(error.clone());
+                return Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, &error));
+            }
+        };
+        // Only tools whose contract is not already in this request need the
+        // synthetic round: the runtime applies the same rule.
+        let body = observed.body.to_string();
+        let tools = step
+            .reply
+            .called_tools()
+            .into_iter()
+            .filter(|tool| !body.contains(&format!("Tool: {tool}")))
+            .collect::<Vec<_>>();
+        let help_calls = tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| {
+                FunctionCall::new(
+                    format!("call_help_gate_{}_{index}", step.id),
+                    "tools_help",
+                    json!({"tool": tool}),
+                )
+            })
+            .collect::<Vec<_>>();
+        if !help_calls.is_empty() {
+            let help = Reply::function_calls(help_calls);
+            match help.prepare(&observed, step.id, &state.options) {
+                Ok(help) => {
+                    // The step's own signals must end with this proxied round,
+                    // or every `.after(&step)` dependency stays blocked
+                    // forever. The real reply is a synthetic response that no
+                    // step handle tracks.
+                    claim_guard.handed_off = true;
+                    step.signals.body_ended(true);
+                    state.hold_help_answer(PendingHelpAnswer {
+                        taught_tools: tools,
+                        step_id: step.id,
+                        planned: prepared,
+                    });
+                    return Ok(prepared_response(help, &state));
+                }
+                Err(error) => {
+                    let error = format!(
+                        "step {} ({:?}) help reply is invalid: {error:#}",
+                        step.id, step.name
+                    );
+                    state.fail(error.clone());
+                    return Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, &error));
+                }
+            }
+        }
     }
     let prepared = match step.reply.prepare(&observed, step.id, &state.options) {
         Ok(prepared) => prepared,
@@ -1390,6 +1529,39 @@ async fn handle_request(
     *response.status_mut() = prepared.status;
     *response.headers_mut() = prepared.headers;
     Ok(response)
+}
+
+/// Stream one prepared reply without a scenario step. Used for the synthetic
+/// `tools_help` round and for re-issuing the held `tools_call` reply.
+fn prepared_response(prepared: PreparedReply, state: &Arc<ModelState>) -> Response<Body> {
+    let (tx, rx) = mpsc::channel(state.options.stream_buffer);
+    let producer_state = state.clone();
+    let signals = Arc::new(StepSignals::new());
+    let producer_signals = signals.clone();
+    state.spawn_tracked(async move {
+        for chunk in prepared.chunks {
+            let sent = tokio::select! {
+                biased;
+                _ = producer_state.shutdown.cancelled() => false,
+                _ = producer_state.fatal.cancelled() => false,
+                sent = tx.send(chunk) => sent.is_ok(),
+            };
+            if !sent {
+                return;
+            }
+            producer_signals
+                .progress
+                .send_modify(|progress| progress.chunks_sent += 1);
+        }
+    });
+    let mut response = Response::new(Body::from_stream(ObservedBody {
+        rx,
+        signals,
+        ended: false,
+    }));
+    *response.status_mut() = prepared.status;
+    *response.headers_mut() = prepared.headers;
+    response
 }
 
 async fn wait_release(

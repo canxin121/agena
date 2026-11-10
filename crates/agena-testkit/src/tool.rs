@@ -51,6 +51,9 @@ pub(crate) async fn start(
     let call_id = format!("call_testkit_{id}");
     let completion = format!("agena-testkit-tool-complete-{id}");
     let captured = Arc::new(Mutex::new(None));
+    // Reply::tool_call teaches the scripted model to read the tool's help in
+    // the same run, because the runtime refuses a call whose contract is not in
+    // the current context.
     let first = model
         .expect(RequestMatch::user_text(&marker).declares_function("tools_call"))
         .named(format!("ask AI to call {tool}"))
@@ -160,9 +163,14 @@ impl ToolRun {
                     .and_then(|call| {
                         serde_json::from_value::<agena_domain::ToolApiCall>(call.clone()).ok()
                     })
-                    .map(|call| Value::from(call.arguments))
-                    .is_some_and(|arguments| {
-                        arguments.get("tool").and_then(Value::as_str) == Some(self.tool.as_str())
+                    .is_some_and(|call| {
+                        // A tools_help call names the same tool in its arguments;
+                        // only the execution call is this run's durable part.
+                        call.function == agena_domain::ToolApiFunction::Call
+                            && Value::from(call.arguments)
+                                .get("tool")
+                                .and_then(Value::as_str)
+                                == Some(self.tool.as_str())
                     })
         });
         let part = matches.next().cloned().with_context(|| {

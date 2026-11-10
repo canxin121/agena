@@ -10,6 +10,12 @@ pub struct ToolApiResponse {
     pub title: String,
     pub summary: String,
     pub output_text: String,
+    /// Execution tools whose complete live contract this response delivered.
+    /// The session keeps these names while the response stays inside the
+    /// current context, so compaction forgets them with the rest of the
+    /// prefix. An empty list means the response taught no tool contract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub helped_tools: Vec<String>,
 }
 
 /// The sole output that can cross from the protocol into execution. It has
@@ -258,12 +264,14 @@ impl ToolApiCatalog {
                     title: format!("List {kind} · {returned}/{total}"),
                     summary: format!("Returned {returned} of {total} {kind}."),
                     output_text: text,
+                    helped_tools: Vec::new(),
                 }))
             }
             ToolApiFunction::Help => {
                 let input: HelpInput = parse(call)?;
                 let names = input.tool.values()?;
                 let mut outputs = Vec::new();
+                let mut helped = Vec::new();
                 let mut failures = 0usize;
                 for name in names {
                     let found = self
@@ -272,7 +280,16 @@ impl ToolApiCatalog {
                         .filter(|tool| tool.name == *name || tool.canonical_name == *name)
                         .collect::<Vec<_>>();
                     match found.as_slice() {
-                        [tool] => outputs.push(self.render_help(tool)),
+                        [tool] => {
+                            outputs.push(self.render_help(tool));
+                            // Record the callable name the model must use, so a
+                            // later tools_call that names the compact or
+                            // canonical form both resolve to one taught tool.
+                            helped.push(tool.name.clone());
+                            if tool.canonical_name != tool.name {
+                                helped.push(tool.canonical_name.clone());
+                            }
+                        }
                         _ => {
                             let message = format!(
                                 "Tool `{name}` is unavailable or ambiguous. Enumerate plugins_list, then tools_list for the owning plugin, and use an exact returned identifier."
@@ -285,6 +302,8 @@ impl ToolApiCatalog {
                         }
                     }
                 }
+                helped.sort();
+                helped.dedup();
                 Ok(ToolApiAction::Respond(ToolApiResponse {
                     title: format!("Inspect {} tools", names.len()),
                     summary: format!(
@@ -292,6 +311,7 @@ impl ToolApiCatalog {
                         names.len() - failures
                     ),
                     output_text: outputs.join("\n\n---\n\n"),
+                    helped_tools: helped,
                 }))
             }
         }

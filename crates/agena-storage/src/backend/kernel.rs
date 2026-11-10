@@ -580,6 +580,10 @@ pub trait KernelBackend: Send + Sync {
         limit: usize,
     ) -> Result<ReadView<SnapshotPage>>;
     async fn prompt(&self, session: SessionId, round: RoundId) -> Result<ReadView<PromptView>>;
+    /// Read a round's frozen provider input without already holding its
+    /// ownership handle. Tool results keep their round identity only, so this
+    /// is how a late reader recovers the exact context the model saw.
+    async fn prompt_session(&self, round: RoundId) -> Result<ReadView<PromptView>>;
     async fn text_range_at(
         &self,
         session: SessionId,

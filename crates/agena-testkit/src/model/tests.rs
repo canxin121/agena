@@ -119,12 +119,18 @@ async fn streamed_tool_calls_keep_item_and_call_ids_distinct_across_fragments() 
                 .header("x-test-case", "wire"),
         )
         .reply(
-            Reply::tool_call("call_original", "test.echo", json!({"message": "中文"}))
-                .arguments_chunks([arguments[..split].to_owned(), arguments[split..].to_owned()])
-                .with_thinking_chunks(["checking"])
-                .usage(Usage::tokens(11, 7).cached(3).reasoning(2))
-                .end_turn(false)
-                .fragment_bytes(7),
+            // Raw wire assertions: this reply must stay one frame set, so it
+            // uses the explicit call form instead of the auto-help helper.
+            Reply::function_call_raw(
+                "call_original",
+                "tools_call",
+                json!({"tool": "test.echo", "input": {"message": "中文"}}).to_string(),
+            )
+            .arguments_chunks([arguments[..split].to_owned(), arguments[split..].to_owned()])
+            .with_thinking_chunks(["checking"])
+            .usage(Usage::tokens(11, 7).cached(3).reasoning(2))
+            .end_turn(false)
+            .fragment_bytes(7),
         );
     let response = client
         .post(format!("{}/responses", owner.base_url()))

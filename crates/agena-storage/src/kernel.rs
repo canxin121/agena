@@ -1232,6 +1232,14 @@ impl ToolHandle {
     pub fn id(&self) -> ToolId {
         self.id
     }
+    /// Owning session and provider round. The round's frozen input is exactly
+    /// the context the model held when it emitted this call.
+    pub fn round_id(&self) -> RoundId {
+        self.round.id
+    }
+    pub fn session_id(&self) -> SessionId {
+        self.round.session_id()
+    }
     pub async fn request_interaction(
         &self,
         request: RequestId,

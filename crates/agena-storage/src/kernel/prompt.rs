@@ -54,6 +54,15 @@ impl RoundHandle {
 }
 
 impl KernelReader {
+    /// Read a round's frozen provider input without holding its ownership
+    /// handle. A round's manifest is immutable, so this returns the same facts
+    /// [`RoundHandle::prompt`] recorded when the model request was made.
+    pub async fn prompt_of(&self, round: RoundId) -> Result<ReadView<PromptView>> {
+        self.0.backend.prompt_session(round).await
+    }
+}
+
+impl KernelReader {
     /// Read a byte range at an earlier committed head. Uncommitted live tails
     /// and later checkpoints are excluded. Retention/restart still return an
     /// explicit gap/reset; callers never silently mix a newer source epoch.

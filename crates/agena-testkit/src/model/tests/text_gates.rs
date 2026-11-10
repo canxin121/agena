@@ -40,7 +40,13 @@ async fn text_gate_survives_thinking_and_byte_fragments_before_release() -> Resu
         .reply(
             Reply::text_chunks(["可见第一段", "must-wait"])
                 .with_thinking_chunks(["分析一", "analysis-two"])
-                .with_tool_call("after-text", "fs.read", json!({"path":"note.txt"}))
+                // Raw framing assertion: keep one response, so the call is
+                // declared explicitly rather than through the auto-help path.
+                .with_function_call(
+                    "after-text",
+                    "tools_call",
+                    json!({"tool":"fs.read","input":{"path":"note.txt"}}),
+                )
                 .fragment_bytes(3)
                 .hold_after_text_chunks(1),
         );

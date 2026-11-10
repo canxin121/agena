@@ -151,9 +151,45 @@ pub struct Reply {
     hold_after_text: Option<usize>,
     fragment_bytes: Option<usize>,
     invalid: Option<String>,
+    /// This reply is a `tools_call` that needs its tool's help in the current
+    /// context. The scripted model answers the gate itself instead of making
+    /// every scenario script a preliminary `tools_help` step.
+    read_required_help: bool,
 }
 
 impl Reply {
+    /// The execution tools this reply calls through `tools_call`. The runtime
+    /// requires each tool's help in the current context first.
+    pub(super) fn called_tools(&self) -> Vec<String> {
+        let ReplyBody::Completion(completion) = &self.body else {
+            return Vec::new();
+        };
+        completion
+            .functions
+            .iter()
+            .filter(|call| call.name == "tools_call")
+            .filter_map(|call| {
+                serde_json::from_str::<Value>(&call.arguments_json)
+                    .ok()?
+                    .get("tool")?
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|tool| !tool.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .collect()
+    }
+
+    /// Whether this reply opted into the automatic `tools_help` step.
+    pub(super) fn reads_required_help(&self) -> bool {
+        self.read_required_help
+    }
+
+    fn require_help(mut self) -> Self {
+        self.read_required_help = true;
+        self
+    }
+
     fn completion(completion: Completion) -> Self {
         Self::new(ReplyBody::Completion(completion), 200)
     }
@@ -168,6 +204,7 @@ impl Reply {
             hold_after_text: None,
             fragment_bytes: None,
             invalid: None,
+            read_required_help: false,
         }
     }
 
@@ -227,9 +264,14 @@ impl Reply {
     }
 
     pub fn tool_call(call_id: impl Into<String>, tool: impl Into<String>, input: Value) -> Self {
-        Self::function_calls([FunctionCall::tool(call_id, tool, input)])
+        // The runtime rejects a tools_call whose help is not in the current
+        // context, so a scripted model reads the contract first, exactly like a
+        // real model must. The helper call is answered automatically and needs
+        // no scripted expectation.
+        let mut reply = Self::function_calls([FunctionCall::tool(call_id, tool, input)]);
+        reply.read_required_help = true;
+        reply
     }
-
     /// The automatic approval protocol is a function call, also for stream=false.
     pub fn approve(reason: impl Into<String>) -> Self {
         Self::function_call("", "approve_action", json!({"reason": reason.into()}))
@@ -256,6 +298,8 @@ impl Reply {
         })
     }
 
+    /// Append a `tools_call` to this reply. Like [`Reply::tool_call`], the
+    /// scripted model reads the tool's help before the runtime will run it.
     pub fn with_tool_call(
         self,
         call_id: impl Into<String>,
@@ -267,6 +311,7 @@ impl Reply {
                 .functions
                 .push(FunctionCall::tool(call_id, tool, input));
         })
+        .require_help()
     }
 
     pub fn with_thinking_chunks<I, S>(self, chunks: I) -> Self

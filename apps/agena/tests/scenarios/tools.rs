@@ -372,3 +372,95 @@ async fn denied_permission_is_visible_to_model_without_writing_file() -> TestRes
         })
         .await
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tools_call_without_help_in_context_returns_the_contract_and_runs_nothing() -> TestResult {
+    fixture()
+        .seed_file("workspace/gated.txt", b"gated-marker".to_vec())
+        .run(|case| async move {
+            let model = case.model();
+            // A raw function call can skip tools_help; the runtime must refuse it.
+            let gated = model
+                .expect(RequestMatch::user_text("help-gate-marker").declares_function("tools_call"))
+                .reply(Reply::function_call(
+                    "call_without_help",
+                    "tools_call",
+                    json!({"tool":"fs.read","input":{"file_path":"gated.txt"}}),
+                ));
+            model
+                .expect(RequestMatch::tool_output("call_without_help"))
+                .after(&gated)
+                .check(|request| {
+                    let text = request
+                        .tool_output_text("call_without_help")
+                        .expect("matched tool output");
+                    ensure!(
+                        text.contains("tool.help_required"),
+                        "rejection did not name its cause: {text}"
+                    );
+                    ensure!(
+                        text.contains("has not been read in the current context"),
+                        "rejection did not explain the missing help: {text}"
+                    );
+                    // The rejection must teach the live contract itself.
+                    ensure!(
+                        text.contains("Input schema") && text.contains("file_path"),
+                        "rejection did not carry the tool contract: {text}"
+                    );
+                    ensure!(
+                        !text.contains("gated-marker"),
+                        "the gated tool executed anyway: {text}"
+                    );
+                    Ok(())
+                })
+                .reply(Reply::text("gate-observed"));
+            let user = case.user().new_session().await?;
+            workspace_permission(&user, "deny").await?;
+            let run = user.send("help-gate-marker").await?;
+            let result = run.wait_settled().await?;
+            result.assert_succeeded()?;
+            result.assert_assistant_text("gate-observed")?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tools_help_establishes_the_contract_for_a_later_call() -> TestResult {
+    fixture()
+        .seed_file("workspace/helped.txt", b"helped-marker".to_vec())
+        .run(|case| async move {
+            let model = case.model();
+            let help = model
+                .expect(
+                    RequestMatch::user_text("help-then-call-marker")
+                        .declares_function("tools_help"),
+                )
+                .reply(Reply::function_call(
+                    "call_read_help",
+                    "tools_help",
+                    json!({"tool":"fs.read"}),
+                ));
+            let call = model
+                .expect(RequestMatch::tool_output("call_read_help"))
+                .after(&help)
+                .reply(Reply::tool_call(
+                    "call_after_help",
+                    "fs.read",
+                    json!({"file_path":"helped.txt"}),
+                ));
+            model
+                .expect(RequestMatch::tool_output("call_after_help"))
+                .after(&call)
+                .check_tool_output_contains("call_after_help", "helped-marker")
+                .reply(Reply::text("help-then-call-done"));
+            let user = case.user().new_session().await?;
+            workspace_permission(&user, "deny").await?;
+            let run = user.send("help-then-call-marker").await?;
+            let result = run.wait_settled().await?;
+            result.assert_succeeded()?;
+            result.assert_assistant_text("help-then-call-done")?;
+            Ok(())
+        })
+        .await
+}

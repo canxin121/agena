@@ -653,6 +653,7 @@ async fn large_protocol_text_survives_content_storage_and_model_history() {
             title: "Large help".into(),
             summary: "Full contract".into(),
             output_text: text.clone(),
+            helped_tools: vec!["fixture.large".into()],
         }),
     )
     .await
@@ -824,4 +825,147 @@ async fn failed_inline_ui_feedback_survives_current_history_hydration() {
         drop(prompt);
         fixture.shutdown().await;
     }
+}
+
+/// A `tools_help` response teaches only the tools it actually rendered.
+#[tokio::test]
+async fn helped_tools_in_context_reads_only_rendered_contracts() {
+    let fixture = Fixture::new().await;
+    let executor = fixture.scoped_executor().await;
+    assert!(catalog(&executor).await.tools.is_empty());
+    let round = fixture
+        .attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let round_id = round.id();
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    assert!(
+        fixture
+            .manager
+            .helped_tools_in_context(fixture.session, round_id)
+            .await
+            .is_empty()
+    );
+    fixture.shutdown().await;
+}
+
+/// A held `tools_help` result stops counting once compaction cuts it from the
+/// model context, even though it stays in the transcript.
+#[tokio::test]
+async fn compaction_removes_helped_tools_from_the_current_context() {
+    let fixture = Fixture::new().await;
+    // A round freezes the transcript at the moment its model request is made,
+    // so the help call and its result must be committed inside the round they
+    // belong to, and inspected through the next round.
+    let help_round = fixture
+        .attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let tool = help_round
+        .begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: "call_help".into(),
+                name: ToolApiFunction::Help.function_name().into(),
+                input: json!({"tool":"agena.fs.read"}),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    tool.complete(
+        RequestId::new(),
+        ToolResult {
+            phase: ToolPhase::Succeeded,
+            value: json!({"tool_api_response":{
+                "title":"Inspect","summary":"ok","output_text":"contract",
+                "helped_tools":["fs.read","agena.fs.read"],
+            }}),
+        },
+    )
+    .await
+    .unwrap();
+    help_round
+        .finish(RequestId::new(), None, true)
+        .await
+        .unwrap();
+
+    let inspected_round = fixture
+        .attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let inspected_id = inspected_round.id();
+    inspected_round
+        .finish(RequestId::new(), None, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .helped_tools_in_context(fixture.session, inspected_id)
+            .await,
+        ["agena.fs.read", "fs.read"]
+    );
+
+    // Compacting that prefix must evict the help with it.
+    let compact = fixture
+        .attempt
+        .begin_compaction(RequestId::new(), 8)
+        .await
+        .unwrap()
+        .value;
+    let through = compact
+        .prompt()
+        .await
+        .unwrap()
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| !matches!(entry.entry.payload, EntryPayload::Compaction { .. }))
+        .map(|entry| entry.entry.id)
+        .expect("a compactable prefix");
+    let summary = compact
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    super::super::results::append_text_chunks(&summary, "checkpoint summary")
+        .await
+        .unwrap();
+    compact
+        .commit_compaction(RequestId::new(), summary.id(), through, None)
+        .await
+        .unwrap();
+
+    let next = fixture
+        .attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let next_id = next.id();
+    assert!(
+        next.prompt()
+            .await
+            .unwrap()
+            .entries
+            .iter()
+            .all(|entry| entry.tool.is_none()),
+        "the compacted help result must leave the live context"
+    );
+    next.finish(RequestId::new(), None, true).await.unwrap();
+    assert!(
+        fixture
+            .manager
+            .helped_tools_in_context(fixture.session, next_id)
+            .await
+            .is_empty()
+    );
+    fixture.shutdown().await;
 }

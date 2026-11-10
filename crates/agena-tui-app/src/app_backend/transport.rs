@@ -2498,12 +2498,14 @@ impl TuiBackend {
         &self,
         session_id: i64,
         at_message_id: i64,
+        mode: agena_domain::RewindMode,
     ) -> Result<SessionExecutionResource> {
         let result = self
             .client()
             .command(Command::RewindSession(RewindSessionParams {
                 session_id,
                 at_message_id,
+                mode,
                 expected_version: None,
             }))
             .await?;

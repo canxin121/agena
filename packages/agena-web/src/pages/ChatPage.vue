@@ -1485,6 +1485,18 @@ function handleSessionActionRequest(actionId: string) {
     case 'attach-project':
       openProjectAttachDialog()
       break
+    case 'session-settings': {
+      const sid = commandSessionId()
+      if (!sid) {
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'session-settings' }))
+        break
+      }
+      void router.push({
+        path: '/settings/permissions',
+        query: { view: 'filesystem', scope: 'session', sessionId: sid },
+      })
+      break
+    }
     default:
       break
   }
@@ -1744,15 +1756,27 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
         toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'rewind' }))
         return
       }
+      // `/rewind [message_id] [in-place]` — in-place truncates this session
+      // instead of branching, matching the message action's second choice.
+      const tokens = args.split(/\s+/).filter(Boolean)
+      let mode: 'fork' | 'in_place' = 'fork'
+      if (tokens.at(-1) === 'in-place') {
+        mode = 'in_place'
+        tokens.pop()
+      }
       const requested =
-        args ||
+        tokens.join(' ').trim() ||
         (await promptForText({
           title: String(t('chat.commandPalette.rewindPromptTitle')),
           placeholder: String(t('chat.commandPalette.rewindPromptPlaceholder')),
         })) ||
         ''
       if (!requested) return
-      await handleRevertFromMessage(requested)
+      if (!/^\d+$/.test(requested.trim())) {
+        toasts.push('error', t('chat.errors.messageIdRequired'))
+        return
+      }
+      await handleRevertFromMessage(requested.trim(), mode)
       return
     }
     case 'rename':
@@ -1777,6 +1801,17 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'settings':
       await router.push('/settings/interface')
       return
+    case 'session-settings': {
+      if (!sid) {
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'session_settings' }))
+        return
+      }
+      await router.push({
+        path: '/settings/permissions',
+        query: { view: 'filesystem', scope: 'session', sessionId: sid },
+      })
+      return
+    }
     case 'model':
       await modelSelection.toggleComposerPicker('model')
       return

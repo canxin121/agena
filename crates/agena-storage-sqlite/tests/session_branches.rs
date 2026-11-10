@@ -806,3 +806,190 @@ async fn archives_restore_control_purpose_and_the_original_inherited_content_cut
         .unwrap();
     runtime.ports.clone().shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn in_place_truncation_keeps_one_session_and_drops_the_retracted_tail() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/truncate-tests")
+        .await
+        .unwrap();
+    let session = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Session".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let first = completed_input(&runtime, session).await;
+    let second = completed_input(&runtime, session).await;
+
+    let result = runtime
+        .ports
+        .sessions
+        .truncate(RequestId::new(), session, second.message_id)
+        .await
+        .unwrap()
+        .value;
+    // No branch is created; the same session keeps its history before the cut.
+    assert_eq!(result.session.id, session);
+    assert_eq!(result.document.text(), "Context inherited by the branch");
+
+    let history = runtime
+        .ports
+        .reader
+        .history(session, None, 32)
+        .await
+        .unwrap();
+    let ids = history
+        .entries
+        .iter()
+        .map(|entry| entry.id)
+        .collect::<Vec<_>>();
+    assert!(ids.contains(&first.message_id));
+    assert!(!ids.contains(&second.message_id));
+    assert_eq!(
+        runtime
+            .ports
+            .reader
+            .summary(session)
+            .await
+            .unwrap()
+            .user_message_count,
+        1
+    );
+    // The same session can still accept a new turn after the cut.
+    let replacement = completed_input(&runtime, session).await;
+    assert_ne!(replacement.message_id, second.message_id);
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn truncated_rounds_are_no_longer_selected_as_the_latest_provider_round() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/truncate-rounds")
+        .await
+        .unwrap();
+    let session = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Rounds".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    async fn round(
+        runtime: &SqliteKernel,
+        session: SessionId,
+        text: &str,
+    ) -> (ExecutionView, RoundId) {
+        let input = send(runtime, session, text).await;
+        let attempt = runtime
+            .ports
+            .executor
+            .claim_next(RequestId::new(), session, input.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let id = round.id();
+        round
+            .finish(
+                RequestId::new(),
+                Some(serde_json::json!({"usage": {"input_tokens": 1, "output_tokens": 1}})),
+                true,
+            )
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        (input, id)
+    }
+    let (first, first_round) = round(&runtime, session, "first").await;
+    let (second, second_round) = round(&runtime, session, "second").await;
+    let latest = runtime
+        .ports
+        .reader
+        .latest_round(session)
+        .await
+        .unwrap()
+        .clone();
+    assert_eq!(latest.as_ref().map(|round| round.id), Some(second_round));
+    assert_eq!(
+        runtime
+            .ports
+            .reader
+            .latest_usage_round(session)
+            .await
+            .unwrap()
+            .as_ref()
+            .map(|round| round.id),
+        Some(second_round)
+    );
+
+    runtime
+        .ports
+        .sessions
+        .truncate(RequestId::new(), session, second.message_id)
+        .await
+        .unwrap();
+
+    // The retracted round left this session's membership; selecting it would
+    // make the projection return an internal error.
+    let latest = runtime
+        .ports
+        .reader
+        .latest_round(session)
+        .await
+        .unwrap()
+        .clone();
+    assert_eq!(latest.as_ref().map(|round| round.id), Some(first_round));
+    assert_eq!(
+        runtime
+            .ports
+            .reader
+            .latest_usage_round(session)
+            .await
+            .unwrap()
+            .as_ref()
+            .map(|round| round.id),
+        Some(first_round)
+    );
+
+    // Truncating the whole history must not surface a removed round either.
+    runtime
+        .ports
+        .sessions
+        .truncate(RequestId::new(), session, first.message_id)
+        .await
+        .unwrap();
+    assert!(
+        runtime
+            .ports
+            .reader
+            .latest_round(session)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        runtime
+            .ports
+            .reader
+            .latest_usage_round(session)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    runtime.ports.clone().shutdown().await.unwrap();
+}

@@ -229,6 +229,7 @@ impl App {
         at_message_id: i64,
         message_document: agena_domain::ComposerDocument,
         target: String,
+        mode: agena_domain::RewindMode,
     ) {
         self.sync_current_draft_slot();
         self.persist_draft_store_with_feedback(true);
@@ -238,7 +239,7 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = application
-                .rewind_session_to_message(session_id, at_message_id)
+                .rewind_session_to_message(session_id, at_message_id, mode)
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx
@@ -246,6 +247,7 @@ impl App {
                     session_id,
                     message_document,
                     target,
+                    mode,
                     result,
                 })
                 .await;

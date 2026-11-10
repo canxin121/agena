@@ -188,13 +188,19 @@ pub struct CancelRunParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Parameters for creating a branch before a completed user message.
+/// Parameters for retracting a completed user message.
 pub struct RewindSessionParams {
     pub session_id: i64,
     pub at_message_id: i64,
+    /// `fork` (default) keeps the original session and creates a branch;
+    /// `in_place` hard-truncates this session's history before the message.
+    #[serde(default)]
+    pub mode: RewindMode,
     #[serde(default)]
     pub expected_version: Option<i64>,
 }
+
+pub use agena_domain::RewindMode;
 
 /// Clone a session's history into a new child session.
 ///

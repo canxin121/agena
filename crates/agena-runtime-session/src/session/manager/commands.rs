@@ -345,13 +345,48 @@ impl SessionManager {
         let session = session_id(request.session_id)?;
         self.check_version(session, request.expected_version)
             .await?;
-        let result = self
-            .kernel()
-            .sessions
-            .rewind(RequestId::new(), session, entry_id(request.at_message_id)?)
-            .await
-            .map_err(kernel_error)?
-            .value;
+        let message = entry_id(request.at_message_id)?;
+        let result = match request.mode {
+            // An in-place truncate edits this session's own history. Settle any
+            // in-flight run first so a provider stream cannot append past the
+            // truncation cut. Settling uses bounded reads and never fences the
+            // queue: truncation edits history, it is not a stop, and the same
+            // session must remain usable afterwards.
+            crate::RewindMode::InPlace => {
+                let mut after = None;
+                loop {
+                    let page = self
+                        .kernel()
+                        .reader
+                        .active_executions(session, after, 128)
+                        .await
+                        .map_err(kernel_error)?;
+                    for execution in &page.executions {
+                        if execution.phase.is_terminal() {
+                            continue;
+                        }
+                        self.cancel_execution_with_outcome(request.session_id, execution.id)
+                            .await?;
+                    }
+                    if !page.has_more {
+                        break;
+                    }
+                    after = page.next;
+                }
+                self.kernel()
+                    .sessions
+                    .truncate(RequestId::new(), session, message)
+                    .await
+            }
+            crate::RewindMode::Fork => {
+                self.kernel()
+                    .sessions
+                    .rewind(RequestId::new(), session, message)
+                    .await
+            }
+        }
+        .map_err(kernel_error)?
+        .value;
         Ok((
             self.get_session(result.session.id.get()).await?,
             result.document,

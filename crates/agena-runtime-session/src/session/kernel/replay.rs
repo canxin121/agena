@@ -56,7 +56,7 @@ impl KernelProviderState {
     /// History must stay readable even when one round's provider state cannot
     /// be decoded: a state written by a newer version, or a damaged row, costs
     /// that round its replay fidelity — never the whole conversation.
-    pub(super) fn decode_lossy(value: &Value) -> Option<Self> {
+    pub(crate) fn decode_lossy(value: &Value) -> Option<Self> {
         match Self::decode(value) {
             Ok(state) => Some(state),
             Err(error) => {

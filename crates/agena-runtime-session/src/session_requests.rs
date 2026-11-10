@@ -132,11 +132,14 @@ pub struct SessionForkRequest {
     pub expected_version: Option<i64>,
 }
 
+pub use agena_domain::RewindMode;
+
 /// Input for rewinding a session before a completed user message.
 #[derive(Debug, Clone)]
 pub struct SessionRewindRequest {
     pub session_id: i64,
     pub at_message_id: i64,
+    pub mode: RewindMode,
     #[doc(hidden)]
     pub expected_version: Option<i64>,
 }

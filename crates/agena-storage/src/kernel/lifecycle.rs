@@ -499,6 +499,26 @@ impl SessionCommands {
             _ => Err(unexpected()),
         }
     }
+    /// Hard-truncate this session's history before a completed user message.
+    /// No branch is created; the picked input is returned for the composer.
+    pub async fn truncate(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        message: EntryId,
+    ) -> Result<CommitReceipt<RewindResult>> {
+        let r = self
+            .0
+            .command(request, Command::Truncate { session, message })
+            .await?;
+        match r.value {
+            Mutation::Rewind(value) => Ok(CommitReceipt {
+                position: r.position,
+                value: *value,
+            }),
+            _ => Err(unexpected()),
+        }
+    }
     pub async fn withdraw(
         &self,
         request: RequestId,

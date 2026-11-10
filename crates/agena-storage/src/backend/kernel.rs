@@ -104,6 +104,13 @@ pub enum Command {
         session: SessionId,
         message: EntryId,
     },
+    /// Hard-truncate this session's own history before a completed user
+    /// message. Unlike `Fork` this creates no branch; the retracted facts stop
+    /// being members of this session.
+    Truncate {
+        session: SessionId,
+        message: EntryId,
+    },
     DeleteSession {
         session: SessionId,
         #[serde(default, skip_serializing_if = "Option::is_none")]

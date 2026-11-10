@@ -213,7 +213,8 @@ pub use role::Role;
 pub use session_conversation::{ConversationMode, SessionConversation};
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{
-    AgentStatus, SessionLifecycleState, SessionRelationKind, SessionStateKind, WorkflowState,
+    AgentStatus, RewindMode, SessionLifecycleState, SessionRelationKind, SessionStateKind,
+    WorkflowState,
 };
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};

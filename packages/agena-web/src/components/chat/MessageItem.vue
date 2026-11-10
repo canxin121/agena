@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { RiArrowGoBackLine, RiCheckLine, RiClipboardLine, RiGitBranchLine, RiLoader4Line } from '@remixicon/vue'
+import {
+  RiArrowGoBackLine,
+  RiCheckLine,
+  RiClipboardLine,
+  RiDeleteBin6Line,
+  RiGitBranchLine,
+  RiLoader4Line,
+} from '@remixicon/vue'
 
 import AgenaTranscriptPart from '@/components/chat/AgenaTranscriptPart.vue'
+import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
@@ -53,7 +61,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'fork', messageId: string): void
-  (event: 'revert', messageId: string): void
+  (event: 'revert', messageId: string, mode: 'fork' | 'in_place'): void
   (event: 'copy', message: MessageLike): void
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
   (event: 'foldExpand', fold: MessageFold, all: boolean): void
@@ -100,6 +108,13 @@ const visibility = computed(() => props.activityVisibility ?? localVisibility)
 const activityPageSize = computed(() => normalizeTranscriptPartPageSize(props.activityPageSize))
 const summaryKey = computed(() => transcriptActivityRunKey(messageId.value, [], 0))
 const requestedFoldKey = ref('')
+// Rewind has two outcomes, so its popover stays open until the user picks one.
+const revertOpen = ref(false)
+
+function chooseRevert(mode: 'fork' | 'in_place') {
+  revertOpen.value = false
+  emit('revert', messageId.value, mode)
+}
 
 // A message that follows its newest parts keeps following them: while nothing
 // has been revealed the window stays collapsed and every new part pushes the
@@ -403,14 +418,43 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
 
           <ConfirmPopover
             v-if="role === 'user'"
+            :open="revertOpen"
             :title="t('chat.messageItem.revert.confirmTitle')"
             :description="t('chat.messageItem.revert.confirmDescription')"
-            :confirm-text="t('chat.messageItem.revert.confirmAction')"
-            :cancel-text="t('common.cancel')"
-            variant="destructive"
+            :show-default-actions="false"
             :anchor-to-cursor="false"
-            @confirm="$emit('revert', messageId)"
+            @update:open="revertOpen = $event"
           >
+            <template #actions>
+              <Button
+                variant="ghost"
+                size="sm"
+                class="h-auto w-full justify-start gap-2 whitespace-normal py-2 text-left"
+                :disabled="revertBusyMessageId === messageId"
+                @click="chooseRevert('fork')"
+              >
+                <RiGitBranchLine class="h-4 w-4" />
+                <span class="min-w-0">
+                  <span class="block text-xs font-medium">{{ t('chat.messageItem.revert.forkLabel') }}</span>
+                  <span class="block text-[11px] text-muted-foreground">{{
+                    t('chat.messageItem.revert.forkDetail')
+                  }}</span>
+                </span>
+              </Button>
+              <Button
+                variant="ghost-destructive"
+                size="sm"
+                class="h-auto w-full justify-start gap-2 whitespace-normal py-2 text-left"
+                :disabled="revertBusyMessageId === messageId"
+                @click="chooseRevert('in_place')"
+              >
+                <RiDeleteBin6Line class="h-4 w-4" />
+                <span class="min-w-0">
+                  <span class="block text-xs font-medium">{{ t('chat.messageItem.revert.inPlaceLabel') }}</span>
+                  <span class="block text-[11px] opacity-80">{{ t('chat.messageItem.revert.inPlaceDetail') }}</span>
+                </span>
+              </Button>
+            </template>
             <IconButton
               variant="ghost"
               class="h-6 w-6"

@@ -184,12 +184,12 @@ pub(crate) use agena_runtime_session::{
     prompt_token_budget, session_output_token_budget,
 };
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
-pub(crate) use agena_runtime_session::{RuntimeSessionManagerConfig, SessionScopeReconfiguration};
 pub use agena_runtime_session::{
-    SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
+    RewindMode, SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
     SessionUserRunRequest,
 };
+pub(crate) use agena_runtime_session::{RuntimeSessionManagerConfig, SessionScopeReconfiguration};
 pub use agena_runtime_session::{
     SessionExecutionAttempt, SessionExecutionControl, SessionExecutionControlError,
 };

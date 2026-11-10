@@ -24,6 +24,25 @@ impl App {
                 }
                 true
             }
+            ChoiceOverlayAction::RewindMode {
+                session_id,
+                at_message_id,
+                message_document,
+                target,
+            } => {
+                let mode = match choice_selection_value(&selection).as_str() {
+                    "in_place" => agena_domain::RewindMode::InPlace,
+                    _ => agena_domain::RewindMode::Fork,
+                };
+                self.open_rewind_confirm_overlay(
+                    session_id,
+                    at_message_id,
+                    message_document,
+                    target,
+                    mode,
+                );
+                true
+            }
             ChoiceOverlayAction::QueuedMessage {
                 session_id,
                 execution_id,

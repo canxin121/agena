@@ -348,6 +348,7 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
         ChoiceOverlayAction::MessageQueue { .. }
         | ChoiceOverlayAction::QueuedMessage { .. }
         | ChoiceOverlayAction::StoppedMessageQueue { .. }
+        | ChoiceOverlayAction::RewindMode { .. }
         | ChoiceOverlayAction::PermissionStudioAddEntries(_)
         | ChoiceOverlayAction::PermissionStudioAddEntriesMode { .. } => String::new(),
     }

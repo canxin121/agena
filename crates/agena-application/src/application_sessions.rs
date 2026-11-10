@@ -440,6 +440,7 @@ impl Application {
         &self,
         session_id: i64,
         at_message_id: i64,
+        mode: agena_domain::RewindMode,
     ) -> Result<SessionExecutionResource, ApplicationError> {
         let expected_version = self
             .get_session(session_id)
@@ -452,6 +453,7 @@ impl Application {
             .rewind_session(SessionRewindRequest {
                 session_id,
                 at_message_id,
+                mode,
                 expected_version: Some(expected_version),
             })
             .await

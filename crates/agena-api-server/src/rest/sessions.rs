@@ -562,6 +562,7 @@ pub async fn rewind_session(
         .rewind_session(agena_runtime::SessionRewindRequest {
             session_id,
             at_message_id: request.at_message_id,
+            mode: request.mode,
             expected_version,
         })
         .await

@@ -436,6 +436,80 @@ async fn fork(
         Mutation::Session(Box::new(metadata))
     })
 }
+/// Hard-truncate this session's own history before a user message.
+///
+/// Unlike `fork(rewind)`, this keeps one session: the retracted entries stop
+/// being members here and the caller restores the picked message to the
+/// composer. Any execution still owning a truncated entry is settled first so
+/// no queued/running attempt survives without a message.
+async fn truncate(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    message: EntryId,
+) -> Result<Mutation> {
+    let metadata = reads::metadata(connection, session).await?;
+    let (sequence, ordinal) = boundary(connection, session, message).await?;
+    let row =
+        sqlx::query("SELECT origin_session_id,kind,execution_id,generation,body_json FROM agena_entries WHERE id=?")
+            .bind(message.get())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+    if row.try_get::<&str, _>("kind").map_err(storage)? != "user"
+        || row
+            .try_get::<i64, _>("origin_session_id")
+            .map_err(storage)?
+            != session.get()
+    {
+        return Err(KernelError::Ownership);
+    }
+    let execution = row
+        .try_get::<&str, _>("execution_id")
+        .map_err(storage)?
+        .parse()
+        .map_err(storage)?;
+    let visible = reads::execution_visible(connection, session, execution).await?;
+    if !visible.phase.is_terminal() {
+        return Err(KernelError::Conflict(
+            "rewind requires a completed user message".into(),
+        ));
+    }
+    let document =
+        decode::<agena_domain::ComposerDocument>(row.try_get("body_json").map_err(storage)?)?;
+    // Executions that still own a truncated entry would otherwise remain
+    // queued/running without a message. Settle them inside this transaction.
+    loop {
+        let ids: Vec<String> = sqlx::query_scalar("SELECT execution_id FROM agena_attempts WHERE session_id=? AND phase IN ('queued','running') ORDER BY execution_id LIMIT 128").bind(session.get()).fetch_all(&mut *connection).await.map_err(sql_error)?;
+        if ids.is_empty() {
+            break;
+        }
+        for id in ids {
+            let (view, _) =
+                reads::execution(connection, session, id.parse().map_err(storage)?).await?;
+            commands::finish(connection, view, ExecutionPhase::Cancelled).await?;
+        }
+    }
+    let next = metadata.membership_generation.next().map_err(storage)?;
+    sqlx::query("INSERT INTO agena_retired_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation) SELECT session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,? FROM agena_session_segments edge WHERE session_id=? AND sequence>=? AND EXISTS(SELECT 1 FROM agena_history_snapshots root WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation AND root.generation<?)").bind(next.get()).bind(session.get()).bind(sequence).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    let cut=sqlx::query("SELECT segment_id,first_ordinal FROM agena_session_segments WHERE session_id=? AND sequence=?").bind(session.get()).bind(sequence).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query("DELETE FROM agena_session_segments WHERE session_id=? AND sequence>=?")
+        .bind(session.get())
+        .bind(sequence)
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    let first: i64 = cut.try_get("first_ordinal").map_err(storage)?;
+    if ordinal > first {
+        sqlx::query("INSERT INTO agena_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation) VALUES (?,?,?,?,?,?)").bind(session.get()).bind(sequence).bind(cut.try_get::<i64,_>("segment_id").map_err(storage)?).bind(first).bind(ordinal).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    }
+    sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query("UPDATE agena_prompt_windows SET checkpoint_entry_id=NULL,through_entry_id=NULL,through_sequence=NULL,through_ordinal=NULL,rewrite_epoch=rewrite_epoch+1 WHERE session_id=?").bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    recount(connection, session).await?;
+    Ok(Mutation::Rewind(Box::new(RewindResult {
+        session: reads::metadata(connection, session).await?,
+        document,
+    })))
+}
 async fn withdraw(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -1042,6 +1116,7 @@ pub(super) async fn apply(
             .await?
         }
         Command::Withdraw { session, message } => withdraw(connection, *session, *message).await?,
+        Command::Truncate { session, message } => truncate(connection, *session, *message).await?,
         Command::DeleteSession { session, guard } => {
             if let Some(guard) = guard {
                 check_delete(connection, *session, guard).await?;

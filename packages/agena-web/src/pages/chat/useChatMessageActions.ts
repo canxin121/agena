@@ -39,7 +39,11 @@ type ChatLike = {
   selectedSessionId: string | null
   selectSession: (sessionId: string) => Promise<void>
   forkSession: (sessionId: string, opts?: { at_message_id?: number }) => Promise<JsonValue | null>
-  revertToMessage: (sessionId: string, messageId: string) => Promise<{ session: Session; message: MessageEntry }>
+  revertToMessage: (
+    sessionId: string,
+    messageId: string,
+    mode?: 'fork' | 'in_place',
+  ) => Promise<{ session: Session; message: MessageEntry }>
 }
 
 function filePartLabel(part: MessagePartLike): string {
@@ -159,14 +163,14 @@ export function useChatMessageActions(opts: {
     }
   }
 
-  async function handleRevertFromMessage(messageId: string) {
+  async function handleRevertFromMessage(messageId: string, mode: 'fork' | 'in_place' = 'fork') {
     const sid = chat.selectedSessionId
     if (!sid || historyActionBusy.value) return
 
     historyActionBusy.value = true
     revertBusyMessageId.value = messageId
     try {
-      const { session, message } = await chat.revertToMessage(sid, messageId)
+      const { session, message } = await chat.revertToMessage(sid, messageId, mode)
       await openBranch(session.id)
       const segments: ComposerSegment[] = []
       const files: AttachedFile[] = []

@@ -46,7 +46,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'fork', messageId: string): void
-  (event: 'revert', messageId: string): void
+  (event: 'revert', messageId: string, mode: 'fork' | 'in_place'): void
   (event: 'copy', message: MessageLike): void
   (event: 'partToggle', part: TranscriptDisplayPart, expanded: boolean): void
   (event: 'foldExpand', fold: MessageFold, all: boolean): void
@@ -159,7 +159,7 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :is-node-search-match="isNodeSearchMatch"
           :session-id="selectedSessionId"
           @fork="$emit('fork', $event)"
-          @revert="$emit('revert', $event)"
+          @revert="(messageId: string, mode: 'fork' | 'in_place') => $emit('revert', messageId, mode)"
           @copy="$emit('copy', $event)"
           @part-toggle="forwardPartToggle"
           @fold-expand="forwardFoldExpand"

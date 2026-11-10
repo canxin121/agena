@@ -219,6 +219,12 @@ pub(crate) enum ChoiceOverlayAction {
         request_id: uuid::Uuid,
         skills: Vec<agena_api::skills::SkillSummary>,
     },
+    RewindMode {
+        session_id: i64,
+        at_message_id: i64,
+        message_document: agena_domain::ComposerDocument,
+        target: String,
+    },
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),
     ModelSelectionMode {
@@ -430,6 +436,7 @@ pub(crate) enum ConfirmAction {
         at_message_id: i64,
         message_document: agena_domain::ComposerDocument,
         target: String,
+        mode: agena_domain::RewindMode,
     },
     PermissionStudioDeletePathRule {
         pattern: String,

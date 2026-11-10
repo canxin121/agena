@@ -148,6 +148,12 @@ export type AgenaExecutionState = {
     model_context_window_tokens?: number | null
     model_max_input_tokens?: number | null
     model_max_output_tokens?: number | null
+    /** Prompt tokens the last request read from the provider cache. */
+    last_cache_read_tokens?: number | null
+    /** Prompt tokens the last request could have cached. */
+    last_cache_input_tokens?: number | null
+    /** last_cache_read_tokens / last_cache_input_tokens (0.0–1.0). */
+    last_cache_hit_rate?: number | null
     [k: string]: JsonValue
   }
   [k: string]: JsonValue
@@ -1141,6 +1147,19 @@ export async function sendMessage(sessionId: string, payload: SendMessagePayload
   return state
 }
 
+/** PUT /api/v1/sessions/{id}/selection — replace the persisted run selection. */
+export async function setSessionSelection(sessionId: string, options: RunOptionsPayload): Promise<AgenaExecutionState> {
+  const scope = sessionRoutingScope()
+  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/selection`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(buildRunRequestBody(options)),
+  })
+  toSession(state.session, scope)
+  reconcileSessionMutation(sessionId, 'execution', scope)
+  return state
+}
+
 /** PUT /api/v1/sessions/{id}/permission — update the session policy. */
 export async function setSessionPermission(sessionId: string, permission: JsonValue): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
@@ -1279,19 +1298,26 @@ export async function cancelSession(sessionId: string, executionId?: string | nu
   }
 }
 
-/** POST /api/v1/sessions/{id}/rewind — create a branch before a user message. */
-export async function rewindSession(sessionId: string, atMessageId: number): Promise<AgenaExecutionState> {
+/** `fork` keeps the source session and creates a branch; `in_place` truncates it. */
+export type RewindMode = 'fork' | 'in_place'
+
+/** POST /api/v1/sessions/{id}/rewind — retract a user message and its successors. */
+export async function rewindSession(
+  sessionId: string,
+  atMessageId: number,
+  mode: RewindMode = 'fork',
+): Promise<AgenaExecutionState> {
   if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
     throw new Error(i18n.global.t('chat.errors.userMessageIdRequired'))
   const scope = sessionRoutingScope()
   const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ at_message_id: atMessageId }),
+    body: JSON.stringify({ at_message_id: atMessageId, mode }),
   })
   const session = toSession(created.session, scope)
   if (!session) throw new Error(i18n.global.t('chat.errors.rewoundSessionMissing'))
-  reconcileSessionMutation(session.id, 'created', scope)
+  reconcileSessionMutation(session.id, mode === 'in_place' ? 'execution' : 'created', scope)
   return created
 }
 

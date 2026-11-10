@@ -28,9 +28,11 @@ mod marketplace;
 mod native;
 mod plugins;
 mod queue;
+mod rewind;
 mod settings;
 mod terminal;
 mod tools;
+mod usage;
 mod workbench_fs;
 
 fn fixture() -> TestAgenaBuilder {

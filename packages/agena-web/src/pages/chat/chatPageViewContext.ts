@@ -37,6 +37,9 @@ type SessionUsageLike = {
   capacityLabel?: string
   costLabel?: string
   tokensValue?: number | null
+  lastCacheReadTokens?: number | null
+  lastCacheInputTokens?: number | null
+  lastCacheHitRate?: number | null
 }
 
 export type ChatPageViewContext = {
@@ -71,6 +74,7 @@ export type ChatPageViewContext = {
     isCompactLayout: boolean
     isCompactTouch: boolean
     isTouchPointer: boolean
+    isMobileDevice: boolean
     isSessionSwitcherOpen: boolean
     setSessionSwitcherOpen: (open: boolean) => void
   }
@@ -247,6 +251,6 @@ export type ChatPageViewContext = {
 
   isStreamingAssistantMessage: (message: MessageRecordLike | null | undefined) => boolean
   handleForkFromMessage: (messageId: string) => void
-  handleRevertFromMessage: (messageId: string) => void
+  handleRevertFromMessage: (messageId: string, mode?: 'fork' | 'in_place') => void
   handleCopyMessage: (message: MessageRecordLike) => void
 }

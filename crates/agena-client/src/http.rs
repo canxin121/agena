@@ -2920,11 +2920,12 @@ impl AgenaClient {
             Command::RewindSession(RewindSessionParams {
                 session_id,
                 at_message_id,
+                mode,
                 expected_version,
             }) => Ok(CommandResult::Execution(
                 self.post_json_if_match(
                     &format!("/api/v1/sessions/{session_id}/rewind"),
-                    serde_json::json!({ "at_message_id": at_message_id }),
+                    serde_json::json!({ "at_message_id": at_message_id, "mode": mode }),
                     expected_version,
                 )
                 .await?,

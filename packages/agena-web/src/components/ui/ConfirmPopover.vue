@@ -41,6 +41,8 @@ const props = withDefaults(
     confirmDisabled?: boolean
     cancelDisabled?: boolean
     busy?: boolean
+    /** Render only the `actions` slot instead of confirm/cancel. */
+    showDefaultActions?: boolean
   }>(),
   {
     open: null,
@@ -276,7 +278,11 @@ function onConfirm() {
           <slot name="content" />
         </div>
 
-        <div class="grid gap-2">
+        <div v-if="$slots.actions" class="grid gap-2">
+          <slot name="actions" />
+        </div>
+
+        <div v-if="showDefaultActions" class="grid gap-2">
           <Button variant="secondary" class="w-full" :disabled="cancelDisabled" @click="onCancel">
             <RiCloseLine class="h-4 w-4 mr-2" />
             {{ effectiveCancelText }}
@@ -341,7 +347,11 @@ function onConfirm() {
           <slot name="content" />
         </div>
 
-        <div class="p-1 space-y-0.5">
+        <div v-if="$slots.actions" class="p-1 space-y-0.5 border-b border-border/60">
+          <slot name="actions" />
+        </div>
+
+        <div v-if="showDefaultActions" class="p-1 space-y-0.5">
           <Button
             type="button"
             variant="ghost"

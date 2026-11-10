@@ -154,6 +154,9 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for SessionReplyRequestBody<T> {
 /// Body of a session rewind request.
 pub struct SessionRewindRequestBody {
     pub at_message_id: i64,
+    /// `fork` (default) creates a branch; `in_place` truncates this session.
+    #[serde(default)]
+    pub mode: agena_domain::RewindMode,
 }
 
 #[cfg(test)]

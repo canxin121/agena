@@ -227,8 +227,9 @@ impl App {
                 session_id,
                 message_document,
                 target,
+                mode,
                 result,
-            } => self.handle_session_rewound(session_id, message_document, target, result),
+            } => self.handle_session_rewound(session_id, message_document, target, mode, result),
             AppMessage::CatalogInvalidated => {
                 if let crate::Route::Hub(state) = &mut self.current_route {
                     state.dirty = true;

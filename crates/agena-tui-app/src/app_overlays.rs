@@ -392,12 +392,7 @@ impl App {
                 else {
                     return false;
                 };
-                self.open_rewind_confirm_overlay(
-                    session_id,
-                    at_message_id,
-                    message_document,
-                    target,
-                );
+                self.open_rewind_mode_picker(session_id, at_message_id, message_document, target);
                 true
             }
         }

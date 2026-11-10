@@ -883,33 +883,59 @@ impl App {
         session_id: i64,
         message_document: agena_domain::ComposerDocument,
         target: String,
+        mode: agena_domain::RewindMode,
         result: UiResult<SessionExecutionResource>,
     ) {
         self.finish_run_operation(RunActivityTarget::Session(session_id), RunOperation::Rewind);
         match result {
             Ok(execution) => {
                 let rewound_session_id = execution.session.id;
+                if mode == agena_domain::RewindMode::InPlace {
+                    // In-place truncation removes parts from this session. Drop
+                    // the cached window and page cursors so no retracted part
+                    // survives a reconnect or a stale cursor.
+                    self.transcript_cache.remove(&rewound_session_id);
+                    if self.transcript.session_id == Some(rewound_session_id) {
+                        let title = execution.session.title.clone();
+                        self.transcript.reset(rewound_session_id, title);
+                        if self.apply_transcript_execution(execution) {
+                            self.sync_pending_interactive_after_execution(rewound_session_id);
+                            self.sync_session_list_selection_to_current_execution();
+                        }
+                        self.request_session_state(rewound_session_id);
+                    }
+                } else {
+                    let rewound_message_draft = ComposerDraft {
+                        document: message_document.clone(),
+                    };
+                    self.set_draft_for_slot(
+                        DraftSlot::Session(rewound_session_id),
+                        rewound_message_draft.clone(),
+                    );
+                    self.open_session(rewound_session_id, execution.session.title.clone());
+                    if self.apply_transcript_execution(execution) {
+                        self.sync_pending_interactive_after_execution(rewound_session_id);
+                        self.sync_session_list_selection_to_current_execution();
+                    }
+                }
                 let rewound_message_draft = ComposerDraft {
                     document: message_document,
                 };
-                self.set_draft_for_slot(
-                    DraftSlot::Session(rewound_session_id),
-                    rewound_message_draft.clone(),
-                );
-                self.open_session(rewound_session_id, execution.session.title.clone());
-                self.replace_composer_draft(rewound_message_draft);
-                self.sync_current_draft_slot();
-                self.persist_draft_store_with_feedback(true);
-                if self.apply_transcript_execution(execution) {
-                    self.sync_pending_interactive_after_execution(rewound_session_id);
-                    self.sync_session_list_selection_to_current_execution();
+                if self.transcript.session_id == Some(rewound_session_id) {
+                    self.replace_composer_draft(rewound_message_draft);
+                    self.sync_current_draft_slot();
+                    self.persist_draft_store_with_feedback(true);
                 }
                 self.focus = Focus::Composer;
                 self.request_sessions(false);
-                self.flash_success(self.i18n.text_args(
-                    "flash-session-rewound",
-                    &agena_tui::fl_args!("target" => target),
-                ));
+                let key = match mode {
+                    agena_domain::RewindMode::Fork => "flash-session-rewound",
+                    agena_domain::RewindMode::InPlace => "flash-session-rewound-in-place",
+                };
+                self.flash_success(
+                    self.i18n
+                        .text_args(key, &agena_tui::fl_args!("target" => target)),
+                );
             }
             Err(error) => {
                 self.flash_error(error);

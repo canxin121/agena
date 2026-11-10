@@ -60,6 +60,17 @@ pub enum SessionRelationKind {
     Subagent,
 }
 
+/// How a rewind treats the session it was requested on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RewindMode {
+    /// Keep the source session and create a branch before the message.
+    #[default]
+    Fork,
+    /// Remove the message and everything after it from this session.
+    InPlace,
+}
+
 impl SessionRelationKind {
     pub const fn as_str(self) -> &'static str {
         match self {

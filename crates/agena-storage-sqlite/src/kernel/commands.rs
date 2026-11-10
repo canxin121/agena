@@ -25,6 +25,7 @@ pub(super) async fn apply(
         | Command::FinishAgent { .. }
         | Command::Fork { .. }
         | Command::Withdraw { .. }
+        | Command::Truncate { .. }
         | Command::DeleteSession { .. }
         | Command::Continue { .. }
         | Command::StartControlExecution { .. }

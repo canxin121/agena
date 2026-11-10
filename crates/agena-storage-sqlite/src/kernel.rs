@@ -393,7 +393,11 @@ impl KernelBackend for Backend {
             .clone()
             .try_acquire_owned()
             .map_err(|_| KernelError::Busy)?;
-        let id:Option<i64>=sqlx::query_scalar("SELECT id FROM agena_rounds WHERE session_id=? AND phase!='running' AND provider_state_json IS NOT NULL ORDER BY id DESC LIMIT 1").bind(session.get()).fetch_optional(self.reader.get_sqlite_connection_pool()).await.map_err(sql_error)?;
+        // A round is readable only while its execution's message is still a
+        // member of this session. In-place truncation retires the membership,
+        // and selecting by `rounds.session_id` alone would then read a round
+        // that `reads::round` rejects.
+        let id:Option<i64>=sqlx::query_scalar("SELECT r.id FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.session_id=? AND r.phase!='running' AND r.provider_state_json IS NOT NULL AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) ORDER BY r.id DESC LIMIT 1").bind(session.get()).bind(session.get()).fetch_optional(self.reader.get_sqlite_connection_pool()).await.map_err(sql_error)?;
         let value = if let Some(id) = id {
             Some(
                 reads::round(
@@ -428,8 +432,9 @@ impl KernelBackend for Backend {
             .try_acquire_owned()
             .map_err(|_| KernelError::Busy)?;
         let id: Option<i64> = sqlx::query_scalar(
-            "SELECT id FROM agena_rounds WHERE session_id=? AND phase!='running' AND json_extract(provider_state_json,'$.usage') IS NOT NULL ORDER BY id DESC LIMIT 1",
+            "SELECT r.id FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.session_id=? AND r.phase!='running' AND json_extract(r.provider_state_json,'$.usage') IS NOT NULL AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) ORDER BY r.id DESC LIMIT 1",
         )
+        .bind(session.get())
         .bind(session.get())
         .fetch_optional(self.reader.get_sqlite_connection_pool())
         .await
@@ -2010,6 +2015,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Configure { session, .. }
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
+        | Command::Truncate { session, .. }
         | Command::DeleteSession { session, .. }
         | Command::Continue { session, .. }
         | Command::StartControlExecution { session, .. }
@@ -2125,6 +2131,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         | Command::DetachGlobal { session, .. }
         | Command::FinishAgent { session, .. } => (*session, ChangeKind::Metadata),
         Command::Withdraw { session, .. }
+        | Command::Truncate { session, .. }
         | Command::DeleteSession { session, .. }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
         Command::Continue { session, .. }
@@ -2323,6 +2330,7 @@ async fn entry_changes(
     match command {
         Command::Fork { .. }
         | Command::Withdraw { .. }
+        | Command::Truncate { .. }
         | Command::DeleteSession { .. }
         | Command::ClearQueued { .. } => {
             change.requires_snapshot = true;

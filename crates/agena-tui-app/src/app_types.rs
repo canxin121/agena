@@ -857,6 +857,7 @@ pub(super) enum AppMessage {
         session_id: i64,
         message_document: agena_domain::ComposerDocument,
         target: String,
+        mode: agena_domain::RewindMode,
         result: UiResult<SessionExecutionResource>,
     },
     /// Pushed by the unified event bus (`app_backend::live_events::subscribe_session_events`).

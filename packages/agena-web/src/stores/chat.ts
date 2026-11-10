@@ -2214,7 +2214,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   // ─── rewind (revert) ──────────────────────────────────────────────────────
 
-  async function revertToMessage(sessionId: string, messageId: string) {
+  async function revertToMessage(sessionId: string, messageId: string, mode: chatApi.RewindMode = 'fork') {
     const sid = (sessionId || '').trim()
     const atMessageId = Number((messageId || '').trim())
     if (!sid || !Number.isSafeInteger(atMessageId) || atMessageId <= 0) {
@@ -2230,9 +2230,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
 
     const generation = transcriptCacheGeneration
-    const state = await chatApi.rewindSession(sid, atMessageId)
+    const state = await chatApi.rewindSession(sid, atMessageId, mode)
     const created = applyExecutionResource(state, generation)
     if (!created) return null
+    if (mode === 'in_place') {
+      // Truncation changes this session's membership. Drop the cached window
+      // and its cursors so no retracted message survives a stale refresh.
+      removedParts.delete(sid)
+      historyOlderLoadedBySession.value = { ...historyOlderLoadedBySession.value, [sid]: false }
+      historyCursorBySession.value = { ...historyCursorBySession.value, [sid]: null }
+      historyExhaustedBySession.value = { ...historyExhaustedBySession.value, [sid]: true }
+      clearMessagesHydrated(sid)
+      await refreshMessages(sid, { replace: true, silent: true })
+      return { session: created, message: target }
+    }
     return { session: created, message: target }
   }
 

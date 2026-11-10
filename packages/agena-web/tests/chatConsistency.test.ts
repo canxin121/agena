@@ -385,4 +385,82 @@ describe('chat session consistency', () => {
     await second
     expect(chat.messagesLoading).toBe(false)
   })
+
+  test('in-place rewind reloads the transcript with exact replacement and drops retracted parts', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    chat.selectedSessionId = '1'
+    const retracted = part({
+      part_id: 22,
+      run_id: 22,
+      message_id: 22,
+      role: 'user',
+      kind: 'text',
+      state: 'completed',
+      run_state: 'completed',
+      content: { document: [], execution_phase: 'succeeded' },
+    })
+    const surviving = part({ part_id: 10, run_id: 10, role: 'assistant' })
+    for (const snapshot of [surviving, retracted]) {
+      chat.applyEvent({
+        type: 'session_changed',
+        properties: { session_id: 1, kind: 'part_added', part: snapshot, resource_revisions: {} },
+      })
+    }
+    expect(chat.getMessagesForSession('1').map((entry) => entry.info.id)).toEqual(['10', '22'])
+
+    const rewound = execution(13)
+    rewound.session.id = 1
+    spyOn(chatApi, 'rewindSession').mockResolvedValue(rewound)
+    spyOn(chatApi, 'listSessionMessages').mockResolvedValue([
+      {
+        info: { id: '22', sessionID: '1', role: 'user', runId: 22, runState: 'completed' },
+        parts: [],
+      },
+    ])
+    const listed = spyOn(chatApi, 'listMessages').mockResolvedValue({
+      entries: [
+        {
+          info: { id: '10', sessionID: '1', role: 'assistant', runId: 10, runState: 'completed' },
+          parts: [],
+        },
+      ],
+      hasMore: false,
+      nextCursor: null,
+      userMessageCount: 1,
+    })
+
+    const result = await chat.revertToMessage('1', '22', 'in_place')
+    expect(result?.session.id).toBe('1')
+    expect(listed).toHaveBeenCalled()
+    // The retracted turn never comes back from the old cache.
+    expect(chat.getMessagesForSession('1').map((entry) => entry.info.id)).toEqual(['10'])
+  })
+
+  test('fork rewind creates a branch session without rewriting the source', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    chat.selectedSessionId = '1'
+    const source = part({ part_id: 10, run_id: 10, role: 'assistant' })
+    chat.applyEvent({
+      type: 'session_changed',
+      properties: { session_id: 1, kind: 'part_added', part: source, resource_revisions: {} },
+    })
+    const created = execution(14)
+    created.session.id = 2
+    created.session.parent_id = 1
+    created.session.relation_kind = 'rewind'
+    const rewind = spyOn(chatApi, 'rewindSession').mockResolvedValue(created)
+    spyOn(chatApi, 'listSessionMessages').mockResolvedValue([
+      {
+        info: { id: '22', sessionID: '1', role: 'user', runId: 22, runState: 'completed' },
+        parts: [],
+      },
+    ])
+    const listed = spyOn(chatApi, 'listMessages')
+
+    const result = await chat.revertToMessage('1', '22', 'fork')
+    expect(rewind).toHaveBeenCalledWith('1', 22, 'fork')
+    expect(result?.session.id).toBe('2')
+    expect(listed).not.toHaveBeenCalled()
+    expect(chat.getMessagesForSession('1').map((entry) => entry.info.id)).toEqual(['10'])
+  })
 })

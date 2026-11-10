@@ -1,3 +1,5 @@
+use crate::{ChoiceItem, ChoiceOverlayAction};
+
 impl App {
     pub(crate) fn open_child_sessions_picker(&mut self) {
         let Some(parent_session_id) = self.transcript.session_id else {
@@ -19,16 +21,68 @@ impl App {
         self.request_child_sessions(parent_session_id);
     }
 
-    pub(crate) fn open_rewind_confirm_overlay(
+    /// Ask how the retracted turn should be kept: a new branch (the default)
+    /// or by hard-truncating this session's own history.
+    pub(crate) fn open_rewind_mode_picker(
         &mut self,
         session_id: i64,
         at_message_id: i64,
         message_document: agena_domain::ComposerDocument,
         target: String,
     ) {
-        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
-            ui_text::t(&self.i18n, "overlay-rewind-confirm-title"),
-            vec![
+        let items = vec![
+            self.rewind_mode_choice(
+                "overlay-rewind-mode-fork-label",
+                "overlay-rewind-mode-fork-detail",
+                "fork",
+            ),
+            self.rewind_mode_choice(
+                "overlay-rewind-mode-in-place-label",
+                "overlay-rewind-mode-in-place-detail",
+                "in_place",
+            ),
+        ];
+        self.open_choice_overlay(self.build_choice_overlay(
+            ui_text::t(&self.i18n, "overlay-rewind-mode-title"),
+            self.i18n.text_args(
+                "overlay-rewind-mode-prompt",
+                &agena_tui::fl_args!("target" => target.clone()),
+            ),
+            None,
+            items,
+            ChoiceOverlayAction::RewindMode {
+                session_id,
+                at_message_id,
+                message_document,
+                target,
+            },
+            false,
+            agena_tui::choice::ChoicePresentationStyle::SelectOnly,
+        ));
+    }
+
+    fn rewind_mode_choice(&self, label_key: &str, detail_key: &str, value: &str) -> ChoiceItem {
+        let label = ui_text::t(&self.i18n, label_key);
+        let detail = ui_text::t(&self.i18n, detail_key);
+        ChoiceItem {
+            search_text: format!("{label} {detail}"),
+            label,
+            detail,
+            value: value.to_owned(),
+            current: false,
+        }
+    }
+
+    pub(crate) fn open_rewind_confirm_overlay(
+        &mut self,
+        session_id: i64,
+        at_message_id: i64,
+        message_document: agena_domain::ComposerDocument,
+        target: String,
+        mode: agena_domain::RewindMode,
+    ) {
+        let body = match mode {
+            agena_domain::RewindMode::Fork => vec![
                 self.i18n.text_args(
                     "overlay-rewind-confirm-keep",
                     &agena_tui::fl_args!("target" => target.clone()),
@@ -36,11 +90,24 @@ impl App {
                 ui_text::t(&self.i18n, "overlay-rewind-confirm-warning"),
                 ui_text::t(&self.i18n, "overlay-rewind-confirm-draft"),
             ],
+            agena_domain::RewindMode::InPlace => vec![
+                self.i18n.text_args(
+                    "overlay-rewind-confirm-keep",
+                    &agena_tui::fl_args!("target" => target.clone()),
+                ),
+                ui_text::t(&self.i18n, "overlay-rewind-confirm-in-place-warning"),
+                ui_text::t(&self.i18n, "overlay-rewind-confirm-in-place-draft"),
+            ],
+        };
+        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
+            ui_text::t(&self.i18n, "overlay-rewind-confirm-title"),
+            body,
             ConfirmAction::Rewind {
                 session_id,
                 at_message_id,
                 message_document,
                 target,
+                mode,
             },
         )));
     }
@@ -470,7 +537,14 @@ impl App {
                 at_message_id,
                 message_document,
                 target,
-            } => self.request_session_rewind(session_id, at_message_id, message_document, target),
+                mode,
+            } => self.request_session_rewind(
+                session_id,
+                at_message_id,
+                message_document,
+                target,
+                mode,
+            ),
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }
@@ -526,3 +600,204 @@ use crate::{
     pending_interactive_kind_for_execution, preferred_visible_session_selection, ui_text,
 };
 use agena_tui::main_focus::Focus;
+
+#[cfg(test)]
+mod rewind_mode_tests {
+    use crate::{App, ChoiceOverlayAction, ConfirmAction, Overlay, Route};
+    use agena_tui::i18n::I18n;
+    use agena_tui::main_focus::Focus;
+
+    fn app() -> (tempfile::TempDir, App) {
+        let temp = tempfile::tempdir().unwrap();
+        let backend = crate::TuiBackend::isolated_test_backend(temp.path().to_path_buf());
+        let mut app =
+            App::new_with_backend(backend, crate::LaunchOptions::default(), I18n::english());
+        app.draft_store_path = temp.path().join("tui-drafts.json");
+        app.prompt_history_path = temp.path().join("tui-prompt-history.jsonl");
+        app.current_route = Route::Main;
+        app.focus = Focus::Composer;
+        (temp, app)
+    }
+
+    fn document() -> agena_domain::ComposerDocument {
+        agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "retracted turn".into(),
+        }])
+    }
+
+    fn pick(app: &mut App, value: &str) -> bool {
+        let Some(Overlay::Choice(dialog)) = &mut app.overlay else {
+            panic!("expected the rewind mode picker");
+        };
+        assert!(matches!(
+            dialog.action,
+            ChoiceOverlayAction::RewindMode { .. }
+        ));
+        let picked = dialog
+            .presentation
+            .select_item_where(|item| item.value == value);
+        if picked {
+            app.handle_key_event(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        picked
+    }
+
+    #[test]
+    fn rewind_mode_and_in_place_copy_exist_in_every_locale() {
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            let i18n = I18n::resolve(Some(locale), None);
+            let prompt = i18n.text_args(
+                "overlay-rewind-mode-prompt",
+                &agena_tui::fl_args!("target" => "turn 2"),
+            );
+            assert!(
+                prompt.contains("turn 2") && !prompt.contains("Unknown localization key"),
+                "{locale}: {prompt}"
+            );
+            let flash = i18n.text_args(
+                "flash-session-rewound-in-place",
+                &agena_tui::fl_args!("target" => "turn 2"),
+            );
+            assert!(
+                flash.contains("turn 2") && !flash.contains("Unknown localization key"),
+                "{locale}: {flash}"
+            );
+            for key in [
+                "overlay-rewind-mode-title",
+                "overlay-rewind-mode-fork-label",
+                "overlay-rewind-mode-fork-detail",
+                "overlay-rewind-mode-in-place-label",
+                "overlay-rewind-mode-in-place-detail",
+                "overlay-rewind-confirm-in-place-warning",
+                "overlay-rewind-confirm-in-place-draft",
+            ] {
+                let value = i18n.text(key);
+                assert!(
+                    !value.trim().is_empty() && !value.contains("Unknown localization key"),
+                    "{locale}/{key}: {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rewind_offers_both_branch_and_in_place_outcomes() {
+        let (_temp, mut app) = app();
+        app.open_rewind_mode_picker(7, 42, document(), "turn 2".into());
+        let Some(Overlay::Choice(dialog)) = &app.overlay else {
+            panic!("expected the rewind mode picker");
+        };
+        let values = ["fork", "in_place"]
+            .into_iter()
+            .filter(|value| {
+                let mut presentation = dialog.presentation.clone();
+                presentation.select_item_where(|item| item.value == *value)
+            })
+            .count();
+        assert_eq!(values, 2, "rewind must offer a branch and an in-place edit");
+    }
+
+    #[test]
+    fn choosing_in_place_opens_a_confirm_that_carries_the_mode() {
+        let (_temp, mut app) = app();
+        app.open_rewind_mode_picker(7, 42, document(), "turn 2".into());
+        assert!(pick(&mut app, "in_place"));
+        let Some(Overlay::Confirm(confirm)) = &app.overlay else {
+            panic!("expected the rewind confirm");
+        };
+        match &confirm.action {
+            ConfirmAction::Rewind {
+                session_id,
+                at_message_id,
+                mode,
+                ..
+            } => {
+                assert_eq!((*session_id, *at_message_id), (7, 42));
+                assert_eq!(*mode, agena_domain::RewindMode::InPlace);
+            }
+            other => panic!("unexpected confirm action: {other:?}"),
+        }
+        assert!(
+            confirm
+                .body_lines
+                .iter()
+                .any(|line| line.contains("cannot be undone")),
+            "in-place rewind must warn that it is destructive: {:?}",
+            confirm.body_lines
+        );
+    }
+
+    #[test]
+    fn choosing_fork_keeps_the_branch_wording() {
+        let (_temp, mut app) = app();
+        app.open_rewind_mode_picker(7, 42, document(), "turn 2".into());
+        assert!(pick(&mut app, "fork"));
+        let Some(Overlay::Confirm(confirm)) = &app.overlay else {
+            panic!("expected the rewind confirm");
+        };
+        match &confirm.action {
+            ConfirmAction::Rewind { mode, .. } => {
+                assert_eq!(*mode, agena_domain::RewindMode::Fork)
+            }
+            other => panic!("unexpected confirm action: {other:?}"),
+        }
+        assert!(
+            confirm
+                .body_lines
+                .iter()
+                .any(|line| line.contains("new branch")),
+            "fork rewind must describe the branch: {:?}",
+            confirm.body_lines
+        );
+    }
+
+    #[tokio::test]
+    async fn in_place_rewind_resets_the_transcript_instead_of_switching_sessions() {
+        let (_temp, mut app) = app();
+        app.transcript.session_id = Some(17);
+        app.transcript.reset(17, "Rewind test".into());
+        let state = serde_json::json!({
+            "session": {
+                "id": 17, "parent_id": null, "root_id": 17, "depth": 0,
+                "workspace_id": 1, "title": "Rewind test", "version": 2,
+                "relation_kind": "root", "lifecycle_state": "ready",
+                "state": {"kind": "ready", "data": {}},
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+                "message_count": 1, "child_session_count": 0
+            },
+            "parts": [], "part_page": null,
+            "execution": {
+                "agent_id": "test", "selected_permission": {},
+                "effective_permission": {}, "permission_ceiling": {}
+            },
+            "usage": { "current_tokens": 0 }
+        });
+        let execution: crate::SessionExecutionResource = serde_json::from_value(state).unwrap();
+        app.handle_session_rewound(
+            17,
+            document(),
+            "turn 2".into(),
+            agena_domain::RewindMode::InPlace,
+            Ok(execution),
+        );
+        assert_eq!(
+            app.transcript.session_id,
+            Some(17),
+            "in-place rewind must stay in the same session"
+        );
+        assert_eq!(app.transcript.execution.as_ref().unwrap().session.id, 17);
+        assert!(
+            !app.run_activity
+                .is_active(crate::RunActivityTarget::Session(17)),
+            "rewind activity must be finished"
+        );
+        assert!(
+            !app.transcript_cache.contains_key(&17),
+            "retracted cached parts must be dropped"
+        );
+    }
+}

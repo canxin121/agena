@@ -96,6 +96,7 @@ pub async fn dispatch_command(
         Command::RewindSession(RewindSessionParams {
             session_id,
             at_message_id,
+            mode,
             expected_version,
         }) => {
             let outcome = session_services
@@ -103,6 +104,7 @@ pub async fn dispatch_command(
                 .rewind_session(agena_runtime::SessionRewindRequest {
                     session_id,
                     at_message_id,
+                    mode,
                     expected_version,
                 })
                 .await

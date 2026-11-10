@@ -47,6 +47,32 @@ async fn usage(user: &UserSession, models: &[&str]) -> anyhow::Result<UsageTotal
             observed.recorded_cost_usd += row.recorded_cost_usd;
             observed.estimated_cost_usd += row.estimated_cost_usd;
         }
+        // The reporting document must carry its own cache metrics, derived from
+        // the same token rows, so a viewer never recomputes them differently.
+        let summary_cache_input = cost
+            .input_tokens
+            .saturating_add(cost.cache_write_tokens)
+            .saturating_add(cost.cache_read_tokens);
+        ensure!(
+            cost.cache_input_tokens == summary_cache_input
+                && cost.total_tokens
+                    == cost
+                        .input_tokens
+                        .saturating_add(cost.output_tokens)
+                        .saturating_add(cost.reasoning_tokens)
+                        .saturating_add(cost.cache_write_tokens)
+                        .saturating_add(cost.cache_read_tokens)
+                        .saturating_add(cost.other_tokens)
+                && (cost.cache_hit_rate
+                    - if summary_cache_input == 0 {
+                        0.0
+                    } else {
+                        cost.cache_read_tokens as f64 / summary_cache_input as f64
+                    })
+                .abs()
+                    < 1e-12,
+            "session {session_id} cache metrics do not match its token totals: {cost:?}"
+        );
         ensure!(
             observed.input_tokens == expected.input_tokens
                 && observed.output_tokens == expected.output_tokens

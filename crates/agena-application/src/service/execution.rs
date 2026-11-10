@@ -429,6 +429,9 @@ async fn session_usage_resource(
         model_context_window_tokens: usage.model_context_window_tokens,
         model_max_input_tokens: usage.model_max_input_tokens,
         model_max_output_tokens: usage.model_max_output_tokens,
+        last_cache_read_tokens: usage.last_cache_read_tokens,
+        last_cache_input_tokens: usage.last_cache_input_tokens,
+        last_cache_hit_rate: usage.last_cache_hit_rate,
     })
 }
 

@@ -15,6 +15,9 @@ type UsageTotals = {
   output_tokens: number
   reasoning_tokens: number
   cache_read_tokens: number
+  cache_write_tokens?: number
+  cache_input_tokens?: number
+  cache_hit_rate?: number
   total_tokens: number
   total_cost_usd: number
   recorded_cost_usd: number
@@ -88,6 +91,10 @@ function finiteNumber(value: unknown): number {
 }
 
 const integerFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
+const percentFormatter = new Intl.NumberFormat(undefined, {
+  style: 'percent',
+  maximumFractionDigits: 1,
+})
 const usdFormatter = new Intl.NumberFormat(undefined, {
   style: 'currency',
   currency: 'USD',
@@ -102,6 +109,24 @@ function formatInteger(value: unknown): string {
 function formatUsd(value: unknown): string {
   return usdFormatter.format(finiteNumber(value))
 }
+
+/** Cache hit rate arrives as a 0–1 ratio; render it as a percentage. */
+function formatPercent(value: unknown): string {
+  const ratio = Number(value)
+  if (!Number.isFinite(ratio) || ratio <= 0) return '—'
+  return percentFormatter.format(Math.min(1, ratio))
+}
+
+const cacheMetrics = computed(() => {
+  const totals = stats.value?.totals
+  if (!totals) return []
+  return [
+    { key: 'hit-rate', label: st('Cache hit rate'), value: formatPercent(totals.cache_hit_rate) },
+    { key: 'cache-input', label: st('Cacheable input'), value: formatInteger(totals.cache_input_tokens) },
+    { key: 'cache-read', label: st('Cache read'), value: formatInteger(totals.cache_read_tokens) },
+    { key: 'cache-write', label: st('Cache write'), value: formatInteger(totals.cache_write_tokens) },
+  ]
+})
 
 function rowLabel(section: UsageSection['key'], row: UsageBreakdown): string {
   if (section === 'by_day') return String(row.date || '')
@@ -204,6 +229,10 @@ defineExpose({ refresh })
               <dd class="break-all font-mono tabular-nums">
                 {{ formatInteger(stats.average_tokens_per_request) }} {{ $st('tokens') }}
               </dd>
+            </div>
+            <div v-for="row in cacheMetrics" :key="row.key" class="flex flex-wrap justify-between gap-2 pt-3">
+              <dt class="text-muted-foreground">{{ row.label }}</dt>
+              <dd class="break-all font-mono tabular-nums">{{ row.value }}</dd>
             </div>
           </dl>
         </SettingsCard>

@@ -968,6 +968,15 @@ pub struct SessionUsageResource {
     pub model_max_input_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_max_output_tokens: Option<u32>,
+    /// Prompt tokens the last request read from the provider cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_cache_read_tokens: Option<u64>,
+    /// Prompt tokens the last request could have cached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_cache_input_tokens: Option<u64>,
+    /// `last_cache_read_tokens / last_cache_input_tokens` (0.0–1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_cache_hit_rate: Option<f64>,
 }
 
 /// Identity of the session atomically published by an archive import.

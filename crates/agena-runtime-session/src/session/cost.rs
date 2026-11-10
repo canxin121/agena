@@ -173,6 +173,9 @@ impl CostAccumulator {
             mut result,
             by_model,
         } = self;
+        // The reporting document carries its own cache metrics so viewers do not
+        // recompute them; keep the values in lockstep with the flat tokens.
+        result.refresh_derived_totals();
         result.billable_units.sort_by(|left, right| {
             left.kind
                 .cmp(&right.kind)
@@ -186,9 +189,74 @@ impl CostAccumulator {
                         .cmp(&right.kind)
                         .then_with(|| left.unit.cmp(&right.unit))
                 });
+                item.refresh_derived_totals();
                 item
             })
             .collect();
         result
+    }
+}
+
+#[cfg(test)]
+mod cache_metric_tests {
+    use super::*;
+
+    fn usage(input: u64, output: u64, cache_read: u64, cache_write: u64) -> CompletionUsage {
+        CompletionUsage {
+            requests: 1,
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_tokens: cache_read,
+            cache_write_tokens: cache_write,
+            ..CompletionUsage::default()
+        }
+    }
+
+    fn summary(observations: &[CompletionUsage]) -> SessionCostSummary {
+        let mut accumulator = CostAccumulator::default();
+        for observation in observations {
+            accumulator.observe("testkit", "model", observation);
+        }
+        accumulator.finish()
+    }
+
+    #[test]
+    fn hit_rate_is_cache_read_over_every_cacheable_prompt_token() {
+        // 100 fresh + 300 read + 600 written = 1000 cacheable prompt tokens,
+        // of which 300 came from the cache.
+        let result = summary(&[usage(100, 50, 300, 600)]);
+        assert_eq!(result.cache_input_tokens, 1_000);
+        assert_eq!(result.cache_read_tokens, 300);
+        assert!((result.cache_hit_rate - 0.3).abs() < 1e-12);
+        assert_eq!(result.total_tokens, 1_050);
+    }
+
+    #[test]
+    fn cache_metrics_accumulate_across_requests_and_models() {
+        let result = summary(&[
+            usage(100, 10, 100, 0),
+            usage(100, 10, 0, 100),
+            usage(0, 5, 50, 50),
+        ]);
+        assert_eq!(result.cache_input_tokens, 500);
+        assert_eq!(result.cache_read_tokens, 150);
+        assert!((result.cache_hit_rate - 0.3).abs() < 1e-12);
+        assert_eq!(result.total_tokens, 525);
+        let model = &result.by_model[0];
+        assert_eq!(model.cache_input_tokens, 500);
+        assert!((model.cache_hit_rate - 0.3).abs() < 1e-12);
+        assert_eq!(model.total_tokens, result.total_tokens);
+    }
+
+    #[test]
+    fn a_request_without_cacheable_tokens_reports_no_hit_rate() {
+        let result = summary(&[CompletionUsage {
+            requests: 1,
+            output_tokens: 12,
+            ..CompletionUsage::default()
+        }]);
+        assert_eq!(result.cache_input_tokens, 0);
+        assert_eq!(result.cache_hit_rate, 0.0);
+        assert_eq!(result.total_tokens, 12);
     }
 }

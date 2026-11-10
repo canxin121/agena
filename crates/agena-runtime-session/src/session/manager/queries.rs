@@ -516,6 +516,18 @@ impl SessionManager {
             metadata.limits.max_input_tokens,
             Some(output),
         );
+        // Cache efficiency of the last request, using the same definition as the
+        // cost report so both surfaces describe one number.
+        let cache_input = usage.as_ref().map(|usage| {
+            usage
+                .input_tokens
+                .saturating_add(usage.cache_write_tokens)
+                .saturating_add(usage.cache_read_tokens)
+        });
+        let cache_read = usage.as_ref().map(|usage| usage.cache_read_tokens);
+        let cache_hit_rate = cache_input
+            .filter(|input| *input > 0)
+            .map(|input| cache_read.unwrap_or_default() as f64 / input as f64);
         Ok(SessionUsage {
             measured_prompt_tokens: measured,
             current_tokens: current,
@@ -527,6 +539,9 @@ impl SessionManager {
             model_context_window_tokens: metadata.limits.context_window_tokens,
             model_max_input_tokens: metadata.limits.max_input_tokens,
             model_max_output_tokens: metadata.limits.max_output_tokens,
+            last_cache_read_tokens: cache_read,
+            last_cache_input_tokens: cache_input,
+            last_cache_hit_rate: cache_hit_rate,
         })
     }
     pub fn session_model_status(
@@ -608,16 +623,61 @@ impl SessionManager {
         query: agena_domain::UsageStatsQuery,
     ) -> Result<agena_domain::UsageStats, AppError> {
         let mut accumulator = crate::usage_stats::UsageStatsAccumulator::default();
+        // The server can host several projects at once. The active project
+        // dimension is therefore not a filter but one source of the browsing
+        // window: every stored session participates, so a Bot conversation or
+        // another project's history is not silently excluded from the report.
         let workspace = self.current_workspace_id().await?;
+        let mut sessions = Vec::new();
         let mut before = None;
         loop {
-            let sessions = self
+            let page = self
                 .kernel()
                 .reader
-                .summaries(workspace, before, 200)
+                .query_summaries(SummaryQuery {
+                    workspace_id: Some(workspace),
+                    before,
+                    limit: 200,
+                    ..Default::default()
+                })
                 .await
                 .map_err(kernel_error)?;
-            for session in &sessions.sessions {
+            let page = page.clone();
+            for session in &page.sessions {
+                sessions.push(session.clone());
+            }
+            if !page.has_more {
+                break;
+            }
+            before = page.next;
+        }
+        let mut before = None;
+        loop {
+            let page = self
+                .kernel()
+                .reader
+                .query_summaries(SummaryQuery {
+                    include_global: true,
+                    before,
+                    limit: 200,
+                    ..Default::default()
+                })
+                .await
+                .map_err(kernel_error)?;
+            let page = page.clone();
+            sessions.extend(
+                page.sessions
+                    .iter()
+                    .filter(|session| session.workspace_id != Some(workspace))
+                    .cloned(),
+            );
+            if !page.has_more {
+                break;
+            }
+            before = page.next;
+        }
+        {
+            for session in &sessions {
                 let config = self
                     .kernel()
                     .reader
@@ -637,7 +697,12 @@ impl SessionManager {
                     }
                     for round in rounds.iter() {
                         if let Some(value) = &round.provider_state {
-                            let state: KernelProviderState = serde_json::from_value(value.clone())?;
+                            // Reporting must survive one damaged or
+                            // newer-version row instead of failing the whole
+                            // dashboard; replay already reads state lossily.
+                            let Some(state) = KernelProviderState::decode_lossy(value) else {
+                                continue;
+                            };
                             if let Some(usage) = state.usage {
                                 accumulator.observe(
                                     &crate::UsageStatRecord {
@@ -686,10 +751,6 @@ impl SessionManager {
                     after = tools.last().map(|tool| tool.id);
                 }
             }
-            if !sessions.has_more {
-                break;
-            }
-            before = sessions.next;
         }
         Ok(accumulator.finish(&query, Utc::now()))
     }

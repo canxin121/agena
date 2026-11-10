@@ -303,6 +303,12 @@ export type SessionUsage = {
   model_context_window_tokens?: number | null
   model_max_input_tokens?: number | null
   model_max_output_tokens?: number | null
+  /** Prompt tokens the last request read from the provider cache. */
+  last_cache_read_tokens?: number | null
+  /** Prompt tokens the last request could have cached. */
+  last_cache_input_tokens?: number | null
+  /** last_cache_read_tokens / last_cache_input_tokens (0.0–1.0). */
+  last_cache_hit_rate?: number | null
 }
 
 // ---------------------------------------------------------------------------

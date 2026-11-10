@@ -22,26 +22,31 @@ pub struct ModelCostBreakdown {
     pub estimated_cost_usd: f64,
     pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
+    /// Prompt tokens that could come from a cache: fresh input plus write/read.
+    pub cache_input_tokens: u64,
+    /// Share of `cache_input_tokens` served from cache (0.0–1.0).
+    pub cache_hit_rate: f64,
+    /// Sum of every token category above.
+    pub total_tokens: u64,
 }
 
 impl ModelCostBreakdown {
-    pub fn total_tokens(&self) -> u64 {
-        self.input_tokens
+    /// Recompute the reporting fields from the token counts. Aggregators call
+    /// this once after folding so the serialized document and these accessors
+    /// can never disagree.
+    pub fn refresh_derived_totals(&mut self) {
+        self.cache_input_tokens = self
+            .input_tokens
+            .saturating_add(self.cache_write_tokens)
+            .saturating_add(self.cache_read_tokens);
+        self.total_tokens = self
+            .input_tokens
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_write_tokens)
             .saturating_add(self.cache_read_tokens)
-            .saturating_add(self.other_tokens)
-    }
-
-    pub fn cache_input_tokens(&self) -> u64 {
-        self.input_tokens
-            .saturating_add(self.cache_write_tokens)
-            .saturating_add(self.cache_read_tokens)
-    }
-
-    pub fn cache_hit_rate(&self) -> f64 {
-        ratio(self.cache_read_tokens, self.cache_input_tokens())
+            .saturating_add(self.other_tokens);
+        self.cache_hit_rate = ratio(self.cache_read_tokens, self.cache_input_tokens);
     }
 }
 
@@ -64,26 +69,29 @@ pub struct SessionCostSummary {
     pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
     pub by_model: Vec<ModelCostBreakdown>,
+    /// Prompt tokens that could come from a cache: fresh input plus write/read.
+    pub cache_input_tokens: u64,
+    /// Share of `cache_input_tokens` served from cache (0.0–1.0).
+    pub cache_hit_rate: f64,
+    /// Sum of every token category above.
+    pub total_tokens: u64,
 }
 
 impl SessionCostSummary {
-    pub fn total_tokens(&self) -> u64 {
-        self.input_tokens
+    /// Recompute the reporting fields from the token counts.
+    pub fn refresh_derived_totals(&mut self) {
+        self.cache_input_tokens = self
+            .input_tokens
+            .saturating_add(self.cache_write_tokens)
+            .saturating_add(self.cache_read_tokens);
+        self.total_tokens = self
+            .input_tokens
             .saturating_add(self.output_tokens)
             .saturating_add(self.reasoning_tokens)
             .saturating_add(self.cache_write_tokens)
             .saturating_add(self.cache_read_tokens)
-            .saturating_add(self.other_tokens)
-    }
-
-    pub fn cache_input_tokens(&self) -> u64 {
-        self.input_tokens
-            .saturating_add(self.cache_write_tokens)
-            .saturating_add(self.cache_read_tokens)
-    }
-
-    pub fn cache_hit_rate(&self) -> f64 {
-        ratio(self.cache_read_tokens, self.cache_input_tokens())
+            .saturating_add(self.other_tokens);
+        self.cache_hit_rate = ratio(self.cache_read_tokens, self.cache_input_tokens);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -111,9 +119,9 @@ impl SessionCostSummary {
             } else {
                 String::new()
             },
-            format_count(self.total_tokens()),
-            if self.cache_input_tokens() > 0 {
-                format!(" · {:.1}% cache hit", self.cache_hit_rate() * 100.0)
+            format_count(self.total_tokens),
+            if self.cache_input_tokens > 0 {
+                format!(" · {:.1}% cache hit", self.cache_hit_rate * 100.0)
             } else {
                 String::new()
             },

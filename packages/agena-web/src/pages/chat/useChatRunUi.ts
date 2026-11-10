@@ -45,6 +45,10 @@ type SessionUsage = {
   capacityLabel?: string
   costLabel: string
   modelLabel?: string
+  /** Cache efficiency of the last provider request, from the same snapshot. */
+  lastCacheReadTokens?: number | null
+  lastCacheInputTokens?: number | null
+  lastCacheHitRate?: number | null
 }
 
 type CanonicalSessionUsage = {
@@ -53,6 +57,9 @@ type CanonicalSessionUsage = {
   input_limit_tokens?: number | null
   limit_tokens?: number | null
   model_context_window_tokens?: number | null
+  last_cache_read_tokens?: number | null
+  last_cache_input_tokens?: number | null
+  last_cache_hit_rate?: number | null
 }
 
 type TokenUsageLike = {
@@ -212,6 +219,10 @@ export function useChatRunUi(opts: {
       return {
         ...sessionContextUsage(canonical),
         costLabel: formatCurrencyUSD(0),
+        // The chip's popover shows the same live snapshot as the percentage.
+        lastCacheReadTokens: canonical.last_cache_read_tokens,
+        lastCacheInputTokens: canonical.last_cache_input_tokens,
+        lastCacheHitRate: canonical.last_cache_hit_rate,
       }
     }
 
@@ -258,6 +269,9 @@ export function useChatRunUi(opts: {
       percentUsed: null,
       costLabel,
       modelLabel: providerID && modelID ? `${providerID}/${modelID}` : undefined,
+      lastCacheReadTokens: null,
+      lastCacheInputTokens: null,
+      lastCacheHitRate: null,
     }
   })
 

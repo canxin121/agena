@@ -221,6 +221,10 @@ pub mod method {
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_CONTEXT_STATUS: &str = "host/context.status";
     pub const HOST_SESSION_SET_MODEL: &str = "host/session.set_model";
+    pub const HOST_SESSION_QUERY: &str = "host/session.query";
+    pub const HOST_SESSION_COMMAND: &str = "host/session.command";
+    pub const HOST_SESSION_STREAM: &str = "host/session.stream";
+    pub const HOST_WORKSPACE_QUERY: &str = "host/workspace.query";
     pub const HOST_IMAGE_EXECUTE: &str = "host/image.execute";
     pub const HOST_MONITOR_START: &str = "host/monitor.start";
     pub const HOST_MONITOR_LIST: &str = "host/monitor.list";

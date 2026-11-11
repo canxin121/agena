@@ -413,6 +413,52 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn session_query(
+        &self,
+        req: crate::sdk::host_api::HostSessionQueryRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostSessionQueryResponse> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.session_query(req)).await
+        })
+        .await
+    }
+
+    async fn session_command(
+        &self,
+        req: crate::sdk::host_api::HostSessionCommandRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostSessionCommandResponse> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.session_command(req))
+                .await
+        })
+        .await
+    }
+
+    async fn session_stream(
+        &self,
+        req: crate::sdk::host_api::HostSessionStreamRequest,
+    ) -> crate::sdk::Result<EventSubscription> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.session_stream(req)).await
+        })
+        .await
+    }
+
+    async fn workspace_query(
+        &self,
+        req: crate::sdk::host_api::HostWorkspaceQueryRequest,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostWorkspaceQueryResponse> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.workspace_query(req))
+                .await
+        })
+        .await
+    }
+
     async fn builtin_provider_connection(
         &self,
     ) -> crate::sdk::Result<crate::sdk::host_api::BuiltinProviderConnection> {

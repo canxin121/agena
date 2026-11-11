@@ -93,6 +93,14 @@ macro_rules! impl_callback_host_client {
                 -> $crate::host_api::HostContextStatusResponse = HOST_CONTEXT_STATUS { "request": request };
             set_session_model(request: $crate::host_api::HostSetSessionModelRequest)
                 -> $crate::host_api::HostSetSessionModelResponse = HOST_SESSION_SET_MODEL { "request": request };
+            session_query(request: $crate::host_api::HostSessionQueryRequest)
+                -> $crate::host_api::HostSessionQueryResponse = HOST_SESSION_QUERY { "request": request };
+            session_command(request: $crate::host_api::HostSessionCommandRequest)
+                -> $crate::host_api::HostSessionCommandResponse = HOST_SESSION_COMMAND { "request": request };
+            session_stream(request: $crate::host_api::HostSessionStreamRequest)
+                -> $crate::host_api::EventSubscription = HOST_SESSION_STREAM { "request": request };
+            workspace_query(request: $crate::host_api::HostWorkspaceQueryRequest)
+                -> $crate::host_api::HostWorkspaceQueryResponse = HOST_WORKSPACE_QUERY { "request": request };
             monitor_start(request: $crate::host_api::MonitorStartRequest)
                 -> $crate::host_api::MonitorHandle = HOST_MONITOR_START { "request": request };
             monitor_list()

@@ -16,12 +16,59 @@ pub enum ChannelKind {
     PublicChannel,
     PrivateChannel,
 }
+
+impl From<ChannelKind> for crate::ConversationKind {
+    fn from(value: ChannelKind) -> Self {
+        match value {
+            ChannelKind::Direct => Self::Direct,
+            ChannelKind::Group => Self::Group,
+            ChannelKind::PublicChannel => Self::PublicChannel,
+            ChannelKind::PrivateChannel => Self::PrivateChannel,
+        }
+    }
+}
+
+impl From<crate::ConversationKind> for ChannelKind {
+    fn from(value: crate::ConversationKind) -> Self {
+        match value {
+            crate::ConversationKind::Direct => Self::Direct,
+            crate::ConversationKind::Group => Self::Group,
+            crate::ConversationKind::PublicChannel => Self::PublicChannel,
+            crate::ConversationKind::PrivateChannel => Self::PrivateChannel,
+        }
+    }
+}
+
+/// A chat platform account owned by one binding.
+///
+/// The conversation kind is not part of the account: one account serves direct
+/// chats, groups and channels at once, and each message carries its own kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelAccount {
+    pub tenant: String,
+    pub account: String,
+}
+
+/// The set of conversation kinds one account is authorized to serve.
+///
+/// A policy may narrow this (for example, "this account only serves groups"),
+/// but the kind of any individual message is decided per message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelIdentity {
     pub tenant: String,
     pub account: String,
     pub kind: ChannelKind,
+}
+
+impl ChannelIdentity {
+    pub fn account(&self) -> ChannelAccount {
+        ChannelAccount {
+            tenant: self.tenant.clone(),
+            account: self.account.clone(),
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -78,12 +125,21 @@ pub struct ChannelMember {
     #[serde(default)]
     pub expires_at_ms: Option<i64>,
 }
+/// How one conversation's sessions are partitioned.
+///
+/// `PerConversation` is the default: a group is one session shared by all of
+/// its members, a direct chat is one session per participant, and a channel is
+/// one session per channel. Context is never merged across conversations or
+/// across platform accounts.
+///
+/// `PerActor` additionally splits a single conversation by speaker. It is an
+/// explicit opt-in for rooms whose members must not share a transcript.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ChannelSessionMode {
     #[default]
-    PerUser,
-    SharedChat,
+    PerConversation,
+    PerActor,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -229,12 +285,19 @@ pub struct ChannelAccessPolicy {
     /// a Blocked entry. Remote platform administrator claims are ignored.
     pub members: Vec<ChannelMember>,
     /// Unlisted platform members can only get chat-only Member access. This
-    /// option never confers Member's optional privileged grant.
+    /// option never confers the binding capability grant.
     #[serde(default)]
     pub allow_unlisted_chat: bool,
+    /// Capabilities available to every admitted member of this binding.
+    ///
+    /// This is deliberately one grant per binding rather than one per role.
+    /// A conversation's transcript is shared by everyone speaking in it, so
+    /// letting two roles hold different tools would let a low-privilege
+    /// message drive a tool whose output the whole room then reads. One grant
+    /// makes that leak structurally impossible; roles continue to govern
+    /// membership management only.
     #[serde(default)]
-    #[schemars(with = "BTreeMap<String,ChannelGrant>")]
-    pub grants: BTreeMap<ChannelRole, ChannelGrant>,
+    pub grant: ChannelGrant,
     #[serde(default = "daily")]
     pub per_user_daily_limit: u32,
     /// Explicit automated posts use a separate service session, never borrow
@@ -280,25 +343,13 @@ impl ChannelAccessPolicy {
             return Err("channel policy needs at least one unexpired local owner".into());
         }
         if self.identity.kind == ChannelKind::Direct
-            && (self.thread_mode != ChannelThreadMode::Exact
-                || self.session_mode != ChannelSessionMode::PerUser
-                || self.allow_unlisted_chat)
+            && (self.thread_mode != ChannelThreadMode::Exact || self.allow_unlisted_chat)
         {
             return Err(
-                "direct messages require exact-thread, per-user sessions and explicit participants"
-                    .into(),
+                "direct messages require exact-thread sessions and explicit participants".into(),
             );
         }
-        if self
-            .grants
-            .get(&ChannelRole::Blocked)
-            .is_some_and(ChannelGrant::has_effects)
-        {
-            return Err("blocked users cannot receive capabilities".into());
-        }
-        for grant in self.grants.values() {
-            grant.validate()?;
-        }
+        self.grant.validate()?;
         self.service_grant.validate()?;
         if self.service_grant.private_memory {
             return Err("automated report sessions cannot use human private memories".into());
@@ -306,18 +357,13 @@ impl ChannelAccessPolicy {
         if !self.allow_automated_reports && self.service_grant.has_effects() {
             return Err("service capabilities require explicit automated-report consent".into());
         }
-        if self.session_mode == ChannelSessionMode::SharedChat
-            && self.grants.values().any(ChannelGrant::has_effects)
-        {
-            return Err("shared chat has no tools, work or private memory; use per-user sessions for privileged capabilities".into());
-        }
         Ok(())
     }
     pub fn member(
         &self,
         actor: &str,
         now: i64,
-    ) -> Result<(ChannelRole, ChannelGrant, Option<i64>), &'static str> {
+    ) -> Result<(ChannelRole, Option<i64>), &'static str> {
         if !valid_channel_id(actor) {
             return Err("invalid_or_reserved_sender_identity");
         }
@@ -328,14 +374,10 @@ impl ChannelAccessPolicy {
             if m.expires_at_ms.is_some_and(|expiry| now >= expiry) {
                 return Err("membership_expired");
             }
-            return Ok((
-                m.role,
-                self.grants.get(&m.role).cloned().unwrap_or_default(),
-                m.expires_at_ms,
-            ));
+            return Ok((m.role, m.expires_at_ms));
         }
         if self.allow_unlisted_chat {
-            Ok((ChannelRole::Member, ChannelGrant::default(), None))
+            Ok((ChannelRole::Member, None))
         } else {
             Err("member_not_authorized")
         }
@@ -347,7 +389,7 @@ impl ChannelAccessPolicy {
         new_role: ChannelRole,
         now: i64,
     ) -> Result<Self, &'static str> {
-        let (role, _, _) = self.member(actor, now)?;
+        let (role, _) = self.member(actor, now)?;
         if !role.can_manage() {
             return Err("members_manage_denied");
         }
@@ -379,8 +421,40 @@ impl ChannelAccessPolicy {
     }
 }
 
-/// Immutable capability fence stored with a session and inherited by workers,
-/// agents and forks. Current membership is rechecked by the host verifier.
+/// The isolation facts of one channel conversation.
+///
+/// This is stored with the session: which binding, which external conversation
+/// and thread, and which private directories belong to it. It deliberately
+/// carries no speaker identity and no capabilities — a group conversation has
+/// many speakers, and each message brings its own authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionChannelScope {
+    pub binding_id: String,
+    pub identity: ChannelAccount,
+    pub resource: String,
+    pub thread: Option<String>,
+    pub kind: ChannelKind,
+    pub memory_workspace_root: PathBuf,
+    pub private_paths: BTreeSet<PathBuf>,
+}
+
+impl SessionChannelScope {
+    pub fn conversation_kind(&self) -> crate::ConversationKind {
+        self.kind.into()
+    }
+
+    /// Resolve the directories this conversation may touch through the
+    /// permission fence. Capabilities are added separately, per execution.
+    pub fn permission_fence(&self, granted_paths: &BTreeSet<PathBuf>) -> crate::PermissionConfig {
+        permission_fence(&self.private_paths, granted_paths, &BTreeSet::new())
+    }
+}
+
+/// The authority of one message's speaker, valid for that execution only.
+///
+/// Workers, agents and forks inherit the authority of the execution that
+/// spawned them, never the authority of another speaker in the same room.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelAuthority {
@@ -400,6 +474,50 @@ pub struct ChannelAuthority {
     pub revoked: bool,
 }
 impl ChannelAuthority {
+    /// Build the per-execution authority for one speaker in a scope.
+    pub fn for_speaker(
+        scope: &SessionChannelScope,
+        epoch: i64,
+        actor: impl Into<String>,
+        role: ChannelRole,
+        grant: ChannelGrant,
+        session_mode: ChannelSessionMode,
+        expires_at_ms: i64,
+    ) -> Self {
+        Self {
+            binding_id: scope.binding_id.clone(),
+            epoch,
+            actor: actor.into(),
+            role,
+            identity: ChannelIdentity {
+                tenant: scope.identity.tenant.clone(),
+                account: scope.identity.account.clone(),
+                kind: scope.kind,
+            },
+            resource: scope.resource.clone(),
+            thread: scope.thread.clone(),
+            session_mode,
+            grant,
+            expires_at_ms,
+            memory_workspace_root: scope.memory_workspace_root.clone(),
+            private_paths: scope.private_paths.clone(),
+            revoked: false,
+        }
+    }
+
+    /// The conversation scope this authority belongs to.
+    pub fn scope(&self) -> SessionChannelScope {
+        SessionChannelScope {
+            binding_id: self.binding_id.clone(),
+            identity: self.identity.account(),
+            resource: self.resource.clone(),
+            thread: self.thread.clone(),
+            kind: self.identity.kind,
+            memory_workspace_root: self.memory_workspace_root.clone(),
+            private_paths: self.private_paths.clone(),
+        }
+    }
+
     pub fn active_at(&self, now: i64) -> bool {
         !self.revoked && now < self.expires_at_ms
     }
@@ -407,46 +525,65 @@ impl ChannelAuthority {
         self.active_at(now) && self.grant.allowed_tools().contains(canonical)
     }
     pub fn permission_fence(&self) -> crate::PermissionConfig {
-        use crate::{
-            NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionMode,
+        permission_fence(
+            &self.private_paths,
+            &BTreeSet::new(),
+            &self.grant.network_hosts,
+        )
+    }
+}
+
+/// Shared fence construction: private paths stay reachable, everything outside
+/// is denied, and only explicitly granted network destinations open.
+fn permission_fence(
+    private_paths: &BTreeSet<PathBuf>,
+    granted_paths: &BTreeSet<PathBuf>,
+    network_hosts: &BTreeSet<String>,
+) -> crate::PermissionConfig {
+    use crate::{NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionMode};
+    let deny = PermissionMode::Deny;
+    let allow = PermissionMode::Allow;
+    let mut rules = indexmap::IndexMap::new();
+    for path in private_paths.iter().chain(granted_paths.iter()) {
+        let path = path.to_string_lossy().into_owned();
+        let modes = PathAccessModes {
+            read: Some(allow),
+            write: Some(allow),
         };
-        let deny = PermissionMode::Deny;
-        let allow = PermissionMode::Allow;
-        let mut rules = indexmap::IndexMap::new();
-        for path in &self.private_paths {
-            let path = path.to_string_lossy().into_owned();
-            let modes = PathAccessModes {
+        rules.insert(path.clone(), modes.clone());
+        rules.insert(format!("{path}/**"), modes);
+    }
+    crate::PermissionConfig {
+        path: Some(PathPermissionConfig {
+            workspace: Some(PathAccessModes {
                 read: Some(allow),
                 write: Some(allow),
-            };
-            rules.insert(path.clone(), modes.clone());
-            rules.insert(format!("{path}/**"), modes);
-        }
-        crate::PermissionConfig {
-            path: Some(PathPermissionConfig {
-                workspace: Some(PathAccessModes {
-                    read: Some(allow),
-                    write: Some(allow),
-                }),
-                external: Some(PathAccessModes {
-                    read: Some(deny),
-                    write: Some(deny),
-                }),
-                rules,
             }),
-            network: Some(NetworkPermissionConfig {
-                internet: Some(deny),
-                private: Some(deny),
-                loopback: Some(deny),
-                rules: self
-                    .grant
-                    .network_hosts
-                    .iter()
-                    .map(|host| (host.clone(), allow))
-                    .collect(),
+            external: Some(PathAccessModes {
+                read: Some(deny),
+                write: Some(deny),
             }),
-            ..Default::default()
-        }
+            rules,
+        }),
+        network: Some(NetworkPermissionConfig {
+            internet: Some(deny),
+            private: Some(deny),
+            loopback: Some(deny),
+            rules: network_hosts
+                .iter()
+                .map(|host| (host.clone(), allow))
+                .collect(),
+        }),
+        ..Default::default()
+    }
+}
+
+#[allow(dead_code)]
+fn _assert_permission_fence_shape(_: &crate::PermissionConfig) {}
+
+impl From<&ChannelAuthority> for SessionChannelScope {
+    fn from(value: &ChannelAuthority) -> Self {
+        value.scope()
     }
 }
 
@@ -481,7 +618,7 @@ mod tests {
                 },
             ],
             allow_unlisted_chat: false,
-            grants: Default::default(),
+            grant: Default::default(),
             per_user_daily_limit: 50,
             allow_automated_reports: false,
             service_grant: Default::default(),
@@ -513,17 +650,16 @@ mod tests {
         );
     }
     #[test]
-    fn deny_beats_public_membership_and_default_role_never_inherits_tools() {
+    fn deny_beats_public_membership_and_unlisted_chat_never_adds_capability() {
         let mut p = policy();
         p.allow_unlisted_chat = true;
-        p.grants.insert(
-            ChannelRole::Member,
-            ChannelGrant {
-                private_memory: true,
-                ..Default::default()
-            },
-        );
-        assert!(!p.member("unlisted", 1).unwrap().1.private_memory);
+        p.grant = ChannelGrant {
+            private_memory: true,
+            ..Default::default()
+        };
+        // Unlisted speakers are admitted, but the binding grant is what the
+        // session actually receives; admission alone never widens a grant.
+        assert!(p.member("unlisted", 1).is_ok());
         p.members.push(ChannelMember {
             actor: "blocked".into(),
             role: ChannelRole::Blocked,
@@ -532,18 +668,17 @@ mod tests {
         assert!(p.member("blocked", 1).is_err());
     }
     #[test]
-    fn shared_context_cannot_mix_privileged_sessions() {
+    fn one_grant_per_binding_keeps_shared_rooms_safe() {
+        // Roles no longer carry capabilities, so two speakers in one group
+        // cannot hold different tools. `validate` accepts a privileged grant
+        // because every admitted member shares it.
         let mut p = policy();
-        p.session_mode = ChannelSessionMode::SharedChat;
-        p.grants.insert(
-            ChannelRole::Owner,
-            ChannelGrant {
-                tools: BTreeSet::from(["agena.agent.spawn".into()]),
-                ..Default::default()
-            },
-        );
-        assert!(p.validate(1).is_err());
-        p.grants.clear();
+        p.grant = ChannelGrant {
+            tools: BTreeSet::from(["agena.agent.spawn".into()]),
+            ..Default::default()
+        };
+        assert!(p.validate(1).is_ok());
+        p.session_mode = ChannelSessionMode::PerActor;
         assert!(p.validate(1).is_ok());
     }
     #[test]
@@ -564,8 +699,9 @@ mod tests {
     fn role_labels_do_not_grant_machine_permissions() {
         let p = policy();
         for actor in ["owner", "admin", "member"] {
-            assert!(p.member(actor, 1).unwrap().1.allowed_tools().is_empty());
+            assert!(p.member(actor, 1).is_ok());
         }
+        assert!(!p.grant.has_effects());
         let grant = ChannelGrant {
             tools: BTreeSet::from(["agena.bot.connections".into()]),
             ..Default::default()

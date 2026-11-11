@@ -275,3 +275,6 @@ pub use inline_ui::expand_inline_references_with;
 
 mod channel_access;
 pub use channel_access::*;
+
+mod message_identity;
+pub use message_identity::*;

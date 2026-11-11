@@ -102,11 +102,15 @@ pub(super) fn command_bytes(command: &Command) -> Result<Vec<u8>> {
             session,
             document,
             blobs,
+            author,
+            origin,
         } => serde_json::to_vec(&(
             "send",
             session,
             document,
             blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
+            author,
+            origin,
         )),
         Command::EditQueued {
             session,

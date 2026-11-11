@@ -166,6 +166,17 @@ impl SessionManager {
         &self,
         request: crate::SessionUserRunRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        self.submit_with_identity(request, None, None).await
+    }
+
+    /// Submit with the host-verified identity of the input, so it is recorded
+    /// on the entry rather than embedded in the user's own text.
+    pub(super) async fn submit_with_identity(
+        &self,
+        request: crate::SessionUserRunRequest,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let permit = self.reserve_execution()?;
         let manager = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -196,11 +207,13 @@ impl SessionManager {
                     .update_session_selection(session.get(), options.clone())
                     .await?;
                 let receipt = persist(|| {
-                    manager.kernel().sessions.send_with_blobs(
+                    manager.kernel().sessions.send_with_blobs_as(
                         send_id,
                         session,
                         document.clone(),
                         &blobs,
+                        author.clone(),
+                        origin.clone(),
                     )
                 })
                 .await
@@ -1935,7 +1948,18 @@ impl SessionManager {
         let mut transcript = String::new();
         for (reverse_index, entry) in history.entries.iter().rev().enumerate() {
             match &entry.payload {
-                EntryPayload::User { document } => {
+                EntryPayload::User {
+                    document,
+                    author,
+                    origin,
+                } => {
+                    if let Some(line) = crate::session::kernel::input::message_source_line(
+                        author.as_ref(),
+                        origin.as_ref(),
+                    ) {
+                        transcript.push_str(&line);
+                        transcript.push('\n');
+                    }
                     for node in &document.0 {
                         if let ComposerNode::Text { text } = node {
                             transcript.push_str(text);

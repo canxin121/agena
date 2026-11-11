@@ -610,7 +610,7 @@ impl Application {
                 "The message has already started or been removed.",
             ));
         }
-        let agena_storage::kernel::EntryPayload::User { document } = &entry.payload else {
+        let agena_storage::kernel::EntryPayload::User { document, .. } = &entry.payload else {
             return Err(ApplicationError::bad_request(
                 "The queued input is not a user message.",
             ));
@@ -671,7 +671,7 @@ impl Application {
             .entry(session, view.message_id)
             .await
             .map_err(crate::kernel_error)?;
-        let agena_storage::kernel::EntryPayload::User { document } = &entry.payload else {
+        let agena_storage::kernel::EntryPayload::User { document, .. } = &entry.payload else {
             return Err(ApplicationError::bad_request(
                 "The queued input is not a user message.",
             ));

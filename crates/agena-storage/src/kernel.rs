@@ -272,6 +272,13 @@ pub struct ExecutionAttemptView {
 pub enum EntryPayload {
     User {
         document: ComposerDocument,
+        /// Verified sender. Absent only on entries written before identity was
+        /// recorded; such entries are never treated as instance-operator input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        author: Option<agena_domain::MessageAuthor>,
+        /// Platform and exact external conversation the message arrived from.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<agena_domain::MessageOrigin>,
     },
     Text {
         content_id: ContentId,
@@ -719,6 +726,18 @@ impl SessionCommands {
         session: SessionId,
         document: ComposerDocument,
     ) -> Result<CommitReceipt<ExecutionView>> {
+        self.send_as(request, session, document, None, None).await
+    }
+
+    /// Submit user input together with its verified sender and arrival origin.
+    pub async fn send_as(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        document: ComposerDocument,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+    ) -> Result<CommitReceipt<ExecutionView>> {
         let result = self
             .0
             .command(
@@ -727,6 +746,8 @@ impl SessionCommands {
                     session,
                     document,
                     blobs: Vec::new(),
+                    author,
+                    origin,
                 },
             )
             .await?;

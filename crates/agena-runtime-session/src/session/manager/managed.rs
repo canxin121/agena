@@ -170,7 +170,7 @@ impl SessionManager {
             .entry(control.session, view.message_id)
             .await
             .map_err(kernel_error)?;
-        let EntryPayload::User { document } = &entry.payload else {
+        let EntryPayload::User { document, .. } = &entry.payload else {
             return Err(AppError::Config(
                 "operation requires a real user input, not a tool result or notification".into(),
             ));
@@ -277,11 +277,17 @@ impl SessionManager {
 
     /// Submit through the ordinary hooks, permissions, kernel and supervisor.
     /// The stable delivery key protects a lost submit acknowledgement.
+    ///
+    /// `author`/`origin` are the host-verified identity of the external
+    /// message. They are stored with the entry so the model can be told who
+    /// spoke and where, and so a later reader never has to guess.
     pub async fn submit_managed_message(
         &self,
         id: i64,
         delivery_key: String,
         text: String,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let metadata = self
             .kernel()
@@ -295,13 +301,15 @@ impl SessionManager {
                 &metadata.selection.clone().unwrap_or_default(),
             )
             .await?;
-        self.submit(
+        self.submit_with_identity(
             crate::SessionUserRunRequest::new(
                 id,
                 options,
                 ComposerDocument(vec![ComposerNode::Text { text }]),
             )
             .with_idempotency_key(delivery_key),
+            author,
+            origin,
         )
         .await
     }

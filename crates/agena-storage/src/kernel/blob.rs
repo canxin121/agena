@@ -288,6 +288,20 @@ impl SessionCommands {
         document: ComposerDocument,
         blobs: &[PreparedBlob],
     ) -> Result<CommitReceipt<ExecutionView>> {
+        self.send_with_blobs_as(request, session, document, blobs, None, None)
+            .await
+    }
+
+    /// Submit user input with attachments and its verified identity.
+    pub async fn send_with_blobs_as(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        document: ComposerDocument,
+        blobs: &[PreparedBlob],
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+    ) -> Result<CommitReceipt<ExecutionView>> {
         let blobs = bindings(&self.0, session, blobs)?;
         execution_receipt(
             self.0
@@ -297,6 +311,8 @@ impl SessionCommands {
                         session,
                         document,
                         blobs,
+                        author,
+                        origin,
                     },
                 )
                 .await?,

@@ -223,6 +223,44 @@ fn invalid(error: impl std::fmt::Display) -> KernelError {
 fn encode<T: serde::Serialize + ?Sized>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(storage)
 }
+
+/// Wire shape stored for `kind='user'` entries.
+///
+/// Rows written before identity existed stored the bare `ComposerDocument`.
+/// Decoding accepts both: a JSON object carrying `document` is the envelope,
+/// anything else is the legacy bare document with no recorded identity.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub(crate) struct UserEntryBody {
+    pub(crate) document: agena_domain::ComposerDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) author: Option<agena_domain::MessageAuthor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) origin: Option<agena_domain::MessageOrigin>,
+}
+
+pub(crate) fn encode_user_body(
+    document: &agena_domain::ComposerDocument,
+    author: Option<&agena_domain::MessageAuthor>,
+    origin: Option<&agena_domain::MessageOrigin>,
+) -> Result<String> {
+    encode(&UserEntryBody {
+        document: document.clone(),
+        author: author.cloned(),
+        origin: origin.cloned(),
+    })
+}
+
+pub(crate) fn decode_user_body(text: &str) -> Result<UserEntryBody> {
+    let value: serde_json::Value = serde_json::from_str(text).map_err(storage)?;
+    if value.get("document").is_some() {
+        return serde_json::from_value(value).map_err(storage);
+    }
+    Ok(UserEntryBody {
+        document: serde_json::from_value(value).map_err(storage)?,
+        author: None,
+        origin: None,
+    })
+}
 fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
     serde_json::from_str(text).map_err(storage)
 }

@@ -77,6 +77,10 @@ pub struct SessionUserRunRequest {
     /// connector. It is persisted with the resulting user message so callers
     /// can detect replay after an interrupted acknowledgement.
     pub idempotency_key: Option<String>,
+    /// Host-verified sender of the input, when the surface records one.
+    pub author: Option<agena_domain::MessageAuthor>,
+    /// Platform and external conversation the input arrived from.
+    pub origin: Option<agena_domain::MessageOrigin>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,7 +114,20 @@ impl SessionUserRunRequest {
             run: SessionExecutionRequest::new(session_id, options),
             document,
             idempotency_key: None,
+            author: None,
+            origin: None,
         }
+    }
+
+    /// Attach the host-verified identity this input arrived with.
+    pub fn with_identity(
+        mut self,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+    ) -> Self {
+        self.author = author;
+        self.origin = origin;
+        self
     }
 
     pub fn with_idempotency_key(mut self, key: impl Into<String>) -> Self {

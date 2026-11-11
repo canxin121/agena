@@ -390,7 +390,7 @@ pub(crate) async fn project_kernel_entry(
         ..PartResource::default()
     };
     match &entry.payload {
-        EntryPayload::User { document } => {
+        EntryPayload::User { document, .. } => {
             part.kind = "text".into();
             part.role = "user".into();
             part.run_id = Some(entry.id.get());

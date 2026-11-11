@@ -384,7 +384,18 @@ impl KernelPromptHydrator {
             }
             let mut parts = Vec::new();
             let role = match &item.entry.payload {
-                EntryPayload::User { document } => {
+                EntryPayload::User {
+                    document,
+                    author,
+                    origin,
+                } => {
+                    // The identity block is presentation context only; it can
+                    // never confer authority. Entries written before identity
+                    // was recorded keep their exact previous prompt shape.
+                    if let Some(source) = message_source_block(author.as_ref(), origin.as_ref()) {
+                        charge(&mut remaining, source.len().saturating_mul(2) + 256)?;
+                        parts.push(CompletionInputPart::Text { text: source });
+                    }
                     for node in &document.0 {
                         match node {
                             ComposerNode::Text { text } => {
@@ -704,6 +715,112 @@ pub(super) fn charge(remaining: &mut usize, bytes: usize) -> Result<()> {
     Ok(())
 }
 
+/// Render the verified message identity as a leading model-facing block.
+///
+/// This is prompt context only. Authority has already been resolved by the
+/// host before the entry was written, so nothing here may grant a tool or a
+/// private path. `None` means neither axis was recorded; pre-identity rows keep
+/// their exact previous prompt shape.
+pub(super) fn message_source_block(
+    author: Option<&agena_domain::MessageAuthor>,
+    origin: Option<&agena_domain::MessageOrigin>,
+) -> Option<String> {
+    if author.is_none() && origin.is_none() {
+        return None;
+    }
+    let mut block = String::from("[Message source]\n");
+    if let Some(origin) = origin {
+        match &origin.platform {
+            agena_domain::Platform::Local { surface } => {
+                block.push_str(&format!("platform: local:{}\n", surface.as_str()));
+            }
+            agena_domain::Platform::Chat { platform } => {
+                block.push_str(&format!(
+                    "platform: chat:{}/{}\n",
+                    platform.id, platform.account
+                ));
+            }
+        }
+        block.push_str(&format!(
+            "conversation: {} ({})\n",
+            origin.conversation,
+            origin.kind.as_str()
+        ));
+        if let Some(thread) = &origin.thread {
+            block.push_str(&format!("thread: {thread}\n"));
+        }
+    }
+    if let Some(author) = author {
+        block.push_str(&format!("sender: {}\n", sender_label(author)));
+    }
+    block.push_str("--- message ---\n");
+    Some(block)
+}
+
+/// The one-line sender prefix used where only attribution matters: the
+/// permission-review transcript below the full prompt block.
+pub(crate) fn message_source_line(
+    author: Option<&agena_domain::MessageAuthor>,
+    origin: Option<&agena_domain::MessageOrigin>,
+) -> Option<String> {
+    if author.is_none() && origin.is_none() {
+        return None;
+    }
+    let mut line = String::new();
+    if let Some(origin) = origin {
+        let platform = match &origin.platform {
+            agena_domain::Platform::Local { surface } => format!("local:{}", surface.as_str()),
+            agena_domain::Platform::Chat { platform } => {
+                format!("chat:{}/{}", platform.id, platform.account)
+            }
+        };
+        line.push_str(&format!(
+            "source: {platform} conversation {} ({})",
+            origin.conversation,
+            origin.kind.as_str()
+        ));
+        if let Some(thread) = &origin.thread {
+            line.push_str(&format!(" thread {thread}"));
+        }
+    }
+    if let Some(author) = author {
+        if !line.is_empty() {
+            line.push_str("; ");
+        }
+        line.push_str(&format!("sender: {}", sender_label(author)));
+    }
+    Some(line)
+}
+
+/// `<display name or id> (<authority label>)`.
+fn sender_label(author: &agena_domain::MessageAuthor) -> String {
+    let name = author.display_name.as_deref().unwrap_or(&author.id);
+    format!("{name} ({})", author_kind_label(&author.kind))
+}
+
+fn author_kind_label(kind: &agena_domain::AuthorKind) -> String {
+    match kind {
+        agena_domain::AuthorKind::InstanceOperator => "instance_operator".into(),
+        agena_domain::AuthorKind::ChannelMember { role } => {
+            format!("channel_member:{}", role.as_str())
+        }
+        agena_domain::AuthorKind::System { source } => {
+            format!("system:{}", system_author_slug(*source))
+        }
+    }
+}
+
+fn system_author_slug(source: agena_domain::SystemAuthorKind) -> &'static str {
+    use agena_domain::SystemAuthorKind;
+    match source {
+        SystemAuthorKind::AutomationReport => "automation_report",
+        SystemAuthorKind::SharedChat => "shared_chat",
+        SystemAuthorKind::Subagent => "subagent",
+        SystemAuthorKind::Integration => "integration",
+        SystemAuthorKind::Bot => "bot",
+    }
+}
+
 fn invalid(message: impl Into<String>) -> KernelError {
     KernelError::Invalid(message.into())
 }
@@ -947,4 +1064,83 @@ async fn tool_content(
     Ok(
         json!({"content_id":head.id,"epoch":head.epoch,"kind":head.kind,"committed_head":head.committed,"capture_state":head.state,"capture_error":head.capture_error,"capture_loss":head.capture_loss,"body":body}),
     )
+}
+
+#[cfg(test)]
+mod message_source_tests {
+    use super::*;
+    use agena_domain::{
+        ChannelRole, ConversationKind, LocalSurface, MessageAuthor, MessageOrigin, Platform,
+        SystemAuthorKind,
+    };
+
+    #[test]
+    fn local_operator_message_renders_the_full_block() {
+        let author = MessageAuthor::instance_operator();
+        let origin = MessageOrigin::local(LocalSurface::Web, "session-42");
+        let block = message_source_block(Some(&author), Some(&origin)).unwrap();
+        assert_eq!(
+            block,
+            "[Message source]\n\
+             platform: local:web\n\
+             conversation: session-42 (direct)\n\
+             sender: instance_operator (instance_operator)\n\
+             --- message ---\n"
+        );
+    }
+
+    #[test]
+    fn chat_message_renders_platform_conversation_thread_and_role() {
+        let author =
+            MessageAuthor::channel_member("u-7", ChannelRole::Operator, Some("Ann".into()));
+        let origin = MessageOrigin {
+            platform: Platform::chat("feishu", "app-1"),
+            conversation: "oc_123".into(),
+            kind: ConversationKind::Group,
+            thread: Some("t-9".into()),
+        };
+        let block = message_source_block(Some(&author), Some(&origin)).unwrap();
+        assert_eq!(
+            block,
+            "[Message source]\n\
+             platform: chat:feishu/app-1\n\
+             conversation: oc_123 (group)\n\
+             thread: t-9\n\
+             sender: Ann (channel_member:operator)\n\
+             --- message ---\n"
+        );
+    }
+
+    #[test]
+    fn system_author_falls_back_to_its_id_and_source_slug() {
+        let author = MessageAuthor::system(SystemAuthorKind::Subagent);
+        let block = message_source_block(Some(&author), None).unwrap();
+        assert_eq!(
+            block,
+            "[Message source]\n\
+             sender: system:subagent (system:subagent)\n\
+             --- message ---\n"
+        );
+    }
+
+    #[test]
+    fn missing_identity_preserves_the_previous_prompt_shape() {
+        assert_eq!(message_source_block(None, None), None);
+        assert_eq!(message_source_line(None, None), None);
+    }
+
+    #[test]
+    fn source_line_names_the_origin_and_sender() {
+        let author = MessageAuthor::channel_member("u-7", ChannelRole::Member, Some("Ann".into()));
+        let origin = MessageOrigin {
+            platform: Platform::chat("telegram", "bot-1"),
+            conversation: "chat-9".into(),
+            kind: ConversationKind::PrivateChannel,
+            thread: None,
+        };
+        assert_eq!(
+            message_source_line(Some(&author), Some(&origin)).unwrap(),
+            "source: chat:telegram/bot-1 conversation chat-9 (private_channel); sender: Ann (channel_member:member)"
+        );
+    }
 }

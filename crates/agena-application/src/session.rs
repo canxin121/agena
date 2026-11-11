@@ -125,11 +125,22 @@ pub async fn session_user_run_request(
     document: ComposerDocument,
 ) -> Result<SessionUserRunRequest, ApplicationError> {
     validate_input_document(&document)?;
+    // Every locally authenticated surface reaches the application through the
+    // instance token, so an input built here is instance-operator input. Chat
+    // adapters never use this path; they supply their own verified author.
+    let author = agena_domain::MessageAuthor::instance_operator();
+    let origin = agena_domain::MessageOrigin {
+        platform: agena_domain::Platform::local(agena_domain::LocalSurface::Api),
+        conversation: session_id.to_string(),
+        kind: agena_domain::ConversationKind::Direct,
+        thread: None,
+    };
     Ok(SessionUserRunRequest::new(
         session_id,
         resolve_session_run_options(state, session_id, options).await?,
         document,
-    ))
+    )
+    .with_identity(Some(author), Some(origin)))
 }
 
 pub fn validate_input_document(document: &ComposerDocument) -> Result<(), ApplicationError> {

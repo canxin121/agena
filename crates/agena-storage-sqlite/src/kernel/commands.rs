@@ -166,6 +166,8 @@ pub(super) async fn apply(
             session,
             document,
             blobs,
+            author,
+            origin,
         } => {
             reads::metadata(connection, *session).await?;
             if document.is_empty() {
@@ -189,7 +191,7 @@ pub(super) async fn apply(
                     return Err(KernelError::Busy);
                 }
             }
-            let body = encode(document)?;
+            let body = encode_user_body(document, author.as_ref(), origin.as_ref())?;
             if body.len() > 256 * 1024 {
                 return Err(invalid("composer document exceeds 256 KiB"));
             }
@@ -249,7 +251,17 @@ pub(super) async fn apply(
                     "the input is already shared with another conversation or model round".into(),
                 ));
             }
-            let body = encode(document)?;
+            // Editing preserves the message's recorded identity; only the
+            // document changes.
+            let existing =
+                sqlx::query_scalar::<_, String>("SELECT body_json FROM agena_entries WHERE id=?")
+                    .bind(view.message_id.get())
+                    .fetch_one(&mut *connection)
+                    .await
+                    .map_err(sql_error)?;
+            let existing = decode_user_body(&existing)?;
+            let body =
+                encode_user_body(document, existing.author.as_ref(), existing.origin.as_ref())?;
             if document.is_empty() || body.len() > 256 * 1024 {
                 return Err(invalid("message must be nonempty and within 256 KiB"));
             }
@@ -1420,8 +1432,8 @@ async fn control_queue(
                 ));
             }
             let mut document: agena_domain::ComposerDocument =
-                serde_json::from_str(&row.try_get::<String, _>("body_json").map_err(storage)?)
-                    .map_err(storage)?;
+                decode_user_body(&row.try_get::<String, _>("body_json").map_err(storage)?)?
+                    .document;
             if text.trim().is_empty() || text.len() > 16 * 1024 {
                 return Err(invalid("queued text must be nonempty and within 16 KiB"));
             }
@@ -1447,7 +1459,15 @@ async fn control_queue(
                     .0
                     .insert(0, agena_domain::ComposerNode::Text { text: text.clone() });
             }
-            let body = encode(&document)?;
+            // Editing preserves the message's recorded identity; only the
+            // document changes.
+            let existing =
+                decode_user_body(&row.try_get::<String, _>("body_json").map_err(storage)?)?;
+            let body = encode_user_body(
+                &document,
+                existing.author.as_ref(),
+                existing.origin.as_ref(),
+            )?;
             if body.len() > 256 * 1024 {
                 return Err(invalid("composer document exceeds 256 KiB"));
             }

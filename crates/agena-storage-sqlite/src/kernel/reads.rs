@@ -284,9 +284,15 @@ pub(super) fn entry_row(row: &SqliteRow) -> Result<EntryView> {
     let body: Option<&str> = row.try_get("body_json").map_err(storage)?;
     let kind: String = row.try_get("kind").map_err(storage)?;
     let payload = match kind.as_str() {
-        "user" => EntryPayload::User {
-            document: decode(body.ok_or_else(|| storage("user entry has no document"))?)?,
-        },
+        "user" => {
+            let body =
+                decode_user_body(body.ok_or_else(|| storage("user entry has no document"))?)?;
+            EntryPayload::User {
+                document: body.document,
+                author: body.author,
+                origin: body.origin,
+            }
+        }
         "text" | "reasoning" => {
             let content_id: agena_domain::ContentId = row
                 .try_get::<String, _>("content_id")
@@ -926,4 +932,68 @@ pub(super) async fn round(
         }
     }
     Ok(view)
+}
+
+#[cfg(test)]
+mod user_body_tests {
+    use super::*;
+    use agena_domain::{ComposerNode, ConversationKind, LocalSurface};
+
+    fn document(text: &str) -> agena_domain::ComposerDocument {
+        agena_domain::ComposerDocument(vec![ComposerNode::Text { text: text.into() }])
+    }
+
+    #[test]
+    fn envelope_round_trips_identity() {
+        let document = document("hello");
+        let author = agena_domain::MessageAuthor::instance_operator();
+        let origin = agena_domain::MessageOrigin::local(LocalSurface::Tui, "session-1");
+        let encoded = encode_user_body(&document, Some(&author), Some(&origin)).unwrap();
+        let decoded = decode_user_body(&encoded).unwrap();
+        assert_eq!(decoded.document, document);
+        assert_eq!(decoded.author, Some(author));
+        assert_eq!(decoded.origin, Some(origin));
+    }
+
+    #[test]
+    fn envelope_without_identity_still_round_trips() {
+        let document = document("anonymous");
+        let encoded = encode_user_body(&document, None, None).unwrap();
+        let decoded = decode_user_body(&encoded).unwrap();
+        assert_eq!(decoded.document, document);
+        assert_eq!(decoded.author, None);
+        assert_eq!(decoded.origin, None);
+    }
+
+    #[test]
+    fn legacy_bare_document_decodes_without_identity() {
+        let document = document("legacy");
+        // Pre-identity rows stored the document itself, which encodes as the
+        // transparent node array rather than an envelope object.
+        let encoded = encode(&document).unwrap();
+        let decoded = decode_user_body(&encoded).unwrap();
+        assert_eq!(decoded.document, document);
+        assert_eq!(decoded.author, None);
+        assert_eq!(decoded.origin, None);
+    }
+
+    #[test]
+    fn chat_origin_is_preserved() {
+        let document = document("hi");
+        let origin = agena_domain::MessageOrigin {
+            platform: agena_domain::Platform::chat("telegram", "bot-1"),
+            conversation: "-100".into(),
+            kind: ConversationKind::Group,
+            thread: Some("t-1".into()),
+        };
+        let author = agena_domain::MessageAuthor::channel_member(
+            "u1",
+            agena_domain::ChannelRole::Member,
+            Some("Ann".into()),
+        );
+        let encoded = encode_user_body(&document, Some(&author), Some(&origin)).unwrap();
+        let decoded = decode_user_body(&encoded).unwrap();
+        assert_eq!(decoded.author, Some(author));
+        assert_eq!(decoded.origin, Some(origin));
+    }
 }

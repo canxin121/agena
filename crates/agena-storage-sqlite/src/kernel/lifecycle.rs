@@ -338,9 +338,7 @@ async fn fork(
             .map_err(sql_error)?;
     let kind: &str = row.try_get("kind").map_err(storage)?;
     let restored = if rewind {
-        Some(decode::<agena_domain::ComposerDocument>(
-            row.try_get("body_json").map_err(storage)?,
-        )?)
+        Some(decode_user_body(row.try_get("body_json").map_err(storage)?)?.document)
     } else {
         None
     };
@@ -474,8 +472,7 @@ async fn truncate(
             "rewind requires a completed user message".into(),
         ));
     }
-    let document =
-        decode::<agena_domain::ComposerDocument>(row.try_get("body_json").map_err(storage)?)?;
+    let document = decode_user_body(row.try_get("body_json").map_err(storage)?)?.document;
     // Executions that still own a truncated entry would otherwise remain
     // queued/running without a message. Settle them inside this transaction.
     loop {

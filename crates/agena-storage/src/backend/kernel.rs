@@ -184,6 +184,12 @@ pub enum Command {
         session: SessionId,
         document: ComposerDocument,
         blobs: Vec<BlobLease>,
+        /// Verified sender and arrival origin. `None` means "recorded before
+        /// identity existed"; such entries are never instance-operator input.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        author: Option<agena_domain::MessageAuthor>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<agena_domain::MessageOrigin>,
     },
     EditQueued {
         session: SessionId,

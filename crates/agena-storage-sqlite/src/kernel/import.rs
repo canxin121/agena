@@ -208,9 +208,17 @@ async fn entry(
     }
     let mut row = json!({"id":e.id.get(),"origin_session_id":1,"execution_id":e.execution_id.to_string(),"generation":e.generation.get(),"message_id":e.message_id.get(),"revision":e.revision.get(),"round_id":facts["round_id"],"created_at_ms":integer(facts,"created_at_ms")?,"body_json":null,"tool_id":null,"interaction_id":null,"content_id":null});
     let kind = match &e.payload {
-        EntryPayload::User { document } => {
+        EntryPayload::User {
+            document,
+            author,
+            origin,
+        } => {
             row["message_id"] = Value::Null;
-            row["body_json"] = json!(encode(document)?);
+            row["body_json"] = json!(encode_user_body(
+                document,
+                author.as_ref(),
+                origin.as_ref()
+            )?);
             "user"
         }
         EntryPayload::Text { content_id } => {

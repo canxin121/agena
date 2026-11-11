@@ -368,3 +368,59 @@ async fn native_gemini_clean_eof_without_finish_reason_fails() -> TestResult {
 async fn native_ollama_clean_eof_without_done_fails() -> TestResult {
     incomplete_native_stream_fails(agena_testkit::ModelProtocol::Ollama).await
 }
+
+/// Split one Responses SSE event into an HTTP body chunk. The client must
+/// tolerate arbitrary TCP chunk boundaries, so this only shapes the bytes.
+fn sse_frame(event: serde_json::Value) -> String {
+    format!("data: {event}\n\n")
+}
+
+/// A Responses gateway can corrupt its terminal frame after every output item
+/// has already been delivered. Failing that turn would throw away an answer
+/// the user fully received, so the adapter must close it successfully.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_corrupt_terminal_after_completed_items_keeps_the_answer() -> TestResult {
+    use agena_testkit::Reply;
+    let frames = [
+        sse_frame(json!({"type":"response.created","response":{"id":"resp_corrupt"}})),
+        sse_frame(json!({"type":"response.output_item.added","output_index":0,
+            "item":{"type":"reasoning","id":"rs_1","summary":[]}})),
+        sse_frame(
+            json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_1",
+            "output_index":0,"summary_index":0,"delta":"checked the sources"}),
+        ),
+        sse_frame(json!({"type":"response.output_item.done","output_index":0,
+            "item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"checked the sources"}]}})),
+        sse_frame(json!({"type":"response.output_item.added","output_index":1,
+            "item":{"type":"message","id":"msg_1","role":"assistant","content":[]}})),
+        sse_frame(
+            json!({"type":"response.output_text.delta","item_id":"msg_1",
+            "output_index":1,"content_index":0,"delta":"corrupt-terminal-answer"}),
+        ),
+        sse_frame(json!({"type":"response.output_item.done","output_index":1,
+            "item":{"type":"message","id":"msg_1","role":"assistant","status":"completed",
+                "content":[{"type":"output_text","text":"corrupt-terminal-answer"}]}})),
+        // Truncated JSON: the gateway dies mid-frame on the terminator.
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_corrupt\"".to_owned(),
+    ];
+    fixture()
+        .run(move |case| async move {
+            let step = case
+            .model()
+            .expect(RequestMatch::user_text("corrupt-terminal-marker"))
+            // Raw bytes: the frames above are already SSE-framed, and the
+            // last one is deliberately truncated JSON.
+            .reply(Reply::raw_stream(200, frames.clone()));
+            let user = case.user().new_session().await?;
+            let result = user
+                .send("corrupt-terminal-marker")
+                .await?
+                .wait_settled()
+                .await?;
+            step.finished().await?;
+            result.assert_succeeded()?;
+            result.assert_assistant_text("corrupt-terminal-answer")?;
+            Ok(())
+        })
+        .await
+}

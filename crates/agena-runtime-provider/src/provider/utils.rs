@@ -1729,6 +1729,9 @@ fn is_retryable_stream_error(code: &str, message: &str) -> bool {
         "rate_limit_exceeded"
             | "server_error"
             | "internal_error"
+            | "internal_server_error"
+            | "api_error"
+            | "upstream_error"
             | "overloaded"
             | "overloaded_error"
             | "server_is_overloaded"
@@ -1832,3 +1835,5 @@ struct ProviderErrorBody {
 
 #[cfg(test)]
 mod header_hook_tests;
+#[cfg(test)]
+mod stream_error_tests;

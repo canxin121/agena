@@ -11,11 +11,12 @@ use super::{
     OpenAiResponsesRequest, OpenAiResponsesResponse, OpenAiTransport, OpenAiUsage, ProviderError,
     ProviderId, ProviderImageCapabilities, ProviderImageOperation, ProviderImageRequest,
     ProviderImageResponse, ProviderNativeToolArtifact, RESPONSES_ADAPTER_KIND,
-    RequestHeaderContext, Stream, ToolStreamAccumulator, async_trait,
-    completion_event_from_tool_stream_update, merge_openai_reasoning_item,
-    openai_reasoning_item_from_event, openai_reasoning_items_from_output,
-    openai_responses_metadata, responses_provider_native_tool_event, responses_reasoning_delta,
-    responses_tool_stream_input, sse, utils,
+    RequestHeaderContext, ResponsesItemProgress, Stream, ToolStreamAccumulator, async_trait,
+    completion_event_from_tool_stream_update, ensure_streaming_reasoning_item,
+    merge_openai_reasoning_item, openai_reasoning_item_from_event,
+    openai_reasoning_items_from_output, openai_responses_metadata,
+    responses_provider_native_tool_event, responses_reasoning_delta, responses_tool_stream_input,
+    sse, utils,
 };
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -799,10 +800,51 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             // not as a `reasoning` output item. Accumulate that text so it can
             // be replayed as a reasoning item for the next request.
             let mut streaming_reasoning_text = String::new();
+            // Responses gateways that terminate the turn with a corrupt
+            // terminal frame still deliver every output item first. Track the
+            // item lifecycles so a damaged `response.completed` after the last
+            // `output_item.done` cannot discard an answer the user already
+            // received in full.
+            let mut output_items = ResponsesItemProgress::default();
 
             while let Some(event) = events.next().await {
-                let event =
-                    event.map_err(|err| utils::json_stream_error(provider_name.as_str(), err))?;
+                let event = match event {
+                    Ok(event) => event,
+                    Err(error) => {
+                        let error = utils::json_stream_error(provider_name.as_str(), error);
+                        match output_items.recovered_finish_reason(
+                            provider_name.as_str(),
+                            &error,
+                            stream_finish_reason.as_deref(),
+                            stream_tool_call_seen,
+                        ) {
+                            None => Err(error)?,
+                            Some(finish_reason) => {
+                                ensure_streaming_reasoning_item(
+                                    &mut reasoning_items,
+                                    streaming_reasoning_text.as_str(),
+                                );
+                                yield CompletionStreamEvent::Completed {
+                                    provider_id: provider_id.clone(),
+                                    model: model_name.clone(),
+                                    finish_reason: Some(finish_reason),
+                                    usage: stream_usage.clone(),
+                                    provider_metadata: openai_responses_metadata(
+                                        response_id.clone(),
+                                        OpenAiTransport::responses_reasoning_items_for_replay(
+                                            &request,
+                                            reasoning_items.iter().map(|(_, item)| item.clone()),
+                                        ),
+                                    ),
+                                    end_turn: None,
+                                };
+                                completed_emitted = true;
+                            }
+                        }
+                        break;
+                    }
+                };
+                output_items.observe(&event);
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
                     RESPONSES_ADAPTER_KIND,
@@ -882,28 +924,10 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                         CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
                         stream_tool_call_seen,
                     );
-                    if !streaming_reasoning_text.trim().is_empty()
-                        && !reasoning_items.iter().any(|(_, item)| {
-                            item.get("content")
-                                .and_then(serde_json::Value::as_array)
-                                .is_some_and(|content| !content.is_empty())
-                        })
-                    {
-                        // Emit the streamed reasoning as a synthetic content
-                        // item so a `reasoning_content` model receives its
-                        // prior reasoning back on the next request.
-                        reasoning_items.push((
-                            "streaming_reasoning".to_owned(),
-                            serde_json::json!({
-                                "type": "reasoning",
-                                "summary": [],
-                                "content": [{
-                                    "type": "reasoning_text",
-                                    "text": streaming_reasoning_text,
-                                }],
-                            }),
-                        ));
-                    }
+                    ensure_streaming_reasoning_item(
+                        &mut reasoning_items,
+                        streaming_reasoning_text.as_str(),
+                    );
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -925,11 +949,44 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
             }
 
-            utils::require_terminal_stream_event(
+            // A clean EOF without a terminal event is only recoverable when
+            // every output item already closed: the answer is complete and
+            // only the terminal frame is missing. Anything else stays a
+            // truncated stream.
+            if let Err(error) = utils::require_terminal_stream_event(
                 provider_name.as_str(),
                 "responses",
                 completed_emitted,
-            )?;
+            ) {
+                match output_items.recovered_finish_reason(
+                    provider_name.as_str(),
+                    &error,
+                    stream_finish_reason.as_deref(),
+                    stream_tool_call_seen,
+                ) {
+                    None => Err(error)?,
+                    Some(finish_reason) => {
+                        ensure_streaming_reasoning_item(
+                            &mut reasoning_items,
+                            streaming_reasoning_text.as_str(),
+                        );
+                        yield CompletionStreamEvent::Completed {
+                            provider_id: provider_id.clone(),
+                            model: model_name.clone(),
+                            finish_reason: Some(finish_reason),
+                            usage: stream_usage.clone(),
+                            provider_metadata: openai_responses_metadata(
+                                response_id.clone(),
+                                OpenAiTransport::responses_reasoning_items_for_replay(
+                                    &request,
+                                    reasoning_items.iter().map(|(_, item)| item.clone()),
+                                ),
+                            ),
+                            end_turn: None,
+                        };
+                    }
+                }
+            }
         };
 
         Ok(Box::pin(stream))

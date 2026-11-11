@@ -379,6 +379,107 @@ fn merge_openai_reasoning_item(current: &mut serde_json::Value, update: serde_js
     }
 }
 
+/// Track the lifecycle of Responses output items so a damaged terminal frame
+/// (or a stream that ends without one) can be told apart from a genuinely
+/// truncated answer. Only a stream whose every opened item was closed may be
+/// recovered as a successful turn: at that point the provider has delivered
+/// the complete visible answer and merely lost its terminator.
+#[derive(Default)]
+struct ResponsesItemProgress {
+    /// `output_index` of every item that is currently open.
+    open: BTreeSet<u64>,
+    /// Items that were closed without ever being opened first.
+    completed: usize,
+    /// Whether any output item was observed at all.
+    seen: bool,
+}
+
+impl ResponsesItemProgress {
+    fn observe(&mut self, event: &serde_json::Value) {
+        let Some(event_type) = event.get("type").and_then(serde_json::Value::as_str) else {
+            return;
+        };
+        let output_index = event
+            .get("output_index")
+            .and_then(serde_json::Value::as_u64);
+        match (event_type, output_index) {
+            ("response.output_item.added", Some(index)) => {
+                self.seen = true;
+                self.open.insert(index);
+            }
+            ("response.output_item.done", Some(index)) => {
+                self.seen = true;
+                if !self.open.remove(&index) {
+                    self.completed += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every item the provider opened has been closed, so the visible answer
+    /// is complete even though no terminal event arrived.
+    fn all_items_complete(&self) -> bool {
+        self.seen && self.open.is_empty()
+    }
+
+    /// Recover a `Completed` event for a damaged terminal path, or `None` when
+    /// the stream must stay an error.
+    fn recovered_finish_reason(
+        &self,
+        provider_id: &str,
+        error: &ProviderError,
+        finish_reason: Option<&str>,
+        saw_tool_call: bool,
+    ) -> Option<CompletionFinishReason> {
+        if !self.all_items_complete() {
+            return None;
+        }
+        tracing::warn!(
+            provider_id,
+            adapter = RESPONSES_ADAPTER_KIND,
+            operation = "complete_stream.responses",
+            output_items = self.completed,
+            error = %error,
+            "responses stream ended without a usable terminal event after every output item completed; closing the turn with the delivered content"
+        );
+        CompletionFinishReason::normalize_with_tool_calls(
+            CompletionFinishReason::from_provider(finish_reason),
+            saw_tool_call,
+        )
+        .or(Some(CompletionFinishReason::Stop))
+    }
+}
+
+/// Preserve reasoning that arrived only as deltas (chat-style
+/// `reasoning_content` models) as a synthetic reasoning item so the model
+/// receives its prior reasoning back on the next request.
+fn ensure_streaming_reasoning_item(
+    reasoning_items: &mut Vec<(String, serde_json::Value)>,
+    streaming_reasoning_text: &str,
+) {
+    if streaming_reasoning_text.trim().is_empty()
+        || reasoning_items.iter().any(|(_, item)| {
+            item.get("content")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|content| !content.is_empty())
+        })
+    {
+        return;
+    }
+    reasoning_items.push((
+        "streaming_reasoning".to_owned(),
+        serde_json::json!({
+            "type": "reasoning",
+            "summary": [],
+            "content": [{
+                "type": "reasoning_text",
+                "text": streaming_reasoning_text,
+            }],
+        }),
+    ));
+}
+
 fn openai_responses_metadata(
     response_id: Option<String>,
     reasoning_items: impl IntoIterator<Item = serde_json::Value>,
@@ -459,5 +560,96 @@ impl<'a> RequestHeaderContext<'a> {
 
     fn initiator_header(&self) -> &str {
         self.initiator.unwrap_or("agent")
+    }
+}
+
+#[cfg(test)]
+mod responses_item_progress_tests {
+    use super::*;
+
+    fn progress(events: &[serde_json::Value]) -> ResponsesItemProgress {
+        let mut progress = ResponsesItemProgress::default();
+        for event in events {
+            progress.observe(event);
+        }
+        progress
+    }
+
+    fn item(event: &str, index: u64) -> serde_json::Value {
+        serde_json::json!({"type": event, "output_index": index})
+    }
+
+    fn truncation_error() -> ProviderError {
+        ProviderError::Provider("stream closed before a terminal response event".to_owned())
+    }
+
+    #[test]
+    fn a_damaged_terminal_frame_after_every_item_completed_recovers_the_turn() {
+        // The failing production trace: reasoning and message items both
+        // closed, then the gateway's `response.completed` frame was corrupt.
+        let progress = progress(&[
+            item("response.output_item.added", 0),
+            item("response.output_item.done", 0),
+            item("response.output_item.added", 1),
+            item("response.output_item.done", 1),
+        ]);
+        let finish = progress
+            .recovered_finish_reason("local", &truncation_error(), Some("stop"), false)
+            .expect("a delivered answer must not be discarded by its terminator");
+        assert_eq!(finish, CompletionFinishReason::Stop);
+    }
+
+    #[test]
+    fn an_item_still_open_keeps_the_stream_truncated() {
+        let progress = progress(&[
+            item("response.output_item.added", 0),
+            item("response.output_item.done", 0),
+            item("response.output_item.added", 1),
+        ]);
+        assert!(!progress.all_items_complete());
+        assert!(
+            progress
+                .recovered_finish_reason("local", &truncation_error(), Some("stop"), false)
+                .is_none(),
+            "an unterminated output item is a real truncation"
+        );
+    }
+
+    #[test]
+    fn a_stream_without_output_items_is_never_recovered() {
+        let progress = progress(&[serde_json::json!({"type": "response.created"})]);
+        assert!(
+            progress
+                .recovered_finish_reason("local", &truncation_error(), None, false)
+                .is_none(),
+            "nothing was delivered, so the failure must surface"
+        );
+    }
+
+    #[test]
+    fn tool_call_items_recover_as_tool_calls() {
+        let progress = progress(&[
+            item("response.output_item.added", 0),
+            item("response.output_item.done", 0),
+        ]);
+        let finish = progress
+            .recovered_finish_reason("local", &truncation_error(), Some("tool_calls"), true)
+            .expect("a completed tool call must still run");
+        assert_eq!(finish, CompletionFinishReason::ToolCalls);
+    }
+
+    #[test]
+    fn streaming_reasoning_is_preserved_only_when_no_item_carried_it() {
+        let mut items = Vec::new();
+        ensure_streaming_reasoning_item(&mut items, "  ");
+        assert!(items.is_empty(), "blank reasoning adds no replay item");
+
+        ensure_streaming_reasoning_item(&mut items, "considered the sources");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, "streaming_reasoning");
+
+        // A second call must not duplicate the synthetic item.
+        ensure_streaming_reasoning_item(&mut items, "considered the sources");
+        assert_eq!(items.len(), 1);
     }
 }

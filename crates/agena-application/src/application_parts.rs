@@ -457,6 +457,16 @@ pub(crate) async fn project_kernel_entry(
                 resource_id:*summary, kind:agena_domain::ContentKind::Text }],"compaction_through":through,
                 "run_kind":"compaction"});
         }
+        // Starting the context over is not a summary: nothing was produced and
+        // the earlier turns stay readable, so it has its own kind and carries
+        // no resource.
+        EntryPayload::ContextCleared { through } => {
+            part.kind = "context_cleared".into();
+            part.visibility = "user".into();
+            part.state = "completed".into();
+            part.content =
+                serde_json::json!({"cleared_through":through,"run_kind":"clear_context"});
+        }
         EntryPayload::Notice { text } => {
             match agena_runtime_contracts::part_content::decode_notice(text) {
                 agena_runtime_contracts::part_content::DecodedNotice::Hook(decoded) => {

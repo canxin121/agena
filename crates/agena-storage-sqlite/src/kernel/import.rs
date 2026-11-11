@@ -247,6 +247,10 @@ async fn entry(
             row["body_json"] = json!(encode(&e.payload)?);
             "compaction"
         }
+        EntryPayload::ContextCleared { .. } => {
+            row["body_json"] = json!(encode(&e.payload)?);
+            "compaction"
+        }
     };
     row["kind"] = json!(kind);
     put(connection, "agena_entries", &row, &[]).await?;

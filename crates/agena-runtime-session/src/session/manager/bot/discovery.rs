@@ -599,6 +599,11 @@ impl SessionManager {
                 );
             }
             EntryPayload::Text { content_id } => (*content_id, "assistant_text", 0),
+            // A cleared context carries no text: it only marks where the model
+            // starts reading, so there is nothing for discovery to return.
+            EntryPayload::ContextCleared { .. } => {
+                return inline_chunk(session, entry, "", offset, max, "context_cleared");
+            }
             EntryPayload::Compaction { summary, .. } => (*summary, "compaction_summary", 0),
             EntryPayload::Tool { tool_id } => {
                 let tool = self
@@ -771,10 +776,12 @@ impl SessionManager {
             }
             EntryPayload::Text { .. }
             | EntryPayload::Reasoning { .. }
+            | EntryPayload::ContextCleared { .. }
             | EntryPayload::Compaction { .. } => {
                 let chunk = self.discovery_text_chunk(session, entry, 0, 1800).await?;
                 out["kind"] = json!(match entry.payload {
                     EntryPayload::Reasoning { .. } => "reasoning",
+                    EntryPayload::ContextCleared { .. } => "context_cleared",
                     EntryPayload::Compaction { .. } => "compaction",
                     _ if entry.compaction_phase.is_some() => "compaction",
                     _ => "assistant",

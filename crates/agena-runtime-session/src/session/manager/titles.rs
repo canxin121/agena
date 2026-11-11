@@ -183,6 +183,8 @@ impl SessionManager {
                         String::from_utf8_lossy(&range.bytes).into_owned(),
                     )
                 }
+                // A cleared context has no text to title a session with.
+                EntryPayload::ContextCleared { .. } => continue,
                 EntryPayload::Compaction { summary, .. } => {
                     let range = self
                         .kernel()

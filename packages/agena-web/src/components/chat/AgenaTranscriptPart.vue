@@ -304,16 +304,41 @@ async function openAttachment(attachment: AttachmentPresentation, path: string, 
         </dl>
       </div>
 
-      <div v-else-if="part.kind === 'notice' || part.kind === 'compaction'" class="py-1 text-sm">
+      <div v-else-if="part.kind === 'compaction'" class="py-1 text-sm">
+        <!-- The checkpoint summary is a content resource, exactly like an
+             answer body, so it renders through the same reader. Reading only
+             `summary` left the expanded part empty. -->
+        <template v-if="resources.length && sessionId">
+          <AgenaContentText
+            v-for="resource in resources"
+            :key="resource.resource_id"
+            :resource="resource"
+            :session-id="sessionId"
+            :source-path="sourcePath"
+            plain
+          />
+        </template>
         <MarkdownRenderer
-          :content="
-            part.kind === 'compaction'
-              ? part.summary
-              : String(content.detail || content.message || content.body || content.summary || part.summary || '')
-          "
+          v-else-if="part.summary"
+          :content="part.summary"
+          mode="markdown"
+          :stream="false"
+          :source-path="sourcePath || ''"
+        />
+      </div>
+
+      <div v-else-if="part.kind === 'notice'" class="py-1 text-sm">
+        <MarkdownRenderer
+          :content="String(content.detail || content.message || content.body || content.summary || part.summary || '')"
           mode="markdown"
           :stream="false"
         />
+      </div>
+
+      <!-- Starting the context over has no body: the earlier turns were kept,
+           only the model stops reading them. -->
+      <div v-else-if="part.kind === 'context_cleared'" class="py-1 text-sm text-muted-foreground">
+        {{ part.summary }}
       </div>
 
       <CodeBlock v-else :code="prettyJson(content)" lang="json" compact />

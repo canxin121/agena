@@ -1717,6 +1717,8 @@ export default {
       responseFailed: 'Error en la respuesta',
       runFailed: 'La ejecución ha fallado.',
       compactionUnchanged: 'El contexto ya está compactado; se ha conservado el historial existente.',
+      contextCleared: 'Contexto vaciado',
+      contextClearedSummary: 'Los turnos anteriores siguen legibles pero ya no se envían al modelo.',
       compactionTokens: 'De {before} a {after} tokens',
     },
     partStatus: {

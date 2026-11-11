@@ -42,6 +42,8 @@ export type TranscriptProjectionLabels = {
   compaction?: string
   compactionUnchanged?: string
   compactionTokens?: (before: number, after: number) => string
+  contextCleared?: string
+  contextClearedSummary?: string
   answer?: string
   reasoning?: string
   textSegment?: string
@@ -223,15 +225,21 @@ function noticeTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels)
     const operationId = firstText(content, ['operation_id'])
     return operationId ? `${operationKind}:${operationId}` : operationKind
   }
+  if (kind === 'context_cleared') {
+    return text(labels?.contextCleared) || 'Context cleared'
+  }
   return (
     firstText(content, ['title', 'hook', 'kind']) ||
     (kind === 'compaction' ? text(labels?.compaction) || 'Compaction' : text(labels?.notice) || 'Notice')
   )
 }
 
-function noticeSummary(part: MessagePartLike): string {
+function noticeSummary(part: MessagePartLike, labels?: TranscriptProjectionLabels): string {
   const content = durablePartContent(part)
   if (durablePartKind(part) === 'compaction') return transcriptPartText(part)
+  if (durablePartKind(part) === 'context_cleared') {
+    return text(labels?.contextClearedSummary) || 'Earlier turns stay readable but are no longer sent to the model.'
+  }
   return firstText(content, ['summary', 'body', 'message', 'detail']) || text(part.agenaSummary)
 }
 
@@ -269,6 +277,9 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
   if (kind === 'skill_ref') return 'command'
   if (kind === 'notice' || kind === 'hook' || kind === 'system_notification') return 'notice'
   if (kind === 'compaction') return 'compaction'
+  // A cleared context is its own row: it is not a summary and must not be
+  // presented as one.
+  if (kind === 'context_cleared') return 'context_cleared'
   if (kind === 'assistant_reply_lifecycle') return 'lifecycle'
   if (kind === 'error') return 'error'
   return 'unknown'
@@ -361,12 +372,12 @@ function displayFields(
       copyText: Object.keys(problem).length ? `${body}\n${prettyJson(problem)}` : body,
     }
   }
-  if (kind === 'notice' || kind === 'compaction') {
+  if (kind === 'notice' || kind === 'compaction' || kind === 'context_cleared') {
     const title = shownTitle(part, presentedTitle, noticeTitle(part, presentationLabels))
     let summary =
       kind === 'compaction' && durablePartContent(part).outcome === 'unchanged'
         ? text(presentationLabels?.compactionUnchanged) || 'Context is already compact; the existing history was kept.'
-        : shownSummary(part, presentedSummary, noticeSummary(part))
+        : shownSummary(part, presentedSummary, noticeSummary(part, presentationLabels))
     const checkpoint = record(durablePartContent(part).checkpoint)
     if (
       kind === 'compaction' &&

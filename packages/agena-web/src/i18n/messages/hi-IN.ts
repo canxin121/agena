@@ -1959,6 +1959,8 @@ export default {
       notice: 'सूचना',
       compaction: 'संक्षिप्तीकरण',
       compactionUnchanged: 'संदर्भ पहले से संक्षिप्त है; मौजूदा इतिहास बनाए रखा गया।',
+      contextCleared: 'संदर्भ साफ़ किया गया',
+      contextClearedSummary: 'पिछले दौर पढ़ने योग्य रहते हैं पर अब मॉडल को नहीं भेजे जाते।',
       compactionTokens: '{before} → {after} टोकन',
       responseRunning: 'जवाब जारी है',
       responseCompleted: 'जवाब पूरा हुआ',

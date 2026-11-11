@@ -314,6 +314,15 @@ pub enum EntryPayload {
         summary: ContentId,
         through: EntryId,
     },
+    /// A conversation was told to start its model context over.
+    ///
+    /// This is the prompt-window boundary a `clear` with `context_only`
+    /// installs. It carries no summary and is never a compaction: the old turns
+    /// remain in the transcript and nothing was summarized, so presenting it as
+    /// one would claim output the user never got.
+    ContextCleared {
+        through: EntryId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

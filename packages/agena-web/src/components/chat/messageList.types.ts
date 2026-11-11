@@ -64,6 +64,7 @@ export type TranscriptPartKind =
   | 'command'
   | 'notice'
   | 'compaction'
+  | 'context_cleared'
   | 'lifecycle'
   | 'error'
   | 'unknown'

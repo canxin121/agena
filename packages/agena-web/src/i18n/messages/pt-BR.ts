@@ -1768,6 +1768,8 @@ export default {
       responseFailed: 'Falha na resposta',
       runFailed: 'A execução falhou.',
       compactionUnchanged: 'O contexto já está compactado; o histórico existente foi mantido.',
+      contextCleared: 'Contexto limpo',
+      contextClearedSummary: 'As rodadas anteriores continuam legíveis mas não são mais enviadas ao modelo.',
       compactionTokens: 'De {before} para {after} tokens',
     },
     partStatus: {

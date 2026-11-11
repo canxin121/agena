@@ -604,10 +604,10 @@ async fn reset_prompt_window(connection: &mut SqliteConnection, session: Session
 
 /// Move the prompt window past `through` without a provider summary.
 ///
-/// The next prompt then contains only the empty checkpoint, so earlier turns
-/// stop being sent to the model while the transcript keeps them. The checkpoint
-/// reuses the session's last attempt, because an entry must belong to a real
-/// execution identity.
+/// This is a clear, not a compaction: nothing was summarized, so the boundary
+/// is recorded as a `ContextCleared` entry with no content. Earlier turns stop
+/// being sent to the model while the transcript keeps them. The entry reuses the
+/// session's last attempt because every entry belongs to a real execution.
 async fn install_empty_checkpoint(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -627,29 +627,15 @@ async fn install_empty_checkpoint(
         .unwrap_or(through.get());
     let (sequence, ordinal) = boundary(connection, session, through).await?;
 
-    let content = agena_domain::ContentId::new();
-    let epoch = agena_domain::ContentEpoch::new();
     let now = now_ms();
-    let entry: i64 = sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,content_id,created_at_ms) VALUES (?,?,?,?,'compaction',?,?,?) RETURNING id")
+    let entry: i64 = sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,?,?,'compaction',?,?) RETURNING id")
         .bind(session.get())
         .bind(&execution)
         .bind(generation)
         .bind(message_id)
-        .bind(encode(&EntryPayload::Compaction { summary: content, through })?)
-        .bind(content.to_string())
+        .bind(encode(&EntryPayload::ContextCleared { through })?)
         .bind(now)
         .fetch_one(&mut *connection)
-        .await
-        .map_err(sql_error)?;
-    // An empty text capture is the checkpoint's frozen summary.
-    sqlx::query("INSERT INTO agena_content_streams (id,entry_id,session_id,execution_id,generation,kind,epoch,capture_state) VALUES (?,?,?,?,?,'text',?,'complete')")
-        .bind(content.to_string())
-        .bind(entry)
-        .bind(session.get())
-        .bind(&execution)
-        .bind(generation)
-        .bind(epoch.to_string())
-        .execute(&mut *connection)
         .await
         .map_err(sql_error)?;
     sqlx::query("UPDATE agena_prompt_windows SET checkpoint_entry_id=?,through_entry_id=?,through_sequence=?,through_ordinal=?,rewrite_epoch=rewrite_epoch+1 WHERE session_id=?")

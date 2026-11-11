@@ -1702,7 +1702,14 @@ impl SessionManager {
                 .entries
                 .iter()
                 .rev()
-                .find(|entry| !matches!(entry.entry.payload, EntryPayload::Compaction { .. }))
+                // A cleared-context marker is a boundary, not compactable
+                // content: choosing it would leave the checkpoint where it is.
+                .find(|entry| {
+                    !matches!(
+                        entry.entry.payload,
+                        EntryPayload::Compaction { .. } | EntryPayload::ContextCleared { .. }
+                    )
+                })
                 .map(|entry| entry.entry.id);
             let Some(through) = through else {
                 if status.checkpoint_entry_id.is_none() {

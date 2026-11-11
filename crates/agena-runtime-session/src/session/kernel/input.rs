@@ -363,7 +363,10 @@ impl KernelPromptHydrator {
         let mut entries = facts.entries.iter().collect::<Vec<_>>();
         entries.sort_by_key(|item| {
             (
-                !matches!(item.entry.payload, EntryPayload::Compaction { .. }),
+                !matches!(
+                    item.entry.payload,
+                    EntryPayload::Compaction { .. } | EntryPayload::ContextCleared { .. }
+                ),
                 item.entry.message_id,
                 item.entry.id,
             )
@@ -590,6 +593,9 @@ impl KernelPromptHydrator {
                     });
                     Role::System
                 }
+                // A cleared context is a boundary, not content: the prompt
+                // already starts after it, so it contributes nothing.
+                EntryPayload::ContextCleared { .. } => continue,
                 EntryPayload::Compaction { summary, .. } => {
                     // A checkpoint with an unreadable or foreign-route native
                     // compaction state still has its frozen summary text; only

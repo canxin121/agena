@@ -1116,6 +1116,8 @@ const renderBlocksApi = useChatRenderBlocks({
     compactionUnchanged: String(t('chat.partTitles.compactionUnchanged')),
     compactionTokens: (before: number, after: number) =>
       String(t('chat.partTitles.compactionTokens', { before, after })),
+    contextCleared: String(t('chat.partTitles.contextCleared')),
+    contextClearedSummary: String(t('chat.partTitles.contextClearedSummary')),
     answer: String(t('chat.partTitles.answer')),
     reasoning: String(t('chat.partTitles.reasoning')),
     textSegment: String(t('chat.partTitles.textSegment')),

@@ -127,10 +127,27 @@ async fn clearing_context_keeps_the_transcript_readable() {
         .prompt_window_status(session)
         .await
         .unwrap();
-    // A real (empty) checkpoint now bounds the window, which is what keeps the
-    // old turns out of the next prompt.
+    // A real boundary entry now bounds the window, which is what keeps the old
+    // turns out of the next prompt.
     assert!(status.checkpoint_entry_id.is_some());
     assert!(status.through_entry_id.is_some());
+    // It is a clear marker, not a compaction: the transcript must still read
+    // it as "context cleared" rather than as a summary that was produced.
+    let boundary = runtime
+        .ports
+        .reader
+        .entry(session, status.checkpoint_entry_id.unwrap())
+        .await
+        .unwrap();
+    assert!(
+        matches!(boundary.payload, EntryPayload::ContextCleared { .. }),
+        "clearing the context must not fabricate a compaction, got {:?}",
+        boundary.payload
+    );
+    assert!(
+        entry_count(&runtime, session).await <= before + 1,
+        "only the clear marker may be appended"
+    );
 
     let prompt = prompt_entry_ids(&runtime, session).await;
     let old_turns = runtime

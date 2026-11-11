@@ -578,6 +578,10 @@ export function normalizeAgenaPart(
         str(part.summary)
       return { ...base, type: 'compaction', ...(summary ? { text: summary } : {}) }
     }
+    // A cleared context keeps its own identity: it carries no summary text, so
+    // folding it into `compaction` would render one as the other.
+    case 'context_cleared':
+      return { ...base, type: 'context_cleared' }
     case 'error': {
       const message = problemMessage(asObject(content).problem)
       return { ...base, type: 'text', text: message }

@@ -818,6 +818,8 @@ export default {
       notice: 'إشعار',
       compaction: 'تلخيص',
       compactionUnchanged: 'السياق مضغوط بالفعل؛ تم الاحتفاظ بالسجل الحالي.',
+      contextCleared: 'تم مسح السياق',
+      contextClearedSummary: 'تبقى الأدوار السابقة قابلة للقراءة لكنها لم تعد تُرسل إلى النموذج.',
       compactionTokens: '{before} → {after} رمزًا',
       responseRunning: 'الرد قيد الإنشاء',
       responseCompleted: 'اكتمل الرد',

@@ -1480,6 +1480,8 @@ export default {
       notice: '通知',
       compaction: '上下文压缩',
       compactionUnchanged: '当前上下文已足够精简，无需压缩，已保留原始记录。',
+      contextCleared: '已清空上下文',
+      contextClearedSummary: '之前的轮次仍可阅读，但不再发送给模型。',
       compactionTokens: '{before} → {after} Token',
       responseRunning: '回复进行中',
       responseCompleted: '回复已完成',

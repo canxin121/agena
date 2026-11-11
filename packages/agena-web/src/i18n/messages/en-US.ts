@@ -1508,6 +1508,8 @@ export default {
       notice: 'Notice',
       compaction: 'Compaction',
       compactionUnchanged: 'Context is already compact; the existing history was kept.',
+      contextCleared: 'Context cleared',
+      contextClearedSummary: 'Earlier turns stay readable but are no longer sent to the model.',
       compactionTokens: '{before} → {after} tokens',
       responseRunning: 'Response running',
       responseCompleted: 'Response completed',

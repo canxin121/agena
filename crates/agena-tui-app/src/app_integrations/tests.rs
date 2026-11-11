@@ -49,7 +49,7 @@ fn channel_draft_keeps_explicit_privileges_without_background_work() {
     provider.adapter.kind = AdapterKind::Channel;
     let json = serde_json::to_value(template(&provider)).unwrap();
     let policy = &json["channel_policy"];
-    assert!(policy["grants"].is_object());
+    assert!(policy["grant"].is_object());
     assert!(policy["service_grant"].is_object());
     assert!(
         !serde_json::to_string(policy)

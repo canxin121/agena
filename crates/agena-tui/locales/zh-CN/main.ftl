@@ -2854,7 +2854,20 @@ integrations-state_enabled = 已启用
 integrations-state_paused = 已暂停
 integrations-state_expired = 已到期
 integrations-state_faulted = 需要处理
-integrations-keys = Enter会话 · ↑↓选择连接 · g切换插件 · n新建 · a权限 · e启用 · p暂停 · o检查 · r刷新 · PgUp/PgDn详情 · Esc返回
+integrations-keysPrefix = v平台总览 · 
+integrations-platformsTitle = 聊天平台总览
+integrations-platformsHint = 按 v 加载当前项目的聊天平台总览。
+integrations-platformsEmpty = 还没有任何聊天平台。
+integrations-platformConversations = 会话
+integrations-platformGroups = 群
+integrations-platformDirects = 私聊
+integrations-platformsNoSession = 尚未建立会话
+integrations-platformsNoConversations = 还没有收到消息。
+integrations-conversationKind_direct = 私聊
+integrations-conversationKind_group = 群聊
+integrations-conversationKind_public_channel = 公开频道
+integrations-conversationKind_private_channel = 私有频道
+integrations-keys = Enter会话 · ↑↓选择连接 · g切换插件 · n新建 · a权限 · e启用 · p暂停 · o检查 · r刷新 · PgUp/PgDn详情 · Esc返回 · v平台总览 ·
 integrations-formKeys = Ctrl+Enter / Alt+Enter保存草稿 · Enter换行 · Esc关闭。保存后需单独确认启用。
 
 ## Scoped channel access

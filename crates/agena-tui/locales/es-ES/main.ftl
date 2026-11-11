@@ -3182,7 +3182,20 @@ integrations-state_enabled = Activo
 integrations-state_paused = Pausado
 integrations-state_expired = Vencido
 integrations-state_faulted = Requiere atención
-integrations-keys = Enter session · ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back
+integrations-keysPrefix = v plataformas · 
+integrations-platformsTitle = Resumen de plataformas
+integrations-platformsHint = Pulsa v para cargar las plataformas de chat de este proyecto.
+integrations-platformsEmpty = Aún no hay ninguna plataforma de chat.
+integrations-platformConversations = conversaciones
+integrations-platformGroups = grupos
+integrations-platformDirects = directos
+integrations-platformsNoSession = aún sin sesión
+integrations-platformsNoConversations = Aún no se ha recibido ningún mensaje.
+integrations-conversationKind_direct = Directo
+integrations-conversationKind_group = Grupo
+integrations-conversationKind_public_channel = Canal público
+integrations-conversationKind_private_channel = Canal privado
+integrations-keys = Enter session · ↑↓ select · g provider · n new · a access · e enable · p pause · o poll · r refresh · PgUp/PgDn details · Esc back · v plataformas ·
 integrations-formKeys = Ctrl+Enter / Alt+Enter save draft · Enter newline · Esc close. Enable requires separate confirmation.
 
 ## Scoped channel access

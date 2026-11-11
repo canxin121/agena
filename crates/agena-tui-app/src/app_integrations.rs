@@ -33,6 +33,10 @@ pub(crate) struct IntegrationState {
     access_edit: Option<(Uuid, i64)>,
     access_pending: Option<ChannelPolicyUpdate>,
     confirm: Option<(IntegrationBinding, IntegrationControlAction)>,
+    /// Read-only per-platform inventory, loaded on demand.
+    platforms: Option<PlatformInventory>,
+    platforms_loading: bool,
+    show_platforms: bool,
     scroll: u16,
 }
 impl IntegrationState {
@@ -54,6 +58,9 @@ impl IntegrationState {
             access_edit: None,
             access_pending: None,
             confirm: None,
+            platforms: None,
+            platforms_loading: false,
+            show_platforms: false,
             scroll: 0,
         }
     }
@@ -119,7 +126,7 @@ fn template(p: &IntegrationProvider) -> IntegrationSpec {
                     account: "bot-account-id".into(),
                     kind: ChannelKind::Group,
                 },
-                session_mode: ChannelSessionMode::PerUser,
+                session_mode: ChannelSessionMode::PerConversation,
                 thread_mode: ChannelThreadMode::Exact,
                 trigger: ChannelTrigger::DirectOrMention,
                 members: vec![ChannelMember {
@@ -128,7 +135,7 @@ fn template(p: &IntegrationProvider) -> IntegrationSpec {
                     expires_at_ms: None,
                 }],
                 allow_unlisted_chat: false,
-                grants: Default::default(),
+                grant: Default::default(),
                 per_user_daily_limit: 50,
                 allow_automated_reports: false,
                 service_grant: Default::default(),
@@ -154,6 +161,41 @@ impl App {
         self.focus = Focus::Transcript;
         self.refresh_integrations(&mut state);
         self.integration_panels.insert(source, state);
+    }
+    /// Load the read-only platform inventory for one project conversation.
+    fn refresh_platforms(&mut self, state: &mut IntegrationState) {
+        if state.platforms_loading || state.busy {
+            return;
+        }
+        let (source, identity, read) = (state.source, state.identity, Uuid::new_v4());
+        state.read = read;
+        state.platforms_loading = true;
+        state.error = None;
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                let result = tokio::time::timeout(Duration::from_secs(30), async {
+                    backend.client().platform_inventory(source).await
+                })
+                .await?;
+                Ok::<_, anyhow::Error>(result?)
+            },
+            move |app, result| {
+                let Some(state) = app.integration_panels.get_mut(&source) else {
+                    return;
+                };
+                if state.identity != identity || state.read != read {
+                    return;
+                }
+                state.platforms_loading = false;
+                match result {
+                    Ok(inventory) => {
+                        state.platforms = Some(inventory);
+                        state.show_platforms = true;
+                    }
+                    Err(e) => state.error = Some(e.to_string()),
+                }
+            },
+        );
     }
     fn refresh_integrations(&mut self, state: &mut IntegrationState) {
         if state.loading || state.busy {
@@ -405,6 +447,13 @@ impl App {
                     state.error = None;
                     self.refresh_integrations(&mut state);
                 }
+                KeyCode::Char('v') => {
+                    if state.platforms.is_some() {
+                        state.show_platforms = !state.show_platforms;
+                    } else {
+                        self.refresh_platforms(&mut state);
+                    }
+                }
                 KeyCode::Char('g') => {
                     let count = state.snapshot.as_ref().map_or(0, |s| s.providers.len());
                     if count > 0 {
@@ -563,6 +612,25 @@ fn render(frame: &mut Frame, area: Rect, s: &IntegrationState, i18n: &I18n) {
         }
         return;
     }
+    if s.show_platforms {
+        let text = match &s.platforms {
+            None if s.platforms_loading => i18n.text("assistant-loading"),
+            None => label(i18n, "platformsHint"),
+            Some(inventory) if inventory.platforms.is_empty() => label(i18n, "platformsEmpty"),
+            Some(inventory) => format!(
+                "{}\n\n{}",
+                label(i18n, "platformsTitle"),
+                render_platforms(inventory, i18n)
+            ),
+        };
+        frame.render_widget(
+            Paragraph::new(text)
+                .wrap(Wrap { trim: false })
+                .scroll((s.scroll, 0)),
+            regions[1],
+        );
+        return;
+    }
     if let Some((b, action)) = &s.confirm {
         frame.render_widget(
             Paragraph::new(format!(
@@ -614,5 +682,67 @@ fn render(frame: &mut Frame, area: Rect, s: &IntegrationState, i18n: &I18n) {
         body[1],
     );
 }
+/// Flatten the inventory into a readable tree.
+///
+/// Read-only: this view never starts work or sends a message.
+fn render_platforms(inventory: &PlatformInventory, i18n: &I18n) -> String {
+    let mut out = String::new();
+    for entry in &inventory.platforms {
+        let title = entry.title.as_deref().unwrap_or(&entry.platform);
+        out.push_str(&format!(
+            "{title} · {} — {} {} · {} {} · {} {}\n",
+            entry.platform,
+            i18n.text("integrations-platformConversations"),
+            entry.conversation_count,
+            i18n.text("integrations-platformGroups"),
+            entry.conversation_counts.group,
+            i18n.text("integrations-platformDirects"),
+            entry.conversation_counts.direct,
+        ));
+        for account in &entry.accounts {
+            out.push_str(&format!(
+                "  {} / {} · {}\n",
+                account.tenant,
+                account.account,
+                account.state.as_str()
+            ));
+            if account.conversations.is_empty() {
+                out.push_str(&format!(
+                    "    {}\n",
+                    label(i18n, "platformsNoConversations")
+                ));
+            }
+            for conversation in &account.conversations {
+                let thread = conversation
+                    .thread
+                    .as_ref()
+                    .map(|t| format!(" · thread {t}"))
+                    .unwrap_or_default();
+                let session = conversation
+                    .session_id
+                    .map(|id| format!("#{id}"))
+                    .unwrap_or_else(|| label(i18n, "platformsNoSession"));
+                let title = conversation
+                    .title
+                    .as_deref()
+                    .map(|t| format!(" · {t}"))
+                    .unwrap_or_default();
+                out.push_str(&format!(
+                    "    [{}] {}{} → {}{}\n",
+                    i18n.text(&format!(
+                        "integrations-conversationKind_{}",
+                        conversation.kind.as_str()
+                    )),
+                    conversation.resource,
+                    thread,
+                    session,
+                    title,
+                ));
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;

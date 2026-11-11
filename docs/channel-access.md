@@ -40,11 +40,13 @@
 
 ## 普通聊天、独立上下文与共享上下文
 
-默认 `session_mode: per_user`：每个发送者拥有独立模型会话。`thread_mode: per_thread` 时，不同线程也独立；`exact` 时只接受规则里指定的精确线程。不同权限代次使用新会话，降权后的用户不会继续使用之前的高权限上下文。本版策略变更采用连接级代次：该连接旧代次的其他活动会话也会停用，后续从新授权上下文继续；不是只撤销被编辑的单个成员。
+默认 `session_mode: per_conversation`：**一个群聊就是一个会话，一个私聊对话就是一个会话，一个频道就是一个会话**，不同会话的上下文从不合并。`thread_mode: per_thread` 时，不同线程再各自独立；`exact` 时只接受规则里指定的精确线程。同一人在不同平台（例如 Telegram 私聊与飞书私聊）始终是两个会话。
 
-私聊必须使用明确参与者、`per_user` 和 `exact`，不允许“任意平台成员可聊”。群和频道默认 `trigger: direct_or_mention`，仅处理私聊或适配器已验证的点名/回复机器人消息；配置成 `every_message` 才处理该范围内每条消息。
+需要"同一会话内每个人各有一份上下文"时，显式选择 `session_mode: per_actor`。
 
-确实需要多人共享上下文时，可显式选择 `shared_chat`。共享仅发生在同一绑定和线程内，并且强制禁止工具、后台工作、个人记忆和项目工作区能力。这样，低权限成员不能借共享的高权限历史驱动工具。
+私聊必须使用明确参与者和 `exact`，不允许“任意平台成员可聊”。群和频道默认 `trigger: direct_or_mention`，仅处理私聊或适配器已验证的点名/回复机器人消息；配置成 `every_message` 才处理该范围内每条消息。
+
+**能力属于绑定，不属于角色。** 一个会话的上下文由所有发言者共享，因此 `channel_policy.grant` 是整条绑定唯一的一份能力集合；给不同角色配不同工具，会让低权限成员的消息驱动一个其输出被全群读到的高权限工具。角色仍然决定成员管理权限（`member`/`operator`/`administrator`/`owner`），但不再决定工具。
 
 上下文隔离不改变聊天平台的可见性。回复到群或公开频道，平台中的其他成员仍然可能看见。私聊内容不会自动带入群聊；要让敏感内容只对个人可见，应使用其独立私聊绑定，而不是把“每人独立模型上下文”误当作群消息加密。
 
@@ -132,7 +134,7 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
 ```json
 {
   "identity": {"tenant": "tenant-123", "account": "bot-456", "kind": "group"},
-  "session_mode": "per_user",
+  "session_mode": "per_conversation",
   "thread_mode": "per_thread",
   "trigger": "direct_or_mention",
   "members": [
@@ -142,14 +144,12 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
     {"actor": "ordinary-user", "role": "member", "expires_at_ms": null}
   ],
   "allow_unlisted_chat": false,
-  "grants": {
-    "operator": {
-      "tools": ["agena.fs.read"],
-      "mcp_tools": {},
-      "private_memory": false,
-      "source_workspace": true,
-      "network_hosts": []
-    }
+  "grant": {
+    "tools": ["agena.fs.read"],
+    "mcp_tools": {},
+    "private_memory": false,
+    "source_workspace": true,
+    "network_hosts": []
   },
   "per_user_daily_limit": 50,
   "allow_automated_reports": false,

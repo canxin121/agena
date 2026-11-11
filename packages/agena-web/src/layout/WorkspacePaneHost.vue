@@ -5,7 +5,15 @@ import { useWorkspacePaneHosts } from './workspacePaneHosts'
 import { useUiStore } from '@/stores/ui'
 import { afterPaint } from '@/lib/afterPaint'
 
-const props = defineProps<{ suspended?: boolean }>()
+const props = defineProps<{
+  suspended?: boolean
+  // Compact layout shows one conversation surface instead of a split board, so
+  // the same panes are teleported into a single host. Keeping this component
+  // mounted across the breakpoint is what lets a window resize change the
+  // layout without remounting (and re-reading) every page.
+  compact?: boolean
+  compactHost?: HTMLElement | null
+}>()
 const ui = useUiStore()
 const hosts = useWorkspacePaneHosts()
 const parking = ref<HTMLElement | null>(null)
@@ -16,10 +24,16 @@ const groupsByWindow = computed(() => {
   for (const group of ui.workspaceGroups) for (const id of group.tabIds) groups.set(id, group.id)
   return groups
 })
-const visibleIds = computed(() => new Set(ui.workspaceVisibleWindowIds))
+const visibleIds = computed(() => {
+  if (!props.compact) return new Set(ui.workspaceVisibleWindowIds)
+  const active = String(
+    ui.activeWorkspaceWindowId || ui.workspaceVisibleWindowIds[0] || ui.workspaceWindows[0]?.id || '',
+  ).trim()
+  return new Set(active ? [active] : [])
+})
 
 watch(
-  () => [ui.workspaceWindows.map((tab) => tab.id), ui.workspaceVisibleWindowIds] as const,
+  () => [ui.workspaceWindows.map((tab) => tab.id), [...visibleIds.value]] as const,
   ([openIds, visible]) => {
     const open = new Set(openIds)
     for (const id of mountedWindowIds.value) {
@@ -46,6 +60,7 @@ watch(
 )
 
 function target(id: string) {
+  if (props.compact) return props.compactHost || parking.value
   return hosts?.get(groupsByWindow.value.get(id) || '') || parking.value
 }
 
@@ -57,13 +72,18 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="parking" hidden aria-hidden="true" />
-  <!-- One stable owner for each window. Moving between split groups moves
-       its DOM instead of destroying the router, transcript and editors. -->
+  <!-- One stable owner for each window. Moving between split groups, or between
+       the split board and a narrow window, moves its DOM instead of destroying
+       the router, transcript and editors. -->
   <template v-if="parking">
     <Teleport v-for="windowId in mountedWindowIds" :key="windowId" :to="target(windowId)!">
+      <!-- `suspended` hides the pane while a gutter is dragged, but it must not
+           report the pane as invisible: visibility pauses data streams and
+           resumes them with a fresh read, so a resize would reload every page.
+           Only a genuinely hidden tab changes `visible`. -->
       <WorkspacePaneView
         v-show="visibleIds.has(windowId) && !suspended"
-        :visible="visibleIds.has(windowId) && !suspended"
+        :visible="visibleIds.has(windowId)"
         :window-id="windowId"
         class="absolute inset-0"
       />

@@ -518,9 +518,10 @@ watch(
   },
 )
 
-// Bootstrap once. Catalog changes are already reconciled by the store's
-// scoped subscriptions and must not trigger a second complete sidebar read.
-scheduleSidebarStateFetch(0)
+// Bootstrap once per store, not once per mount. A window resize can swap the
+// desktop rail for the compact panel, and the second mount must reuse the
+// state the first one already read instead of issuing a full sidebar read.
+void directorySessions.bootstrapWithStaleWhileRevalidate()
 
 function isDirectoryCollapsed(directoryId: string): boolean {
   const pid = (directoryId || '').trim()

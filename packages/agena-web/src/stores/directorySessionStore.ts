@@ -822,6 +822,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
 
   let disposed = false
   let sidebarInitialized = false
+  // The sidebar lives in the shell and can be unmounted by a layout change
+  // (the compact breakpoint swaps the desktop rail for the mobile panel). Its
+  // first read must not repeat on every remount: the store already holds the
+  // state, and subscriptions keep it current.
+  const sidebarBootstrapState = { loaded: false, promise: null as Promise<boolean> | null }
   let catalogDirty = false
   let recoveryCheck = false
   const dirtyDirectories = new Set<string>()
@@ -2749,11 +2754,23 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     return sessionStateIsActive(stateBySessionId.value[sid])
   }
 
-  async function bootstrapWithStaleWhileRevalidate() {
-    await revalidateFromApi()
+  async function bootstrapWithStaleWhileRevalidate(force = false): Promise<boolean> {
+    if (!force && sidebarBootstrapState.loaded) return true
+    if (sidebarBootstrapState.promise) return sidebarBootstrapState.promise
+    const request = revalidateFromApi(undefined, { silent: true })
+    sidebarBootstrapState.promise = request
+    try {
+      const ok = await request
+      if (ok) sidebarBootstrapState.loaded = true
+      return ok
+    } finally {
+      if (sidebarBootstrapState.promise === request) sidebarBootstrapState.promise = null
+    }
   }
 
   async function resetAllPersistedState() {
+    sidebarBootstrapState.loaded = false
+    sidebarBootstrapState.promise = null
     targetedController?.abort()
     for (const controller of pageRequests.values()) controller.abort()
     pageRequests.clear()

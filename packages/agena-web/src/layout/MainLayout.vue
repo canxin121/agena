@@ -165,6 +165,9 @@ const activePrimaryWindowId = computed(() =>
 const isGroupPaneResizing = ref(false)
 const isLeftSidebarResizing = ref(false)
 const desktopSidebarAsideEl = ref<HTMLElement | null>(null)
+// Compact layout teleports the active window here; keeping the element mounted
+// lets a breakpoint change move the panes instead of remounting them.
+const compactPaneHostEl = ref<HTMLElement | null>(null)
 const isAnySidebarResizing = computed(() => isLeftSidebarResizing.value)
 const isWorkspaceDropDragActive = ref(false)
 const workspacePaneDropTarget = ref<{ paneId: string; position: WorkspaceDropPosition } | null>(null)
@@ -774,10 +777,16 @@ watch(
             <div v-if="isConversationSettings" class="relative h-full min-h-0">
               <router-view />
             </div>
-            <div v-else-if="isGroupPaneMode" class="relative h-full min-h-0">
-              <div v-show="!isAnySidebarResizing" class="h-full min-h-0">
+            <!-- One pane host serves the split board and a narrow window. Only
+                 the teleport target and the visible window set change when the
+                 compact breakpoint is crossed, so a window resize never
+                 remounts the pages (and never re-runs their loaders). -->
+            <div
+              v-else-if="isGroupPaneMode || (ui.isCompactLayout && ui.workspaceWindows.length > 0)"
+              class="relative h-full min-h-0"
+            >
+              <div v-show="isGroupPaneMode && !isAnySidebarResizing" class="h-full min-h-0">
                 <MultiPaneHorizontalSplit
-                  v-if="isGroupPaneMode"
                   :pane-ids="workspaceGroupPaneIds"
                   :ratios="groupPaneRatios"
                   :min-pane-width="280"
@@ -853,58 +862,23 @@ watch(
                     </div>
                   </template>
                 </MultiPaneHorizontalSplit>
-
-                <div v-else-if="isEmbeddedWorkspacePane" class="relative h-full min-h-0">
-                  <WorkspacePrimaryPaneView :window-id="activePrimaryWindowId" />
-
-                  <div
-                    v-if="showWorkspacePaneDropTargets && selectedWorkspaceGroupId"
-                    class="pointer-events-auto absolute inset-0 z-30 flex items-stretch gap-2"
-                    aria-hidden="true"
-                    @dragover="handleWorkspacePaneOverlayDragOver"
-                    @drop="handleWorkspacePaneOverlayDrop"
-                  >
-                    <div
-                      class="pointer-events-auto flex min-h-0 w-1/4 items-center justify-center rounded-md border text-center text-[10px] font-medium leading-4 transition-colors"
-                      :class="workspacePaneDropZoneClass(selectedWorkspaceGroupId, 'before')"
-                      @dragover="handleWorkspacePaneDropDragOver($event, selectedWorkspaceGroupId, 'before')"
-                      @dragleave="handleWorkspacePaneDropDragLeave($event, selectedWorkspaceGroupId, 'before')"
-                      @drop="void handleWorkspacePaneDrop($event, selectedWorkspaceGroupId, 'before')"
-                    >
-                      {{ workspacePaneDropZoneLabel('before') }}
-                    </div>
-
-                    <div
-                      class="pointer-events-auto flex min-h-0 flex-1 items-center justify-center rounded-md border text-center text-[10px] font-medium leading-4 transition-colors"
-                      :class="workspacePaneDropZoneClass(selectedWorkspaceGroupId, 'replace')"
-                      @dragover="handleWorkspacePaneDropDragOver($event, selectedWorkspaceGroupId, 'replace')"
-                      @dragleave="handleWorkspacePaneDropDragLeave($event, selectedWorkspaceGroupId, 'replace')"
-                      @drop="void handleWorkspacePaneDrop($event, selectedWorkspaceGroupId, 'replace')"
-                    >
-                      {{ workspacePaneDropZoneLabel('replace') }}
-                    </div>
-
-                    <div
-                      class="pointer-events-auto flex min-h-0 w-1/4 items-center justify-center rounded-md border text-center text-[10px] font-medium leading-4 transition-colors"
-                      :class="workspacePaneDropZoneClass(selectedWorkspaceGroupId, 'after')"
-                      @dragover="handleWorkspacePaneDropDragOver($event, selectedWorkspaceGroupId, 'after')"
-                      @dragleave="handleWorkspacePaneDropDragLeave($event, selectedWorkspaceGroupId, 'after')"
-                      @drop="void handleWorkspacePaneDrop($event, selectedWorkspaceGroupId, 'after')"
-                    >
-                      {{ workspacePaneDropZoneLabel('after') }}
-                    </div>
-                  </div>
-                </div>
-
-                <div v-else class="flex h-full items-center justify-center px-4 text-xs text-muted-foreground">
-                  {{ t('header.windowTabs.splitNoContent') }}
-                </div>
-                <WorkspacePaneHost v-if="isGroupPaneMode" :suspended="isAnySidebarResizing || isGroupPaneResizing" />
               </div>
 
+              <!-- Compact layout hosts the active window in this element. It
+                   stays in the tree so the host can teleport the same panes
+                   here without tearing the split board down. -->
+              <div v-show="ui.isCompactLayout" ref="compactPaneHostEl" class="h-full min-h-0" />
+
+              <WorkspacePaneHost
+                :compact="ui.isCompactLayout"
+                :compact-host="compactPaneHostEl"
+                :suspended="isAnySidebarResizing || isGroupPaneResizing"
+              />
+
+              <!-- A resize only covers the panes; it never unmounts them. -->
               <div
-                v-show="isAnySidebarResizing"
-                class="workspace-main-resize-placeholder absolute inset-0 z-20 flex items-center justify-center px-4"
+                v-show="isAnySidebarResizing || isGroupPaneResizing"
+                class="workspace-main-resize-placeholder absolute inset-0 z-20 flex items-center justify-center bg-background/60 px-4"
                 aria-hidden="true"
               >
                 <div class="flex w-full max-w-xs flex-col items-center gap-3 px-4 py-6 text-center">
@@ -918,10 +892,6 @@ watch(
             </div>
 
             <div v-else-if="!ui.workspaceWindows.length" class="relative h-full min-h-0">
-              <WorkspacePrimaryPaneView :window-id="activePrimaryWindowId" />
-            </div>
-
-            <div v-else-if="ui.isCompactLayout" class="relative h-full min-h-0">
               <WorkspacePrimaryPaneView :window-id="activePrimaryWindowId" />
             </div>
 

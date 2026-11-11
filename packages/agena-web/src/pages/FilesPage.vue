@@ -654,27 +654,15 @@ watch(
   },
 )
 
+// A narrower window shows the explorer first, so a reader returning to a file
+// reopens the viewer. Reopening is a display choice; the open file and its
+// content stay loaded, so changing the window width never discards work or
+// re-reads the file just to show the list again.
 watch(
-  () => [isCompactLayout.value, showMobileViewer.value] as const,
-  ([mobile, showViewer]) => {
-    if (!mobile || showViewer) return
-    if (!selectedFile.value) return
-
-    fileRefreshSeq += 1
-    isRefreshingFile.value = false
-    closeRefreshConflictDialog()
-    selectedFile.value = null
-    viewerMode.value = 'none'
-    fileContent.value = ''
-    draftContent.value = ''
-    resetFileChunkState()
-    fileLoading.value = false
-    fileError.value = null
-    selection.value = null
-    commentText.value = ''
-    clearBlame()
-    clearGitDiff()
-    closeFileTimeline()
+  () => isCompactLayout.value,
+  (compact, previous) => {
+    if (compact && !previous) showMobileViewer.value = false
+    else if (!compact && previous && selectedFile.value) showMobileViewer.value = true
   },
 )
 

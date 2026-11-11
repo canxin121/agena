@@ -243,6 +243,10 @@ pub struct ProviderConfiguredAdapterModels {
     pub adapter_id: String,
     pub enabled: bool,
     pub model_ids: Vec<String>,
+    /// The saved definition of each route, keyed by model id. An editor that
+    /// only received bare ids had to rebuild every row from the catalog, which
+    /// discarded the user's own values on the next read.
+    pub models: std::collections::BTreeMap<String, ConfiguredModelDefinition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

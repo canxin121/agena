@@ -122,6 +122,26 @@ pub fn apply_configured_definition_as_baseline(
     model
 }
 
+/// Apply a route's saved display name.
+///
+/// A display name has no capability or metadata slot, so the baseline merge
+/// cannot carry it. A route that owns its definition (`manual_overrides`) keeps
+/// the name the user saved; the catalog still supplies one only when the route
+/// has none.
+pub fn apply_configured_display_name(
+    configured: &ConfiguredModelDefinition,
+    model: &mut Model,
+    keep_existing: bool,
+) {
+    let Some(display_name) = configured.display_name.clone() else {
+        return;
+    };
+    if keep_existing && model.display_name.is_some() {
+        return;
+    }
+    model.display_name = Some(display_name);
+}
+
 trait CatalogBaselineMode {
     fn is_default(&self) -> bool;
     fn set_default(&mut self, is_default: bool);
@@ -321,4 +341,42 @@ pub fn merge_catalog_baseline_speed_modes(
         .or_else(|| baseline.default.mode());
     retain_mode_map_default(&mut modes, default);
     modes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::Model;
+
+    fn configured(display_name: Option<&str>) -> ConfiguredModelDefinition {
+        ConfiguredModelDefinition {
+            display_name: display_name.map(ToOwned::to_owned),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_saved_route_display_name_reaches_the_model_listing() {
+        let mut model = Model::new("fixture", "same-id");
+        apply_configured_display_name(&configured(Some("Saved name")), &mut model, false);
+        assert_eq!(model.display_name.as_deref(), Some("Saved name"));
+    }
+
+    #[test]
+    fn baseline_decoration_does_not_invent_a_display_name() {
+        // Baseline decoration fills capabilities and metadata only. A display
+        // name is a route identity, so it is assigned explicitly rather than
+        // copied through the baseline merge.
+        let definition = CatalogModelDefinition {
+            display_name: Some("Catalog name".to_owned()),
+            ..Default::default()
+        };
+        let model = apply_catalog_definition_as_baseline(
+            &definition,
+            &ModelCapabilities::default(),
+            &ModelMetadata::default(),
+            Model::new("fixture", "same-id"),
+        );
+        assert_eq!(model.display_name, None);
+    }
 }

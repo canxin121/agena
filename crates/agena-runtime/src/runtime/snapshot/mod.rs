@@ -572,6 +572,42 @@ impl RuntimeSnapshot {
             .collect()
     }
 
+    /// Re-apply each route's own saved definition after catalog decoration.
+    ///
+    /// Catalog decoration can only choose between catalog values and the
+    /// provider's live listing; it never sees the route the user saved. A route
+    /// that opted out of following the catalog (`manual_overrides`) must keep
+    /// its saved values, otherwise an edit is written to the configuration and
+    /// then replaced on the very next listing.
+    fn apply_saved_route_definitions(&self, provider_id: &str, models: &mut [agena_domain::Model]) {
+        let Some(configured) = self.provider_configs().get(provider_id) else {
+            return;
+        };
+        for model in models {
+            let Some(adapter_id) = model.adapter_id.as_ref() else {
+                continue;
+            };
+            let route = format!("{}/{}", adapter_id.as_ref(), model.id.as_ref());
+            let Some(saved) = configured.models.get(route.as_str()) else {
+                continue;
+            };
+            if !saved.definition.manual_overrides {
+                continue;
+            }
+            let capabilities = model.capabilities.clone();
+            let metadata = model.metadata.clone();
+            let mut next = agena_provider::apply_configured_definition_as_baseline(
+                &saved.definition,
+                &capabilities,
+                &metadata,
+                model.clone(),
+            );
+            agena_provider::apply_configured_display_name(&saved.definition, &mut next, false);
+            next.native_compaction = saved.native_compaction;
+            *model = next;
+        }
+    }
+
     pub(crate) fn configured_local_models(
         &self,
         provider_id: &str,
@@ -597,12 +633,14 @@ impl RuntimeSnapshot {
             models: provider_record.models,
             appendable_model_ids: Default::default(),
         };
-        Ok(decorate_provider_models(
+        let mut models = decorate_provider_models(
             &catalog_decoration_source(provider.as_ref()),
             &local_provider_record,
             &Self::manual_override_model_ids(Some(configured)),
             models,
-        ))
+        );
+        self.apply_saved_route_definitions(provider_id, &mut models);
+        Ok(models)
     }
 
     pub(crate) async fn discover_provider_models(
@@ -680,12 +718,14 @@ impl RuntimeSnapshot {
             .providers
             .get(provider_id)
             .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
-        Ok(decorate_provider_models(
+        let mut models = decorate_provider_models(
             &catalog_decoration_source(provider.as_ref()),
             &provider_record,
             &Self::manual_override_model_ids(self.provider_configs().get(provider_id)),
             models,
-        ))
+        );
+        self.apply_saved_route_definitions(provider_id, &mut models);
+        Ok(models)
     }
 
     pub(crate) fn resolve_model_target(

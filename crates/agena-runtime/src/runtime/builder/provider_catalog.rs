@@ -78,10 +78,23 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
                     })
                     .collect::<Vec<_>>();
                 model_ids.sort();
+                // Carry each route's saved definition so an editor reads back
+                // the values the user saved rather than rebuilding the row
+                // from the catalog.
+                let models = model_ids
+                    .iter()
+                    .filter_map(|model_id| {
+                        provider
+                            .models
+                            .get(format!("{adapter_id}/{model_id}").as_str())
+                            .map(|configured| (model_id.clone(), configured.definition.clone()))
+                    })
+                    .collect();
                 agena_provider::ProviderConfiguredAdapterModels {
                     adapter_id: adapter_id.clone(),
                     enabled: adapter.enabled,
                     model_ids,
+                    models,
                 }
             })
             .collect::<Vec<_>>();

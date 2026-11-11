@@ -413,10 +413,11 @@ pub fn configured_provider_adapter_models_response(
                 .model_ids
                 .into_iter()
                 .map(|model_id| {
-                    let mut model = agena_domain::Model::new(provider_id, model_id);
+                    let mut model = agena_domain::Model::new(provider_id, model_id.as_str());
                     model.adapter_id = Some(agena_domain::AdapterId::new(adapter_id.as_str()));
-                    provider_model_resource_from_domain(enrich_listing_model_from_catalog(
+                    provider_model_resource_from_domain(enrich_configured_model_from_catalog(
                         model,
+                        adapter.models.get(model_id.as_str()),
                         &catalog_entries,
                     ))
                 })
@@ -431,6 +432,83 @@ pub fn configured_provider_adapter_models_response(
             }
         })
         .collect()
+}
+
+/// Enrich a saved route with its preferred catalog entry.
+///
+/// The saved definition is the route's own configuration, so it decides the
+/// result when the route opted out of following the catalog
+/// (`manual_overrides`). A route that follows the catalog takes the catalog
+/// values and uses its saved definition only for what the catalog leaves
+/// undefined — the same precedence the runtime uses, so the editor reads back
+/// exactly what execution will use.
+fn enrich_configured_model_from_catalog(
+    model: agena_domain::Model,
+    saved: Option<&agena_provider::ConfiguredModelDefinition>,
+    catalog_entries: &[crate::dto::CatalogModelResource],
+) -> agena_domain::Model {
+    let lookup_ids = catalog_lookup_candidates(model.id.as_ref());
+    let catalog_model = preferred_catalog_model_for_lookup_ids(catalog_entries, &lookup_ids);
+    let route_follows_catalog = saved.is_none_or(|definition| !definition.manual_overrides);
+    if route_follows_catalog {
+        return match catalog_model {
+            Some(catalog_model) => {
+                let definition = catalog_model_to_catalog_definition(catalog_model);
+                let enriched = agena_provider::apply_catalog_definition_as_authority(
+                    &definition,
+                    &model.capabilities.clone(),
+                    &model.metadata.clone(),
+                    model,
+                );
+                // The route may still carry policy the catalog does not define
+                // (a tool mode). Let it fill the gaps, but keep the catalog's
+                // display name because this route follows the catalog.
+                match saved {
+                    Some(saved) => agena_provider::apply_configured_definition_as_baseline(
+                        saved,
+                        &enriched.capabilities.clone(),
+                        &enriched.metadata.clone(),
+                        enriched,
+                    ),
+                    None => enriched,
+                }
+            }
+            None => match saved {
+                Some(saved) => {
+                    let mut filled = agena_provider::apply_configured_definition_as_baseline(
+                        saved,
+                        &model.capabilities.clone(),
+                        &model.metadata.clone(),
+                        model,
+                    );
+                    agena_provider::apply_configured_display_name(saved, &mut filled, false);
+                    filled
+                }
+                None => model,
+            },
+        };
+    }
+
+    // The route owns its definition; the catalog only fills what it omits.
+    let definition = catalog_model.map(catalog_model_to_catalog_definition);
+    let configured = saved.expect("manual override routes have a saved definition");
+    let mut model = model;
+    if let Some(definition) = definition {
+        model = agena_provider::apply_catalog_definition_as_baseline(
+            &definition,
+            &model.capabilities.clone(),
+            &model.metadata.clone(),
+            model,
+        );
+    }
+    model = agena_provider::apply_configured_definition_as_baseline(
+        configured,
+        &model.capabilities.clone(),
+        &model.metadata.clone(),
+        model,
+    );
+    agena_provider::apply_configured_display_name(configured, &mut model, false);
+    model
 }
 
 /// Enrich a raw listing model with its preferred catalog entry. Returns the

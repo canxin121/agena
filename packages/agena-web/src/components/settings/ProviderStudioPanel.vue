@@ -1732,11 +1732,20 @@ async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) 
     modelValue.value = next
     setModelJsonText(JSON.stringify(next, null, 2))
     stageCurrentModelValue(next, true)
+    // Choosing a catalog entry changes this route's identity, so the route must
+    // keep its own values from now on. Without this the next open, listing or
+    // save silently replaces the choice with the catalog's automatic match.
     const key = modelKey(editing.adapterId, editing.modelId)
-    const selections = { ...manualCatalogSelections.value }
-    if (manual) selections[key] = catalog
-    else delete selections[key]
-    manualCatalogSelections.value = selections
+    if (manual) {
+      selectModelRoute(editing.adapterId, editing.modelId)
+      const selections = { ...manualCatalogSelections.value }
+      selections[key] = catalog
+      manualCatalogSelections.value = selections
+    } else {
+      const selections = { ...manualCatalogSelections.value }
+      delete selections[key]
+      manualCatalogSelections.value = selections
+    }
     catalogPickerOpen.value = false
   } catch (reason) {
     if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
@@ -1744,6 +1753,17 @@ async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) 
   } finally {
     if (applyGeneration === catalogApplyGeneration) catalogApplying.value = false
   }
+}
+
+/** Ensure the edited route is part of the saved selection. */
+function selectModelRoute(adapterId: string, modelId: string) {
+  selectedAdapterIds.value = new Set([...selectedAdapterIds.value, adapterId])
+  const key = modelKey(adapterId, modelId)
+  if (!selectedModelKeys.value.has(key)) {
+    selectedModelKeys.value = new Set([...selectedModelKeys.value, key])
+  }
+  const deleted = new Set(pendingDeletedModelKeys.value)
+  if (deleted.delete(key)) pendingDeletedModelKeys.value = deleted
 }
 
 function modelPathValue(key: string): any {
@@ -1907,6 +1927,10 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
   modelValue.value = next
   modelJsonDirty.value = false
   scheduleModelJsonSync()
+  // Editing a field is an intentional change to this route; keep it selected
+  // so saving the provider cannot drop the row the user is editing.
+  const editing = editingModel.value
+  if (editing) selectModelRoute(editing.adapterId, editing.modelId)
   stageCurrentModelValue(next, key === 'display_name' || key === 'native_compaction' || key === 'manual_overrides')
   modelError.value = ''
 }

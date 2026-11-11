@@ -31,6 +31,7 @@ export const localStorageKeys = {
     workspacePreviewViewportScale: namespacedKey('ui.workspace-preview.viewport.scale'),
     workspacePreviewTouchSimulation: namespacedKey('ui.workspace-preview.touch-simulation'),
     locale: namespacedKey('ui.locale'),
+    botSidebarPage: namespacedKey('ui.bot-sidebar.page'),
   },
   directory: {
     currentDirectoryByWindow: namespacedKey('directory.current-directory-by-window'),

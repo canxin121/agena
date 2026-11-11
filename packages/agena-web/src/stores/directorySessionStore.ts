@@ -23,7 +23,13 @@ import { normalizeDirForCompare } from '@/features/sessions/model/labels'
 import { loadExpandedTree } from '@/features/sessions/model/expandedTree'
 import { sessionStateKind, type Session } from '@/types/chat'
 import type { SseEvent } from '@/lib/sse'
-import { defaultChatSidebarUiPrefs, patchChatSidebarUiPrefs, type ChatSidebarUiPrefs } from '@/data/chatSidebarUiPrefs'
+import {
+  defaultChatSidebarUiPrefs,
+  loadChatSidebarUiPrefs,
+  patchChatSidebarUiPrefs,
+  saveChatSidebarUiPrefs,
+  type ChatSidebarUiPrefs,
+} from '@/data/chatSidebarUiPrefs'
 import { useChatStoreUnscoped } from './chat'
 
 import {
@@ -199,7 +205,7 @@ type SidebarCommandRuntimeOpts = {
 
 type SidebarInFlightVoidRequest = {
   key: string
-  promise: Promise<void>
+  promise: Promise<boolean>
   controller: AbortController | null
   startedAt: number
 }
@@ -801,7 +807,11 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   const directoriesPageIndex = ref(0)
   const directoryPageRows = ref<DirectoryEntry[]>([])
   const directoryPageTotal = ref(0)
-  const uiPrefs = ref<ChatSidebarUiPrefs>(defaultChatSidebarUiPrefs())
+  // Sidebar chrome (collapsed folders, expanded parents, current pages) is
+  // client-local. Start from the stored copy and write every change back, so a
+  // reload restores the same place instead of reopening at page 0.
+  const uiPrefs = ref<ChatSidebarUiPrefs>(loadChatSidebarUiPrefs())
+  watch(uiPrefs, (value) => saveChatSidebarUiPrefs(value), { deep: true, flush: 'sync' })
 
   const loading = ref(false)
   const error = ref<string | null>(null)
@@ -1441,7 +1451,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       } else if (command.type === 'setDirectoryCollapsed' || command.type === 'setDirectoryRootPage') {
         if (!(await revalidateDirectorySessionPageFromApi(command.directoryId, { silent: true }))) return false
       } else if (command.type === 'setDirectoriesPage') {
-        await revalidateFromStateApi()
+        if (!(await revalidateFromStateApi())) return false
       }
       return true
     } catch (err) {
@@ -2101,7 +2111,13 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     if (typeof document !== 'undefined') document.removeEventListener?.('visibilitychange', resumeSidebarSync)
   })
 
-  async function revalidateFromStateApi(opts?: SidebarStateQuery): Promise<void> {
+  /// Reads the sidebar state and reports whether it was actually applied.
+  ///
+  /// An aborted or superseded read resolves the same way a successful one does,
+  /// so the boolean is the only way a caller can tell "the payload landed" from
+  /// "another request replaced it"; caching the latter as loaded would leave the
+  /// sidebar permanently empty until a manual refresh.
+  async function revalidateFromStateApi(opts?: SidebarStateQuery): Promise<boolean> {
     persistedStateQuery = applyPersistentStateQueryOverrides(persistedStateQuery, opts)
     const focusSessionId = typeof opts?.focusSessionId === 'string' ? opts.focusSessionId.trim() : ''
     const stateKey = `agena:${persistedStateQuery.directoriesPage ?? 0}:${persistedStateQuery.directoryQuery ?? ''}:${focusSessionId}`
@@ -2118,17 +2134,19 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     const controller = createAbortController()
     const timeout = window.setTimeout(() => controller?.abort(), 30_000)
 
-    let requestPromise!: Promise<void>
+    let requestPromise!: Promise<boolean>
     requestPromise = (async () => {
       try {
         const state = await buildAgenaSidebarPayload(controller ? controller.signal : undefined)
-        if (!controller?.signal.aborted) {
-          applySidebarStatePayload(state)
-          syncWorkspaceSubscriptions(directoryPageRows.value)
-          sidebarInitialized = true
-        }
+        // A superseded read must not claim the payload applied: the newer
+        // request owns the result and will apply it.
+        if (controller?.signal.aborted) return false
+        applySidebarStatePayload(state)
+        syncWorkspaceSubscriptions(directoryPageRows.value)
+        sidebarInitialized = true
+        return true
       } catch (err) {
-        if (isAbortError(err)) return
+        if (isAbortError(err)) return false
         throw err
       } finally {
         window.clearTimeout(timeout)
@@ -2264,8 +2282,8 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     }
     error.value = null
     try {
-      await revalidateFromStateApi(opts)
-      return true
+      const applied = await revalidateFromStateApi(opts)
+      return applied
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
       return false
@@ -2755,14 +2773,19 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   }
 
   async function bootstrapWithStaleWhileRevalidate(force = false): Promise<boolean> {
-    if (!force && sidebarBootstrapState.loaded) return true
+    // A store that already holds a payload satisfies a mount even if the flag
+    // was cleared by an earlier failure; the flag only short-circuits the read.
+    if (!force && sidebarBootstrapState.loaded && sidebarInitialized) return true
     if (sidebarBootstrapState.promise) return sidebarBootstrapState.promise
     const request = revalidateFromApi(undefined, { silent: true })
     sidebarBootstrapState.promise = request
     try {
+      // Only a read that actually applied a payload counts as loaded. An
+      // aborted or superseded attempt must leave the flag clear so the next
+      // mount retries instead of showing an empty sidebar.
       const ok = await request
-      if (ok) sidebarBootstrapState.loaded = true
-      return ok
+      if (ok && sidebarInitialized) sidebarBootstrapState.loaded = true
+      return ok && sidebarInitialized
     } finally {
       if (sidebarBootstrapState.promise === request) sidebarBootstrapState.promise = null
     }
@@ -2819,6 +2842,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     directoryPageRows.value = []
     directoryPageTotal.value = 0
     uiPrefs.value = defaultChatSidebarUiPrefs()
+    // A full reset discards the stored chrome as well, so a later mount does
+    // not restore the layout this reset just cleared.
+    saveChatSidebarUiPrefs(uiPrefs.value)
     loading.value = false
     error.value = null
   }

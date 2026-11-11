@@ -49,7 +49,10 @@ import { useSidebarLocate } from '@/layout/chatSidebar/useSidebarLocate'
 import { normalizeSidebarUiPrefsForUi } from '@/features/sessions/model/sidebarUiPrefs'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
-import type { SessionToggleSelectionOptions, DirectoryToggleSelectionOptions } from '@/layout/chatSidebar/sessionMenu.types'
+import type {
+  SessionToggleSelectionOptions,
+  DirectoryToggleSelectionOptions,
+} from '@/layout/chatSidebar/sessionMenu.types'
 
 const props = withDefaults(
   defineProps<{
@@ -521,7 +524,14 @@ watch(
 // Bootstrap once per store, not once per mount. A window resize can swap the
 // desktop rail for the compact panel, and the second mount must reuse the
 // state the first one already read instead of issuing a full sidebar read.
-void directorySessions.bootstrapWithStaleWhileRevalidate()
+// A mount that arrives while a read is superseded gets `false`; retry once on
+// the next frame rather than leaving the list empty until a manual refresh.
+void directorySessions.bootstrapWithStaleWhileRevalidate().then((loaded) => {
+  if (loaded) return
+  requestAnimationFrame(() => {
+    void directorySessions.bootstrapWithStaleWhileRevalidate()
+  })
+})
 
 function isDirectoryCollapsed(directoryId: string): boolean {
   const pid = (directoryId || '').trim()

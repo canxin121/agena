@@ -9,6 +9,8 @@ import { searchBots } from '@/features/bots/profiles'
 import { useBotConversationActions } from '@/features/bots/useBotConversationActions'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { getLocalString, setLocalString } from '@/lib/persist'
+import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import type { BotProfile } from '@/lib/bots'
 import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
@@ -36,7 +38,11 @@ const route = useRoute()
 const { t } = useI18n()
 
 const query = ref('')
-const page = ref(0)
+// The bot list is paged; remember the page so reopening the sidebar lands where
+// the user left it instead of jumping back to the first one.
+const PAGE_STORAGE_KEY = localStorageKeys.ui.botSidebarPage
+const page = ref(Math.max(0, Number.parseInt(getLocalString(PAGE_STORAGE_KEY).trim(), 10) || 0))
+watch(page, (value) => setLocalString(PAGE_STORAGE_KEY, String(Math.max(0, Math.floor(Number(value) || 0)))))
 
 const matched = computed<BotProfile[]>(() => searchBots(bots.profiles, query.value))
 const total = computed(() => matched.value.length)

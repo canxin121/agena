@@ -37,11 +37,15 @@ use agena_plugin_host::sdk::host_api::{
     HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostSetSessionModelRequest, HostSetSessionModelResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageRecord, HostStorageSetRequest, LogLevel, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    PathPermissionQuery, PermissionQuery, ToolDescriptor, current_host_callback_context,
+    HostSessionCommand, HostSessionCommandRequest, HostSessionCommandResponse, HostSessionEvent,
+    HostSessionQuery, HostSessionQueryRequest, HostSessionQueryResponse, HostSessionStreamKind,
+    HostSessionStreamRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
+    HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse, LogLevel,
+    MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
+    MonitorStopRequest, PathPermissionQuery, PermissionQuery, ToolDescriptor,
+    current_host_callback_context,
 };
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
@@ -888,6 +892,396 @@ impl HostClient for RuntimeHostClient {
             )
             .unwrap_or(u8::MAX),
         })
+    }
+
+    async fn session_query(
+        &self,
+        req: HostSessionQueryRequest,
+    ) -> Result<HostSessionQueryResponse, PluginError> {
+        let runtime = self.runtime()?;
+        let services = runtime.application_services();
+        let target = match req.query {
+            HostSessionQuery::List { .. } => None,
+            _ => Some(self.callback_or_requested_session_id(req.session_id, "session_query")?),
+        };
+        let data = match req.query {
+            HostSessionQuery::List {
+                workspace_id,
+                search,
+                limit,
+            } => {
+                let manager = self.session_manager()?;
+                let request = agena_domain::SessionListRequest {
+                    limit: limit.map(u64::from),
+                    search,
+                    ..Default::default()
+                };
+                let (manager, rows) = if let Some(workspace_id) = workspace_id {
+                    // The manager lists within its current workspace; an
+                    // explicit id must match or the caller sees nothing.
+                    let rows = manager.list_session_summaries(request).await;
+                    (manager, (rows, Some(workspace_id)))
+                } else {
+                    let rows = manager.list_session_summaries(request).await;
+                    (manager, (rows, None))
+                };
+                let _ = manager;
+                let (rows, filter) = rows;
+                let rows = rows.map_err(plugin_error)?;
+                let rows = match filter {
+                    Some(id) => rows
+                        .into_iter()
+                        .filter(|row| row.workspace_id == Some(id))
+                        .collect(),
+                    None => rows,
+                };
+                serde_json::to_value(rows).map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::Get => {
+                let target = target.expect("resolved above");
+                let session = self
+                    .use_session_manager(|manager| async move { manager.get_session(target).await })
+                    .await?;
+                serde_json::to_value(session)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::State => {
+                let target = target.expect("resolved above");
+                let summary = self
+                    .use_session_manager(|manager| async move {
+                        manager.get_session_summary(target).await
+                    })
+                    .await?;
+                let active = self
+                    .use_session_manager(|manager| async move {
+                        Ok::<bool, crate::AppError>(manager.is_run_active(target).await)
+                    })
+                    .await
+                    .unwrap_or(false);
+                serde_json::json!({"summary": summary, "running": active})
+            }
+            HostSessionQuery::Parts { after, limit } => {
+                let target = target.expect("resolved above");
+                let page = self
+                    .use_session_manager(|manager| async move {
+                        let kernel = manager.session_kernel();
+                        kernel
+                            .reader
+                            .message_history(
+                                agena_storage::kernel::SessionId::try_from(target)
+                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
+                                None,
+                                limit.unwrap_or(8).clamp(1, 32) as usize,
+                                32,
+                            )
+                            .await
+                            .map_err(|error| crate::AppError::Config(error.to_string()))
+                    })
+                    .await?;
+                let _ = after;
+                serde_json::to_value(&*page).map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::Content { resource_id } => {
+                let target = target.expect("resolved above");
+                serde_json::json!({
+                    "session_id": target,
+                    "resource_id": resource_id,
+                    "note": "read the content through the parts view",
+                })
+            }
+            HostSessionQuery::Executions => {
+                let target = target.expect("resolved above");
+                let sessions = self
+                    .use_session_manager(|manager| async move {
+                        manager.list_session_tree(target).await
+                    })
+                    .await?;
+                serde_json::to_value(sessions)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::Cost => {
+                let target = target.expect("resolved above");
+                let queries = services
+                    .session_queries
+                    .clone()
+                    .ok_or_else(|| host_unavailable("session queries are not enabled"))?;
+                let summary = queries
+                    .session_cost_summary(target)
+                    .await
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                serde_json::to_value(summary)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::Tree { root_id } => {
+                let sessions = self
+                    .use_session_manager(|manager| async move {
+                        manager.list_session_tree(root_id).await
+                    })
+                    .await?;
+                serde_json::to_value(sessions)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::Platforms => {
+                let target = target.expect("resolved above");
+                let assistant = self
+                    .runtime()?
+                    .assistant_service()
+                    .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
+                let inventory = agena_assistant::AssistantService::platform_inventory(
+                    assistant.as_ref(),
+                    target,
+                )
+                .await
+                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                serde_json::to_value(inventory)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            HostSessionQuery::Pending => {
+                let target = target.expect("resolved above");
+                let requests = self
+                    .use_session_manager(|manager| async move {
+                        let kernel = manager.session_kernel();
+                        let snapshot = kernel
+                            .reader
+                            .control_snapshot(
+                                agena_storage::kernel::SessionId::try_from(target)
+                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
+                                32,
+                            )
+                            .await
+                            .map_err(|error| crate::AppError::Config(error.to_string()))?;
+                        manager.pending_interactive_requests(&snapshot).await
+                    })
+                    .await?;
+                serde_json::to_value(requests)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+        };
+        Ok(HostSessionQueryResponse { data })
+    }
+
+    async fn session_command(
+        &self,
+        req: HostSessionCommandRequest,
+    ) -> Result<HostSessionCommandResponse, PluginError> {
+        let target = self.callback_or_requested_session_id(req.session_id, "session_command")?;
+        let mut execution_ids = Vec::new();
+        let mut data = None;
+        match req.command {
+            HostSessionCommand::Submit {
+                document,
+                author,
+                origin,
+            } => {
+                // A plugin may describe an external speaker, but only the host
+                // may conclude instance-operator authority. Rejecting the claim
+                // keeps a compromised adapter from acting as the operator.
+                if author
+                    .as_ref()
+                    .is_some_and(|author| author.is_instance_operator())
+                {
+                    return Err(PluginError::invalid_params(
+                        "plugins cannot submit input as the instance operator",
+                    ));
+                }
+                let outcome = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .submit_managed_document(
+                                target,
+                                req.idempotency_key.clone().unwrap_or_default(),
+                                document,
+                                author,
+                                origin,
+                            )
+                            .await
+                    })
+                    .await?;
+                if let Some(receipt) = outcome.receipt {
+                    execution_ids.push(receipt.execution_id.to_string());
+                }
+            }
+            HostSessionCommand::Cancel => {
+                let outcome = self
+                    .use_session_manager(|manager| async move {
+                        manager.cancel_active_execution_with_outcome(target).await
+                    })
+                    .await?;
+                serde_json::to_value(outcome.result).ok();
+            }
+            HostSessionCommand::SetQueuePaused { paused } => {
+                self.use_session_manager(|manager| async move {
+                    manager.set_message_queue_paused(target, paused).await
+                })
+                .await?;
+            }
+            HostSessionCommand::Rename { title } => {
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        manager.rename_session(target, title).await
+                    })
+                    .await?;
+                data = serde_json::to_value(session).ok();
+            }
+            HostSessionCommand::Fork {
+                from_part_id,
+                title,
+            } => {
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .fork_session(crate::session::SessionForkRequest {
+                                conversation_mode: None,
+                                session_id: target,
+                                at_message_id: from_part_id,
+                                title,
+                                expected_version: None,
+                            })
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(session).ok();
+            }
+            HostSessionCommand::Rewind { part_id } => {
+                let result = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .rewind_session(crate::session::SessionRewindRequest {
+                                session_id: target,
+                                at_message_id: part_id,
+                                mode: crate::session::RewindMode::InPlace,
+                                expected_version: None,
+                            })
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(&result.0).ok();
+            }
+            HostSessionCommand::Compact => {
+                return Err(host_unavailable(
+                    "compaction is not yet reachable from a plugin callback",
+                ));
+            }
+            HostSessionCommand::ClearQueue
+            | HostSessionCommand::RemoveQueued { .. }
+            | HostSessionCommand::TakeQueued { .. }
+            | HostSessionCommand::ReplyPermission { .. }
+            | HostSessionCommand::ReplyUserInput { .. }
+            | HostSessionCommand::SetSelection { .. } => {
+                return Err(host_unavailable(
+                    "this session command is not yet reachable from a plugin callback",
+                ));
+            }
+        }
+        Ok(HostSessionCommandResponse {
+            session_id: Some(target),
+            execution_ids,
+            data,
+        })
+    }
+
+    async fn session_stream(
+        &self,
+        req: HostSessionStreamRequest,
+    ) -> Result<EventSubscription, PluginError> {
+        let target = self.callback_or_requested_session_id(req.session_id, "session_stream")?;
+        // Live delivery to plugins reuses the existing event channel; the
+        // stream handle itself is created when the plugin subscribes.
+        let _ = req.kind;
+        let subscription_id = self
+            .subscribe_events(agena_plugin_sdk::hooks::EventFilter {
+                kinds: vec!["session".into()],
+                session_id: Some(target),
+                workspace: None,
+            })
+            .await?;
+        Ok(subscription_id)
+    }
+
+    async fn workspace_query(
+        &self,
+        req: HostWorkspaceQueryRequest,
+    ) -> Result<HostWorkspaceQueryResponse, PluginError> {
+        let services = self.runtime()?.application_services();
+        let repositories = services
+            .repositories
+            .ok_or_else(|| host_unavailable("workspace repository is not configured"))?;
+        let data = match req.query {
+            HostWorkspaceQuery::List {
+                include_session_count,
+            } => {
+                let _ = include_session_count;
+                let rows = repositories
+                    .workspace
+                    .list(agena_storage::WorkspaceListQuery {
+                        limit: 256,
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                serde_json::Value::Array(
+                    rows.into_iter()
+                        .map(|row| {
+                            serde_json::json!({
+                                "id": row.id,
+                                "path": row.path,
+                                "created_at_ms": row.created_at_ms,
+                                "updated_at_ms": row.updated_at_ms,
+                            })
+                        })
+                        .collect(),
+                )
+            }
+            HostWorkspaceQuery::Get { workspace_id } => {
+                let row = repositories
+                    .workspace
+                    .get(workspace_id)
+                    .await
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                match row {
+                    Some(row) => serde_json::json!({
+                        "id": row.id,
+                        "path": row.path,
+                        "created_at_ms": row.created_at_ms,
+                        "updated_at_ms": row.updated_at_ms,
+                    }),
+                    None => serde_json::Value::Null,
+                }
+            }
+            HostWorkspaceQuery::Files {
+                workspace_id,
+                path: _,
+                limit,
+            } => {
+                let root = repositories
+                    .workspace
+                    .path_by_id(workspace_id)
+                    .await
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?
+                    .ok_or_else(|| PluginError::invalid_params("workspace not found"))?;
+                let _ = (limit, root);
+                return Err(host_unavailable(
+                    "workspace file listing is not yet reachable from a plugin callback",
+                ));
+            }
+            HostWorkspaceQuery::Read {
+                workspace_id,
+                path: _,
+                max_bytes,
+            } => {
+                let root = repositories
+                    .workspace
+                    .path_by_id(workspace_id)
+                    .await
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?
+                    .ok_or_else(|| PluginError::invalid_params("workspace not found"))?;
+                let _ = (max_bytes, root);
+                return Err(host_unavailable(
+                    "workspace file reads are not yet reachable from a plugin callback",
+                ));
+            }
+        };
+        Ok(HostWorkspaceQueryResponse { data })
     }
 
     async fn get_session(

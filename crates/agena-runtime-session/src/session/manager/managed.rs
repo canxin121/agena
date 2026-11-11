@@ -289,6 +289,30 @@ impl SessionManager {
         author: Option<agena_domain::MessageAuthor>,
         origin: Option<agena_domain::MessageOrigin>,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        self.submit_managed_document(
+            id,
+            delivery_key,
+            ComposerDocument(vec![ComposerNode::Text { text }]),
+            author,
+            origin,
+        )
+        .await
+    }
+
+    /// Submit a full composer document through the same admission path.
+    ///
+    /// This is the entry point a chat adapter uses when the message is not
+    /// plain text: the document may carry attachments and inline-UI activity
+    /// nodes, and the host still owns hooks, permissions, the kernel and the
+    /// supervisor exactly as it does for a text-only message.
+    pub async fn submit_managed_document(
+        &self,
+        id: i64,
+        delivery_key: String,
+        document: ComposerDocument,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let metadata = self
             .kernel()
             .reader
@@ -301,16 +325,14 @@ impl SessionManager {
                 &metadata.selection.clone().unwrap_or_default(),
             )
             .await?;
-        self.submit_with_identity(
-            crate::SessionUserRunRequest::new(
-                id,
-                options,
-                ComposerDocument(vec![ComposerNode::Text { text }]),
-            )
-            .with_idempotency_key(delivery_key),
-            author,
-            origin,
-        )
-        .await
+        // An empty key must stay absent so a caller that cannot supply a
+        // stable delivery identity is not silently deduplicated.
+        let request = crate::SessionUserRunRequest::new(id, options, document);
+        let request = if delivery_key.trim().is_empty() {
+            request
+        } else {
+            request.with_idempotency_key(delivery_key)
+        };
+        self.submit_with_identity(request, author, origin).await
     }
 }

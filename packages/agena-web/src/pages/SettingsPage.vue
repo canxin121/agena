@@ -167,7 +167,7 @@ watch(
       localStorage.setItem(settingsSubpageStorageKey(activeSection.value), activeView.value)
       localStorage.setItem(settingsScopeStorageKey(activeSection.value), activeScope.value)
     } catch {}
-    const { pluginTab: _pluginTab, scope: _scope, ...query } = route.query
+    const { pluginTab: _pluginTab, scope: _scope, sessionId: _sessionId, ...query } = route.query
     if (activeScope.value) query.scope = activeScope.value
     const isPluginView = activeSection.value === 'plugins-tools' && pluginTabForSettingsView(activeView.value)
     if (isPluginView) {
@@ -178,6 +178,7 @@ watch(
       query.view === activeView.value &&
       query.scope === (activeScope.value || undefined) &&
       route.query.pluginTab === query.pluginTab &&
+      route.query.sessionId === undefined &&
       (isPluginView || route.query.plugin === undefined)
     )
       return

@@ -7,7 +7,17 @@ export function settingsQueryForDestination(
   currentSection: SettingsTab,
   currentQuery: LocationQuery,
 ): LocationQueryRaw {
-  const { view: _view, scope: _scope, plugin, pluginTab: _pluginTab, ...restQuery } = currentQuery
+  // `sessionId` is not a settings parameter: a session-scoped page edits the
+  // conversation this client used last, so a stale id must not travel between
+  // sections.
+  const {
+    view: _view,
+    scope: _scope,
+    sessionId: _sessionId,
+    plugin,
+    pluginTab: _pluginTab,
+    ...restQuery
+  } = currentQuery
   const query: LocationQueryRaw = { ...restQuery, view: destination.view }
   // A scope row names the configuration layer to open; every other destination
   // drops the scope so a page without a layer choice cannot inherit a stale one.

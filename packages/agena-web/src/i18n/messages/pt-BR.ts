@@ -1268,10 +1268,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: {
-          label: 'Configurações da sessão',
-          description: 'Permissões desta conversa e suas próprias instruções',
-        },
         projectSettings: {
           label: 'Configurações do projeto',
           description: 'Permissões e instruções que se aplicam a este projeto',
@@ -3825,7 +3821,6 @@ export default {
   'command-rewind-summary':
     'Retirar uma mensagem do usuário e todas as posteriores, em uma nova ramificação ou no local',
   'command-sessions-summary': 'Abrir o seletor de sessões',
-  'command-session-settings-summary': 'Abrir as permissões e instruções adicionais desta conversa',
   'command-settings-summary':
     'Abrir o painel unificado de configurações de modelos, permissões, plugins, runtime, sessões, interface e diagnósticos',
   'command-btw-summary':

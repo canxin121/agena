@@ -2445,10 +2445,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: {
-          label: 'Configuración de la sesión',
-          description: 'Permisos de esta conversación y sus propias instrucciones',
-        },
         projectSettings: {
           label: 'Configuración del proyecto',
           description: 'Permisos e instrucciones que se aplican a este proyecto',
@@ -3785,7 +3781,6 @@ export default {
   'command-rename-summary': 'Cambiar el nombre de la sesión actual o seleccionada',
   'command-rewind-summary': 'Retirar un mensaje del usuario y todos los posteriores, en una rama nueva o en el lugar',
   'command-sessions-summary': 'Abrir el selector de sesiones',
-  'command-session-settings-summary': 'Abrir los permisos e instrucciones adicionales de esta conversación',
   'command-settings-summary':
     'Abrir el espacio de trabajo unificado de ajustes para modelos, permisos, complementos, runtime, sesiones, interfaz y diagnóstico',
   'command-btw-summary':

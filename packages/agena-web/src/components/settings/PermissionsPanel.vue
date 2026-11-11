@@ -14,6 +14,7 @@ import { useToastsStore } from '@/stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneRead } from '@/composables/usePaneRead'
 import { useChatStore } from '@/stores/chat'
+import { lastSessionId } from '@/lib/lastSession'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
@@ -82,7 +83,7 @@ const stateOptions = computed(() => [
 const activeSessionId = computed(() => {
   // A settings page names the conversation it edits; the chat selection is only
   // the fallback when this panel is embedded in a conversation surface.
-  const id = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
+  const id = Number(String(props.sessionId || '').trim() || lastSessionId.value || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
 })
 const activeWorkspaceId = computed(() => {

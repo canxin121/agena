@@ -36,6 +36,7 @@ import {
   type InteractiveRequestKind,
 } from '../lib/interactiveRequests'
 import { setLocalJson, getLocalJson } from '../lib/persist'
+import { readLastSessionId, writeLastSessionId, clearLastSessionId } from '../lib/lastSession'
 import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
 import { useDirectoryStoreUnscoped } from './directory'
@@ -70,7 +71,6 @@ const SESSION_PAGE_SIZE = 30
 // page is never only half of one reply. Older pages use the same size.
 const MESSAGE_PAGE_SIZE = 2
 const OLDER_MESSAGE_PAGE_SIZE = 2
-const STORAGE_SELECTED_SESSION = 'agena.chat.selected-session-id'
 
 function isRecord(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -374,22 +374,14 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const lastSessionErrorToastByKey = new Map<string, { at: number; message: string }>()
 
   function loadStoredSelectedSession(): string | null {
-    try {
-      const raw = getLocalJson<unknown>(STORAGE_SELECTED_SESSION, null)
-      if (typeof raw === 'string' && raw.trim()) return raw.trim()
-    } catch {
-      // ignore
-    }
-    return null
+    return readLastSessionId() || null
   }
 
+  // The client remembers the conversation it used last, independently of any
+  // selection being cleared: opening Files or closing a tab must not erase the
+  // conversation that the session-scoped settings pages edit.
   function persistSelectedSession(id: string | null) {
-    try {
-      if (id) setLocalJson(STORAGE_SELECTED_SESSION, id)
-      else localStorage.removeItem(STORAGE_SELECTED_SESSION)
-    } catch {
-      // ignore
-    }
+    if (id) writeLastSessionId(id)
   }
 
   function pushErrorToastWithDedupe(key: string, message: string, timeoutMs = 4500, dedupeWindowMs = 1200) {
@@ -546,6 +538,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
   async function hydrateSession(id: string | null, opts?: SessionHydrationOptions) {
     const sid = String(id || '').trim()
     if (!sid) return
+    // Opening a conversation in any pane — split windows, non-focused panes,
+    // bot bindings — is what "used last" means; the selection ref only follows
+    // the focused pane, so the record cannot live only there.
+    if (opts?.isCurrent?.() !== false) writeLastSessionId(sid)
     const windowId = String(opts?.windowId || '').trim()
     const owner = {}
     if (windowId) directoryHydrationOwners.set(windowId, owner)
@@ -1766,8 +1762,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
     if (selectedSessionId.value === sid) {
       selectedSessionId.value = null
-      persistSelectedSession(null)
     }
+    // A deleted conversation cannot be a target for session-scoped settings.
+    if (readLastSessionId() === sid) clearLastSessionId()
 
     clearAttention(sid)
 

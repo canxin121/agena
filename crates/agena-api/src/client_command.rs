@@ -70,7 +70,6 @@ client_command_actions! {
     Favorite => "favorite", "/favorite";
     Timeline => "timeline", "/timeline";
     Settings => "settings", "/settings";
-    SessionSettings => "session-settings", "/session_setting";
     Model => "model", "/model";
     Commit => "commit", "/commit";
     Pr => "pr", "/pr";

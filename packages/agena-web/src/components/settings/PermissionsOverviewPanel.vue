@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { RiArrowRightSLine, RiFolderLine, RiGlobalLine, RiToolsLine } from '@remixicon/vue'
 import { apiJson } from '@/lib/api'
 import { useChatStore } from '@/stores/chat'
+import { lastSessionId } from '@/lib/lastSession'
 import { settingsText as st } from '@/i18n/settingsText'
 import Button from '@/components/ui/Button.vue'
 import SettingsCard from './SettingsCard.vue'
@@ -44,7 +45,7 @@ const busy = ref(false)
 const error = ref('')
 const permission = ref<PermissionConfig>({})
 const sessionId = computed(() => {
-  const id = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
+  const id = Number(String(props.sessionId || '').trim() || lastSessionId.value || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
 })
 let controller: AbortController | undefined

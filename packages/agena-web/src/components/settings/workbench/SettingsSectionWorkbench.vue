@@ -7,7 +7,7 @@ import type { SettingsTab } from '../sidebar/settingsSidebarNavigation'
 import { buildSettingsScopes, findSettingsScope } from '../settingsScopeCatalog'
 import { resolveSettingsSubpage, type SettingsSubpageDefinition } from './settingsSectionNavigation'
 import SettingsProjectPicker from '../SettingsProjectPicker.vue'
-import SettingsSessionPicker from '../SettingsSessionPicker.vue'
+import { useSettingsSessionTarget } from '../settingsSessionScope'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 import { useDirectoryStore } from '@/stores/directory'
 
@@ -36,10 +36,11 @@ const activeScopeLabel = computed(
 // A viewport-filling page keeps its own scrolling panes, so the workbench must
 // stop contributing page scroll and hand it the remaining height instead.
 const fillsViewport = computed(() => activeDefinition.value?.fillsViewport === true)
-// A session layer always names its conversation; a workspace layer names its
-// project. Both controls sit in the same place so every scoped page reads the
-// same way, and the session picker defaults to the most recently used one.
+// A session layer always names its conversation: settings edit the one this
+// client used last, so there is nothing to pick here. A workspace layer names
+// its project.
 const sessionScope = computed(() => props.activeScope === 'session')
+const sessionTarget = useSettingsSessionTarget()
 const workspaceScope = computed(() => props.activeScope === 'workspace')
 const directory = useDirectoryStore()
 const directories = useDirectorySessionStore()
@@ -180,7 +181,28 @@ function selectScope(scope: string) {
             {{ scope.label }}
           </button>
         </nav>
-        <SettingsSessionPicker v-if="sessionScope" class="mb-4" />
+        <!-- A session layer always edits the conversation this client used last;
+             the page states which one so the layer selector is unambiguous. -->
+        <div
+          v-if="sessionScope"
+          class="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2"
+          :aria-label="$st('Session for this setting')"
+        >
+          <span class="text-xs font-medium text-muted-foreground">{{ $st('Conversation') }}</span>
+          <span class="min-w-0 truncate text-sm font-medium">
+            {{ sessionTarget.selected.value?.title || $st('No conversation yet') }}
+          </span>
+          <span
+            v-if="sessionTarget.selected.value?.project"
+            class="min-w-0 truncate font-mono text-[10px] text-muted-foreground"
+            :title="sessionTarget.selected.value.project"
+          >
+            {{ sessionTarget.selected.value.project }}
+          </span>
+          <span v-else class="min-w-0 text-xs text-muted-foreground">
+            {{ $st('Open a conversation to set this layer.') }}
+          </span>
+        </div>
         <div
           v-else-if="workspaceScope"
           class="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2"

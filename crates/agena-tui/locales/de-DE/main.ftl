@@ -1023,7 +1023,6 @@ flash-settings-cleared = gelöscht {$path}
 flash-provider-save-error-settings-object = bestehende Providereinstellungen müssen ein JSON-Objekt sein
 
 command-settings-summary = Öffnen Sie die Workbench für einheitliche Einstellungen für Modelle, Berechtigungen, Plugins, Laufzeit, Sitzungen, Schnittstelle und Diagnose
-command-session-settings-summary = Berechtigungen und zusätzliche Anweisungen dieser Unterhaltung öffnen
 
 settings-mcp-public-url-updated = Agena-Zugriffsadresse aktualisiert.
 

@@ -63,19 +63,6 @@ impl App {
         self.open_settings_studio_at(None, SettingsStudioFocus::Navigation);
     }
 
-    /// Open the unified studio on the current conversation's settings, so the
-    /// client offers one settings surface instead of a second session-only one.
-    pub(crate) fn open_settings_studio_on_session_scope(&mut self) {
-        if self.current_or_selected_session_id().is_none() {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return;
-        }
-        self.open_settings_studio_at(
-            Some(SettingsStudioSectionId::Permissions),
-            SettingsStudioFocus::Items,
-        );
-    }
-
     fn open_settings_studio_at(
         &mut self,
         section: Option<SettingsStudioSectionId>,

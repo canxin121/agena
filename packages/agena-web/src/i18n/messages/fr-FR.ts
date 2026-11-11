@@ -1755,10 +1755,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: {
-          label: 'Paramètres de la session',
-          description: 'Autorisations de cette conversation et ses propres instructions',
-        },
         projectSettings: {
           label: 'Paramètres du projet',
           description: 'Autorisations et instructions qui s’appliquent à ce projet',
@@ -3554,7 +3550,6 @@ export default {
   'command-rewind-summary':
     'Retirer un message utilisateur et tous les suivants, dans une nouvelle branche ou sur place',
   'command-sessions-summary': 'Ouvrir le sélecteur de sessions',
-  'command-session-settings-summary': 'Ouvrir les autorisations et instructions supplémentaires de cette conversation',
   'command-settings-summary':
     'Ouvrir l’espace de travail des paramètres : modèles, autorisations, plugins, runtime, sessions, interface et diagnostics',
   'command-btw-summary':

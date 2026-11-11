@@ -1692,7 +1692,6 @@ flash-side-already-open = 已有侧问会话打开
 transcript-footer-side-active = 侧问会话 · 通过 /parent 或导航离开
 transcript-footer-side-return = 侧问会话进行中 · 切换回去以返回
 command-settings-summary = 打开统一设置工作台，管理模型、权限、插件、运行时、会话、界面与诊断
-command-session-settings-summary = 打开此对话的权限与附加指令
 command-commit-summary = 基于已暂存改动创建 commit
 command-pr-summary = 用最小 gh 参数创建 pull request
 flash-memory-forgotten = 已删除 memory：{$name}

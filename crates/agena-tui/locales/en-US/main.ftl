@@ -1692,7 +1692,6 @@ flash-side-already-open = a side conversation is already open
 transcript-footer-side-active = side conversation · leave via /parent or navigation
 transcript-footer-side-return = side conversation open · switch back to return
 command-settings-summary = Open the unified settings workbench for models, permissions, plugins, runtime, sessions, interface, and diagnostics
-command-session-settings-summary = Open this conversation's permissions and additional instructions
 command-commit-summary = Create a commit from staged changes
 command-pr-summary = Create a pull request with minimal gh-backed options
 flash-memory-forgotten = removed memory: {$name}

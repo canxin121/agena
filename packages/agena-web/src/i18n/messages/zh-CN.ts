@@ -2219,7 +2219,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: { label: '会话设置', description: '此对话的权限与其专属指令' },
         projectSettings: { label: '项目设置', description: '应用于此项目的权限与指令' },
         menuTitle: '会话操作',
         open: {
@@ -3818,7 +3817,6 @@ export default {
   'command-rename-summary': '重命名当前或选中的会话',
   'command-rewind-summary': '撤回一条用户消息及其后的全部历史：保留为新分支，或直接修改当前会话',
   'command-sessions-summary': '打开会话切换器',
-  'command-session-settings-summary': '打开此对话的权限与附加指令',
   'command-settings-summary': '打开统一设置工作台，管理模型、权限、插件、运行时、会话、界面与诊断',
   'command-btw-summary': '主会话继续运行。可只读查询，结果单独显示，不写入主会话。',
   'command-side-summary': '打开分叉的侧问会话，不打断当前运行',

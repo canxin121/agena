@@ -1077,7 +1077,6 @@ flash-settings-cleared = 클리어 {$path}
 flash-provider-save-error-settings-object = 기존 공급자 설정은 JSON 객체이어야 합니다.
 
 command-settings-summary = 모델, 권한, 플러그인, 실행 시간, 세션, 인터페이스 및 진단에 대한 통합 설정 작업 벤치를 엽니 다
-command-session-settings-summary = 이 대화의 권한과 추가 지침 열기
 
 settings-mcp-public-url-updated = Agena 접속 URL을 업데이트했습니다.
 

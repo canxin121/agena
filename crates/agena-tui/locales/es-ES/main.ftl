@@ -1050,7 +1050,6 @@ flash-settings-cleared = cleared {$path}
 flash-provider-save-error-settings-object = configuración del proveedor existente debe ser un objeto JSON
 
 command-settings-summary = Abra el banco de trabajo de configuración unificada para modelos, permisos, plugins, tiempo de ejecución, sesiones, interfaz y diagnósticos
-command-session-settings-summary = Abrir los permisos e instrucciones adicionales de esta conversación
 
 settings-mcp-public-url-updated = URL de acceso a Agena actualizada.
 

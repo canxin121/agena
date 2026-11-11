@@ -1,4 +1,4 @@
-import { mainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
+import { mainTabPath, normalizeMainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
 import { router } from '@/router'
 import { useUiStore, type WorkspaceWindowTab } from '@/stores/ui'
 import { useDirectoryStore } from '@/stores/directory'
@@ -82,7 +82,6 @@ export function useWorkspaceNavigation() {
       if (navigationInFlightByPath.get(key) === request) navigationInFlightByPath.delete(key)
     }
   }
-
   async function openWorkspaceLocation(tab: MainTabId, opts?: OpenWorkspaceLocationOptions): Promise<string> {
     const query = { ...((opts?.query || {}) as Record<string, unknown>) }
     if (tab === 'files' || tab === 'git' || tab === 'terminal') {
@@ -103,13 +102,23 @@ export function useWorkspaceNavigation() {
     return windowId
   }
 
-  async function openMainTab(tab: MainTabId, opts?: { path?: string; replace?: boolean }): Promise<string> {
+  /**
+   * Open a main tab, optionally directly at one of its pages.
+   *
+   * `path` carries the destination and `query` its parameters. A query string
+   * embedded in `path` is dropped by the router resolver, so callers that need
+   * a page with parameters pass them separately.
+   */
+  async function openMainTab(
+    tab: MainTabId,
+    opts?: { path?: string; query?: Record<string, string>; replace?: boolean },
+  ): Promise<string> {
     // Tool entry points use the selected folder, even when another folder's
     // Files/Git tab is already open. Resource tabs keep their original owner.
     if (tab === 'files' || tab === 'git' || tab === 'terminal') {
       return openWorkspaceLocation(tab, {
         path: opts?.path,
-        query: { directory: directoryStore.currentDirectory || '' },
+        query: { directory: directoryStore.currentDirectory || '', ...(opts?.query || {}) },
         replace: opts?.replace,
       })
     }
@@ -123,6 +132,15 @@ export function useWorkspaceNavigation() {
       groupWindows.find((item) => item.mainTab === tab) || ui.workspaceWindows.find((item) => item.mainTab === tab)
 
     if (existing) {
+      // An explicit destination retargets the existing tab instead of leaving
+      // it on whatever page it last showed, so a menu entry always lands where
+      // it names.
+      if (opts?.path) {
+        const path = normalizeMainTabPath(tab, opts.path)
+        ui.setWorkspaceWindowRoutePath(existing.id, path)
+        ui.setWorkspaceWindowRouteQuery(existing.id, opts.query || {})
+        ui.setWorkspaceWindowRouteHash(existing.id, '')
+      }
       await navigateToWorkspaceWindow(existing.id, opts?.replace === true)
       return existing.id
     }
@@ -137,6 +155,7 @@ export function useWorkspaceNavigation() {
 
     return openWorkspaceLocation(tab, {
       path: opts?.path || mainTabPath(tab),
+      query: opts?.query,
       replace: opts?.replace,
     })
   }

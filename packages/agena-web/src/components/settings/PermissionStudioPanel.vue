@@ -29,6 +29,7 @@ import { apiJson } from '@/lib/api'
 import { confirmAction } from '@/lib/appConfirm'
 import { deleteRuntimeSetting, setRuntimeSetting } from '@/lib/runtimeSettings'
 import { useChatStore } from '@/stores/chat'
+import { lastSessionId } from '@/lib/lastSession'
 import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -132,7 +133,7 @@ const commandQuery = ref('')
 const activeSessionId = computed(() => {
   // An explicit target lets a settings surface describe a conversation other
   // than whichever chat tab last loaded; otherwise the current selection owns it.
-  const value = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
+  const value = Number(String(props.sessionId || '').trim() || lastSessionId.value || chat.selectedSessionId)
   return Number.isSafeInteger(value) && value > 0 ? value : null
 })
 const canEdit = computed(

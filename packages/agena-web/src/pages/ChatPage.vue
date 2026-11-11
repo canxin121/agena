@@ -1485,18 +1485,6 @@ function handleSessionActionRequest(actionId: string) {
     case 'attach-project':
       openProjectAttachDialog()
       break
-    case 'session-settings': {
-      const sid = commandSessionId()
-      if (!sid) {
-        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'session-settings' }))
-        break
-      }
-      void router.push({
-        path: '/settings/permissions',
-        query: { view: 'filesystem', scope: 'session', sessionId: sid },
-      })
-      break
-    }
     default:
       break
   }
@@ -1801,17 +1789,6 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
     case 'settings':
       await router.push('/settings/interface')
       return
-    case 'session-settings': {
-      if (!sid) {
-        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'session_settings' }))
-        return
-      }
-      await router.push({
-        path: '/settings/permissions',
-        query: { view: 'filesystem', scope: 'session', sessionId: sid },
-      })
-      return
-    }
     case 'model':
       await modelSelection.toggleComposerPicker('model')
       return

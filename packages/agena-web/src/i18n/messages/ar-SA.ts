@@ -1143,7 +1143,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: { label: 'إعدادات الجلسة', description: 'صلاحيات هذه المحادثة وتعليماتها الخاصة' },
         projectSettings: { label: 'إعدادات المشروع', description: 'الصلاحيات والتعليمات التي تنطبق على هذا المشروع' },
         menuTitle: 'إجراءات الجلسة',
         open: { description: 'فتح هذه الجلسة في مساحة العمل' },
@@ -3334,7 +3333,6 @@ export default {
   'command-rename-summary': 'أعِد تسمية الجلسة الحالية أو المحددة',
   'command-rewind-summary': 'اسحب رسالة مستخدم وكل الرسائل اللاحقة إلى فرع جديد أو عدّل الجلسة نفسها',
   'command-sessions-summary': 'افتح مبدّل الجلسات',
-  'command-session-settings-summary': 'فتح صلاحيات هذه المحادثة وتعليماتها الإضافية',
   'command-settings-summary':
     'افتح مساحة الإعدادات الموحدة للنماذج والأذونات والإضافات وبيئة التشغيل والجلسات والواجهة والتشخيصات',
   'command-btw-summary':

@@ -56,12 +56,6 @@ impl App {
             }
             ClientCommandAction::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
             ClientCommandAction::Settings => self.open_settings_studio(),
-            ClientCommandAction::SessionSettings => {
-                // Session settings are one scope of the ordinary settings
-                // studio, so this opens that studio on the session workbench
-                // rather than a second, parallel screen.
-                self.open_settings_studio_on_session_scope()
-            }
             ClientCommandAction::Model => self.open_session_model_chooser(),
             ClientCommandAction::Commit => self.handle_commit_command(args),
             ClientCommandAction::Pr => self.handle_pr_command(args),

@@ -778,7 +778,7 @@ const sessionActionMenuGroups = computed<OptionMenuGroup[]>(() => {
     { id: 'session-open', items: menuItemsById(items, ['open']) },
     {
       id: 'session-organize',
-      items: menuItemsById(items, ['toggle-pin', 'toggle-favorite', 'rename', 'session-settings']),
+      items: menuItemsById(items, ['toggle-pin', 'toggle-favorite', 'rename']),
     },
     { id: 'session-content', items: menuItemsById(items, ['copy-transcript', 'export-transcript', 'fork']) },
     { id: 'session-danger', items: menuItemsById(items, ['delete']) },
@@ -953,7 +953,8 @@ async function runDirectoryDialogAction(item: DirectoryDialogActionItem) {
     if (!target) return
     await selectDirectory(target.id, target.path)
     await workspaceNavigation.openMainTab('settings', {
-      path: '/settings/permissions?view=filesystem&scope=workspace',
+      path: '/settings/permissions',
+      query: { view: 'filesystem', scope: 'workspace' },
     })
     return
   }

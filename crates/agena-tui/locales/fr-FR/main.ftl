@@ -1083,7 +1083,6 @@ flash-settings-cleared = nettoyée {$path}
 flash-provider-save-error-settings-object = les paramètres existants du fournisseur doivent être un objet JSON
 
 command-settings-summary = Ouvrir le workbench de paramètres unifiés pour les modèles, permissions, plugins, runtime, sessions, interface et diagnostics
-command-session-settings-summary = Ouvrir les autorisations et instructions supplémentaires de cette conversation
 command-side-summary = Ouvrir une conversation parallèle sans interrompre l’exécution en cours
 command-commit-summary = Créer un commit à partir des modifications préparées
 command-pr-summary = Créer une demande de fusion avec les options gh essentielles

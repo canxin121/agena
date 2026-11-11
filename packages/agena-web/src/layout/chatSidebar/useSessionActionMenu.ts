@@ -5,7 +5,6 @@ import {
   RiEditLine,
   RiFileUploadLine,
   RiGitBranchLine,
-  RiSettings3Line,
   RiStarFill,
   RiStarLine,
 } from '@remixicon/vue'
@@ -63,12 +62,6 @@ export function buildSessionActionItemsForSessionI18n(
       label: String(t('chat.sidebar.sessionActions.rename.label')),
       description: String(t('chat.sidebar.sessionActions.rename.description')),
       icon: RiEditLine,
-    },
-    {
-      id: 'session-settings',
-      label: String(t('chat.sidebar.sessionActions.settings.label')),
-      description: String(t('chat.sidebar.sessionActions.settings.description')),
-      icon: RiSettings3Line,
     },
     {
       id: 'copy-transcript',

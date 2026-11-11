@@ -1163,7 +1163,6 @@ flash-settings-cleared = クリア {$path}
 flash-provider-save-error-settings-object = 既存のプロバイダの設定は JSON オブジェクトでなければなりません
 
 command-settings-summary = モデル、パーミッション、プラグイン、ランタイム、セッション、インターフェイス、および診断用の統一された設定ワークベンチを開きます。
-command-session-settings-summary = この会話のパーミッションと追加指示を開く
 
 command-side-summary = 現在の実行に影響を与えず、分岐した会話を開きます
 command-commit-summary = ステージ済みの変更からコミットを作成します

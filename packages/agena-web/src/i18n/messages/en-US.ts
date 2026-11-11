@@ -2253,10 +2253,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: {
-          label: 'Session settings',
-          description: 'Permissions for this conversation and its own instructions',
-        },
         projectSettings: {
           label: 'Project settings',
           description: 'Permissions and instructions that apply to this project',
@@ -3863,7 +3859,6 @@ export default {
   'command-rename-summary': 'Rename the current or selected session',
   'command-rewind-summary': 'Retract a user message and every later message, as a new branch or in place',
   'command-sessions-summary': 'Open the session switcher',
-  'command-session-settings-summary': "Open this conversation's permissions and additional instructions",
   'command-settings-summary':
     'Open the unified settings workbench for models, permissions, plugins, runtime, sessions, interface, and diagnostics',
   'command-btw-summary':

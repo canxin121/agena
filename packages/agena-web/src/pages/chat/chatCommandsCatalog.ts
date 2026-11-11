@@ -33,7 +33,6 @@ export const CLIENT_COMMAND_ACTIONS = [
   'favorite',
   'timeline',
   'settings',
-  'session-settings',
   'model',
   'commit',
   'pr',

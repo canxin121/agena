@@ -1,53 +1,52 @@
 /**
- * The session a session-scoped settings page edits, and the grouped picker that
- * chooses it.
+ * The conversation a session-scoped settings page edits.
  *
- * Settings pages are not conversations, so they cannot rely on a chat tab's
- * selection being on screen. They resolve it from the conversation this client
- * used last — the chat store persists that choice across reloads — unless the
- * URL names one explicitly, so a shared link opens the same conversation.
- * Conversations are browsed by project and paged, using the same catalog the
- * sidebar reads, so both surfaces describe one list.
+ * Settings pages are not conversations, so they cannot rely on the chat pane
+ * on screen — a focused Files or Terminal pane has no session at all. Every
+ * page therefore resolves the conversation this client used last, which the
+ * chat store records whenever any pane or bot binding opens one. There is no
+ * per-page session picker and no `?sessionId=`: the last used conversation is
+ * the target, so the same setting is edited from one place rather than from a
+ * URL that different doors spell differently.
  */
-import { computed, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { computed } from 'vue'
 
 import { settingsText as st } from '@/i18n/settingsText'
-import { useChatStore } from '@/stores/chat'
-import { sessionGroupsForPicker, usePagedSessionGroups } from './sessionCatalog'
-
-export const SETTINGS_SESSION_QUERY_KEY = 'sessionId'
+import { lastSessionId } from '@/lib/lastSession'
+import { useChatStoreUnscoped } from '@/stores/chat'
 
 function normalizedId(value: unknown): string {
-  const raw = Array.isArray(value) ? value.find((item) => typeof item === 'string') : value
-  const id = String(raw || '').trim()
-  if (!/^\d+$/.test(id)) return ''
-  const numeric = Number(id)
-  return Number.isSafeInteger(numeric) && numeric > 0 ? id : ''
+  // A repeated query value arrives as an array; use its first usable entry.
+  const candidates = Array.isArray(value) ? value : [value]
+  for (const candidate of candidates) {
+    const id = String(candidate ?? '').trim()
+    if (!/^\d+$/.test(id)) continue
+    const numeric = Number(id)
+    if (Number.isSafeInteger(numeric) && numeric > 0) return id
+  }
+  return ''
 }
 
-/** URL first (shareable), then the conversation this client used last. */
-export function settingsSessionId(requested: unknown, lastUsed: unknown): string {
-  return normalizedId(requested) || normalizedId(lastUsed)
+/**
+ * The conversation session-scoped settings edit. `recorded` is the value the
+ * client last opened; a URL naming a conversation is only a hint and never
+ * outlives the record, so a deep link cannot silently retarget the page.
+ */
+export function settingsSessionId(recorded: unknown): string {
+  return normalizedId(recorded)
 }
 
 export function useSettingsSessionTarget() {
-  const route = useRoute()
-  const router = useRouter()
-  const chat = useChatStore()
+  // The raw store owns the record. Reading it through a pane-scoped view would
+  // report this settings pane's own (empty) route instead.
+  const chat = useChatStoreUnscoped()
 
-  const requested = computed(() => normalizedId(route.query[SETTINGS_SESSION_QUERY_KEY]))
-  const sessionId = computed(() => settingsSessionId(requested.value, chat.selectedSessionId))
+  // `lastSessionId` is the shared in-memory record; the raw store's selection
+  // is only a fallback for a session that has not been recorded yet.
+  const sessionId = computed(() => settingsSessionId(lastSessionId.value || chat.selectedSessionId))
 
-  // One page of conversations, grouped under collapsible project headers. The
-  // pager requests another page from the server rather than growing the list.
-  const catalog = usePagedSessionGroups()
-  const pickerGroups = computed(() =>
-    sessionGroupsForPicker(catalog.groups.value, { selectedId: sessionId.value }),
-  )
-
-  // The chosen conversation may live on another page or may have just opened,
-  // so its label never depends on the page currently loaded.
+  // The target may not be on the loaded session page (it can be older than the
+  // page the sidebar read), so its label never depends on that page.
   const selected = computed(() => {
     const id = sessionId.value
     if (!id) return null
@@ -59,18 +58,5 @@ export function useSettingsSessionTarget() {
     }
   })
 
-  function select(id: string) {
-    const next = normalizedId(id)
-    if (next === requested.value) return
-    const query = { ...route.query }
-    if (next) query[SETTINGS_SESSION_QUERY_KEY] = next
-    else delete query[SETTINGS_SESSION_QUERY_KEY]
-    void router.replace({ path: route.path, query, hash: route.hash })
-  }
-
-  onMounted(() => {
-    if (!catalog.sessions.value.length) void catalog.load(1)
-  })
-
-  return { sessionId, selected, pickerGroups, catalog, select }
+  return { sessionId, selected }
 }

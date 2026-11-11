@@ -77,7 +77,11 @@ const conversationActions = useBotConversationActions({
     getSessionById: (id) => {
       const session = chat.getSessionById(id)
       return session
-        ? { id: session.id, title: session.title, time: session.created_at ? { created: Date.parse(session.created_at) } : undefined }
+        ? {
+            id: session.id,
+            title: session.title,
+            time: session.created_at ? { created: Date.parse(session.created_at) } : undefined,
+          }
         : null
     },
     renameSession: (id, title) => chat.renameSession(id, title),
@@ -142,14 +146,6 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
   }
   if (item.id === 'toggle-favorite') {
     await toggleFavorite(profile.session_id)
-    return true
-  }
-  if (item.id === 'session-settings') {
-    // Session settings live in the ordinary settings pages under the session
-    // scope, so the conversation is passed as the selected layer target.
-    void navigation.openMainTab('settings', {
-      path: `/settings/permissions?view=filesystem&scope=session&sessionId=${profile.session_id}`,
-    })
     return true
   }
   return true

@@ -39,6 +39,7 @@ import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 import { getSessionExecution, getSessionPromptPreview, setSessionPrompts } from '@/stores/chat/api'
 import { useChatStore } from '@/stores/chat'
+import { lastSessionId } from '@/lib/lastSession'
 import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
 
@@ -66,7 +67,7 @@ const scope = computed<PromptLayerScope>(() =>
 const sessionId = computed(() => {
   // An explicit target lets the session settings surface edit a conversation
   // that is not the one currently open in the chat pane.
-  const id = Number(String(props.sessionId || '').trim() || chat.selectedSessionId)
+  const id = Number(String(props.sessionId || '').trim() || lastSessionId.value || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? String(id) : null
 })
 const needsSession = computed(() => scope.value === 'session' || scope.value === 'effective')
@@ -106,17 +107,19 @@ const inlineById = computed(() => new Map(layer.value.inline.map((fragment) => [
 const available = computed(() => availableSavedPrompts(globalSaved.value, workspaceSaved.value, scope.value))
 const availableById = computed(() => new Map(available.value.map((item) => [item.id, item])))
 const addable = computed(() =>
-  available.value.filter((item) =>
-    !layer.value.order.includes(item.id) && !layer.value.disabled.includes(item.id) && !inlineById.value.has(item.id),
+  available.value.filter(
+    (item) =>
+      !layer.value.order.includes(item.id) && !layer.value.disabled.includes(item.id) && !inlineById.value.has(item.id),
   ),
 )
 const hideable = computed(() =>
-  available.value.filter((item) =>
-    scope.value !== 'global' &&
-    (scope.value !== 'workspace' || item.scope === 'global') &&
-    !layer.value.disabled.includes(item.id) &&
-    !layer.value.order.includes(item.id) &&
-    !inlineById.value.has(item.id),
+  available.value.filter(
+    (item) =>
+      scope.value !== 'global' &&
+      (scope.value !== 'workspace' || item.scope === 'global') &&
+      !layer.value.disabled.includes(item.id) &&
+      !layer.value.order.includes(item.id) &&
+      !inlineById.value.has(item.id),
   ),
 )
 const orderedEntries = computed(() =>
@@ -564,7 +567,9 @@ onBeforeUnmount(() => {
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex min-w-0 items-center gap-2">
                 <span class="text-xs text-muted-foreground">{{ entry.index + 1 }}</span>
-                <span class="truncate text-sm font-medium">{{ entry.fragment?.title || entry.saved?.fragment.title || entry.id }}</span>
+                <span class="truncate text-sm font-medium">{{
+                  entry.fragment?.title || entry.saved?.fragment.title || entry.id
+                }}</span>
                 <span
                   v-if="!entry.fragment && !entry.saved"
                   class="rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground"

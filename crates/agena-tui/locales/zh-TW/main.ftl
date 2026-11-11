@@ -1253,7 +1253,6 @@ flash-settings-cleared = 已清空 {$path}
 flash-provider-save-error-settings-object = 現有 provider settings 必須是一個 JSON object
 
 command-settings-summary = 打開統一設定工作台，管理模型、權限、外掛、運行時、工作階段、介面與診斷
-command-session-settings-summary = 開啟此對話的權限與附加指令
 command-side-summary = 開啟分支對話，不影響目前執行中的工作
 command-commit-summary = 將已暫存的變更建立為提交
 command-pr-summary = 使用精簡的 gh 選項建立合併請求

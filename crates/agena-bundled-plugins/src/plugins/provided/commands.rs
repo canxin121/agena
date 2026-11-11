@@ -180,13 +180,6 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-settings-summary",
     },
     BuiltInCommand {
-        action: "session-settings",
-        slash: "/session_setting",
-        aliases: &["session-settings", "session-config"],
-        usage: None,
-        summary_key: "command-session-settings-summary",
-    },
-    BuiltInCommand {
         action: "model",
         slash: "/model",
         aliases: &[],

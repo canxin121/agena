@@ -2089,7 +2089,6 @@ export default {
         },
       },
       sessionActions: {
-        settings: { label: 'सेशन सेटिंग्स', description: 'इस वार्तालाप की अनुमतियाँ और इसके अपने निर्देश' },
         projectSettings: { label: 'प्रोजेक्ट सेटिंग्स', description: 'इस प्रोजेक्ट पर लागू अनुमतियाँ और निर्देश' },
         menuTitle: 'सेशन की कार्रवाइयाँ',
         open: { description: 'यह सेशन वर्कस्पेस में खोलें' },
@@ -3192,7 +3191,6 @@ export default {
   'command-rename-summary': 'मौजूदा या चुने हुए सेशन का नाम बदलें',
   'command-rewind-summary': 'उपयोगकर्ता का संदेश और उसके बाद के सभी संदेश नई शाखा में या इसी सेशन में हटाएँ',
   'command-sessions-summary': 'सेशन स्विचर खोलें',
-  'command-session-settings-summary': 'इस वार्तालाप की अनुमतियाँ और अतिरिक्त निर्देश खोलें',
   'command-settings-summary':
     'मॉडल, अनुमतियाँ, प्लगइन, रनटाइम, सेशन, इंटरफ़ेस और निदान के लिए एकीकृत सेटिंग्स कार्यक्षेत्र खोलें',
   'command-btw-summary':

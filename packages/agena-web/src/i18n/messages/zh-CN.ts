@@ -284,7 +284,6 @@ export default {
     moveGroupRight: '分组右移',
     moveToGroup: '移到分组 {number}',
     mergeIntoGroup: '合并到分组 {number}',
-    replaceTab: '用当前标签替换 {title}',
     moveFile: '移动到…',
     panHint: 'Shift + 方向键平移放大的图片；单独按左右键切换图片。',
     panLeft: '向左查看图片',

@@ -1905,38 +1905,6 @@ export const useUiStore = defineStore('ui', () => {
     return true
   }
 
-  function replaceWorkspaceWindowContent(
-    targetWindowId: string | null | undefined,
-    sourceWindowId: string | null | undefined,
-    opts?: { closeSource?: boolean; activateTarget?: boolean },
-  ): boolean {
-    const targetId = String(targetWindowId || '').trim()
-    const sourceId = String(sourceWindowId || '').trim()
-    if (!targetId || !sourceId || targetId === sourceId) return false
-
-    const source = workspaceWindows.value.find((item) => item.id === sourceId)
-    const target = workspaceWindows.value.find((item) => item.id === targetId)
-    if (!source || !target) return false
-
-    if (opts?.activateTarget !== false) {
-      activateWorkspaceWindow(targetId)
-    }
-
-    setWorkspaceWindowMainTab(targetId, source.mainTab)
-    setWorkspaceWindowRoutePath(targetId, source.routePath)
-    setWorkspaceWindowRouteQuery(targetId, source.routeQuery)
-    setWorkspaceWindowRouteHash(targetId, source.routeHash)
-    if (typeof source.title !== 'undefined') {
-      setWorkspaceWindowTitle(targetId, source.title)
-    }
-
-    if (opts?.closeSource !== false) {
-      closeWorkspaceWindow(sourceId)
-    }
-
-    return true
-  }
-
   function duplicateWorkspaceWindow(windowId?: string | null): string {
     const targetId = getResolvedWorkspaceWindowId(windowId)
     if (!targetId) return createWorkspaceWindow(defaultMainTab)
@@ -2359,7 +2327,6 @@ export const useUiStore = defineStore('ui', () => {
     closeWorkspaceWindowsToRight,
     closeAllWorkspaceWindows,
     splitWorkspaceWindowToRight,
-    replaceWorkspaceWindowContent,
     duplicateWorkspaceWindow,
     getAdjacentWorkspaceWindowId,
     setWorkspaceSplitWindow,

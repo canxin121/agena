@@ -297,7 +297,6 @@ export default {
     moveGroupRight: 'Mover grupo para a direita',
     moveToGroup: 'Mover para o grupo {number}',
     mergeIntoGroup: 'Mesclar com o grupo {number}',
-    replaceTab: 'Substituir {title} por esta aba',
     moveFile: 'Mover para…',
     panHint: 'Shift + setas move a imagem ampliada. Esquerda/direita sem Shift troca a imagem.',
     panLeft: 'Mover imagem para a esquerda',

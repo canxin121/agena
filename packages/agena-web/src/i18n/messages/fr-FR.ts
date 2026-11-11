@@ -299,7 +299,6 @@ export default {
     moveGroupRight: 'Déplacer le groupe à droite',
     moveToGroup: 'Déplacer vers le groupe {number}',
     mergeIntoGroup: 'Fusionner avec le groupe {number}',
-    replaceTab: 'Remplacer {title} par cet onglet',
     moveFile: 'Déplacer vers…',
     panHint: 'Maj + flèches déplace l’image agrandie. Gauche/droite sans Maj change d’image.',
     panLeft: 'Déplacer l’image à gauche',

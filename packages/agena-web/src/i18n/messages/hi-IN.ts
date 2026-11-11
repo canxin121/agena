@@ -292,7 +292,6 @@ export default {
     moveGroupRight: 'समूह दाईं ओर ले जाएँ',
     moveToGroup: 'समूह {number} में ले जाएँ',
     mergeIntoGroup: 'समूह {number} में मिलाएँ',
-    replaceTab: '{title} को इस टैब से बदलें',
     moveFile: 'यहाँ ले जाएँ…',
     panHint: 'Shift + तीर से बड़ी छवि खिसकाएँ। केवल बाएँ/दाएँ तीर से छवि बदलें।',
     panLeft: 'छवि में बाईं ओर जाएँ',

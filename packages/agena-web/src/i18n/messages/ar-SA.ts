@@ -286,7 +286,6 @@ export default {
     moveGroupRight: 'نقل المجموعة يمينًا',
     moveToGroup: 'نقل إلى المجموعة {number}',
     mergeIntoGroup: 'دمج في المجموعة {number}',
-    replaceTab: 'استبدال {title} بعلامة التبويب هذه',
     moveFile: 'نقل إلى…',
     panHint: 'استخدم Shift مع الأسهم لتحريك الصورة المكبّرة. السهمان الأيسر والأيمن دون Shift يبدّلان الصور.',
     panLeft: 'عرض يسار الصورة',

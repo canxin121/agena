@@ -146,12 +146,6 @@ const tabContextMenuGroups = computed<OptionMenuGroup[]>(() => {
               { id: `merge-group:${g.id}`, label: String(t('keyboard.mergeIntoGroup', { number })) },
             ]
           }),
-        ...ui.workspaceWindows
-          .filter((w) => w.id !== tabContextWindowId.value)
-          .map((w) => ({
-            id: `replace:${w.id}`,
-            label: String(t('keyboard.replaceTab', { title: windowTitle(w) })),
-          })),
       ],
     },
     {
@@ -500,9 +494,6 @@ async function handleTabContextMenuSelect(item: OptionMenuItem) {
     const groupId = item.id.slice('merge-group:'.length)
     for (const id of tabIds) ui.moveWorkspaceWindowToGroup(id, groupId, { activateTargetGroup: true })
     ui.selectWorkspaceWindow(targetId)
-  } else if (item.id.startsWith('replace:')) {
-    destinationId = item.id.slice('replace:'.length)
-    ui.replaceWorkspaceWindowContent(destinationId, targetId)
   } else handled = false
   if (handled) {
     tabContextReturnId.value = destinationId

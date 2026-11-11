@@ -305,7 +305,6 @@ export default {
     moveGroupRight: 'Move group right',
     moveToGroup: 'Move to group {number}',
     mergeIntoGroup: 'Merge into group {number}',
-    replaceTab: 'Replace {title} with this tab',
     moveFile: 'Move to…',
     panHint: 'Shift + arrow keys pan the zoomed image. Plain left/right switches images.',
     panLeft: 'Pan image left',

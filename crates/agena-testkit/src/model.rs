@@ -1021,9 +1021,19 @@ impl PendingHelpAnswer {
     /// numbers calls by position, so the synthetic id never reaches the wire.
     fn matches(&self, observed: &ModelRequest) -> bool {
         let body = observed.body.to_string();
-        self.taught_tools
+        if self
+            .taught_tools
             .iter()
             .any(|tool| body.contains(&format!("Tool: {tool}")))
+        {
+            return true;
+        }
+        // A tool outside the session's catalog has no contract to teach; the
+        // help round returns `tool.help_required` instead. Release the held
+        // call only for the round that actually carries that help answer, so
+        // an unrelated session's request cannot consume it.
+        let help_call = format!("call_help_gate_{}_", self.step_id);
+        body.contains("tool.help_required") && body.contains(&help_call)
     }
 }
 

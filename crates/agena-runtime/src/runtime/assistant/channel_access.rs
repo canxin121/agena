@@ -131,13 +131,23 @@ impl AssistantRuntime {
             }
             return Ok(record);
         }
+        // A shared transcript must never imply shared private memory. The
+        // conversation directory holds what the room may see; each speaker's
+        // memory lives under a per-speaker key so one member cannot read
+        // another's remembered preferences.
         let private_root = agena_storage_layout::StorageLayout::current()
             .root()
             .join("channel-scopes")
             .join(b.id.to_string())
-            .join(privacy_key);
-        let memory = agena_storage::MemoryDir::from_workspace(&private_root);
-        let mut private_paths = BTreeSet::from([private_root.clone()]);
+            .join(&privacy_key);
+        let speaker_root = agena_storage_layout::StorageLayout::current()
+            .root()
+            .join("channel-speakers")
+            .join(b.id.to_string())
+            .join(&privacy_key)
+            .join(&principal);
+        let memory = agena_storage::MemoryDir::from_workspace(&speaker_root);
+        let mut private_paths = BTreeSet::from([private_root.clone(), speaker_root.clone()]);
         if grant.private_memory {
             private_paths.insert(memory.path().to_path_buf());
             private_paths.insert(memory.index_dir());
@@ -155,7 +165,7 @@ impl AssistantRuntime {
             expires_at_ms: expiry
                 .unwrap_or(b.spec.expires_at_ms)
                 .min(b.spec.expires_at_ms),
-            memory_workspace_root: private_root,
+            memory_workspace_root: speaker_root,
             private_paths,
             revoked: false,
         };

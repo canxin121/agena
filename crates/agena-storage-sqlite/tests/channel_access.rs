@@ -1,10 +1,7 @@
 use agena_assistant::*;
 use agena_storage_sqlite::{SqliteIntegrationRepository, open_kernel_runtime};
 use serde_json::{Value, json};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-};
+use std::{collections::BTreeSet, path::PathBuf};
 
 fn policy() -> ChannelAccessPolicy {
     ChannelAccessPolicy {
@@ -13,7 +10,7 @@ fn policy() -> ChannelAccessPolicy {
             account: "bot-a".into(),
             kind: ChannelKind::Group,
         },
-        session_mode: ChannelSessionMode::PerUser,
+        session_mode: ChannelSessionMode::PerConversation,
         thread_mode: ChannelThreadMode::PerThread,
         trigger: ChannelTrigger::DirectOrMention,
         members: vec![
@@ -34,7 +31,7 @@ fn policy() -> ChannelAccessPolicy {
             },
         ],
         allow_unlisted_chat: false,
-        grants: BTreeMap::new(),
+        grant: Default::default(),
         per_user_daily_limit: 1,
         allow_automated_reports: false,
         service_grant: Default::default(),
@@ -89,7 +86,7 @@ fn authority(b: &IntegrationBinding) -> ChannelAuthority {
         identity: policy().identity,
         resource: "room".into(),
         thread: Some("thread-1".into()),
-        session_mode: ChannelSessionMode::PerUser,
+        session_mode: ChannelSessionMode::PerConversation,
         grant: Default::default(),
         expires_at_ms: b.spec.expires_at_ms,
         memory_workspace_root: PathBuf::from("/private/alice"),

@@ -138,7 +138,7 @@ impl SessionManager {
             .entries
             .first()
             .and_then(|entry| match &entry.payload {
-                EntryPayload::User { document } => Some(document_text(document, 2048)),
+                EntryPayload::User { document, .. } => Some(document_text(document, 2048)),
                 _ => None,
             });
         drop(first);
@@ -165,7 +165,7 @@ impl SessionManager {
                 break;
             }
             let (role, text) = match &entry.payload {
-                EntryPayload::User { document } => {
+                EntryPayload::User { document, .. } => {
                     ("user", document_text(document, remaining.min(2048)))
                 }
                 EntryPayload::Text { content_id } => {

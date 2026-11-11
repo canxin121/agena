@@ -961,7 +961,7 @@ async fn private_channel_learning_uses_its_authorized_store_and_rechecks_revocat
             },
             resource: "private-conversation".into(),
             thread: None,
-            session_mode: agena_domain::ChannelSessionMode::PerUser,
+            session_mode: agena_domain::ChannelSessionMode::PerConversation,
             grant: agena_domain::ChannelGrant {
                 private_memory: enabled,
                 ..Default::default()

@@ -39,7 +39,7 @@ fn policy(kind: ChannelKind) -> ChannelAccessPolicy {
             account: "bot-a".into(),
             kind,
         },
-        session_mode: ChannelSessionMode::PerUser,
+        session_mode: ChannelSessionMode::PerConversation,
         thread_mode: if kind == ChannelKind::Direct {
             ChannelThreadMode::Exact
         } else {
@@ -61,7 +61,7 @@ fn policy(kind: ChannelKind) -> ChannelAccessPolicy {
         })
         .collect(),
         allow_unlisted_chat: false,
-        grants: Default::default(),
+        grant: Default::default(),
         per_user_daily_limit: 50,
         allow_automated_reports: false,
         service_grant: Default::default(),
@@ -341,14 +341,13 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
             let source = case.user().new_session().await?;
             let model = case.model();
             let mut p = policy(ChannelKind::Group);
-            p.grants.insert(
-                ChannelRole::Operator,
-                ChannelGrant {
-                    tools: BTreeSet::from(["agena.fs.read".into()]),
-                    source_workspace: true,
-                    ..Default::default()
-                },
-            );
+            // Capabilities belong to the binding, not to a role: everyone in
+            // this room can read the project, and nobody can write it.
+            p.grant = ChannelGrant {
+                tools: BTreeSet::from(["agena.fs.read".into()]),
+                source_workspace: true,
+                ..Default::default()
+            };
             let b = bind(&source, "privileges", p.clone()).await?;
             let denied = model
                 .expect(RequestMatch::user_text("member-tool-escalation"))
@@ -521,8 +520,7 @@ async fn private_memory_is_scoped_and_native_subagents_inherit_channel_tool_limi
     let replies: Replies = Default::default();
     channel_fixture(replies.clone()).run(move|case|async move{
         let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ChannelKind::Group);
-        p.grants.insert(ChannelRole::Member,ChannelGrant{private_memory:true,..Default::default()});
-        p.grants.insert(ChannelRole::Operator,ChannelGrant{tools:BTreeSet::from(["agena.agent.spawn".into(),"agena.agent.cancel".into()]),..Default::default()});
+        p.grant=ChannelGrant{private_memory:true,tools:BTreeSet::from(["agena.agent.spawn".into(),"agena.agent.cancel".into()]),..Default::default()};
         let b=bind(&source,"private-memory",p.clone()).await?;
         let remember=model.expect(RequestMatch::user_text("记住我的私人报告偏好"))
             .reply(Reply::tool_call("alice-memory","memory.write",json!({"name":"private-style","content":"ALICE-ONLY-MEMORY-cb28: conclusions first","kind":"preference"})));
@@ -598,8 +596,9 @@ async fn explicit_shared_chat_shares_only_its_thread_and_never_acquires_tools() 
         .run(move |case| async move {
             let source = case.user().new_session().await?;
             let model = case.model();
-            let mut p = policy(ChannelKind::PrivateChannel);
-            p.session_mode = ChannelSessionMode::SharedChat;
+            // A private channel is one shared conversation by default. The
+            // transcript is shared, and so is the (empty) capability grant.
+            let p = policy(ChannelKind::PrivateChannel);
             let b = bind(&source, "explicit-shared-context", p.clone()).await?;
             model
                 .expect(RequestMatch::user_text("shared-thread-context-35e1"))
@@ -664,7 +663,8 @@ async fn explicit_shared_chat_shares_only_its_thread_and_never_acquires_tools() 
                 .await?;
             ensure!(detail.channel_sessions.len() == 2);
             for scope in detail.channel_sessions {
-                ensure!(scope.authority.actor == "@shared" && !scope.authority.grant.has_effects());
+                // One conversation, one session; capabilities stay empty.
+                ensure!(!scope.authority.grant.has_effects());
                 ensure!(
                     !scope
                         .authority
@@ -822,13 +822,10 @@ async fn authorized_operator_cannot_cancel_another_members_native_execution() ->
                 .find(|m| m.actor == "bob")
                 .unwrap()
                 .role = ChannelRole::Operator;
-            p.grants.insert(
-                ChannelRole::Operator,
-                ChannelGrant {
-                    tools: BTreeSet::from(["agena.agent.cancel".into()]),
-                    ..Default::default()
-                },
-            );
+            p.grant = ChannelGrant {
+                tools: BTreeSet::from(["agena.agent.cancel".into()]),
+                ..Default::default()
+            };
             let b = bind(&source, "separate-native-ownership", p.clone()).await?;
             let owner = model
                 .expect(RequestMatch::user_text("isolated-owner-native-marker"))
@@ -919,7 +916,7 @@ async fn native_permission_reply_cannot_resurrect_a_revoked_channel_write() -> T
         let target=case.workspace().join("revoked-pending-approval.txt");
         super::path_permission(&source,&target,"ask").await?;
         let mut p=policy(ChannelKind::Group);
-        p.grants.insert(ChannelRole::Operator,ChannelGrant{tools:BTreeSet::from(["agena.fs.write".into()]),source_workspace:true,..Default::default()});
+        p.grant=ChannelGrant{tools:BTreeSet::from(["agena.fs.write".into()]),source_workspace:true,..Default::default()};
         let binding=bind(&source,"revoke-after-permission-request",p.clone()).await?;
         let requested=model.expect(RequestMatch::user_text("申请写入测试文件"))
             .reply(Reply::tool_call("channel-pending-write","fs.write",json!({"path":"revoked-pending-approval.txt","content":"MUST-NOT-WRITE-AFTER-REVOCATION"})));
@@ -975,7 +972,7 @@ async fn channel_mcp_gateway_allows_only_the_authorized_server_and_remote_tool()
         let url=reqwest::Url::parse(&tokio::fs::read_to_string(case.workspace().join("channel-mcp-url")).await?)?;
         let network_target=format!("{}:{}",url.host_str().unwrap(),url.port().unwrap());
         source.client().set_session_permission(source.id(),serde_json::from_value(json!({"network":{"rules":{(network_target):"allow"}}}))?).await?;
-        p.grants.insert(ChannelRole::Operator,ChannelGrant{mcp_tools:BTreeMap::from([("authorized-server".into(),BTreeSet::from(["echo".into()]))]),network_hosts:BTreeSet::from([format!("{}:{}",url.host_str().unwrap(),url.port().unwrap())]),..Default::default()});
+        p.grant=ChannelGrant{mcp_tools:BTreeMap::from([("authorized-server".into(),BTreeSet::from(["echo".into()]))]),network_hosts:BTreeSet::from([format!("{}:{}",url.host_str().unwrap(),url.port().unwrap())]),..Default::default()};
         bind(&source,"mcp-pair-authority",p.clone()).await?;
         let search=model.expect(RequestMatch::user_text("查看当前可用的 MCP 工具"))
             .reply(Reply::tool_call("mcp-exact-search","mcp.tools.search",json!({"query":"","limit":10})));

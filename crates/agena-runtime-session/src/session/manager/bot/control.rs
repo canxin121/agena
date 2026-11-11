@@ -278,7 +278,7 @@ impl SessionManager {
                                     .entry(session, run.message_id)
                                     .await
                                     .map_err(control_error)?;
-                                if matches!(&entry.payload,EntryPayload::User {document} if document.text() == *text)
+                                if matches!(&entry.payload,EntryPayload::User {document, ..} if document.text() == *text)
                                 {
                                     "no_change"
                                 } else {
@@ -433,7 +433,7 @@ impl SessionManager {
                 .await
                 .map_err(control_error)?;
             let (text, attachments) = match &entry.payload {
-                EntryPayload::User { document } => {
+                EntryPayload::User { document, .. } => {
                     let attachments = document.0.iter().filter_map(|node| match node {
                         ComposerNode::Activity { activity } => Some(match &activity.payload {
                             ActivityPayload::Resource(resource) => json!({"activity_id":activity.id,"kind":resource.kind,"name":bounded(&resource.name,256),"media_type":resource.media_type.as_ref().map(|kind|bounded(kind,128)),"size_bytes":resource.size_bytes}),

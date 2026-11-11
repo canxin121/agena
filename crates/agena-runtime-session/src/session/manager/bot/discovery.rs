@@ -588,7 +588,7 @@ impl SessionManager {
         max: usize,
     ) -> Result<Value, AppError> {
         let (content, source, additional_streams) = match &entry.payload {
-            EntryPayload::User { document } => {
+            EntryPayload::User { document, .. } => {
                 return inline_chunk(
                     session,
                     entry,
@@ -736,7 +736,7 @@ impl SessionManager {
             "execution_id":entry.execution_id,"generation":entry.generation.get(),"phase":entry.execution_phase,"created_at_ms":entry.created_at_ms,
             "url":link(session.get()),"origin_url":link(entry.origin_session_id.get()),"untrusted_data":true});
         match &entry.payload {
-            EntryPayload::User { document } => {
+            EntryPayload::User { document, .. } => {
                 let mut text = String::new();
                 let mut attachments = Vec::new();
                 let mut truncated = false;

@@ -481,7 +481,9 @@ async fn stale_generation_edit_and_remove_have_no_effect_on_newer_running_attemp
         .entry(target, input.message_id)
         .await
         .unwrap();
-    assert!(matches!(&entry.payload,EntryPayload::User {document} if document.text() == "keep me"));
+    assert!(
+        matches!(&entry.payload,EntryPayload::User {document, ..} if document.text() == "keep me")
+    );
 }
 
 struct WireFixture {
@@ -672,7 +674,7 @@ async fn held_native_run_pause_edit_remove_resume_preserves_attachments_fifo_and
         .await
         .unwrap();
     assert!(
-        matches!(&entry.payload,EntryPayload::User {document} if document.text() == "edited second text" && document.0.contains(&ComposerNode::activity(attachment)))
+        matches!(&entry.payload,EntryPayload::User {document, ..} if document.text() == "edited second text" && document.0.contains(&ComposerNode::activity(attachment)))
     );
     let blobs_after = manager
         .kernel()

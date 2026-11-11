@@ -28,7 +28,7 @@ fn channel_policy() -> ChannelAccessPolicy {
             account: "fixture-bot".into(),
             kind: ChannelKind::Group,
         },
-        session_mode: ChannelSessionMode::PerUser,
+        session_mode: ChannelSessionMode::PerConversation,
         thread_mode: ChannelThreadMode::Exact,
         trigger: ChannelTrigger::DirectOrMention,
         members: vec![ChannelMember {
@@ -37,7 +37,7 @@ fn channel_policy() -> ChannelAccessPolicy {
             expires_at_ms: None,
         }],
         allow_unlisted_chat: false,
-        grants: Default::default(),
+        grant: Default::default(),
         per_user_daily_limit: 10,
         allow_automated_reports: true,
         service_grant: ChannelGrant::default(),

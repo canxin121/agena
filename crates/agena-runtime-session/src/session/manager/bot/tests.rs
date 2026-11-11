@@ -169,7 +169,7 @@ async fn operator_and_target_guards_reject_subagents_side_conversations_and_chan
         },
         resource: "private".into(),
         thread: None,
-        session_mode: agena_domain::ChannelSessionMode::PerUser,
+        session_mode: agena_domain::ChannelSessionMode::PerConversation,
         grant: Default::default(),
         expires_at_ms: i64::MAX,
         memory_workspace_root: std::env::temp_dir(),

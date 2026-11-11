@@ -79,3 +79,16 @@ pub async fn update_channel_access(
         .map(Json)
         .map_err(error)
 }
+
+/// Read-only platform inventory for one project conversation's workspace.
+pub async fn platform_inventory(
+    State(s): State<AppState>,
+    Path(source): Path<i64>,
+) -> Result<Json<PlatformInventory>, ServerError> {
+    s.application()
+        .assistant_service()?
+        .platform_inventory(source)
+        .await
+        .map(Json)
+        .map_err(error)
+}

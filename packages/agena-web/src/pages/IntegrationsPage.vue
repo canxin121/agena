@@ -15,6 +15,7 @@ import {
 } from '@/lib/integrationApi'
 import { integrationTemplate, parseIntegration } from '@/features/integrations/model'
 import ChannelAccessPanel from '@/features/integrations/ChannelAccessPanel.vue'
+import PlatformInventoryPanel from '@/features/integrations/PlatformInventoryPanel.vue'
 
 const route = useRoute(),
   router = useRouter(),
@@ -219,6 +220,8 @@ onBeforeUnmount(() => {
           >
         </button>
       </aside>
+      <div class="min-w-0 space-y-5">
+      <PlatformInventoryPanel />
       <section v-if="detail" class="min-w-0 space-y-4" data-testid="integration-detail">
         <div class="rounded-lg border border-border p-4">
           <h2 class="font-semibold">{{ detail.binding.spec.title }}</h2>
@@ -316,6 +319,7 @@ onBeforeUnmount(() => {
       <p v-else class="text-sm text-muted-foreground">
         {{ loading ? t('assistant.loading') : t('integrations.select') }}
       </p>
+      </div>
     </div>
     <Dialog
       :open="!!form"

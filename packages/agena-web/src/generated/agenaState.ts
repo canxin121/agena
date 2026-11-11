@@ -178,7 +178,7 @@ export type ChannelAccessAudit = {
 export type ChannelAccessPolicy = {
   allow_automated_reports?: boolean
   allow_unlisted_chat?: boolean
-  grants?: Record<string, ChannelGrant>
+  grant?: ChannelGrant
   identity: ChannelIdentity
   members: ChannelMember[]
   per_user_daily_limit?: number
@@ -246,7 +246,7 @@ export type ChannelOutputRoute = {
 
 export type ChannelRole = 'blocked' | 'member' | 'operator' | 'administrator' | 'owner'
 
-export type ChannelSessionMode = 'per_user' | 'shared_chat'
+export type ChannelSessionMode = 'per_conversation' | 'per_actor'
 
 export type ChannelSessionRecord = {
   authority: ChannelAuthority
@@ -413,6 +413,51 @@ export type IntegrationProvider = {
   plugin_id: string
 }
 
+/** One conversation, an explicit allow-list, or every conversation the adapter reports. */
+export type ResourceSelector = string | { all: boolean } | string[]
+
+export type ConversationKind = 'direct' | 'group' | 'public_channel' | 'private_channel'
+
+export type ConversationCounts = {
+  direct: number
+  group: number
+  public_channel: number
+  private_channel: number
+}
+
+export type ConversationEntry = {
+  resource: string
+  kind: ConversationKind
+  thread?: string | null
+  session_id?: number | null
+  title?: string | null
+  actor?: string | null
+  role?: ChannelRole | null
+  created_at_ms?: number | null
+}
+
+export type PlatformAccount = {
+  binding_id: string
+  tenant: string
+  account: string
+  state: BindingState
+  selector: string
+  last_error?: string | null
+  conversations: ConversationEntry[]
+}
+
+export type PlatformEntry = {
+  platform: string
+  title?: string | null
+  accounts: PlatformAccount[]
+  conversation_count: number
+  conversation_counts: ConversationCounts
+}
+
+export type PlatformInventory = {
+  platforms: PlatformEntry[]
+}
+
 export type IntegrationSpec = {
   actors?: string[]
   channel_policy?: ChannelAccessPolicy
@@ -425,7 +470,7 @@ export type IntegrationSpec = {
   mode: IntegrationMode
   poll_seconds: number
   provider: string
-  resource: string
+  resource: ResourceSelector
   thread?: string | null
   title: string
   total_limit: number

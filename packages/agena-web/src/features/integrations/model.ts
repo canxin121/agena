@@ -59,7 +59,7 @@ export function parseIntegration(text: string): IntegrationSpec {
     throw new Error('max_execution_seconds must be a positive integer')
   const policy = spec.channel_policy as ChannelAccessPolicy | undefined
   if (policy && typeof policy === 'object') {
-    for (const grant of [...Object.values(policy.grants || {}), policy.service_grant]) {
+    for (const grant of [policy.grant, policy.service_grant]) {
       if (
         grant &&
         Object.keys(grant).some(
@@ -75,12 +75,12 @@ export function parseIntegration(text: string): IntegrationSpec {
 export function channelPolicyTemplate(): ChannelAccessPolicy {
   return {
     identity: { tenant: 'tenant-id', account: 'bot-account-id', kind: 'group' },
-    session_mode: 'per_user',
+    session_mode: 'per_conversation',
     thread_mode: 'exact',
     trigger: 'direct_or_mention',
     members: [{ actor: 'owner-user-id', role: 'owner', expires_at_ms: null }],
     allow_unlisted_chat: false,
-    grants: {},
+    grant: { tools: [], mcp_tools: {}, private_memory: false, source_workspace: false, network_hosts: [] },
     per_user_daily_limit: 50,
     allow_automated_reports: false,
     service_grant: {

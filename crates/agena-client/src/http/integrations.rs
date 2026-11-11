@@ -33,6 +33,19 @@ impl AgenaClient {
             .await?;
         self.parse_json(response).await
     }
+    /// Read-only per-platform inventory for one project conversation.
+    pub async fn platform_inventory(&self, source: i64) -> Result<PlatformInventory, ClientError> {
+        let response = self
+            .send_request(
+                reqwest::Method::GET,
+                self.endpoint(&format!("/api/v1/sessions/{source}/platforms")),
+                None,
+                None,
+            )
+            .await?;
+        self.parse_json(response).await
+    }
+
     pub async fn create_integration(
         &self,
         source: i64,

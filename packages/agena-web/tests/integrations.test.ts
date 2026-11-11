@@ -43,9 +43,9 @@ describe('plugin integration authorization proposals', () => {
     expect(draft.mode).toBe('channel')
     expect(draft.actors).toEqual([])
     expect(draft.channel_policy?.members).toEqual([{ actor: 'owner-user-id', role: 'owner', expires_at_ms: null }])
-    expect(draft.channel_policy?.session_mode).toBe('per_user')
+    expect(draft.channel_policy?.session_mode).toBe('per_conversation')
     expect(draft.channel_policy?.allow_unlisted_chat).toBe(false)
-    expect(draft.channel_policy?.grants).toEqual({})
+    expect(draft.channel_policy?.grant).toEqual({ tools: [], mcp_tools: {}, private_memory: false, source_workspace: false, network_hosts: [] })
     expect(draft.use_source_permissions).toBe(false)
     expect(draft.event_types).toEqual(['message'])
     expect(draft.config).toEqual({ conversation: 'account:conversation' })
@@ -91,11 +91,11 @@ test('session execution proposals use the current JSON contract and reject retir
   expect(() => parseIntegration(JSON.stringify({ ...draft, max_task_seconds: 300 }))).toThrow()
   for (const max_execution_seconds of [0, -1, 1.5, null, '300'])
     expect(() => parseIntegration(JSON.stringify({ ...draft, max_execution_seconds }))).toThrow()
-  const channel_policy = { grants: { operator: { tools: ['Subagent'], background_work: true } } }
+  const channel_policy = { grant: { tools: ['Subagent'], background_work: true } }
   expect(() => parseIntegration(JSON.stringify({ ...draft, channel_policy }))).toThrow()
   expect(() =>
     parseIntegration(JSON.stringify({ ...draft, channel_policy: { service_grant: { background_work: false } } })),
   ).toThrow()
-  const valid = { grants: { operator: { tools: ['Subagent'] } } }
+  const valid = { grant: { tools: ['Subagent'] } }
   expect(parseIntegration(JSON.stringify({ ...draft, channel_policy: valid })).channel_policy).toEqual(valid)
 })

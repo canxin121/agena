@@ -117,6 +117,7 @@ pub fn router(state: AppState) -> Router {
             .route("/api/v1/sessions/{session_id}/integrations/{binding_id}",get(rest::integration_detail))
             .route("/api/v1/sessions/{session_id}/integrations/{binding_id}/control",post(rest::control_integration))
             .route("/api/v1/sessions/{session_id}/integrations/{binding_id}/access",axum::routing::put(rest::update_channel_access))
+            .route("/api/v1/sessions/{session_id}/platforms",get(rest::platform_inventory))
             .route("/api/v1/usage", get(rest::get_usage_stats))
             .route("/api/v1/runtime/reload", post(rest::reload_runtime))
             .route(

@@ -19,7 +19,6 @@ const emit = defineEmits<{ changed: [IntegrationBinding]; editing: [boolean] }>(
 const { t } = useI18n()
 const copy = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 const roles: ChannelRole[] = ['member', 'operator', 'administrator', 'owner', 'blocked']
-const grantRoles: ChannelRole[] = ['member', 'operator', 'administrator', 'owner']
 const emptyGrant = (): ChannelGrant => ({
   tools: [],
   mcp_tools: {},
@@ -33,15 +32,12 @@ const baseRevision = ref(0),
   busy = ref(false),
   error = ref(''),
   stale = ref(false)
-const mcpDrafts = ref<Partial<Record<ChannelRole, string>>>({})
+const mcpDraft = ref('')
 let disposed = false
 function open() {
   const value = copy(props.detail.binding.spec.channel_policy || channelPolicyTemplate())
-  value.grants ||= {}
-  for (const role of grantRoles) value.grants[role] ||= emptyGrant()
-  mcpDrafts.value = Object.fromEntries(
-    grantRoles.map((role) => [role, JSON.stringify(value.grants?.[role]?.mcp_tools || {}, null, 2)]),
-  )
+  value.grant ||= emptyGrant()
+  mcpDraft.value = JSON.stringify(value.grant.mcp_tools || {}, null, 2)
   draft.value = value
   pending.value = null
   baseRevision.value = props.detail.binding.revision
@@ -60,8 +56,8 @@ function add() {
   if (draft.value && draft.value.members.length < 128)
     draft.value.members.push({ actor: '', role: 'member', expires_at_ms: null })
 }
-function lines(role: ChannelRole, field: 'tools' | 'network_hosts', event: Event) {
-  const grant = draft.value?.grants?.[role]
+function lines(field: 'tools' | 'network_hosts', event: Event) {
+  const grant = draft.value?.grant
   if (grant)
     grant[field] = [
       ...new Set(
@@ -87,9 +83,7 @@ async function save() {
   if (!draft.value || busy.value || stale.value) return
   if (!pending.value) {
     try {
-      for (const role of grantRoles) {
-        draft.value.grants![role]!.mcp_tools = parseMcpAllowlist(mcpDrafts.value[role] || '{}')
-      }
+      draft.value.grant!.mcp_tools = parseMcpAllowlist(mcpDraft.value || '{}')
     } catch (e) {
       error.value = e instanceof Error ? e.message : String(e)
       return
@@ -163,7 +157,7 @@ onBeforeUnmount(() => {
         {{ detail.binding.spec.channel_policy.identity.tenant }} /
         {{ detail.binding.spec.channel_policy.identity.account }} ·
         {{ t(`channelAccess.kind_${detail.binding.spec.channel_policy.identity.kind}`) }} ·
-        {{ t(`channelAccess.mode_${detail.binding.spec.channel_policy.session_mode || 'per_user'}`) }}
+        {{ t(`channelAccess.mode_${detail.binding.spec.channel_policy.session_mode || 'per_conversation'}`) }}
       </p>
       <div class="overflow-x-auto">
         <table class="w-full text-sm">
@@ -227,10 +221,8 @@ onBeforeUnmount(() => {
             ><label class="channel-field"
               >{{ t('channelAccess.context')
               }}<select v-model="draft.session_mode">
-                <option value="per_user">{{ t('channelAccess.mode_per_user') }}</option>
-                <option value="shared_chat" :disabled="draft.identity.kind === 'direct'">
-                  {{ t('channelAccess.mode_shared_chat') }}
-                </option>
+                <option value="per_conversation">{{ t('channelAccess.mode_per_conversation') }}</option>
+                <option value="per_actor">{{ t('channelAccess.mode_per_actor') }}</option>
               </select></label
             ><label class="channel-field"
               >{{ t('channelAccess.thread')
@@ -295,43 +287,41 @@ onBeforeUnmount(() => {
           <details>
             <summary class="cursor-pointer font-medium">{{ t('channelAccess.capabilities') }}</summary>
             <p class="mt-2 text-xs text-muted-foreground">{{ t('channelAccess.capabilityHint') }}</p>
-            <div v-for="role in grantRoles" :key="role" class="mt-3 rounded border border-border p-3 space-y-3">
-              <h4 class="text-sm font-semibold">{{ t(`channelAccess.role_${role}`) }}</h4>
-              <template v-if="draft.grants?.[role]"
-                ><div class="flex flex-wrap gap-3 text-xs">
-                  <label
-                    ><input type="checkbox" v-model="draft.grants[role]!.private_memory" />
-                    {{ t('channelAccess.memory') }}</label
-                  ><label
-                    ><input type="checkbox" v-model="draft.grants[role]!.source_workspace" />
-                    {{ t('channelAccess.project') }}</label
-                  >
-                </div>
-                <label class="channel-field"
-                  >{{ t('channelAccess.tools')
-                  }}<textarea
-                    rows="3"
-                    :value="draft.grants[role]!.tools?.join('\n')"
-                    :data-testid="`channel-tools-${role}`"
-                    @input="lines(role, 'tools', $event)"
-                  /></label
-                ><label class="channel-field"
-                  >{{ t('channelAccess.mcp')
-                  }}<textarea
-                    rows="3"
-                    v-model="mcpDrafts[role]"
-                    spellcheck="false"
-                    placeholder='{"docs":["search"]}'
-                    :data-testid="`channel-mcp-${role}`"
-                  /></label
-                ><label class="channel-field"
-                  >{{ t('channelAccess.network')
-                  }}<textarea
-                    rows="2"
-                    :value="draft.grants[role]!.network_hosts?.join('\n')"
-                    @input="lines(role, 'network_hosts', $event)"
-                  /></label
-              ></template>
+            <div class="mt-3 rounded border border-border p-3 space-y-3">
+              <h4 class="text-sm font-semibold">{{ t('channelAccess.bindingGrant') }}</h4>
+              <div class="flex flex-wrap gap-3 text-xs">
+                <label
+                  ><input type="checkbox" v-model="draft.grant!.private_memory" />
+                  {{ t('channelAccess.memory') }}</label
+                ><label
+                  ><input type="checkbox" v-model="draft.grant!.source_workspace" />
+                  {{ t('channelAccess.project') }}</label
+                >
+              </div>
+              <label class="channel-field"
+                >{{ t('channelAccess.tools')
+                }}<textarea
+                  rows="3"
+                  :value="draft.grant!.tools?.join('\n')"
+                  data-testid="channel-tools"
+                  @input="lines('tools', $event)"
+                /></label
+              ><label class="channel-field"
+                >{{ t('channelAccess.mcp')
+                }}<textarea
+                  rows="3"
+                  v-model="mcpDraft"
+                  spellcheck="false"
+                  placeholder='{"docs":["search"]}'
+                  data-testid="channel-mcp"
+                /></label
+              ><label class="channel-field"
+                >{{ t('channelAccess.network')
+                }}<textarea
+                  rows="2"
+                  :value="draft.grant!.network_hosts?.join('\n')"
+                  @input="lines('network_hosts', $event)"
+                /></label>
             </div>
           </details>
           <label class="flex items-center gap-2 text-sm"

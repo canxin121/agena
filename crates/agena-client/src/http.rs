@@ -2166,6 +2166,21 @@ impl AgenaClient {
         .await
     }
 
+    /// Start a conversation over without deleting its stored history.
+    pub async fn clear_session(
+        &self,
+        session_id: i64,
+        context_only: bool,
+    ) -> Result<SessionResource, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/clear"),
+            serde_json::json!({
+                "mode": if context_only { "context_only" } else { "history" },
+            }),
+        )
+        .await
+    }
+
     pub async fn update_session_selection(
         &self,
         session_id: i64,

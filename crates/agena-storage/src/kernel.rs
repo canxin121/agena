@@ -109,6 +109,21 @@ impl From<TransitionError> for KernelError {
 
 pub type Result<T> = std::result::Result<T, KernelError>;
 
+/// How much of a conversation a `Clear` command hides.
+///
+/// Both modes keep every stored fact: entries, content and segments remain in
+/// the database. They differ only in what the transcript and the model see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClearMode {
+    /// Start over completely: the transcript and the model both see nothing
+    /// from before the clear. The retired segments stay stored.
+    History,
+    /// Start the model over while keeping the transcript readable, so the old
+    /// turns remain browsable but stop being part of the next prompt.
+    Context,
+}
+
 /// A client-generated durable idempotency identity. Retrying a different
 /// payload with the same identity conflicts, rather than replaying by accident.
 pub type RequestId = agena_domain::CommandId;

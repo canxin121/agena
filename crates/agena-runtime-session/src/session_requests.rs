@@ -151,6 +151,25 @@ pub struct SessionForkRequest {
 
 pub use agena_domain::RewindMode;
 
+/// What a `clear` hides. Both modes keep every stored fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionClearMode {
+    /// Start over completely: the transcript and the model both see nothing
+    /// from before the clear.
+    History,
+    /// Keep the transcript readable and restart only the model's context.
+    Context,
+}
+
+impl From<SessionClearMode> for agena_storage::kernel::ClearMode {
+    fn from(value: SessionClearMode) -> Self {
+        match value {
+            SessionClearMode::History => Self::History,
+            SessionClearMode::Context => Self::Context,
+        }
+    }
+}
+
 /// Input for rewinding a session before a completed user message.
 #[derive(Debug, Clone)]
 pub struct SessionRewindRequest {

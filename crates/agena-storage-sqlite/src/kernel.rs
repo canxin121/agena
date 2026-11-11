@@ -2054,6 +2054,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
         | Command::Truncate { session, .. }
+        | Command::Clear { session, .. }
         | Command::DeleteSession { session, .. }
         | Command::Continue { session, .. }
         | Command::StartControlExecution { session, .. }
@@ -2170,6 +2171,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         | Command::FinishAgent { session, .. } => (*session, ChangeKind::Metadata),
         Command::Withdraw { session, .. }
         | Command::Truncate { session, .. }
+        | Command::Clear { session, .. }
         | Command::DeleteSession { session, .. }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
         Command::Continue { session, .. }
@@ -2369,6 +2371,7 @@ async fn entry_changes(
         Command::Fork { .. }
         | Command::Withdraw { .. }
         | Command::Truncate { .. }
+        | Command::Clear { .. }
         | Command::DeleteSession { .. }
         | Command::ClearQueued { .. } => {
             change.requires_snapshot = true;

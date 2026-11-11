@@ -507,6 +507,163 @@ async fn truncate(
         document,
     })))
 }
+
+/// Start this conversation over without deleting any stored fact.
+///
+/// `History` retires every segment, exactly as `truncate` retires a suffix, so
+/// neither the transcript nor the model sees the old turns and the rows stay
+/// addressable through `agena_retired_session_segments` until snapshot GC.
+/// `Context` leaves membership untouched and only moves the prompt window to
+/// the end, so the transcript still reads and the next prompt starts empty.
+async fn clear(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    mode: ClearMode,
+) -> Result<Mutation> {
+    let metadata = reads::metadata(connection, session).await?;
+    settle_active_executions(connection, session).await?;
+    match mode {
+        ClearMode::History => {
+            let next = metadata.membership_generation.next().map_err(storage)?;
+            // Retire every live edge that earlier snapshots can still address;
+            // edges no snapshot pins are simply dropped with the membership
+            // rows below, which is the same rule truncate uses.
+            sqlx::query("INSERT INTO agena_retired_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation) SELECT session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,? FROM agena_session_segments edge WHERE session_id=? AND EXISTS(SELECT 1 FROM agena_history_snapshots root WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation AND root.generation<?)").bind(next.get()).bind(session.get()).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
+            sqlx::query("DELETE FROM agena_session_segments WHERE session_id=?")
+                .bind(session.get())
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+            reset_prompt_window(connection, session).await?;
+            recount(connection, session).await?;
+        }
+        ClearMode::Context => {
+            // The window boundary must be a real checkpoint: the schema keeps
+            // the four boundary columns all-or-nothing, and a bare position
+            // would leave the next prompt scanning the old turns. Install an
+            // empty checkpoint at the end of the current membership, which
+            // hides the transcript from the model without a provider call.
+            let through = sqlx::query_scalar::<_, i64>("SELECT m.entry_id FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal WHERE s.session_id=? ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1")
+                .bind(session.get())
+                .fetch_optional(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            let has_attempt: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM agena_attempts WHERE session_id=? LIMIT 1")
+                    .bind(session.get())
+                    .fetch_optional(&mut *connection)
+                    .await
+                    .map_err(sql_error)?;
+            match (through, has_attempt) {
+                (Some(through), Some(_attempt)) => {
+                    let through = EntryId::try_from(through).map_err(storage)?;
+                    install_empty_checkpoint(connection, session, through).await?;
+                }
+                // Nothing has ever run: there is no prompt history to hide.
+                _ => reset_prompt_window(connection, session).await?,
+            }
+            sqlx::query(
+                "UPDATE agena_sessions SET updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?",
+            )
+            .bind(now_ms())
+            .bind(session.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+        }
+    }
+    Ok(Mutation::Session(Box::new(
+        reads::metadata(connection, session).await?,
+    )))
+}
+
+/// Settle queued and running executions in bounded batches, so a clear never
+/// leaves an attempt that would append past the new boundary.
+async fn settle_active_executions(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+) -> Result<()> {
+    loop {
+        let ids: Vec<String> = sqlx::query_scalar("SELECT execution_id FROM agena_attempts WHERE session_id=? AND phase IN ('queued','running') ORDER BY execution_id LIMIT 128").bind(session.get()).fetch_all(&mut *connection).await.map_err(sql_error)?;
+        if ids.is_empty() {
+            return Ok(());
+        }
+        for id in ids {
+            let (view, _) =
+                reads::execution(connection, session, id.parse().map_err(storage)?).await?;
+            commands::finish(connection, view, ExecutionPhase::Cancelled).await?;
+        }
+    }
+}
+
+async fn reset_prompt_window(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
+    sqlx::query("UPDATE agena_prompt_windows SET checkpoint_entry_id=NULL,through_entry_id=NULL,through_sequence=NULL,through_ordinal=NULL,rewrite_epoch=rewrite_epoch+1 WHERE session_id=?").bind(session.get()).execute(connection).await.map_err(sql_error)?;
+    Ok(())
+}
+
+/// Move the prompt window past `through` without a provider summary.
+///
+/// The next prompt then contains only the empty checkpoint, so earlier turns
+/// stop being sent to the model while the transcript keeps them. The checkpoint
+/// reuses the session's last attempt, because an entry must belong to a real
+/// execution identity.
+async fn install_empty_checkpoint(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    through: EntryId,
+) -> Result<()> {
+    let identity = sqlx::query("SELECT execution_id,generation,message_id FROM agena_entries WHERE id=? AND origin_session_id=?")
+        .bind(through.get())
+        .bind(session.get())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    let execution: String = identity.try_get("execution_id").map_err(storage)?;
+    let generation: i64 = identity.try_get("generation").map_err(storage)?;
+    let message_id: i64 = identity
+        .try_get::<Option<i64>, _>("message_id")
+        .map_err(storage)?
+        .unwrap_or(through.get());
+    let (sequence, ordinal) = boundary(connection, session, through).await?;
+
+    let content = agena_domain::ContentId::new();
+    let epoch = agena_domain::ContentEpoch::new();
+    let now = now_ms();
+    let entry: i64 = sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,content_id,created_at_ms) VALUES (?,?,?,?,'compaction',?,?,?) RETURNING id")
+        .bind(session.get())
+        .bind(&execution)
+        .bind(generation)
+        .bind(message_id)
+        .bind(encode(&EntryPayload::Compaction { summary: content, through })?)
+        .bind(content.to_string())
+        .bind(now)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    // An empty text capture is the checkpoint's frozen summary.
+    sqlx::query("INSERT INTO agena_content_streams (id,entry_id,session_id,execution_id,generation,kind,epoch,capture_state) VALUES (?,?,?,?,?,'text',?,'complete')")
+        .bind(content.to_string())
+        .bind(entry)
+        .bind(session.get())
+        .bind(&execution)
+        .bind(generation)
+        .bind(epoch.to_string())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    sqlx::query("UPDATE agena_prompt_windows SET checkpoint_entry_id=?,through_entry_id=?,through_sequence=?,through_ordinal=?,rewrite_epoch=rewrite_epoch+1 WHERE session_id=?")
+        .bind(entry)
+        .bind(through.get())
+        .bind(sequence)
+        .bind(ordinal)
+        .bind(session.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    commands::append_history(connection, session, &[entry]).await?;
+    Ok(())
+}
 async fn withdraw(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -1114,6 +1271,7 @@ pub(super) async fn apply(
         }
         Command::Withdraw { session, message } => withdraw(connection, *session, *message).await?,
         Command::Truncate { session, message } => truncate(connection, *session, *message).await?,
+        Command::Clear { session, mode } => clear(connection, *session, *mode).await?,
         Command::DeleteSession { session, guard } => {
             if let Some(guard) = guard {
                 check_delete(connection, *session, guard).await?;

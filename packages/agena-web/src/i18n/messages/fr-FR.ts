@@ -1779,6 +1779,10 @@ export default {
           label: 'Dériver la session',
           description: 'Créer une session à partir de cette conversation',
         },
+        clear: {
+          label: 'Vider la conversation',
+          description: 'Reprendre sans supprimer l’historique enregistré',
+        },
         share: {
           label: 'Partager la session',
           description: 'Créer un lien public',
@@ -1948,6 +1952,14 @@ export default {
       loading: 'Chargement du plan',
       empty: 'Aucun plan n’est disponible pour cette session.',
     },
+    clearDialog: {
+      title: 'Vider la conversation',
+      description: 'Choisissez ce qu’il faut réinitialiser. L’historique enregistré est conservé dans les deux cas.',
+      historyLabel: 'Vider l’historique',
+      historyDescription: 'Masquer tous les échanges précédents du fil et du modèle',
+      contextLabel: 'Vider uniquement le contexte',
+      contextDescription: 'Garder le fil lisible et ne redémarrer que le contexte du modèle',
+    },
     toasts: {
       noSessionErrorToCopy: 'Aucune erreur de session à copier',
       copiedErrorDetails: 'Détails de l’erreur copiés',
@@ -1964,6 +1976,7 @@ export default {
       sessionUnshared: 'Partage de la session désactivé',
       selectModelToCompact: 'Sélectionnez un modèle pour compacter cette session',
       compactionStarted: 'Compactage démarré',
+      sessionCleared: 'Session vidée',
       abortedRun: 'Exécution interrompue',
       failedToAbortRun: 'Échec de l’interruption de l’exécution',
       pressEscAgainToAbort: 'Appuyez de nouveau sur Échap pour interrompre ({modKey}+.) — voir les raccourcis',
@@ -3525,6 +3538,7 @@ export default {
   'command-commands-summary': 'Ouvrir la palette de commandes',
   'command-commit-summary': 'Créer un commit à partir des modifications indexées',
   'command-compact-summary': 'Résumer le contexte de la session actuelle',
+  'command-clear-summary': 'Reprendre cette conversation sans supprimer son historique enregistré',
   'command-continue-summary': 'Reprendre la session actuelle, bloquée ou en attente',
   'command-copy-message-summary': 'Copier le dernier message de l’assistant',
   'command-copy-summary': 'Copier la transcription chargée',

@@ -243,6 +243,9 @@ export type ChatPageViewContext = {
   renameDraft: MaybeRef<string>
   renameBusy: MaybeRef<boolean>
   saveRename: () => void | Promise<void>
+  clearDialogOpen: MaybeRef<boolean>
+  clearDialogOptions: MaybeRef<Array<{ id: string; label: string; description: string }>>
+  handleClearDialogSelect: (id: string) => void
   attachProjectDialogOpen: MaybeRef<boolean>
   attachProjectPath: MaybeRef<string>
   sessionDirectory: MaybeRef<string>

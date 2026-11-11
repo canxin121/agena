@@ -24,8 +24,11 @@ type ChatLike = {
   renameSession: (sessionId: string, title: string) => Promise<JsonValue>
   forkSession: (sessionId: string) => Promise<JsonValue>
   compactSession: (sessionId: string) => Promise<JsonValue>
+  clearSession: (sessionId: string, mode: SessionClearMode) => Promise<JsonValue>
   messages: MessageLike[]
 }
+
+export type SessionClearMode = 'history' | 'context_only'
 
 export function useChatSessionActions(opts: {
   chat: ChatLike
@@ -49,6 +52,7 @@ export function useChatSessionActions(opts: {
 
   const forkBusy = ref(false)
   const compactBusy = ref(false)
+  const clearBusy = ref(false)
   const submittingCompactionSessionId = ref<string | null>(null)
   const compactingSessionId = computed(() => {
     if (submittingCompactionSessionId.value) return submittingCompactionSessionId.value
@@ -179,12 +183,27 @@ export function useChatSessionActions(opts: {
     }
   }
 
+  async function handleClearSession(mode: SessionClearMode) {
+    const sid = chat.selectedSessionId
+    if (!sid || clearBusy.value) return
+    clearBusy.value = true
+    try {
+      await chat.clearSession(sid, mode)
+      toasts.push('success', t('chat.toasts.sessionCleared'))
+    } catch (err) {
+      toasts.push('error', err instanceof Error ? err.message : String(err))
+    } finally {
+      clearBusy.value = false
+    }
+  }
+
   return {
     renameDialogOpen,
     renameDraft,
     renameBusy,
     forkBusy,
     compactBusy,
+    clearBusy,
     compactingSessionId,
     openRenameDialog,
     saveRename,
@@ -192,5 +211,6 @@ export function useChatSessionActions(opts: {
     exportTranscript,
     handleForkSession,
     handleCompactSession,
+    handleClearSession,
   }
 }

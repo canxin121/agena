@@ -61,6 +61,63 @@ impl App {
         ));
     }
 
+    /// Ask how much of the conversation to hide: the whole transcript, or only
+    /// the model's context while the transcript stays readable.
+    pub(crate) fn open_clear_mode_picker(&mut self) {
+        let Some(session_id) = self.transcript.session_id else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        if self.prompt_for_pending_interactive_on_session(session_id) {
+            return;
+        }
+        let items = vec![
+            self.rewind_mode_choice(
+                "overlay-clear-mode-history-label",
+                "overlay-clear-mode-history-detail",
+                "history",
+            ),
+            self.rewind_mode_choice(
+                "overlay-clear-mode-context-label",
+                "overlay-clear-mode-context-detail",
+                "context",
+            ),
+        ];
+        self.open_choice_overlay(self.build_choice_overlay(
+            ui_text::t(&self.i18n, "overlay-clear-mode-title"),
+            ui_text::t(&self.i18n, "overlay-clear-mode-prompt"),
+            None,
+            items,
+            ChoiceOverlayAction::ClearMode { session_id },
+            false,
+            agena_tui::choice::ChoicePresentationStyle::SelectOnly,
+        ));
+    }
+
+    /// A clear never deletes stored history, so the confirmation only states
+    /// which surface is reset.
+    pub(crate) fn open_clear_confirm_overlay(
+        &mut self,
+        session_id: i64,
+        mode: agena_api::commands::SessionClearMode,
+    ) {
+        let body = match mode {
+            agena_api::commands::SessionClearMode::History => vec![
+                ui_text::t(&self.i18n, "overlay-clear-confirm-history-warning"),
+                ui_text::t(&self.i18n, "overlay-clear-confirm-kept"),
+            ],
+            agena_api::commands::SessionClearMode::ContextOnly => vec![
+                ui_text::t(&self.i18n, "overlay-clear-confirm-context-warning"),
+                ui_text::t(&self.i18n, "overlay-clear-confirm-kept"),
+            ],
+        };
+        self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
+            ui_text::t(&self.i18n, "overlay-clear-confirm-title"),
+            body,
+            ConfirmAction::Clear { session_id, mode },
+        )));
+    }
+
     fn rewind_mode_choice(&self, label_key: &str, detail_key: &str, value: &str) -> ChoiceItem {
         let label = ui_text::t(&self.i18n, label_key);
         let detail = ui_text::t(&self.i18n, detail_key);
@@ -545,6 +602,9 @@ impl App {
                 target,
                 mode,
             ),
+            ConfirmAction::Clear { session_id, mode } => {
+                self.request_session_clear(session_id, mode)
+            }
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }
@@ -681,6 +741,53 @@ mod rewind_mode_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn clear_copy_exists_in_every_locale() {
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            let i18n = I18n::resolve(Some(locale), None);
+            for key in [
+                "overlay-clear-mode-title",
+                "overlay-clear-mode-prompt",
+                "overlay-clear-mode-history-label",
+                "overlay-clear-mode-history-detail",
+                "overlay-clear-mode-context-label",
+                "overlay-clear-mode-context-detail",
+                "overlay-clear-confirm-title",
+                "overlay-clear-confirm-history-warning",
+                "overlay-clear-confirm-context-warning",
+                "overlay-clear-confirm-kept",
+                "flash-session-cleared",
+            ] {
+                let value = i18n.text(key);
+                assert!(
+                    !value.trim().is_empty() && !value.contains("Unknown localization key"),
+                    "{locale}/{key}: {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clear_offers_both_history_and_context_outcomes() {
+        let (_temp, mut app) = app();
+        app.transcript.session_id = Some(7);
+        app.open_clear_mode_picker();
+        let Some(Overlay::Choice(dialog)) = &app.overlay else {
+            panic!("expected the clear mode picker");
+        };
+        let count = ["history", "context"]
+            .into_iter()
+            .filter(|value| {
+                let mut presentation = dialog.presentation.clone();
+                presentation.select_item_where(|item| item.value == *value)
+            })
+            .count();
+        assert_eq!(
+            count, 2,
+            "clear must offer both a history and a context reset"
+        );
     }
 
     #[test]

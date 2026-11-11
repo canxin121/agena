@@ -111,6 +111,16 @@ pub enum Command {
         session: SessionId,
         message: EntryId,
     },
+    /// Start this conversation over without deleting its history.
+    ///
+    /// `history` retires every segment, so neither the transcript nor the
+    /// model sees the old turns; `context` only advances the prompt window, so
+    /// the transcript stays readable while the model starts from nothing. In
+    /// both modes the entries, content and segments stay stored.
+    Clear {
+        session: SessionId,
+        mode: ClearMode,
+    },
     DeleteSession {
         session: SessionId,
         #[serde(default, skip_serializing_if = "Option::is_none")]

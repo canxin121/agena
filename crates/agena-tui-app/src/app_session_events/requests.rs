@@ -254,6 +254,35 @@ impl App {
         });
     }
 
+    /// Clear this conversation without deleting stored history. `History` also
+    /// resets the transcript; `ContextOnly` keeps it and restarts the prompt.
+    pub(crate) fn request_session_clear(
+        &mut self,
+        session_id: i64,
+        mode: agena_api::commands::SessionClearMode,
+    ) {
+        self.begin_run_operation(RunActivityTarget::Session(session_id), RunOperation::Rewind);
+
+        let application = self.application.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = application
+                .clear_session(
+                    session_id,
+                    mode == agena_api::commands::SessionClearMode::ContextOnly,
+                )
+                .await
+                .map_err(crate::UiFailure::from_backend);
+            let _ = tx
+                .send(AppMessage::SessionCleared {
+                    session_id,
+                    mode,
+                    result,
+                })
+                .await;
+        });
+    }
+
     pub(crate) fn request_session_state(&mut self, session_id: i64) {
         if self.transcript.state_loading {
             return;

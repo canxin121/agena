@@ -860,6 +860,11 @@ pub(super) enum AppMessage {
         mode: agena_domain::RewindMode,
         result: UiResult<SessionExecutionResource>,
     },
+    SessionCleared {
+        session_id: i64,
+        mode: agena_api::commands::SessionClearMode,
+        result: UiResult<agena_api::resource::SessionResource>,
+    },
     /// Pushed by the unified event bus (`app_backend::live_events::subscribe_session_events`).
     /// Callers receive each domain event in real time, with a hint about
     /// whether a refresh is needed.

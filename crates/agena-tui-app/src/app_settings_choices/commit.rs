@@ -43,6 +43,14 @@ impl App {
                 );
                 true
             }
+            ChoiceOverlayAction::ClearMode { session_id } => {
+                let mode = match choice_selection_value(&selection).as_str() {
+                    "context" => agena_api::commands::SessionClearMode::ContextOnly,
+                    _ => agena_api::commands::SessionClearMode::History,
+                };
+                self.open_clear_confirm_overlay(session_id, mode);
+                true
+            }
             ChoiceOverlayAction::QueuedMessage {
                 session_id,
                 execution_id,

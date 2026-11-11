@@ -582,6 +582,10 @@ pub fn router(state: AppState) -> Router {
                 post(rest::compact_session),
             )
             .route(
+                "/api/v1/sessions/{session_id}/clear",
+                post(rest::clear_session),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/fork",
                 post(rest::fork_session),
             )

@@ -469,6 +469,25 @@ pub async fn compact_session(
     ))
 }
 
+/// Start a conversation over without deleting its stored history.
+///
+/// `mode = "context_only"` keeps the transcript readable and restarts only the
+/// model's prompt window; the default `history` clears the transcript too.
+pub async fn clear_session(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+    Json(request): Json<SessionClearRequestBody>,
+) -> Result<impl IntoResponse, ServerError> {
+    assert_if_match_session_version(&state, session_id, &headers).await?;
+    json_http(
+        state
+            .service()
+            .clear_session(session_id, request.context_only()),
+    )
+    .await
+}
+
 pub async fn fork_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
@@ -685,11 +704,11 @@ pub async fn import_session(
 
 use super::{
     AppState, AxumQuery, Deserialize, Event, HeaderMap, Infallible, IntoResponse, Json, Path,
-    PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
-    SessionForkRequestBody, SessionListQuery, SessionPartListQuery, SessionReplyRequestBody,
-    SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, Sse,
-    State, ToolDetailSectionQuery, UserInputReply, if_match_version, json_http, json_http_found,
-    server_error_from_application, sse_error_event, stream,
+    PermissionReply, ServerError, SessionChangeStreamQuery, SessionClearRequestBody,
+    SessionCreateRequest, SessionForkRequestBody, SessionListQuery, SessionPartListQuery,
+    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody,
+    SessionUpdateRequest, Sse, State, ToolDetailSectionQuery, UserInputReply, if_match_version,
+    json_http, json_http_found, server_error_from_application, sse_error_event, stream,
 };
 
 #[derive(Debug, Deserialize)]

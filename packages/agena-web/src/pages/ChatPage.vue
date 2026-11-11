@@ -1171,6 +1171,7 @@ const {
   renameDraft,
   renameBusy,
   compactBusy,
+  clearBusy,
   compactingSessionId,
   openRenameDialog,
   saveRename,
@@ -1178,7 +1179,27 @@ const {
   exportTranscript,
   handleForkSession,
   handleCompactSession,
+  handleClearSession,
 } = sessionActions
+
+// Clearing has two non-equivalent outcomes, so the command opens a chooser
+// instead of picking one behind the user's back.
+const clearDialogOpen = ref(false)
+const clearDialogOptions = computed(() => [
+  {
+    id: 'history',
+    label: String(t('chat.clearDialog.historyLabel')),
+    description: String(t('chat.clearDialog.historyDescription')),
+  },
+  {
+    id: 'context_only',
+    label: String(t('chat.clearDialog.contextLabel')),
+    description: String(t('chat.clearDialog.contextDescription')),
+  },
+])
+function handleClearDialogSelect(id: string) {
+  void handleClearSession(id === 'context_only' ? 'context_only' : 'history')
+}
 
 watch([failedDraftVersion, () => ui.isImageViewerOpen], attachments.releaseUnusedAttachmentUrls, {
   flush: 'post',
@@ -1478,6 +1499,9 @@ function handleSessionActionRequest(actionId: string) {
       break
     case 'compact':
       void handleCompactSession()
+      break
+    case 'clear':
+      clearDialogOpen.value = true
       break
     case 'attach-local':
       openFilePicker()
@@ -1849,6 +1873,9 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       return
     case 'compact':
       await handleCompactSession()
+      return
+    case 'clear':
+      clearDialogOpen.value = true
       return
     case 'attach':
     case 'image':
@@ -2565,6 +2592,9 @@ const viewCtx = {
   renameDraft,
   renameBusy,
   saveRename,
+  clearDialogOpen,
+  clearDialogOptions,
+  handleClearDialogSelect,
   attachProjectDialogOpen,
   attachProjectPath,
   sessionDirectory,

@@ -392,6 +392,26 @@ impl SessionManager {
             result.document,
         ))
     }
+    /// Start this conversation over without deleting its stored history.
+    ///
+    /// Both modes settle any in-flight run first, so a provider stream cannot
+    /// append past the new boundary. `History` also retires the transcript the
+    /// client shows; `Context` keeps it readable and only clears the prompt.
+    pub async fn clear_session(
+        &self,
+        id: i64,
+        mode: crate::SessionClearMode,
+    ) -> Result<Session, AppError> {
+        let session = session_id(id)?;
+        self.cancel_active_execution_with_outcome(id).await?;
+        let command = RequestId::new();
+        let kernel_mode: agena_storage::kernel::ClearMode = mode.into();
+        persist(|| self.kernel().sessions.clear(command, session, kernel_mode))
+            .await
+            .map_err(kernel_error)?;
+        self.schedule_memory(session);
+        self.get_session(id).await
+    }
     pub async fn delete_session(&self, id: i64) -> Result<(), AppError> {
         self.cancel_active_execution_with_outcome(id).await?;
         if let Some(monitors) = self.tool_executor().monitor_registry() {

@@ -229,6 +229,13 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-compact-summary",
     },
     BuiltInCommand {
+        action: "clear",
+        slash: "/clear",
+        aliases: &["reset"],
+        usage: None,
+        summary_key: "command-clear-summary",
+    },
+    BuiltInCommand {
         action: "attach",
         slash: "/attach",
         aliases: &["file"],

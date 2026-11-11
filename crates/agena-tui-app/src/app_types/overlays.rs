@@ -225,6 +225,9 @@ pub(crate) enum ChoiceOverlayAction {
         message_document: agena_domain::ComposerDocument,
         target: String,
     },
+    ClearMode {
+        session_id: i64,
+    },
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),
     ModelSelectionMode {
@@ -437,6 +440,10 @@ pub(crate) enum ConfirmAction {
         message_document: agena_domain::ComposerDocument,
         target: String,
         mode: agena_domain::RewindMode,
+    },
+    Clear {
+        session_id: i64,
+        mode: agena_api::commands::SessionClearMode,
     },
     PermissionStudioDeletePathRule {
         pattern: String,

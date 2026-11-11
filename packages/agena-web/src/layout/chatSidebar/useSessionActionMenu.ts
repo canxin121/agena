@@ -2,6 +2,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch, type Component, type C
 import {
   RiArchiveLine,
   RiClipboardLine,
+  RiDeleteBack2Line,
   RiEditLine,
   RiFileUploadLine,
   RiGitBranchLine,
@@ -95,6 +96,12 @@ export function buildSessionActionItemsForSessionI18n(
       label: String(t('chat.sidebar.sessionActions.fork.label')),
       description: String(t('chat.sidebar.sessionActions.fork.description')),
       icon: RiGitBranchLine,
+    })
+    items.push({
+      id: 'clear',
+      label: String(t('chat.sidebar.sessionActions.clear.label')),
+      description: String(t('chat.sidebar.sessionActions.clear.description')),
+      icon: RiDeleteBack2Line,
     })
   }
   return items

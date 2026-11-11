@@ -1627,6 +1627,14 @@ export default {
       loading: '正在加载计划',
       empty: '此会话当前没有计划。',
     },
+    clearDialog: {
+      title: '清空对话',
+      description: '选择要重置的范围；两种方式都会保留已存储的历史。',
+      historyLabel: '清空历史',
+      historyDescription: '让对话记录和模型都不再看到之前的轮次',
+      contextLabel: '仅清空上下文',
+      contextDescription: '保留可读的记录，只重新开始模型的上下文',
+    },
     toasts: {
       noSessionErrorToCopy: '没有可复制的会话错误',
       copiedErrorDetails: '已复制错误详情',
@@ -1643,6 +1651,7 @@ export default {
       sessionUnshared: '会话已取消分享',
       selectModelToCompact: '请选择一个模型来压缩该会话',
       compactionStarted: '压缩已开始',
+      sessionCleared: '会话已清空',
       abortedRun: '已中止运行',
       failedToAbortRun: '中止运行失败',
       pressEscAgainToAbort: '再次按 Esc 以中止（{modKey}+.）查看快捷键',
@@ -2239,6 +2248,10 @@ export default {
         fork: {
           label: '派生会话',
           description: '从当前对话创建一个新会话',
+        },
+        clear: {
+          label: '清空对话',
+          description: '重新开始，但不删除已存储的历史',
         },
         share: {
           label: '分享会话',
@@ -3793,6 +3806,7 @@ export default {
   'command-commands-summary': '打开命令面板',
   'command-commit-summary': '基于已暂存改动创建 commit',
   'command-compact-summary': '将当前会话上下文压缩为摘要',
+  'command-clear-summary': '重新开始此对话，但不删除已存储的历史',
   'command-continue-summary': '继续当前被阻塞或待处理的会话',
   'command-copy-message-summary': '复制最后一条 assistant 消息',
   'command-copy-summary': '复制已加载的对话记录',

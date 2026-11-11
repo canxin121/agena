@@ -188,6 +188,30 @@ pub struct SessionForkRequestBody {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+/// Body of a session clear request.
+pub struct SessionClearRequestBody {
+    /// `context_only` keeps the transcript readable and restarts only the
+    /// model's prompt window. `history` (the default) clears the transcript
+    /// too. Neither mode deletes stored history.
+    pub mode: Option<SessionClearRequestMode>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// How much of a conversation a clear hides.
+pub enum SessionClearRequestMode {
+    History,
+    ContextOnly,
+}
+
+impl SessionClearRequestBody {
+    pub fn context_only(&self) -> bool {
+        self.mode == Some(SessionClearRequestMode::ContextOnly)
+    }
+}
+
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
     let status = state.runtime_snapshot_summary().await;
     Ok(Json(HealthResponse {

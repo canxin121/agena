@@ -2095,6 +2095,18 @@ command-commands-summary = Befehlspalette öffnen
 command-commit-summary = Commit aus vorgemerkten Änderungen erstellen
 
 command-compact-summary = Sitzungskontext zu einer Zusammenfassung verdichten
+command-clear-summary = Diese Unterhaltung neu beginnen, ohne den gespeicherten Verlauf zu löschen
+overlay-clear-mode-title = Unterhaltung leeren
+overlay-clear-mode-prompt = Wählen Sie, was zurückgesetzt wird. Der gespeicherte Verlauf bleibt in beiden Fällen erhalten.
+overlay-clear-mode-history-label = Verlauf leeren
+overlay-clear-mode-history-detail = Alle früheren Runden aus Protokoll und Modell ausblenden
+overlay-clear-mode-context-label = Nur den Kontext leeren
+overlay-clear-mode-context-detail = Das Protokoll lesbar halten und nur den Modellkontext neu starten
+overlay-clear-confirm-title = Leeren bestätigen
+overlay-clear-confirm-history-warning = Frühere Runden erscheinen nicht mehr in dieser Unterhaltung.
+overlay-clear-confirm-context-warning = Frühere Runden bleiben lesbar, werden aber nicht mehr an das Modell gesendet.
+overlay-clear-confirm-kept = Es wird nichts gelöscht: der gespeicherte Verlauf bleibt verfügbar.
+flash-session-cleared = Sitzung geleert
 
 command-continue-summary = Aktuelle blockierte oder ausstehende Sitzung fortsetzen
 

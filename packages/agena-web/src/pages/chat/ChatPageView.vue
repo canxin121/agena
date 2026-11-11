@@ -29,6 +29,7 @@ import TranscriptKeyboardToolbar from '@/components/chat/TranscriptKeyboardToolb
 import { getComposerInput } from './composerInput'
 import Composer from '@/components/chat/Composer.vue'
 import RenameSessionDialog from '@/components/chat/RenameSessionDialog.vue'
+import ChoiceDialog from '@/components/ui/ChoiceDialog.vue'
 import AttachProjectDialog from '@/components/chat/AttachProjectDialog.vue'
 import AttachmentsPanel from '@/components/chat/AttachmentsPanel.vue'
 import CommandPalette from '@/components/chat/CommandPalette.vue'
@@ -237,6 +238,9 @@ const {
   renameDraft,
   renameBusy,
   saveRename,
+  clearDialogOpen,
+  clearDialogOptions,
+  handleClearDialogSelect,
   attachProjectDialogOpen,
   attachProjectPath,
   sessionDirectory,
@@ -1041,6 +1045,16 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
     :busy="renameBusy"
     @update:open="(v) => (renameDialogOpen = v)"
     @save="saveRename"
+  />
+
+  <ChoiceDialog
+    :open="clearDialogOpen"
+    :title="String(t('chat.clearDialog.title'))"
+    :description="String(t('chat.clearDialog.description'))"
+    :options="clearDialogOptions"
+    :cancel-text="String(t('common.cancel'))"
+    @update:open="(v) => (clearDialogOpen = v)"
+    @select="handleClearDialogSelect"
   />
 
   <AttachProjectDialog

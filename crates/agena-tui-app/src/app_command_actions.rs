@@ -63,6 +63,7 @@ impl App {
             ClientCommandAction::Pager => self.pending_ui_action = Some(UiAction::PageTranscript),
             ClientCommandAction::Continue => self.continue_current_session(),
             ClientCommandAction::Compact => self.compact_current_session(),
+            ClientCommandAction::Clear => self.open_clear_mode_picker(),
             ClientCommandAction::Attach => {
                 self.focus = Focus::Composer;
                 self.request_file_attachment(false);

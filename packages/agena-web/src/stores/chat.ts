@@ -2199,6 +2199,25 @@ const useChatStoreDefinition = defineStore('chat', () => {
     reconcileExecutionAfterWrite(sid)
   }
 
+  // ─── clear ────────────────────────────────────────────────────────────────
+
+  /**
+   * Start a conversation over without deleting stored history. Both modes
+   * re-read the session: `history` retires the transcript the client shows,
+   * `context_only` keeps it and only restarts the prompt.
+   */
+  async function clearSession(sessionId: string, mode: chatApi.SessionClearMode = 'history') {
+    const sid = (sessionId || '').trim()
+    if (!sid) return null
+    await chatApi.clearSession(sid, mode)
+    clearMessagesHydrated(sid)
+    messagesBySession.value = { ...messagesBySession.value, [sid]: [] }
+    transcriptCache.remove(sid)
+    evictedTranscriptSessions.delete(sid)
+    await refreshMessages(sid)
+    void refreshExecutionStatus(sid).catch(() => scheduleSessionStatusRefresh(sid))
+  }
+
   // ─── fork ─────────────────────────────────────────────────────────────────
 
   async function forkSession(sessionId: string, opts?: { at_message_id?: number; conversation_mode?: 'side' }) {
@@ -2551,6 +2570,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     uploadWorkspaceAttachment,
     resolveSessionWorkspace,
     compactSession,
+    clearSession,
     forkSession,
     replyPermission,
     replyQuestion,

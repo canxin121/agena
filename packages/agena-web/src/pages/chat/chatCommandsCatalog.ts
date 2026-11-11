@@ -40,6 +40,7 @@ export const CLIENT_COMMAND_ACTIONS = [
   'pager',
   'continue',
   'compact',
+  'clear',
   'attach',
   'editor',
   'image',

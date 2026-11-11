@@ -77,6 +77,7 @@ client_command_actions! {
     Pager => "pager", "/pager";
     Continue => "continue", "/continue";
     Compact => "compact", "/compact";
+    Clear => "clear", "/clear";
     Attach => "attach", "/attach";
     Editor => "editor", "/editor";
     Image => "image", "/image";

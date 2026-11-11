@@ -1902,6 +1902,14 @@ export default {
         dismiss: 'Descartar',
       },
     },
+    clearDialog: {
+      title: 'Vaciar conversación',
+      description: 'Elige qué restablecer. El historial guardado se conserva en ambos casos.',
+      historyLabel: 'Vaciar el historial',
+      historyDescription: 'Ocultar los turnos anteriores del historial y del modelo',
+      contextLabel: 'Vaciar solo el contexto',
+      contextDescription: 'Mantener el historial legible y reiniciar solo el contexto del modelo',
+    },
     toasts: {
       noSessionErrorToCopy: 'No hay ningún error de sesión que copiar',
       copiedErrorDetails: 'Detalles del error copiados',
@@ -1918,6 +1926,7 @@ export default {
       sessionUnshared: 'Se ha dejado de compartir la sesión',
       selectModelToCompact: 'Selecciona un modelo para compactar esta sesión',
       compactionStarted: 'Se ha iniciado la compactación',
+      sessionCleared: 'Sesión vaciada',
       abortedRun: 'Ejecución interrumpida',
       failedToAbortRun: 'No se ha podido interrumpir la ejecución',
       pressEscAgainToAbort: 'Pulsa Esc de nuevo para interrumpir ({modKey}+.) para ver los atajos',
@@ -2468,6 +2477,10 @@ export default {
         fork: {
           label: 'Crear bifurcación de la sesión',
           description: 'Crear una sesión nueva a partir de esta conversación',
+        },
+        clear: {
+          label: 'Vaciar conversación',
+          description: 'Empezar de nuevo sin borrar el historial guardado',
         },
         share: {
           label: 'Compartir sesión',
@@ -3757,6 +3770,7 @@ export default {
   'command-commands-summary': 'Abrir la paleta de comandos',
   'command-commit-summary': 'Crear un commit con los cambios preparados',
   'command-compact-summary': 'Resumir el contexto de la sesión actual',
+  'command-clear-summary': 'Empezar de nuevo esta conversación sin borrar su historial guardado',
   'command-continue-summary': 'Continuar la sesión actual bloqueada o pendiente',
   'command-copy-message-summary': 'Copiar el último mensaje del asistente',
   'command-copy-summary': 'Copiar la transcripción cargada',

@@ -6,13 +6,13 @@ use std::future::Future;
 
 use agena_api::{
     commands::{
-        CancelRunParams, Command, CommandResult, CompactSessionParams, ContinueRunParams,
-        CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
+        CancelRunParams, ClearSessionParams, Command, CommandResult, CompactSessionParams,
+        ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
         DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ForkSessionParams,
         ListSessionTreeParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
-        UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+        RevokePermissionRuleParams, RewindSessionParams, SessionClearMode, StopActivityParams,
+        SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
     },
     queries::{
         ActivityLogsParams, GetActivityParams, GetPermissionRuleParams, GetSessionParams,

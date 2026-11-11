@@ -885,6 +885,25 @@ export async function deleteSession(sessionId: string): Promise<void> {
   reconcileSessionMutation(sessionId, 'deleted', scope)
 }
 
+/**
+ * POST /api/v1/sessions/{id}/clear — start a conversation over without
+ * deleting its stored history. `history` also clears the transcript the client
+ * shows; `context_only` keeps it readable and restarts only the prompt.
+ */
+export async function clearSession(sessionId: string, mode: SessionClearMode = 'history'): Promise<void> {
+  const scope = sessionRoutingScope()
+  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/clear`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  })
+  // Clearing changes membership (and, in history mode, the transcript the
+  // client holds), so every cached view of this session must be re-read.
+  reconcileSessionMutation(sessionId, 'execution', scope)
+}
+
+export type SessionClearMode = 'history' | 'context_only'
+
 export type SessionUpdatePayload = {
   title?: string
   favorite?: boolean

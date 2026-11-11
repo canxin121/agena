@@ -1657,6 +1657,14 @@ export default {
       loading: 'Loading plan',
       empty: 'No plan is available for this session.',
     },
+    clearDialog: {
+      title: 'Clear conversation',
+      description: 'Choose what to reset. Stored history is kept either way.',
+      historyLabel: 'Clear the history',
+      historyDescription: 'Hide every earlier turn from the transcript and the model',
+      contextLabel: 'Clear the context only',
+      contextDescription: "Keep the transcript readable and restart only the model's context",
+    },
     toasts: {
       noSessionErrorToCopy: 'No session error to copy',
       copiedErrorDetails: 'Copied error details',
@@ -1673,6 +1681,7 @@ export default {
       sessionUnshared: 'Session unshared',
       selectModelToCompact: 'Select a model to compact this session',
       compactionStarted: 'Compaction started',
+      sessionCleared: 'Session cleared',
       abortedRun: 'Aborted run',
       failedToAbortRun: 'Failed to abort run',
       pressEscAgainToAbort: 'Press Esc again to abort ({modKey}+.) for shortcuts',
@@ -2276,6 +2285,10 @@ export default {
         fork: {
           label: 'Fork session',
           description: 'Create a new session from this conversation',
+        },
+        clear: {
+          label: 'Clear conversation',
+          description: 'Start over without deleting the stored history',
         },
         share: {
           label: 'Share session',
@@ -3835,6 +3848,7 @@ export default {
   'command-commands-summary': 'Open the command palette',
   'command-commit-summary': 'Create a commit from staged changes',
   'command-compact-summary': 'Compact the current session context into a summary',
+  'command-clear-summary': 'Start this conversation over without deleting its stored history',
   'command-continue-summary': 'Continue the current blocked or pending session',
   'command-copy-message-summary': 'Copy the last assistant message',
   'command-copy-summary': 'Copy the loaded transcript',

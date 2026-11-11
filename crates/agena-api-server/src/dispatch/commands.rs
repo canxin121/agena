@@ -87,6 +87,16 @@ pub async fn dispatch_command(
         }) => Ok(execution_command_result(
             state.compact_session(session_id, options).await?,
         )),
+        Command::ClearSession(ClearSessionParams {
+            session_id,
+            mode,
+            options: _,
+        }) => Ok(CommandResult::Session(
+            state
+                .service()
+                .clear_session(session_id, mode == SessionClearMode::ContextOnly)
+                .await?,
+        )),
         Command::CancelRun(CancelRunParams {
             session_id,
             execution_id,
@@ -252,14 +262,14 @@ pub async fn dispatch_command(
     }
 }
 use super::{
-    Application, ApplicationError, CancelRunParams, Command, CommandResult, CompactSessionParams,
-    ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
-    DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ForkSessionParams,
-    ListSessionTreeParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
-    ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-    RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
-    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams, WorkspacePathRequest,
-    WorkspaceResolveRequest,
+    Application, ApplicationError, CancelRunParams, ClearSessionParams, Command, CommandResult,
+    CompactSessionParams, ContinueRunParams, CreateSessionParams, CreateWorkspaceParams,
+    DeletePermissionRuleParams, DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams,
+    ForkSessionParams, ListSessionTreeParams, MarkInteractiveRequestPresentedParams,
+    ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, SessionClearMode,
+    StopActivityParams, SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams,
+    UpdateWorkspaceParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };
 
 fn activity_command_error(error: agena_runtime::ActivityControlError) -> ApplicationError {

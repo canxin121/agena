@@ -2470,6 +2470,18 @@ impl TuiBackend {
         Ok(self.localized_execution(execution).await)
     }
 
+    /// Start a conversation over without deleting its stored history.
+    pub async fn clear_session(
+        &self,
+        session_id: i64,
+        context_only: bool,
+    ) -> Result<agena_api::resource::SessionResource> {
+        self.client()
+            .clear_session(session_id, context_only)
+            .await
+            .context("failed to clear session")
+    }
+
     pub async fn update_session_selection(
         &self,
         session_id: i64,

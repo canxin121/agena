@@ -33,6 +33,7 @@ pub enum Command {
     SubmitMessage(SubmitRunParams),
     ContinueRun(ContinueRunParams),
     CompactSession(CompactSessionParams),
+    ClearSession(ClearSessionParams),
     CancelRun(CancelRunParams),
     RewindSession(RewindSessionParams),
 
@@ -173,6 +174,28 @@ pub struct CompactSessionParams {
     pub session_id: i64,
     #[serde(default)]
     pub options: RunOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Parameters for clearing a conversation's history without deleting it.
+pub struct ClearSessionParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub mode: SessionClearMode,
+    #[serde(default)]
+    pub options: RunOptions,
+}
+
+/// How much of a conversation a clear hides. Both modes keep stored history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionClearMode {
+    /// Start over completely: transcript and model both see nothing from before.
+    #[default]
+    History,
+    /// Keep the transcript readable and restart only the model's context.
+    ContextOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

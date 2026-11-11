@@ -1292,6 +1292,10 @@ export default {
           label: 'Criar sessão derivada',
           description: 'Criar uma nova sessão a partir desta conversa',
         },
+        clear: {
+          label: 'Limpar conversa',
+          description: 'Começar de novo sem apagar o histórico salvo',
+        },
         share: {
           label: 'Compartilhar sessão',
           description: 'Criar um link público',
@@ -1572,6 +1576,14 @@ export default {
         description: 'Use os botões acima para anexar arquivos.',
       },
     },
+    clearDialog: {
+      title: 'Limpar conversa',
+      description: 'Escolha o que redefinir. O histórico salvo é mantido nos dois casos.',
+      historyLabel: 'Limpar o histórico',
+      historyDescription: 'Ocultar as rodadas anteriores do registro e do modelo',
+      contextLabel: 'Limpar apenas o contexto',
+      contextDescription: 'Manter o registro legível e reiniciar apenas o contexto do modelo',
+    },
     toasts: {
       noSessionErrorToCopy: 'Não há erro de sessão para copiar',
       copiedErrorDetails: 'Detalhes do erro copiados',
@@ -1588,6 +1600,7 @@ export default {
       sessionUnshared: 'Compartilhamento da sessão desativado',
       selectModelToCompact: 'Selecione um modelo para compactar esta sessão',
       compactionStarted: 'Compactação iniciada',
+      sessionCleared: 'Sessão limpa',
       abortedRun: 'Execução interrompida',
       failedToAbortRun: 'Falha ao interromper a execução',
       pressEscAgainToAbort: 'Pressione Esc novamente para interromper ({modKey}+.) nos atalhos',
@@ -3796,6 +3809,7 @@ export default {
   'command-commands-summary': 'Abrir a paleta de comandos',
   'command-commit-summary': 'Criar um commit com as alterações preparadas',
   'command-compact-summary': 'Compactar o contexto da sessão atual em um resumo',
+  'command-clear-summary': 'Começar esta conversa de novo sem apagar seu histórico salvo',
   'command-continue-summary': 'Continuar a sessão atual que está bloqueada ou pendente',
   'command-copy-message-summary': 'Copiar a última mensagem do assistente',
   'command-copy-summary': 'Copiar a transcrição carregada',

@@ -189,6 +189,37 @@ impl ApplicationService {
             .ok_or_else(|| ApplicationError::not_found("The session was not found."))
     }
 
+    /// Start a conversation over without deleting its stored history.
+    ///
+    /// `context_only` keeps the transcript readable and restarts only the
+    /// model's prompt window; otherwise the transcript is cleared as well.
+    /// Both modes leave every entry, content block and segment in place.
+    pub async fn clear_session(
+        &self,
+        session_id: i64,
+        context_only: bool,
+    ) -> ApplicationResult<SessionResource> {
+        let resource = self
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
+        let mode = if context_only {
+            agena_storage::kernel::ClearMode::Context
+        } else {
+            agena_storage::kernel::ClearMode::History
+        };
+        self.session_kernel
+            .sessions
+            .clear(
+                RequestId::new(),
+                crate::kernel_session_id(session_id)?,
+                mode,
+            )
+            .await
+            .map_err(crate::kernel_error)?;
+        Ok(resource)
+    }
+
     pub async fn delete_session(&self, session_id: i64) -> ApplicationResult<SessionResource> {
         let resource = self
             .get_session(session_id)

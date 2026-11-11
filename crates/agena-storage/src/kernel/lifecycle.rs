@@ -519,6 +519,24 @@ impl SessionCommands {
             _ => Err(unexpected()),
         }
     }
+    /// Start this conversation over without deleting anything.
+    ///
+    /// `ClearMode::History` retires every segment so neither the transcript nor
+    /// the model sees the old turns; `ClearMode::Context` only advances the
+    /// prompt window, leaving the transcript readable. The stored entries,
+    /// content and retired segments remain available for recovery.
+    pub async fn clear(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        mode: ClearMode,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(request, Command::Clear { session, mode })
+                .await?,
+        )
+    }
     pub async fn withdraw(
         &self,
         request: RequestId,

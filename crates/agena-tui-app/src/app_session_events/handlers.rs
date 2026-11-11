@@ -878,6 +878,31 @@ impl App {
         self.restore_timeline_dialog(host, dialog);
     }
 
+    /// A clear never deletes stored history; it only changes what the client
+    /// and the model read from here on. `History` resets the cached transcript,
+    /// `ContextOnly` leaves it intact.
+    pub(crate) fn handle_session_cleared(
+        &mut self,
+        session_id: i64,
+        mode: agena_api::commands::SessionClearMode,
+        result: UiResult<agena_api::resource::SessionResource>,
+    ) {
+        self.finish_run_operation(RunActivityTarget::Session(session_id), RunOperation::Rewind);
+        match result {
+            Ok(session) => {
+                self.flash_success(ui_text::t(&self.i18n, "flash-session-cleared"));
+                self.transcript_cache.remove(&session_id);
+                if self.transcript.session_id == Some(session_id)
+                    && mode == agena_api::commands::SessionClearMode::History
+                {
+                    self.transcript.reset(session_id, session.title.clone());
+                }
+                self.request_session_state(session_id);
+            }
+            Err(error) => self.flash_error(format!("{error:?}")),
+        }
+    }
+
     pub(crate) fn handle_session_rewound(
         &mut self,
         session_id: i64,

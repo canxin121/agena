@@ -44,6 +44,9 @@ pub trait AssistantService: Send + Sync {
         request: CreateIntegration,
     ) -> Result<IntegrationBinding>;
     async fn integration_detail(&self, source: i64, id: Uuid) -> Result<IntegrationDetail>;
+    /// Read-only per-platform inventory: platforms, their accounts, the
+    /// conversations seen through them, and the session each maps to.
+    async fn platform_inventory(&self, source: i64) -> Result<PlatformInventory>;
     async fn control_integration(
         &self,
         source: i64,

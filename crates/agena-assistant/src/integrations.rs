@@ -1,6 +1,8 @@
 //! Plugin-neutral external channels and consent-bound event automation.
 //! Providers only normalize external data and deliver replies. The host owns
 //! identities, grants, inbox/checkpoints, jobs and uncertain-delivery state.
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::{
     ChannelAccessAudit, ChannelOutputRoute, ChannelPolicyUpdate, ChannelSessionRecord, Error,
     Result, validate_key,
@@ -8,6 +10,7 @@ use crate::{
 pub use agena_domain::{
     ChannelAccessPolicy, ChannelAuthority, ChannelEnvelope, ChannelGrant, ChannelIdentity,
     ChannelKind, ChannelMember, ChannelRole, ChannelSessionMode, ChannelThreadMode, ChannelTrigger,
+    ConversationKind,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -166,6 +169,139 @@ pub enum IntegrationMode {
     Session,
 }
 
+/// Which external conversations one binding is authorized to serve.
+///
+/// A chat adapter owns a whole platform account, so one binding usually covers
+/// many rooms. A bare string keeps the old single-conversation shape valid and
+/// serializes exactly as before.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ResourceSelector {
+    /// Exactly one conversation (the historical shape).
+    Exact(String),
+    /// Every conversation the adapter reports for this account.
+    All(AllResources),
+    /// A fixed allow-list of conversations.
+    Explicit(BTreeSet<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AllResources {
+    pub all: bool,
+}
+
+impl std::fmt::Display for ResourceSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.display())
+    }
+}
+
+impl From<&str> for ResourceSelector {
+    fn from(value: &str) -> Self {
+        Self::Exact(value.to_owned())
+    }
+}
+
+impl From<String> for ResourceSelector {
+    fn from(value: String) -> Self {
+        Self::Exact(value)
+    }
+}
+
+impl ResourceSelector {
+    pub fn exact(value: impl Into<String>) -> Self {
+        Self::Exact(value.into())
+    }
+
+    /// Human-readable form used by `/access whoami` and UI lists.
+    pub fn display(&self) -> String {
+        match self {
+            Self::Exact(value) => value.clone(),
+            Self::All(AllResources { all: true }) => "*".into(),
+            Self::All(AllResources { all: false }) => "(none)".into(),
+            Self::Explicit(set) => set.iter().cloned().collect::<Vec<_>>().join(","),
+        }
+    }
+
+    /// True when the binding may serve this conversation.
+    pub fn matches(&self, resource: &str) -> bool {
+        match self {
+            Self::Exact(expected) => expected == resource,
+            Self::All(AllResources { all }) => *all,
+            Self::Explicit(set) => set.contains(resource),
+        }
+    }
+
+    /// The one conversation this selector pins, when it pins exactly one.
+    pub fn single(&self) -> Option<&str> {
+        match self {
+            Self::Exact(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn is_unbounded(&self) -> bool {
+        !matches!(self, Self::Exact(_))
+    }
+}
+
+impl Default for ResourceSelector {
+    fn default() -> Self {
+        Self::All(AllResources { all: false })
+    }
+}
+
+impl ResourceSelector {
+    pub fn validate(&self) -> crate::Result<()> {
+        let check = |value: &str| -> crate::Result<()> {
+            if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+                return Err(crate::Error::Invalid(
+                    "integration resource identities must be exact, non-empty and bounded",
+                ));
+            }
+            Ok(())
+        };
+        match self {
+            Self::Exact(value) => check(value),
+            Self::All(AllResources { all: true }) => Ok(()),
+            Self::All(AllResources { all: false }) => Err(crate::Error::Invalid(
+                "a resource selector must name a conversation, list them, or set all: true",
+            )),
+            Self::Explicit(set) => {
+                if set.is_empty() || set.len() > 256 {
+                    return Err(crate::Error::Invalid(
+                        "explicit resource selectors need 1-256 conversations",
+                    ));
+                }
+                for value in set {
+                    check(value)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ResourceSelector {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Exact(String),
+            All(AllResources),
+            Explicit(BTreeSet<String>),
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Exact(value) => Self::Exact(value),
+            Wire::All(all) => Self::All(all),
+            Wire::Explicit(set) => Self::Explicit(set),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct IntegrationSpec {
@@ -174,7 +310,11 @@ pub struct IntegrationSpec {
     pub mode: IntegrationMode,
     #[schemars(schema_with = "bounded_adapter_json")]
     pub config: Value,
-    pub resource: String,
+    /// One conversation, an explicit set, or every conversation the adapter
+    /// reports for this account.
+    #[serde(alias = "resource")]
+    #[schemars(with = "String")]
+    pub resource: ResourceSelector,
     #[serde(default)]
     pub thread: Option<String>,
     pub event_types: Vec<String>,
@@ -197,13 +337,14 @@ pub struct IntegrationSpec {
 }
 impl IntegrationSpec {
     pub fn validate(&self, now: i64) -> Result<()> {
-        for value in [&self.title, &self.provider, &self.resource] {
+        for value in [&self.title, &self.provider] {
             if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
                 return Err(Error::Invalid(
                     "integration title/provider/resource is invalid",
                 ));
             }
         }
+        self.resource.validate()?;
         if self
             .thread
             .as_ref()
@@ -379,7 +520,7 @@ impl IntegrationBinding {
             if let Some(reason) = self.channel_rejection(event, now) {
                 return Some(reason);
             }
-        } else if event.resource != self.spec.resource || event.thread != self.spec.thread {
+        } else if !self.spec.resource.matches(&event.resource) {
             return Some("wrong_resource_or_thread");
         }
         if !self.spec.event_types.contains(&event.event_type) {
@@ -460,6 +601,172 @@ pub struct IntegrationDetail {
     pub deliveries: Vec<IntegrationDelivery>,
     pub channel_sessions: Vec<ChannelSessionRecord>,
     pub access_audit: Vec<ChannelAccessAudit>,
+}
+
+/// Read-only inventory of every chat platform this instance serves.
+///
+/// The shape mirrors how an operator thinks about the deployment: a platform
+/// (one adapter account), the conversations seen through it, and the sessions
+/// those conversations map to. Nothing here triggers work or sends a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformInventory {
+    pub platforms: Vec<PlatformEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformEntry {
+    /// Canonical adapter id, for example `telegram`.
+    pub platform: String,
+    /// Human title the adapter declared, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// One entry per installed binding for this platform account.
+    pub accounts: Vec<PlatformAccount>,
+    pub conversation_count: usize,
+    /// Conversations grouped by their kind, so a reader can answer
+    /// "how many groups vs direct chats" without iterating.
+    pub conversation_counts: ConversationCounts,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationCounts {
+    pub direct: usize,
+    pub group: usize,
+    pub public_channel: usize,
+    pub private_channel: usize,
+}
+
+impl ConversationCounts {
+    fn record(&mut self, kind: ConversationKind) {
+        match kind {
+            ConversationKind::Direct => self.direct += 1,
+            ConversationKind::Group => self.group += 1,
+            ConversationKind::PublicChannel => self.public_channel += 1,
+            ConversationKind::PrivateChannel => self.private_channel += 1,
+        }
+    }
+
+    pub fn total(&self) -> usize {
+        self.direct + self.group + self.public_channel + self.private_channel
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformAccount {
+    #[schemars(with = "String")]
+    pub binding_id: Uuid,
+    /// The binding's declared account identity.
+    pub tenant: String,
+    pub account: String,
+    pub state: BindingState,
+    /// Conversation selector: one id, a set, or every conversation.
+    pub selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    pub conversations: Vec<ConversationEntry>,
+}
+
+/// One externally visible conversation and the session it maps to.
+///
+/// A conversation that has never received a message has no session yet; the
+/// session fields stay `None` rather than inventing a placeholder id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationEntry {
+    /// Exact external conversation id (room / DM / channel id).
+    pub resource: String,
+    pub kind: ConversationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<ChannelRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_ms: Option<i64>,
+}
+
+impl PlatformInventory {
+    /// Group flat bindings plus their sessions into per-platform entries.
+    ///
+    /// Pure and deterministic so it can be unit tested without a runtime.
+    /// `titles` maps session id to a display title; unknown ids keep `None`.
+    pub fn build(
+        bindings: &[IntegrationBinding],
+        channel_sessions: &[ChannelSessionRecord],
+        titles: &BTreeMap<i64, String>,
+    ) -> Self {
+        let mut platforms: BTreeMap<String, PlatformEntry> = BTreeMap::new();
+        for binding in bindings
+            .iter()
+            .filter(|b| b.spec.mode == IntegrationMode::Channel)
+        {
+            let Some(policy) = binding.spec.channel_policy.as_ref() else {
+                continue;
+            };
+            let entry = platforms
+                .entry(binding.spec.provider.clone())
+                .or_insert_with(|| PlatformEntry {
+                    platform: binding.spec.provider.clone(),
+                    title: None,
+                    accounts: Vec::new(),
+                    conversation_count: 0,
+                    conversation_counts: ConversationCounts::default(),
+                });
+            let mut conversations = channel_sessions
+                .iter()
+                .filter(|s| s.binding_id == binding.id)
+                .map(|s| ConversationEntry {
+                    resource: s.authority.resource.clone(),
+                    kind: s.authority.identity.kind.into(),
+                    thread: s.authority.thread.clone(),
+                    session_id: Some(s.session_id),
+                    title: titles.get(&s.session_id).cloned(),
+                    actor: Some(s.authority.actor.clone()),
+                    role: Some(s.authority.role),
+                    created_at_ms: Some(s.created_at_ms),
+                })
+                .collect::<Vec<_>>();
+            conversations.sort_by(|a, b| {
+                a.resource
+                    .cmp(&b.resource)
+                    .then_with(|| a.thread.cmp(&b.thread))
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+            });
+            for conversation in &conversations {
+                entry.conversation_counts.record(conversation.kind);
+            }
+            entry.conversation_count += conversations.len();
+            entry.accounts.push(PlatformAccount {
+                binding_id: binding.id,
+                tenant: policy.identity.tenant.clone(),
+                account: policy.identity.account.clone(),
+                state: binding.state,
+                selector: binding.spec.resource.display(),
+                last_error: binding.last_error.clone(),
+                conversations,
+            });
+        }
+        let mut platforms = platforms.into_values().collect::<Vec<_>>();
+        for entry in &mut platforms {
+            entry.accounts.sort_by(|a, b| {
+                a.tenant
+                    .cmp(&b.tenant)
+                    .then_with(|| a.account.cmp(&b.account))
+            });
+        }
+        Self { platforms }
+    }
 }
 
 #[async_trait]
@@ -600,5 +907,140 @@ mod tests {
         assert!(automation_goal(&b, &e).unwrap().contains("untrusted DATA"));
         e.resource = "other/repo".into();
         assert_eq!(b.rejection(&e, 3000), Some("wrong_resource_or_thread"));
+    }
+    fn channel_spec(provider: &str, resource: &str) -> IntegrationSpec {
+        IntegrationSpec {
+            title: "chat".into(),
+            provider: provider.into(),
+            mode: IntegrationMode::Channel,
+            config: serde_json::json!({}),
+            resource: resource.into(),
+            thread: None,
+            event_types: vec!["message".into()],
+            actors: vec![],
+            instruction: String::new(),
+            poll_seconds: 60,
+            expires_at_ms: 100_000,
+            daily_limit: 5,
+            total_limit: 50,
+            max_execution_seconds: 60,
+            use_source_permissions: true,
+            channel_policy: Some(ChannelAccessPolicy {
+                identity: ChannelIdentity {
+                    tenant: "t".into(),
+                    account: "a".into(),
+                    kind: ChannelKind::Group,
+                },
+                session_mode: Default::default(),
+                thread_mode: Default::default(),
+                trigger: Default::default(),
+                members: vec![ChannelMember {
+                    actor: "owner".into(),
+                    role: ChannelRole::Owner,
+                    expires_at_ms: None,
+                }],
+                allow_unlisted_chat: false,
+                grant: Default::default(),
+                per_user_daily_limit: 50,
+                allow_automated_reports: false,
+                service_grant: Default::default(),
+            }),
+        }
+    }
+
+    fn session_record(
+        binding: Uuid,
+        resource: &str,
+        kind: ChannelKind,
+        session: i64,
+    ) -> ChannelSessionRecord {
+        ChannelSessionRecord {
+            binding_id: binding,
+            scope_key: format!("{resource}-{session}"),
+            session_id: session,
+            authority: ChannelAuthority {
+                binding_id: binding.to_string(),
+                epoch: 1,
+                actor: "@shared".into(),
+                role: ChannelRole::Member,
+                identity: ChannelIdentity {
+                    tenant: "t".into(),
+                    account: "a".into(),
+                    kind,
+                },
+                resource: resource.into(),
+                thread: None,
+                session_mode: Default::default(),
+                grant: Default::default(),
+                expires_at_ms: 100_000,
+                memory_workspace_root: std::path::PathBuf::from("/tmp/x"),
+                private_paths: Default::default(),
+                revoked: false,
+            },
+            created_at_ms: 10,
+        }
+    }
+
+    #[test]
+    fn platform_inventory_groups_by_platform_and_counts_kinds() {
+        let a = IntegrationBinding::new(
+            1,
+            1,
+            "k1".into(),
+            channel_spec("telegram", "chat-1"),
+            "fp".into(),
+            1000,
+        )
+        .unwrap();
+        let b = IntegrationBinding::new(
+            1,
+            1,
+            "k2".into(),
+            channel_spec("feishu", "oc_9"),
+            "fp".into(),
+            1000,
+        )
+        .unwrap();
+        let sessions = vec![
+            session_record(a.id, "chat-1", ChannelKind::Group, 10),
+            session_record(a.id, "chat-2", ChannelKind::Group, 11),
+            session_record(a.id, "dm-1", ChannelKind::Direct, 12),
+            session_record(b.id, "oc_9", ChannelKind::PublicChannel, 20),
+        ];
+        let mut titles = BTreeMap::new();
+        titles.insert(10, "Team".to_string());
+        let inventory = PlatformInventory::build(&[a.clone(), b], &sessions, &titles);
+        assert_eq!(inventory.platforms.len(), 2);
+        let telegram = inventory
+            .platforms
+            .iter()
+            .find(|p| p.platform == "telegram")
+            .unwrap();
+        assert_eq!(telegram.accounts.len(), 1);
+        assert_eq!(telegram.accounts[0].conversations.len(), 3);
+        assert_eq!(telegram.conversation_count, 3);
+        assert_eq!(telegram.conversation_counts.group, 2);
+        assert_eq!(telegram.conversation_counts.direct, 1);
+        // Titles come from the supplied session-title map.
+        let team = telegram.accounts[0]
+            .conversations
+            .iter()
+            .find(|c| c.session_id == Some(10))
+            .unwrap();
+        assert_eq!(team.title.as_deref(), Some("Team"));
+        assert_eq!(team.role, Some(ChannelRole::Member));
+        let feishu = inventory
+            .platforms
+            .iter()
+            .find(|p| p.platform == "feishu")
+            .unwrap();
+        assert_eq!(feishu.conversation_counts.public_channel, 1);
+    }
+
+    #[test]
+    fn platform_inventory_ignores_non_channel_bindings_and_empty_conversations() {
+        let source = IntegrationBinding::new(1, 1, "k0".into(), spec(), "fp".into(), 1000).unwrap();
+        let inventory = PlatformInventory::build(&[source], &[], &BTreeMap::new());
+        assert!(inventory.platforms.is_empty());
     }
 }

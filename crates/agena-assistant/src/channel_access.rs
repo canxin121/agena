@@ -67,7 +67,7 @@ impl IntegrationBinding {
         if channel.identity != policy.identity {
             return Some("tenant_account_or_kind_mismatch");
         }
-        if event.resource != self.spec.resource {
+        if !self.spec.resource.matches(&event.resource) {
             return Some("conversation_not_authorized");
         }
         if policy.thread_mode == ChannelThreadMode::Exact && event.thread != self.spec.thread {
@@ -85,10 +85,11 @@ impl IntegrationBinding {
         if event.bot {
             return Some("bot_echo");
         }
-        match policy.member(&event.actor, now) {
-            Err(reason) => return Some(reason),
-            Ok((_, grant, _)) if grant.validate().is_err() => return Some("channel_grant_invalid"),
-            Ok(_) => {}
+        if policy.grant.validate().is_err() {
+            return Some("channel_grant_invalid");
+        }
+        if let Err(reason) = policy.member(&event.actor, now) {
+            return Some(reason);
         }
         if policy.identity.kind != ChannelKind::Direct
             && policy.trigger == ChannelTrigger::DirectOrMention
@@ -112,7 +113,7 @@ impl IntegrationBinding {
             return false;
         };
         if a.identity != p.identity
-            || a.resource != self.spec.resource
+            || !self.spec.resource.matches(&a.resource)
             || a.session_mode != p.session_mode
         {
             return false;
@@ -124,10 +125,12 @@ impl IntegrationBinding {
             return p.allow_automated_reports && a.grant == p.service_grant;
         }
         if a.actor == "@shared" {
-            return p.session_mode == ChannelSessionMode::SharedChat && !a.grant.has_effects();
+            // Shared rooms are the default for groups; the speaker is the
+            // room, and capabilities are the binding's single grant.
+            return a.role == ChannelRole::Member && a.grant == p.grant;
         }
         p.member(&a.actor, now)
-            .is_ok_and(|(role, grant, _)| role == a.role && grant == a.grant)
+            .is_ok_and(|(role, _)| role == a.role && a.grant == p.grant)
     }
     pub fn authorizes_output(&self, route: &ChannelOutputRoute, now: i64) -> bool {
         if self.state != BindingState::Enabled
@@ -139,7 +142,7 @@ impl IntegrationBinding {
         let Some(p) = &self.spec.channel_policy else {
             return false;
         };
-        if route.identity != p.identity || route.resource != self.spec.resource {
+        if route.identity != p.identity || !self.spec.resource.matches(&route.resource) {
             return false;
         }
         if p.thread_mode == ChannelThreadMode::Exact && route.thread != self.spec.thread {
@@ -147,7 +150,7 @@ impl IntegrationBinding {
         }
         match route.actor.as_str() {
             "@service" => p.allow_automated_reports,
-            "@shared" => p.session_mode == ChannelSessionMode::SharedChat,
+            "@shared" => true,
             actor => p.member(actor, now).is_ok(),
         }
     }
@@ -156,7 +159,6 @@ impl IntegrationBinding {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     fn binding() -> IntegrationBinding {
         let policy = ChannelAccessPolicy {
             identity: ChannelIdentity {
@@ -164,7 +166,7 @@ mod tests {
                 account: "bot".into(),
                 kind: ChannelKind::Group,
             },
-            session_mode: ChannelSessionMode::PerUser,
+            session_mode: ChannelSessionMode::PerConversation,
             thread_mode: ChannelThreadMode::PerThread,
             trigger: ChannelTrigger::DirectOrMention,
             members: vec![ChannelMember {
@@ -173,7 +175,7 @@ mod tests {
                 expires_at_ms: None,
             }],
             allow_unlisted_chat: false,
-            grants: BTreeMap::new(),
+            grant: Default::default(),
             per_user_daily_limit: 10,
             allow_automated_reports: false,
             service_grant: Default::default(),

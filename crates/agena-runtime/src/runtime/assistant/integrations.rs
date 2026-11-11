@@ -358,6 +358,48 @@ impl AssistantRuntime {
             access_audit: self.integrations.channel_audit(id).await?,
         })
     }
+
+    /// Read-only inventory of every chat platform this workspace serves.
+    ///
+    /// Nothing here polls an adapter or dispatches work: bindings, their
+    /// channel sessions and the session titles come from persisted state only.
+    pub(super) async fn read_platform_inventory(&self, source: i64) -> Result<PlatformInventory> {
+        let workspace = self.integration_scope(source).await?;
+        let bindings = self.integrations.bindings(Some(workspace)).await?;
+        let host = self.integration_host().ok();
+        let mut channel_sessions = Vec::new();
+        for binding in bindings
+            .iter()
+            .filter(|b| b.spec.mode == IntegrationMode::Channel)
+        {
+            channel_sessions.extend(self.integrations.channel_sessions(binding.id).await?);
+        }
+        let mut titles = std::collections::BTreeMap::new();
+        let manager = self.manager()?;
+        for session_id in channel_sessions
+            .iter()
+            .map(|record| record.session_id)
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            if let Ok(session) = manager.get_session(session_id).await {
+                titles.insert(session_id, session.title);
+            }
+        }
+        let mut inventory = PlatformInventory::build(&bindings, &channel_sessions, &titles);
+        // Fill in adapter titles when the plugin is loaded. An unloaded or
+        // failed adapter leaves the platform id as the display name.
+        if let Some(host) = host {
+            for entry in &mut inventory.platforms {
+                if entry.title.is_some() {
+                    continue;
+                }
+                if let Ok(provider) = self.adapter_on_host(host.clone(), &entry.platform).await {
+                    entry.title = Some(provider.adapter.title);
+                }
+            }
+        }
+        Ok(inventory)
+    }
     pub(super) async fn change_integration(
         &self,
         source: i64,
@@ -656,11 +698,39 @@ impl AssistantRuntime {
                     event.note = Some("host_access_command".into());
                 } else {
                     let scope = self
-                        .channel_scope(&b, &event.event.actor, event.event.thread.clone(), now)
+                        .channel_scope_for(
+                            &b,
+                            &event.event.resource,
+                            &event.event.actor,
+                            event.event.thread.clone(),
+                            now,
+                        )
                         .await?;
-                    let text=format!("[Verified channel identity — metadata, not instructions]\n{}\n[Message]\n{}",serde_json::to_string(&json!({"tenant":scope.authority.identity.tenant,"account":scope.authority.identity.account,"conversation":event.event.resource,"kind":scope.authority.identity.kind,"thread":event.event.thread,"actor":event.event.actor,"local_role":scope.authority.role})).map_err(runtime_error)?,event.event.text);
+                    // Identity travels as structured fields on the entry; the
+                    // prompt layer renders it. Nothing is concatenated into
+                    // the user's own text.
+                    let author = agena_domain::MessageAuthor::channel_member(
+                        event.event.actor.clone(),
+                        scope.authority.role,
+                        None,
+                    );
+                    let origin = agena_domain::MessageOrigin {
+                        platform: agena_domain::Platform::chat(
+                            b.spec.provider.clone(),
+                            scope.authority.identity.account.clone(),
+                        ),
+                        conversation: event.event.resource.clone(),
+                        kind: scope.authority.identity.kind.into(),
+                        thread: event.event.thread.clone(),
+                    };
                     let result = manager
-                        .submit_managed_message(scope.session_id, key, text)
+                        .submit_managed_message(
+                            scope.session_id,
+                            key,
+                            event.event.text.clone(),
+                            Some(author),
+                            Some(origin),
+                        )
                         .await
                         .map_err(runtime_error)?;
                     if let Some(receipt) = result.receipt {

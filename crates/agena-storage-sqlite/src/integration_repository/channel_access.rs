@@ -211,7 +211,7 @@ pub(super) async fn ingest_platform_revocations(
             .is_some_and(|(policy, context)| {
                 agena_domain::valid_channel_id(&event.actor)
                     && context.identity == policy.identity
-                    && event.resource == b.spec.resource
+                    && b.spec.resource.matches(&event.resource)
                     && event.occurred_at_ms >= b.activated_at_ms.unwrap_or(b.created_at_ms)
                     && event.occurred_at_ms <= now + 30000
                     && context.actor_verified

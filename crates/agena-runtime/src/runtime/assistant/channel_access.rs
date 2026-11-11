@@ -85,13 +85,17 @@ impl AssistantRuntime {
             }));
         }
     }
-    pub(super) async fn channel_scope(
+    pub(super) async fn channel_scope_for(
         &self,
         b: &IntegrationBinding,
+        resource: &str,
         actor: &str,
         thread: Option<String>,
         now: i64,
     ) -> Result<ChannelSessionRecord> {
+        if !b.spec.resource.matches(resource) {
+            return Err(Error::Invalid("conversation is outside this binding"));
+        }
         let policy = b.spec.channel_policy.as_ref().ok_or(Error::Invalid(
             "channel permissions must be reviewed before use",
         ))?;
@@ -106,23 +110,19 @@ impl AssistantRuntime {
                 None,
             )
         } else {
-            let (role, grant, expiry) = policy.member(actor, now).map_err(Error::Invalid)?;
-            if policy.session_mode == ChannelSessionMode::SharedChat {
-                (
-                    "@shared".into(),
-                    ChannelRole::Member,
-                    ChannelGrant::default(),
-                    None,
-                )
-            } else {
-                (actor.to_owned(), role, grant, expiry)
-            }
+            let (role, expiry) = policy.member(actor, now).map_err(Error::Invalid)?;
+            (actor.to_owned(), role, policy.grant.clone(), expiry)
         };
+        // One conversation is one session. The speaker is not part of the
+        // scope key, so a group's members share a transcript; `PerActor`
+        // opts back into per-speaker transcripts explicitly.
+        let speaker_key =
+            (policy.session_mode == ChannelSessionMode::PerActor).then_some(principal.as_str());
         let privacy_key = hash(
-            &json!({"binding":b.id,"provider":b.spec.provider,"identity":policy.identity,"resource":b.spec.resource,"thread":thread,"actor":principal}),
+            &json!({"binding":b.id,"provider":b.spec.provider,"identity":policy.identity,"resource":resource,"thread":thread,"speaker":speaker_key}),
         )?;
-        let scope_key =
-            hash(&json!({"private_scope":privacy_key,"epoch":b.epoch,"role":role,"grant":grant}))?;
+        // Capabilities are one per binding, so they cannot split a scope.
+        let scope_key = hash(&json!({"private_scope":privacy_key,"epoch":b.epoch}))?;
         if let Some(record) = self.integrations.channel_session(b.id, &scope_key).await? {
             if !b.authorizes_scope(&record.authority, now) {
                 return Err(Error::Conflict(
@@ -148,7 +148,7 @@ impl AssistantRuntime {
             actor: principal,
             role,
             identity: policy.identity.clone(),
-            resource: b.spec.resource.clone(),
+            resource: resource.to_owned(),
             thread,
             session_mode: policy.session_mode,
             grant,
@@ -159,6 +159,7 @@ impl AssistantRuntime {
             private_paths,
             revoked: false,
         };
+        let _ = &authority.scope();
         let session_id = self
             .manager()?
             .ensure_channel_session(b.source_session_id, &scope_key, authority.clone())
@@ -185,9 +186,15 @@ impl AssistantRuntime {
                 .is_some_and(|p| p.allow_automated_reports)
             && b.channel_session_id.is_none()
         {
+            let Some(resource) = b.spec.resource.single().map(str::to_owned) else {
+                // A binding serving many conversations has no single room to
+                // hold automated reports; reports are scoped per event instead.
+                return Ok(b);
+            };
             let scope = self
-                .channel_scope(
+                .channel_scope_for(
                     &b,
+                    &resource,
                     "@service",
                     b.spec.thread.clone(),
                     Utc::now().timestamp_millis(),
@@ -249,13 +256,14 @@ impl AssistantRuntime {
             .channel_policy
             .as_ref()
             .ok_or(Error::Invalid("channel policy missing"))?;
-        let (role, grant, _) = policy
+        let (role, _) = policy
             .member(&event.event.actor, now)
             .map_err(Error::Invalid)?;
+        let grant = &policy.grant;
         let words = text.split_whitespace().collect::<Vec<_>>();
         let mut current = b.clone();
         let response=match words.as_slice(){
-            ["/access"]|["/access","whoami"]=>format!("Scope: {}/{}/{} · {:?} · thread {:?}\nUser: {} · local role: {}\nTools: {} · private memory: {}\nPlatform administrator labels do not grant instance privileges.",policy.identity.tenant,policy.identity.account,b.spec.resource,policy.identity.kind,event.event.thread,event.event.actor,role.as_str(),grant.tools.len(),grant.private_memory),
+            ["/access"]|["/access","whoami"]=>format!("Scope: {}/{}/{} · {:?} · thread {:?}\nUser: {} · local role: {}\nTools: {} · private memory: {}\nPlatform administrator labels do not grant instance privileges.",policy.identity.tenant,policy.identity.account,b.spec.resource.display(),policy.identity.kind,event.event.thread,event.event.actor,role.as_str(),grant.tools.len(),grant.private_memory),
             ["/access","members"] if role.can_manage()=>policy.members.iter().map(|m|format!("{}: {}{}",m.actor,m.role.as_str(),if m.expires_at_ms.is_some_and(|expiry|now>=expiry){" (expired)"}else{""})).collect::<Vec<_>>().join("\n"),
             ["/access","set",target,requested]=>{
                 let assigned=ChannelRole::parse(requested);

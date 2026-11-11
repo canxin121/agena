@@ -105,6 +105,9 @@ impl AssistantService for AssistantRuntime {
     ) -> Result<agena_assistant::IntegrationDetail> {
         self.read_integration(source, id).await
     }
+    async fn platform_inventory(&self, source: i64) -> Result<agena_assistant::PlatformInventory> {
+        self.read_platform_inventory(source).await
+    }
     async fn control_integration(
         &self,
         source: i64,

@@ -23,9 +23,17 @@ pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 mod bot;
 mod companion;
 mod integrations;
+mod session;
+mod workspace;
 pub use bot::{BotAction, BotRequest};
 pub use companion::{CompanionAction, CompanionRequest};
 pub use integrations::{IntegrationAction, IntegrationRequest};
+pub use session::{
+    HostSessionCommand, HostSessionCommandRequest, HostSessionCommandResponse, HostSessionEvent,
+    HostSessionQuery, HostSessionQueryRequest, HostSessionQueryResponse, HostSessionStreamKind,
+    HostSessionStreamRequest,
+};
+pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse};
 
 #[async_trait]
 /// Client interface used by plugins to call host capabilities.
@@ -225,6 +233,38 @@ pub trait HostClient: Send + Sync + 'static {
         &self,
         _req: HostSetSessionModelRequest,
     ) -> Result<HostSetSessionModelResponse> {
+        Err(unavailable())
+    }
+
+    /// Read persisted session state (transcript, executions, cost, platforms).
+    async fn session_query(
+        &self,
+        _req: HostSessionQueryRequest,
+    ) -> Result<HostSessionQueryResponse> {
+        Err(unavailable())
+    }
+
+    /// Mutate a session: submit input, cancel, manage the queue, answer a card.
+    async fn session_command(
+        &self,
+        _req: HostSessionCommandRequest,
+    ) -> Result<HostSessionCommandResponse> {
+        Err(unavailable())
+    }
+
+    /// Subscribe to a live session stream. Returns a subscription id; events are
+    /// delivered through the existing `subscribe_events` channel as
+    /// `EventEnvelope` values whose payload decodes to `HostSessionEvent`.
+    async fn session_stream(&self, _req: HostSessionStreamRequest) -> Result<EventSubscription> {
+        Err(unavailable())
+    }
+
+    /// Read projects and their files, subject to the host's path permission
+    /// fence. `Read` never returns more than the host's bounded read budget.
+    async fn workspace_query(
+        &self,
+        _req: HostWorkspaceQueryRequest,
+    ) -> Result<HostWorkspaceQueryResponse> {
         Err(unavailable())
     }
 
@@ -557,7 +597,7 @@ pub enum LogLevel {
     Error,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 /// Subscription to runtime events.
 pub struct EventSubscription {
     pub id: String,

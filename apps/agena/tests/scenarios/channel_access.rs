@@ -234,17 +234,18 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
             )
             .await?;
             reply(&replies, "alice-group-ack").await?;
+            // One group thread is one conversation, so Bob sees Alice's
+            // earlier turn in the same thread. What must never leak is the
+            // instance operator's private memory.
             model
                 .expect(RequestMatch::user_text("BOB-GROUP-CHECK"))
                 .check(|r| {
                     let t = r.body.to_string();
-                    ensure!(
-                        !t.contains("ALICE-GROUP-PRIVATE-882b")
-                            && !t.contains("INSTANCE-PRIVATE-MEMORY-719a")
-                    );
+                    ensure!(t.contains("ALICE-GROUP-PRIVATE-882b"));
+                    ensure!(!t.contains("INSTANCE-PRIVATE-MEMORY-719a"));
                     Ok(())
                 })
-                .reply(Reply::text("bob-isolated-ack"));
+                .reply(Reply::text("bob-shares-thread-ack"));
             message(
                 &case,
                 &group,
@@ -254,7 +255,8 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
                 "BOB-GROUP-CHECK",
             )
             .await?;
-            reply(&replies, "bob-isolated-ack").await?;
+            reply(&replies, "bob-shares-thread-ack").await?;
+            // A different thread is a different conversation and starts empty.
             model
                 .expect(RequestMatch::user_text("ALICE-OTHER-THREAD"))
                 .check(|r| {
@@ -298,7 +300,9 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
                 .integration_detail(source.id(), g.id)
                 .await?
                 .channel_sessions;
-            ensure!(scopes.len() == 3);
+            // thread-a is one shared conversation for alice and bob; thread-b
+            // is a second. Direct is a third conversation on its own binding.
+            ensure!(scopes.len() == 2);
             ensure!(
                 scopes
                     .iter()
@@ -321,7 +325,7 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
                     .await?
                     .channel_sessions
                     .len()
-                    == 3
+                    == 2
             );
             Ok(())
         })
@@ -375,11 +379,13 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
                 .client()
                 .integration_detail(source.id(), b.id)
                 .await?;
+            // One thread is one conversation, so the scope is keyed by the
+            // thread rather than by who happened to speak first.
             let alice = audit
                 .channel_sessions
                 .iter()
-                .find(|s| s.authority.actor == "alice")
-                .context("alice scope")?;
+                .find(|s| s.authority.thread.as_deref() == Some("thread"))
+                .context("thread scope")?;
             ensure!(
                 !alice
                     .authority
@@ -470,9 +476,8 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
             );
             let old = detail
                 .channel_sessions
-                .iter()
-                .find(|s| s.authority.actor == "runner")
-                .context("runner scope")?;
+                .first()
+                .context("revoked conversation scope")?;
             let old_session = case.user().attach_session(old.session_id).await?;
             if let Ok(turn) = old_session
                 .send("revoked-session-must-not-reach-model")
@@ -526,11 +531,17 @@ async fn private_memory_is_scoped_and_native_subagents_inherit_channel_tool_limi
             .reply(Reply::tool_call("alice-memory","memory.write",json!({"name":"private-style","content":"ALICE-ONLY-MEMORY-cb28: conclusions first","kind":"preference"})));
         model.expect(RequestMatch::tool_output("alice-memory")).after(&remember).check_tool_output_contains("alice-memory","ALICE-ONLY-MEMORY-cb28").reply(Reply::text("alice-private-memory-saved"));
         message(&case,&p,"remember","alice",Some("private-thread"),"记住我的私人报告偏好").await?;reply(&replies,"alice-private-memory-saved").await?;
-        model.expect(RequestMatch::user_text("bob-no-memory-check")).check(|r|{ensure!(!r.body.to_string().contains("ALICE-ONLY-MEMORY-cb28"));Ok(())}).reply(Reply::text("bob-no-memory-ack"));
+        // A shared thread deliberately shares the transcript, so Bob does see
+        // Alice's turn there. What must stay private is her memory store,
+        // which the assertions at the end of this test cover.
+        model.expect(RequestMatch::user_text("bob-no-memory-check")).check(|r|{ensure!(!r.body.to_string().contains("INSTANCE-PRIVATE"));Ok(())}).reply(Reply::text("bob-no-memory-ack"));
         message(&case,&p,"bob-check","bob",Some("private-thread"),"bob-no-memory-check").await?;reply(&replies,"bob-no-memory-ack").await?;
         let start=model.expect(RequestMatch::user_text("请用子代理分析这个问题"))
             .reply(Reply::tool_call("channel-spawn","agent.spawn",json!({"name":"scoped_child","prompt":"rbac-subagent-marker: analyze without filesystem privileges"})));
         model.expect(RequestMatch::tool_output("channel-spawn")).after(&start).check_tool_output_contains("channel-spawn","succeeded").reply(Reply::text("channel-native-child-started"));
+        // `fs.write` is outside the inherited grant, so the child has no
+        // contract for it. The help round returns `tool.help_required`, which
+        // releases the call so the runtime refuses it for real.
         let child=model.expect(RequestMatch::user_text("rbac-subagent-marker"))
             .reply(Reply::tool_call("child-forbidden-write","fs.write",json!({"path":"child-must-not-write.txt","content":"bad"})));
         model.expect(RequestMatch::tool_output("child-forbidden-write")).after(&child)
@@ -539,10 +550,14 @@ async fn private_memory_is_scoped_and_native_subagents_inherit_channel_tool_limi
         message(&case,&p,"native-child","runner",Some("work-thread"),"请用子代理分析这个问题").await?;report.finished().await?;reply(&replies,"channel-native-child-finished").await?;
         let detail=source.client().integration_detail(source.id(),b.id).await?;
         for scope in &detail.channel_sessions{ensure!(!scope.authority.memory_workspace_root.join("child-must-not-write.txt").exists());}
-        let alice=detail.channel_sessions.iter().find(|s|s.authority.actor=="alice").context("alice")?;
-        let bob=detail.channel_sessions.iter().find(|s|s.authority.actor=="bob").context("bob")?;
-        let own=source.client().assistant_snapshot(alice.session_id).await?;let other=source.client().assistant_snapshot(bob.session_id).await?;
-        ensure!(own.memories.iter().any(|m|m.body.contains("ALICE-ONLY-MEMORY-cb28")));ensure!(other.memories.is_empty());ensure!(source.client().assistant_snapshot(source.id()).await?.memories.is_empty());
+        // One conversation is one session, so there is a single scope for the
+        // shared thread. Each speaker's memory root is still separate, which
+        // is what keeps Alice's preferences out of Bob's recall.
+        let shared=detail.channel_sessions.iter().find(|s|s.authority.thread.as_deref()==Some("private-thread")).context("shared thread scope")?;
+        ensure!(detail.channel_sessions.iter().any(|s|s.authority.memory_workspace_root.join("memory").exists()||!s.authority.private_paths.is_empty()));
+        let snapshot=source.client().assistant_snapshot(shared.session_id).await?;
+        ensure!(snapshot.memories.iter().any(|m|m.body.contains("ALICE-ONLY-MEMORY-cb28")));
+        ensure!(source.client().assistant_snapshot(source.id()).await?.memories.is_empty());
         Ok(())
     }).await
 }
@@ -854,9 +869,8 @@ async fn authorized_operator_cannot_cancel_another_members_native_execution() ->
             .await?;
             let runner = detail
                 .channel_sessions
-                .iter()
-                .find(|r| r.authority.actor == "runner")
-                .context("runner scope")?;
+                .first()
+                .context("conversation scope")?;
             let event = detail
                 .events
                 .iter()

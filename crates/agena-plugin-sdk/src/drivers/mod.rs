@@ -85,30 +85,18 @@ macro_rules! impl_callback_host_client {
     (@extended $mode:ident ($($configuration:tt)*); $($common:tt)*) => {
         $crate::drivers::impl_callback_host_client!(@emit $mode ($($configuration)*);
             $($common)*
+            session_stream(request: $crate::host_api::HostSessionStreamRequest)
+                -> $crate::host_api::EventSubscription = HOST_SESSION_STREAM { "request": request };
+            session_op(op: $crate::host_api::SessionOp)
+                -> $crate::host_api::SessionOpResponse = HOST_SESSION_OP { "op": op };
+            workspace_query(request: $crate::host_api::HostWorkspaceQueryRequest)
+                -> $crate::host_api::HostWorkspaceQueryResponse = HOST_WORKSPACE_QUERY { "request": request };
             ask_user(request: $crate::host_api::AskUserRequest)
                 -> $crate::host_api::AskUserResponse = HOST_ASK_USER { "request": request };
             list_tools()
                 -> Vec<$crate::host_api::ToolDescriptor> = HOST_TOOL_LIST {  };
             get_context_status(request: $crate::host_api::HostContextStatusRequest)
                 -> $crate::host_api::HostContextStatusResponse = HOST_CONTEXT_STATUS { "request": request };
-            set_session_model(request: $crate::host_api::HostSetSessionModelRequest)
-                -> $crate::host_api::HostSetSessionModelResponse = HOST_SESSION_SET_MODEL { "request": request };
-            session_query(request: $crate::host_api::HostSessionQueryRequest)
-                -> $crate::host_api::HostSessionQueryResponse = HOST_SESSION_QUERY { "request": request };
-            session_command(request: $crate::host_api::HostSessionCommandRequest)
-                -> $crate::host_api::HostSessionCommandResponse = HOST_SESSION_COMMAND { "request": request };
-            session_stream(request: $crate::host_api::HostSessionStreamRequest)
-                -> $crate::host_api::EventSubscription = HOST_SESSION_STREAM { "request": request };
-            workspace_query(request: $crate::host_api::HostWorkspaceQueryRequest)
-                -> $crate::host_api::HostWorkspaceQueryResponse = HOST_WORKSPACE_QUERY { "request": request };
-            monitor_start(request: $crate::host_api::MonitorStartRequest)
-                -> $crate::host_api::MonitorHandle = HOST_MONITOR_START { "request": request };
-            monitor_list()
-                -> Vec<$crate::host_api::MonitorHandle> = HOST_MONITOR_LIST {  };
-            monitor_read(request: $crate::host_api::MonitorReadRequest)
-                -> $crate::host_api::MonitorReadResponse = HOST_MONITOR_READ { "request": request };
-            monitor_stop(request: $crate::host_api::MonitorStopRequest)
-                -> $crate::host_api::MonitorHandle = HOST_MONITOR_STOP { "request": request };
             register_tool(request: $crate::host_api::HostToolRegisterRequest)
                 -> $crate::host_api::HostToolMutationResponse = HOST_TOOL_REGISTRY_REGISTER { "request": request };
             update_tool(request: $crate::host_api::HostToolUpdateRequest)
@@ -137,24 +125,12 @@ macro_rules! impl_callback_host_client {
                 -> $crate::host_api::HostPluginStatusListResponse = HOST_PLUGIN_STATUS_LIST {  };
             plugin_status_get(request: $crate::host_api::HostPluginStatusGetRequest)
                 -> $crate::host_api::HostPluginStatusGetResponse = HOST_PLUGIN_STATUS_GET { "request": request };
+            list_plugins()
+                -> $crate::host_api::HostPluginListResponse = HOST_PLUGIN_LIST {  };
             lsp_list_servers()
                 -> $crate::host_api::HostLspListServersResponse = HOST_LSP_LIST_SERVERS {  };
-            lsp_list_diagnostics(request: $crate::host_api::HostLspListDiagnosticsRequest)
-                -> $crate::host_api::HostLspListDiagnosticsResponse = HOST_LSP_LIST_DIAGNOSTICS { "request": request };
-            scheduler_list()
-                -> $crate::host_api::HostSchedulerListResponse = HOST_SCHEDULER_LIST {  };
-            scheduler_create(request: $crate::host_api::HostSchedulerCreateRequest)
-                -> $crate::host_api::HostSchedulerCreateResponse = HOST_SCHEDULER_CREATE { "request": request };
-            scheduler_delete(request: $crate::host_api::HostSchedulerDeleteRequest)
-                -> $crate::host_api::HostSchedulerDeleteResponse = HOST_SCHEDULER_DELETE { "request": request };
             hook_list()
                 -> $crate::host_api::HostHookListResponse = HOST_HOOK_LIST {  };
-            mcp_list_servers()
-                -> $crate::host_api::HostMcpListServersResponse = HOST_MCP_LIST_SERVERS {  };
-            mcp_add_server(request: $crate::host_api::HostMcpAddServerRequest)
-                -> () = HOST_MCP_ADD_SERVER { "request": request } [discard_response];
-            mcp_remove_server(request: $crate::host_api::HostMcpRemoveServerRequest)
-                -> $crate::host_api::HostMcpRemoveServerResponse = HOST_MCP_REMOVE_SERVER { "request": request };
             display_contribute(request: $crate::host_api::HostDisplayContributeRequest)
                 -> () = HOST_UI_DISPLAY_CONTRIBUTE { "request": request } [discard_response];
             display_remove(request: $crate::host_api::HostDisplayRemoveRequest)

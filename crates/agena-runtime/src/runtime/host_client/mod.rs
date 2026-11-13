@@ -27,26 +27,21 @@ use agena_plugin_host::sdk::host_api::{
     AgentWaitRequest, AgentWaitResponse, AskUserRequest, AskUserResponse, EventSubscription,
     HostCallbackContext, HostClient, HostConfigReloadRequestResponse,
     HostConfigReloadStatusRequest, HostConfigReloadStatusResponse, HostContextStatusRequest,
-    HostContextStatusResponse, HostGetSessionRequest, HostGetSessionResponse,
-    HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation, HostLspDiagnostic,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
-    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostContextStatusResponse, HostExecutionList, HostExecutionSummary, HostGetSessionRequest,
+    HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
+    HostLspDiagnostic, HostLspListServersResponse, HostLspServer, HostMcpServerSpec, HostPartsPage,
+    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostQueuedMessage, HostRenameSessionRequest,
+    HostRenameSessionResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostSessionCommand, HostSessionCommandRequest, HostSessionCommandResponse, HostSessionEvent,
-    HostSessionQuery, HostSessionQueryRequest, HostSessionQueryResponse, HostSessionStreamKind,
-    HostSessionStreamRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
-    HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse, LogLevel,
-    MonitorEvent, MonitorHandle, MonitorReadRequest, MonitorReadResponse, MonitorStartRequest,
-    MonitorStopRequest, PathPermissionQuery, PermissionQuery, ToolDescriptor,
-    current_host_callback_context,
+    HostSessionAgent, HostSessionModel, HostSessionState, HostSessionStreamKind,
+    HostSessionStreamRequest, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
+    HostStorageSetRequest, HostWorkspaceQuery, HostWorkspaceQueryRequest,
+    HostWorkspaceQueryResponse, LogLevel, PathPermissionQuery, PermissionQuery, SessionOp,
+    SessionOpResponse, ToolDescriptor, current_host_callback_context,
 };
+
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
 };
@@ -203,15 +198,6 @@ impl RuntimeHostClient {
             .map_err(plugin_error)
     }
 
-    fn snapshot_feature<T>(
-        &self,
-        feature: impl FnOnce(&crate::runtime::RuntimeSnapshot) -> Option<T>,
-        unavailable: &'static str,
-    ) -> Result<T, PluginError> {
-        let snapshot = self.snapshot()?;
-        feature(snapshot.as_ref()).ok_or_else(|| host_unavailable(unavailable))
-    }
-
     fn executor_feature<T>(
         &self,
         feature: impl FnOnce(&crate::tool::ToolExecutor) -> Option<T>,
@@ -220,6 +206,484 @@ impl RuntimeHostClient {
         let executor = self.tool_executor()?;
         let feature = feature(&executor).ok_or_else(|| host_unavailable(unavailable))?;
         Ok((executor, feature))
+    }
+
+    /// Run one read-only session operation.
+    ///
+    /// The plugin contract is the shared transport contract, so this matches
+    /// the same `Query` enum the REST and WebSocket surfaces dispatch. An
+    /// operation added there fails to compile here until it is routed.
+    async fn run_session_query(
+        &self,
+        query: agena_session_api::queries::Query,
+    ) -> Result<serde_json::Value, PluginError> {
+        use agena_session_api::queries::Query;
+        let runtime = self.runtime()?;
+        let services = runtime.application_services();
+        // Every session-scoped read must name a session this callback may
+        // touch. `None` falls back to the callback's own session.
+        let scope = query.session_id();
+        let target = match scope {
+            Some(_) => self.callback_or_requested_session_id(scope, "session_query")?,
+            None => 0,
+        };
+        let data = match query {
+            Query::ListSessions(params) => {
+                let manager = self.session_manager()?;
+                let request = agena_domain::SessionListRequest {
+                    limit: params.limit,
+                    search: params.search.clone(),
+                    ..Default::default()
+                };
+                let rows = manager
+                    .list_session_summaries(request)
+                    .await
+                    .map_err(plugin_error)?;
+                let rows = match params.workspace_id {
+                    // The manager lists within its current workspace; an
+                    // explicit id must match or the caller sees nothing.
+                    Some(id) => rows
+                        .into_iter()
+                        .filter(|row| row.workspace_id == Some(id))
+                        .collect(),
+                    None => rows,
+                };
+                serde_json::to_value(rows).map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::GetSession(_) => {
+                let session = self
+                    .use_session_manager(|manager| async move { manager.get_session(target).await })
+                    .await?;
+                serde_json::to_value(
+                    crate::runtime::host_client::mappers::session_resource_from_session(&session),
+                )
+                .map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::GetSessionState(_) => {
+                // Same sources the HTTP session-state endpoint reads: one
+                // control snapshot plus the query service. The plugin receives
+                // the durable facts, not a client-shaped duplicate.
+                let queries = services
+                    .session_queries
+                    .ok_or_else(|| host_unavailable("session queries are not enabled"))?;
+                let kernel = self.session_manager()?.session_kernel();
+                let snapshot = kernel
+                    .reader
+                    .control_snapshot(kernel_session_id(target)?, 128)
+                    .await
+                    .map_err(|error| PluginError::internal_error(&error))?;
+                let manager = self.session_manager()?;
+                let summary = manager
+                    .get_session_summary(target)
+                    .await
+                    .map_err(plugin_error)?;
+                let running = manager.is_run_active(target).await;
+                let context = queries
+                    .execution_context(&snapshot)
+                    .map_err(|error| PluginError::internal(error.to_string()))?;
+                let state = agena_plugin_host::sdk::host_api::HostSessionState {
+                    session: super::host_client::mappers::session_resource_from_summary(&summary),
+                    running,
+                    queue_paused: snapshot.configuration.message_queue_paused,
+                    queued_messages: snapshot
+                        .active_executions
+                        .executions
+                        .iter()
+                        .filter(|execution| {
+                            execution.phase == agena_storage::kernel::ExecutionPhase::Queued
+                                && execution.purpose
+                                    == agena_storage::kernel::ExecutionPurpose::Message
+                        })
+                        .map(
+                            |execution| agena_plugin_host::sdk::host_api::HostQueuedMessage {
+                                execution_id: execution.id.0.to_string(),
+                                message_id: execution.message_id.get(),
+                            },
+                        )
+                        .collect(),
+                    control_version: snapshot.control_version,
+                    workflow_state: format!("{:?}", context.workflow_state),
+                    selected_permission: serde_json::to_value(&context.selected_permission)
+                        .unwrap_or(serde_json::Value::Null),
+                    effective_permission: serde_json::to_value(&context.effective_permission)
+                        .unwrap_or(serde_json::Value::Null),
+                    permission_ceiling: serde_json::to_value(&context.permission_ceiling)
+                        .unwrap_or(serde_json::Value::Null),
+                    model: agena_plugin_host::sdk::host_api::HostSessionModel {
+                        provider_id: context.model_provider_id,
+                        adapter_id: context.model_adapter_id,
+                        model_id: context.model_id,
+                        thinking_mode: context.model_thinking_mode,
+                        speed_mode: context.model_speed_mode,
+                        verbosity: context.model_verbosity,
+                        parallel_tool_calls: context.model_parallel_tool_calls,
+                    },
+                    workspace_root: context.effective_workspace_root,
+                    agent: agena_plugin_host::sdk::host_api::HostSessionAgent {
+                        id: context.agent_id,
+                        name: context.agent_name,
+                        status: context.agent_status,
+                        started_at: context.agent_started_at.map(|at| at.to_rfc3339()),
+                        finished_at: context.agent_finished_at.map(|at| at.to_rfc3339()),
+                        failure: context
+                            .agent_failure
+                            .and_then(|failure| serde_json::to_value(failure).ok()),
+                    },
+                };
+                serde_json::to_value(state).map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::ReadParts(params) => {
+                let page = self
+                    .use_session_manager(|manager| async move {
+                        let kernel = manager.session_kernel();
+                        kernel
+                            .reader
+                            .message_history(
+                                agena_storage::kernel::SessionId::try_from(params.session_id)
+                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
+                                None,
+                                params.limit.unwrap_or(8).clamp(1, 32) as usize,
+                                32,
+                            )
+                            .await
+                            .map_err(|error| crate::AppError::Config(error.to_string()))
+                    })
+                    .await?;
+                serde_json::to_value(agena_plugin_host::sdk::host_api::HostPartsPage {
+                    entries: serde_json::to_value(&page.entries)
+                        .map_err(|error| PluginError::internal_error(&error))?,
+                    user_message_count: page.user_message_count,
+                    has_more: page.has_more,
+                })
+                .map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::ReadContent(params) => {
+                let range = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .kernel()
+                            .reader
+                            .text_range(
+                                agena_storage::kernel::SessionId::try_from(params.session_id)
+                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
+                                params.resource_id,
+                                None,
+                                params.max_bytes,
+                            )
+                            .await
+                            .map_err(|error| crate::AppError::Internal(error.to_string()))
+                    })
+                    .await?;
+                // `TextRange` is a kernel read view, not a wire type. Project
+                // the durable facts a reader needs.
+                serde_json::json!({
+                    "resource": range.stream,
+                    "start": range.start,
+                    "text": String::from_utf8_lossy(&range.bytes),
+                    "has_more": range.has_more,
+                })
+            }
+            Query::ReadRuns(_) => {
+                let page = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .kernel()
+                            .reader
+                            .message_history(
+                                agena_storage::kernel::SessionId::try_from(target)
+                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
+                                None,
+                                32,
+                                1,
+                            )
+                            .await
+                            .map_err(|error| crate::AppError::Internal(error.to_string()))
+                    })
+                    .await?;
+                serde_json::to_value(agena_plugin_host::sdk::host_api::HostExecutionList {
+                    executions: page
+                        .messages
+                        .iter()
+                        .map(
+                            |message| agena_plugin_host::sdk::host_api::HostExecutionSummary {
+                                execution_id: message.id.get(),
+                                part_count: message.entry_count,
+                                loaded_count: message.loaded_count,
+                            },
+                        )
+                        .collect(),
+                    user_message_count: page.user_message_count,
+                    has_more: page.has_more,
+                })
+                .map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::GetSessionCost(_) => {
+                let queries = services
+                    .session_queries
+                    .ok_or_else(|| host_unavailable("session queries are not enabled"))?;
+                let summary = queries
+                    .session_cost_summary(target)
+                    .await
+                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                serde_json::to_value(summary)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::GetSessionTree(params) => {
+                let sessions = self
+                    .use_session_manager(|manager| async move {
+                        manager.list_session_tree(params.session_id).await
+                    })
+                    .await?;
+                serde_json::to_value(sessions)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::GetSessionPlatforms(_) => {
+                let assistant = self
+                    .runtime()?
+                    .assistant_service()
+                    .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
+                let inventory = agena_assistant::AssistantService::platform_inventory(
+                    assistant.as_ref(),
+                    target,
+                )
+                .await
+                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
+                serde_json::to_value(inventory)
+                    .map_err(|error| PluginError::internal_error(&error))?
+            }
+            Query::Health
+            | Query::Runtime
+            | Query::ListProviders
+            | Query::ListProviderModels(_)
+            | Query::ListProviderAdapterModels(_)
+            | Query::ListSavedProviderAdapterModels(_)
+            | Query::ListWorkspaces(_)
+            | Query::GetWorkspace(_)
+            | Query::ListPermissionRules(_)
+            | Query::GetPermissionRule(_)
+            | Query::ListActivities(_)
+            | Query::GetActivity(_)
+            | Query::ActivityLogs(_)
+            | Query::ReadContentText(_) => {
+                return Err(PluginError::from_kind(
+                    agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                    "this operation is operator-only; plugins cannot read runtime, provider, \
+                     workspace or permission state through the session surface",
+                ));
+            }
+        };
+        Ok(data)
+    }
+
+    /// Run one side-effectful session operation.
+    ///
+    /// Matches the same `Command` enum the REST and WebSocket surfaces
+    /// dispatch, so a plugin reaches exactly the operations a browser client
+    /// reaches. Operator-only operations are refused by
+    /// [`SessionOp::plugin_allowed`] before this runs.
+    async fn run_session_command(
+        &self,
+        command: agena_session_api::commands::Command,
+    ) -> Result<serde_json::Value, PluginError> {
+        use agena_session_api::commands::Command;
+        // Commands name their session explicitly; a plugin callback may also
+        // omit it, in which case the callback's session is used.
+        let target = match command.session_id() {
+            Some(session_id) => {
+                self.callback_or_requested_session_id(Some(session_id), "session_command")?
+            }
+            None => self.callback_or_requested_session_id(None, "session_command")?,
+        };
+        let mut execution_ids = Vec::new();
+        let mut data = None;
+        match command {
+            Command::SubmitMessage(params) => {
+                let outcome = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .submit_managed_document(
+                                params.session_id,
+                                String::new(),
+                                params.document,
+                                None,
+                                None,
+                            )
+                            .await
+                    })
+                    .await?;
+                if let Some(receipt) = outcome.receipt {
+                    execution_ids.push(receipt.execution_id.to_string());
+                }
+            }
+            Command::CancelRun(_) => {
+                let outcome = self
+                    .use_session_manager(|manager| async move {
+                        manager.cancel_active_execution_with_outcome(target).await
+                    })
+                    .await?;
+                data = serde_json::to_value(outcome.result).ok();
+            }
+            Command::UpdateSession(params) => {
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .rename_session(params.session_id, params.title)
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(session).ok();
+            }
+            Command::ForkSession(params) => {
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .fork_session(crate::session::SessionForkRequest {
+                                conversation_mode: params.conversation_mode,
+                                session_id: params.session_id,
+                                at_message_id: params.at_message_id,
+                                title: params.title,
+                                expected_version: None,
+                            })
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(session).ok();
+            }
+            Command::RewindSession(params) => {
+                let result = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .rewind_session(crate::session::SessionRewindRequest {
+                                session_id: params.session_id,
+                                at_message_id: params.at_message_id,
+                                mode: params.mode,
+                                expected_version: params.expected_version,
+                            })
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(&result.0).ok();
+            }
+            Command::CompactSession(_) => {
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        let options = manager.session_run_options(target).await?;
+                        manager
+                            .compact_session(crate::session::SessionExecutionRequest {
+                                session_id: target,
+                                options,
+                            })
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(&session).ok();
+            }
+            Command::ContinueRun(_) => {
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        let options = manager.session_run_options(target).await?;
+                        manager
+                            .continue_session(crate::session::SessionExecutionRequest {
+                                session_id: target,
+                                options,
+                            })
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(&session).ok();
+            }
+            Command::ClearSession(params) => {
+                let mode = match params.mode {
+                    agena_session_api::commands::SessionClearMode::History => {
+                        crate::session::SessionClearMode::History
+                    }
+                    agena_session_api::commands::SessionClearMode::ContextOnly => {
+                        crate::session::SessionClearMode::Context
+                    }
+                };
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        manager.clear_session(params.session_id, mode).await
+                    })
+                    .await?;
+                data = serde_json::to_value(&session).ok();
+            }
+            Command::ReplyPermission(params) => {
+                self.use_session_manager(|manager| async move {
+                    let options = manager.session_run_options(params.session_id).await?;
+                    manager
+                        .reply_permission(crate::SessionPermissionReplyRequest::new(
+                            params.session_id,
+                            options,
+                            params.reply.into(),
+                            None,
+                        ))
+                        .await
+                })
+                .await?;
+            }
+            Command::ReplyUserInput(params) => {
+                let reply: agena_domain::UserInputReply = params.reply.into();
+                self.use_session_manager(|manager| async move {
+                    let options = manager.session_run_options(params.session_id).await?;
+                    manager
+                        .reply_user_input(crate::SessionExecutionReplyRequest::new(
+                            params.session_id,
+                            options,
+                            reply,
+                        ))
+                        .await
+                })
+                .await?;
+            }
+            Command::UpdateSessionSelection(params) => {
+                let selection =
+                    params.options.model.clone().ok_or_else(|| {
+                        PluginError::invalid_params("selection.model is required")
+                    })?;
+                use std::str::FromStr;
+                let reference = match selection.adapter_id.as_deref() {
+                    Some(adapter) => format!(
+                        "{}/{}/{}",
+                        selection.provider_id, adapter, selection.model_id
+                    ),
+                    None => format!("{}/{}", selection.provider_id, selection.model_id),
+                };
+                let model =
+                    agena_domain::ModelRef::from_str(reference.trim()).map_err(|error| {
+                        PluginError::invalid_params(format!(
+                            "selection must name a provider/model reference: {error}"
+                        ))
+                    })?;
+                let session = self
+                    .use_session_manager(|manager| async move {
+                        manager
+                            .set_session_model_override(params.session_id, model)
+                            .await
+                    })
+                    .await?;
+                data = serde_json::to_value(&session).ok();
+            }
+            // Every remaining variant is refused before dispatch: either it is
+            // operator-only, or it targets a surface a plugin cannot own.
+            other => {
+                other.plugin_allowed().map_err(|reason| {
+                    PluginError::from_kind(
+                        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                        reason,
+                    )
+                })?;
+                return Err(PluginError::from_kind(
+                    agena_plugin_host::sdk::PluginErrorKind::NotImplemented,
+                    "this session command is not routed for plugins yet",
+                ));
+            }
+        }
+        Ok(serde_json::json!({
+            "session_id": target,
+            "execution_ids": execution_ids,
+            "data": data,
+        }))
     }
 
     async fn callback_session_context(
@@ -261,35 +725,6 @@ impl RuntimeHostClient {
         Ok((executor, session_context))
     }
 
-    fn callback_monitor_owner(
-        &self,
-        executor: &crate::tool::ToolExecutor,
-    ) -> Result<agena_runtime_tools::TerminalOwner, PluginError> {
-        let session = self
-            .callback_context()?
-            .session_id
-            .ok_or_else(|| host_unavailable("monitor access requires a session"))?;
-        Ok(agena_runtime_tools::TerminalOwner {
-            workspace: executor.workspace_root().to_owned(),
-            session_id: Some(session),
-        })
-    }
-
-    fn require_monitor_owner(
-        &self,
-        executor: &crate::tool::ToolExecutor,
-        registry: &dyn agena_runtime_tools::MonitorService,
-        id: &str,
-    ) -> Result<(), PluginError> {
-        if registry.is_owned(id, &self.callback_monitor_owner(executor)?) {
-            return Ok(());
-        }
-        Err(PluginError::from_kind(
-            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-            "monitor belongs to another session or is unavailable",
-        ))
-    }
-
     async fn require_callback_invocation(
         &self,
         name: &str,
@@ -322,6 +757,58 @@ impl RuntimeHostClient {
             .call_id
             .ok_or_else(|| host_unavailable("host callback context is missing call_id"))?;
         Ok((session_id, call_id))
+    }
+
+    /// Session plus the call id the delegation runs under.
+    ///
+    /// A tool-bound callback keeps its live call authority. A session-scoped
+    /// hook callback has no transcript tool call and passes the reserved
+    /// session-scoped sentinel instead.
+    fn callback_scope(&self) -> Result<(i64, i64), PluginError> {
+        let context = self.callback_context()?;
+        let session_id = context
+            .session_id
+            .ok_or_else(|| host_unavailable("host callback context is missing session_id"))?;
+        Ok((
+            session_id,
+            context
+                .call_id
+                .unwrap_or(agena_plugin_host::sdk::host_api::SESSION_SCOPED_CALL_ID),
+        ))
+    }
+
+    /// Agent capability scope.
+    ///
+    /// Agent coordination is owned by the `agena.agent` plugin, which is the
+    /// only holder of this host capability. Any other plugin reaches the same
+    /// behaviour by invoking `agena.agent.*` through `invoke_tool`, so agent
+    /// work keeps one permission, transcript and budget path.
+    ///
+    /// A tool-bound callback uses its live call id; a session-scoped callback
+    /// passes none, which the session manager already supports by attributing
+    /// the child to the session's latest message.
+    fn agent_callback_scope(&self) -> Result<(i64, Option<i64>), PluginError> {
+        self.require_agent_delegation()?;
+        let context = self.callback_context()?;
+        let session_id = context
+            .session_id
+            .ok_or_else(|| host_unavailable("agent coordination requires a session"))?;
+        Ok((session_id, context.call_id))
+    }
+
+    fn require_agent_delegation(&self) -> Result<(), PluginError> {
+        let owner = agena_bundled_plugins::tool::agent_plugin_id();
+        let caller = self.callback_plugin_key()?;
+        if caller.to_string() == owner {
+            return Ok(());
+        }
+        Err(PluginError::from_kind(
+            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+            format!(
+                "agent coordination belongs to `{owner}`; invoke its `agena.agent.*` tools \
+                 through host/tool.invoke instead of the host agent callbacks"
+            ),
+        ))
     }
 
     fn callback_plugin_key(&self) -> Result<PluginKey, PluginError> {
@@ -559,7 +1046,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         request: PathPermissionQuery,
     ) -> Result<(), PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
+        let (session, call) = self.callback_scope()?;
         self.session_manager()?
             .require_host_path_permission(session, call, request.kind, request.path)
             .await
@@ -567,7 +1054,7 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn require_network_permission(&self, target: String) -> Result<(), PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
+        let (session, call) = self.callback_scope()?;
         self.session_manager()?
             .require_host_network_permission(session, call, target)
             .await
@@ -685,21 +1172,42 @@ impl HostClient for RuntimeHostClient {
         let session_id = caller
             .session_id
             .ok_or_else(|| host_unavailable("host/tool.invoke requires session_id"))?;
-        let call_id = caller.call_id.unwrap_or(-1);
         let structured = StructuredObject::try_from(input)
             .map_err(|err| PluginError::invalid_params(format!("invoke_tool input: {err}")))?;
         let invocation = ToolInvocation::new(resolution.canonical_name(), structured);
-        let _guard = agena_runtime::try_enter_invocation(session_id, call_id, plugin_id.clone())
-            .ok_or_else(|| {
-                PluginError::internal(format!(
-                    "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
-                ))
-            })?;
-        let execution = self
-            .session_manager()?
-            .execute_host_invoked_tool(session_id, call_id, invocation)
-            .await
-            .map_err(plugin_error_from_app)?;
+        let call_id = caller.call_id;
+        let _delegation = agena_runtime::try_enter_delegation(session_id).ok_or_else(|| {
+            PluginError::internal(format!(
+                "plugin tool delegation in session {session_id} exceeded its nesting bound \
+                 (possible cycle through `{plugin_id}`)"
+            ))
+        })?;
+        // A hook (`session.start`, `chat.*`, `run.pre`, …) has no transcript
+        // tool call, so it delegates under the session's policy instead of the
+        // live-call authority. Only a real tool invocation carries a call id.
+        let execution = match call_id {
+            Some(call_id) => {
+                let _guard = agena_runtime::try_enter_invocation(
+                    session_id,
+                    call_id,
+                    plugin_id.clone(),
+                )
+                .ok_or_else(|| {
+                    PluginError::internal(format!(
+                        "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
+                    ))
+                })?;
+                self.session_manager()?
+                    .execute_host_invoked_tool(session_id, call_id, invocation)
+                    .await
+            }
+            None => {
+                self.session_manager()?
+                    .execute_session_scoped_tool(session_id, invocation)
+                    .await
+            }
+        }
+        .map_err(plugin_error_from_app)?;
 
         Ok(tool_execution_to_invoke_output(execution))
     }
@@ -778,9 +1286,9 @@ impl HostClient for RuntimeHostClient {
             .map_err(bot_plugin_error)
     }
     async fn spawn_agent(&self, req: AgentSpawnRequest) -> Result<AgentHandle, PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
+        let (session, call) = self.agent_callback_scope()?;
         self.session_manager()?
-            .spawn_agent(session, Some(call), req)
+            .spawn_agent(session, call, req)
             .await
             .map_err(plugin_error)
     }
@@ -789,15 +1297,18 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: AgentMessageRequest,
     ) -> Result<AgentMessageReceipt, PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
+        let (session, call) = self.agent_callback_scope()?;
         self.session_manager()?
-            .message_agent(session, Some(call), req)
+            .message_agent(session, call, req)
             .await
             .map_err(plugin_error)
     }
 
     async fn wait_agent(&self, req: AgentWaitRequest) -> Result<AgentWaitResponse, PluginError> {
+        // Waiting releases this tool's concurrency permit, so it needs a live
+        // tool call; without one it would block a hook past its timeout.
         let (session, call) = self.callback_session_and_call()?;
+        self.require_agent_delegation()?;
         self.session_manager()?
             .wait_agent(session, Some(call), req)
             .await
@@ -805,9 +1316,9 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn followup_agent(&self, req: AgentMessageRequest) -> Result<AgentHandle, PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
+        let (session, call) = self.agent_callback_scope()?;
         self.session_manager()?
-            .followup_agent(session, Some(call), req)
+            .followup_agent(session, call, req)
             .await
             .map_err(plugin_error)
     }
@@ -816,9 +1327,9 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: AgentTargetRequest,
     ) -> Result<AgentMessageReceipt, PluginError> {
-        let (session, call) = self.callback_session_and_call()?;
+        let (session, call) = self.agent_callback_scope()?;
         self.session_manager()?
-            .cancel_agent(session, Some(call), req)
+            .cancel_agent(session, call, req)
             .await
             .map_err(plugin_error)
     }
@@ -894,290 +1405,103 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
-    async fn session_query(
+    async fn get_session(
         &self,
-        req: HostSessionQueryRequest,
-    ) -> Result<HostSessionQueryResponse, PluginError> {
-        let runtime = self.runtime()?;
-        let services = runtime.application_services();
-        let target = match req.query {
-            HostSessionQuery::List { .. } => None,
-            _ => Some(self.callback_or_requested_session_id(req.session_id, "session_query")?),
-        };
-        let data = match req.query {
-            HostSessionQuery::List {
-                workspace_id,
-                search,
-                limit,
-            } => {
-                let manager = self.session_manager()?;
-                let request = agena_domain::SessionListRequest {
-                    limit: limit.map(u64::from),
-                    search,
-                    ..Default::default()
-                };
-                let (manager, rows) = if let Some(workspace_id) = workspace_id {
-                    // The manager lists within its current workspace; an
-                    // explicit id must match or the caller sees nothing.
-                    let rows = manager.list_session_summaries(request).await;
-                    (manager, (rows, Some(workspace_id)))
-                } else {
-                    let rows = manager.list_session_summaries(request).await;
-                    (manager, (rows, None))
-                };
-                let _ = manager;
-                let (rows, filter) = rows;
-                let rows = rows.map_err(plugin_error)?;
-                let rows = match filter {
-                    Some(id) => rows
-                        .into_iter()
-                        .filter(|row| row.workspace_id == Some(id))
-                        .collect(),
-                    None => rows,
-                };
-                serde_json::to_value(rows).map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::Get => {
-                let target = target.expect("resolved above");
-                let session = self
-                    .use_session_manager(|manager| async move { manager.get_session(target).await })
-                    .await?;
-                serde_json::to_value(session)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::State => {
-                let target = target.expect("resolved above");
-                let summary = self
-                    .use_session_manager(|manager| async move {
-                        manager.get_session_summary(target).await
-                    })
-                    .await?;
-                let active = self
-                    .use_session_manager(|manager| async move {
-                        Ok::<bool, crate::AppError>(manager.is_run_active(target).await)
-                    })
-                    .await
-                    .unwrap_or(false);
-                serde_json::json!({"summary": summary, "running": active})
-            }
-            HostSessionQuery::Parts { after, limit } => {
-                let target = target.expect("resolved above");
-                let page = self
-                    .use_session_manager(|manager| async move {
-                        let kernel = manager.session_kernel();
-                        kernel
-                            .reader
-                            .message_history(
-                                agena_storage::kernel::SessionId::try_from(target)
-                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
-                                None,
-                                limit.unwrap_or(8).clamp(1, 32) as usize,
-                                32,
-                            )
-                            .await
-                            .map_err(|error| crate::AppError::Config(error.to_string()))
-                    })
-                    .await?;
-                let _ = after;
-                serde_json::to_value(&*page).map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::Content { resource_id } => {
-                let target = target.expect("resolved above");
-                serde_json::json!({
-                    "session_id": target,
-                    "resource_id": resource_id,
-                    "note": "read the content through the parts view",
-                })
-            }
-            HostSessionQuery::Executions => {
-                let target = target.expect("resolved above");
-                let sessions = self
-                    .use_session_manager(|manager| async move {
-                        manager.list_session_tree(target).await
-                    })
-                    .await?;
-                serde_json::to_value(sessions)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::Cost => {
-                let target = target.expect("resolved above");
-                let queries = services
-                    .session_queries
-                    .clone()
-                    .ok_or_else(|| host_unavailable("session queries are not enabled"))?;
-                let summary = queries
-                    .session_cost_summary(target)
-                    .await
-                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
-                serde_json::to_value(summary)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::Tree { root_id } => {
-                let sessions = self
-                    .use_session_manager(|manager| async move {
-                        manager.list_session_tree(root_id).await
-                    })
-                    .await?;
-                serde_json::to_value(sessions)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::Platforms => {
-                let target = target.expect("resolved above");
-                let assistant = self
-                    .runtime()?
-                    .assistant_service()
-                    .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
-                let inventory = agena_assistant::AssistantService::platform_inventory(
-                    assistant.as_ref(),
-                    target,
-                )
-                .await
-                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
-                serde_json::to_value(inventory)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            HostSessionQuery::Pending => {
-                let target = target.expect("resolved above");
-                let requests = self
-                    .use_session_manager(|manager| async move {
-                        let kernel = manager.session_kernel();
-                        let snapshot = kernel
-                            .reader
-                            .control_snapshot(
-                                agena_storage::kernel::SessionId::try_from(target)
-                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
-                                32,
-                            )
-                            .await
-                            .map_err(|error| crate::AppError::Config(error.to_string()))?;
-                        manager.pending_interactive_requests(&snapshot).await
-                    })
-                    .await?;
-                serde_json::to_value(requests)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-        };
-        Ok(HostSessionQueryResponse { data })
+        req: HostGetSessionRequest,
+    ) -> Result<HostGetSessionResponse, PluginError> {
+        let session_id = self.callback_or_requested_session_id(req.session_id, "get_session")?;
+        let session = self
+            .use_session_manager(|manager| async move { manager.get_session(session_id).await })
+            .await?;
+        Ok(HostGetSessionResponse {
+            session: session_resource_from_session(&session),
+        })
     }
 
-    async fn session_command(
+    async fn rename_session(
         &self,
-        req: HostSessionCommandRequest,
-    ) -> Result<HostSessionCommandResponse, PluginError> {
-        let target = self.callback_or_requested_session_id(req.session_id, "session_command")?;
-        let mut execution_ids = Vec::new();
-        let mut data = None;
-        match req.command {
-            HostSessionCommand::Submit {
-                document,
-                author,
-                origin,
-            } => {
-                // A plugin may describe an external speaker, but only the host
-                // may conclude instance-operator authority. Rejecting the claim
-                // keeps a compromised adapter from acting as the operator.
-                if author
-                    .as_ref()
-                    .is_some_and(|author| author.is_instance_operator())
-                {
-                    return Err(PluginError::invalid_params(
-                        "plugins cannot submit input as the instance operator",
-                    ));
-                }
-                let outcome = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .submit_managed_document(
-                                target,
-                                req.idempotency_key.clone().unwrap_or_default(),
-                                document,
-                                author,
-                                origin,
-                            )
-                            .await
-                    })
-                    .await?;
-                if let Some(receipt) = outcome.receipt {
-                    execution_ids.push(receipt.execution_id.to_string());
-                }
+        req: HostRenameSessionRequest,
+    ) -> Result<HostRenameSessionResponse, PluginError> {
+        let session_id = self.callback_or_requested_session_id(req.session_id, "rename_session")?;
+        let title = req.title.trim();
+        if title.is_empty() {
+            return Err(PluginError::invalid_params(
+                "session title must not be empty",
+            ));
+        }
+        let title = title.to_string();
+        let session = self
+            .use_session_manager(|manager| async move {
+                manager.rename_session(session_id, title).await
+            })
+            .await?;
+        Ok(HostRenameSessionResponse {
+            session: session_resource_from_session(&session),
+        })
+    }
+
+    async fn builtin_provider_models(&self) -> Result<serde_json::Value, PluginError> {
+        let context = current_host_callback_context()
+            .ok_or_else(|| host_unavailable("model discovery requires an active tool callback"))?;
+        if context.plugin_id.as_deref() != Some("agena.provider") {
+            return Err(host_unavailable(
+                "provider model discovery is restricted to the bundled provider plugin",
+            ));
+        }
+        let (session_id, _) = self.callback_session_and_call()?;
+        let session = self
+            .session_manager()?
+            .get_session(session_id)
+            .await
+            .map_err(plugin_error)?;
+        let snapshot = self.snapshot()?;
+        let selected = snapshot
+            .provider_registry()
+            .resolve_default_model_selection(&session.execution.selection)
+            .map_err(plugin_error)?
+            .ok_or_else(|| host_unavailable("select a provider before discovering models"))?;
+        let provider_id = selected.provider_id.to_string();
+        let config = snapshot
+            .provider_configs()
+            .get::<str>(&provider_id)
+            .ok_or_else(|| host_unavailable("the current provider has no configuration"))?;
+        let targets =
+            agena_runtime_provider_adapters::config_support::provider_model_discovery_targets(
+                &provider_id,
+                config,
+            )
+            .map_err(plugin_error)?;
+        for target in targets {
+            self.require_network_permission(target).await?;
+        }
+        let discovery = snapshot
+            .discover_provider_models(&provider_id)
+            .await
+            .map_err(plugin_error)?;
+        let mut result = serde_json::to_value(discovery).map_err(plugin_error)?;
+        result["provider_id"] = serde_json::json!(provider_id);
+        result["current_model"] = serde_json::json!(selected.model_id);
+        result["current_adapter"] = serde_json::json!(selected.adapter_id);
+        result["capability_notice"] = serde_json::json!(
+            "All enabled adapters of this provider are queried, subject to configured-only discovery policies. Model presence and catalog metadata do not guarantee operation or account access."
+        );
+        Ok(result)
+    }
+
+    async fn session_op(&self, op: SessionOp) -> Result<SessionOpResponse, PluginError> {
+        // The plugin contract *is* the HTTP contract: `SessionOp` wraps the
+        // same `Query`/`Command` enums a browser client sends. One exhaustive
+        // match per direction is the only place a new operation is routed.
+        match op {
+            SessionOp::Query(query) => {
+                let response = self.run_session_query(query).await?;
+                Ok(SessionOpResponse::Query(response))
             }
-            HostSessionCommand::Cancel => {
-                let outcome = self
-                    .use_session_manager(|manager| async move {
-                        manager.cancel_active_execution_with_outcome(target).await
-                    })
-                    .await?;
-                serde_json::to_value(outcome.result).ok();
-            }
-            HostSessionCommand::SetQueuePaused { paused } => {
-                self.use_session_manager(|manager| async move {
-                    manager.set_message_queue_paused(target, paused).await
-                })
-                .await?;
-            }
-            HostSessionCommand::Rename { title } => {
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        manager.rename_session(target, title).await
-                    })
-                    .await?;
-                data = serde_json::to_value(session).ok();
-            }
-            HostSessionCommand::Fork {
-                from_part_id,
-                title,
-            } => {
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .fork_session(crate::session::SessionForkRequest {
-                                conversation_mode: None,
-                                session_id: target,
-                                at_message_id: from_part_id,
-                                title,
-                                expected_version: None,
-                            })
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(session).ok();
-            }
-            HostSessionCommand::Rewind { part_id } => {
-                let result = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .rewind_session(crate::session::SessionRewindRequest {
-                                session_id: target,
-                                at_message_id: part_id,
-                                mode: crate::session::RewindMode::InPlace,
-                                expected_version: None,
-                            })
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(&result.0).ok();
-            }
-            HostSessionCommand::Compact => {
-                return Err(host_unavailable(
-                    "compaction is not yet reachable from a plugin callback",
-                ));
-            }
-            HostSessionCommand::ClearQueue
-            | HostSessionCommand::RemoveQueued { .. }
-            | HostSessionCommand::TakeQueued { .. }
-            | HostSessionCommand::ReplyPermission { .. }
-            | HostSessionCommand::ReplyUserInput { .. }
-            | HostSessionCommand::SetSelection { .. } => {
-                return Err(host_unavailable(
-                    "this session command is not yet reachable from a plugin callback",
-                ));
+            SessionOp::Command(command) => {
+                let response = self.run_session_command(command).await?;
+                Ok(SessionOpResponse::Command(response))
             }
         }
-        Ok(HostSessionCommandResponse {
-            session_id: Some(target),
-            execution_ids,
-            data,
-        })
     }
 
     async fn session_stream(
@@ -1282,118 +1606,6 @@ impl HostClient for RuntimeHostClient {
             }
         };
         Ok(HostWorkspaceQueryResponse { data })
-    }
-
-    async fn get_session(
-        &self,
-        req: HostGetSessionRequest,
-    ) -> Result<HostGetSessionResponse, PluginError> {
-        let session_id = self.callback_or_requested_session_id(req.session_id, "get_session")?;
-        let session = self
-            .use_session_manager(|manager| async move { manager.get_session(session_id).await })
-            .await?;
-        Ok(HostGetSessionResponse {
-            session: host_session_from_session(&session),
-        })
-    }
-
-    async fn rename_session(
-        &self,
-        req: HostRenameSessionRequest,
-    ) -> Result<HostRenameSessionResponse, PluginError> {
-        let session_id = self.callback_or_requested_session_id(req.session_id, "rename_session")?;
-        let title = req.title.trim();
-        if title.is_empty() {
-            return Err(PluginError::invalid_params(
-                "session title must not be empty",
-            ));
-        }
-        let title = title.to_string();
-        let session = self
-            .use_session_manager(|manager| async move {
-                manager.rename_session(session_id, title).await
-            })
-            .await?;
-        Ok(HostRenameSessionResponse {
-            session: host_session_from_session(&session),
-        })
-    }
-
-    async fn set_session_model(
-        &self,
-        req: HostSetSessionModelRequest,
-    ) -> Result<HostSetSessionModelResponse, PluginError> {
-        use std::str::FromStr;
-
-        let session_id =
-            self.callback_or_requested_session_id(req.session_id, "set_session_model")?;
-        let model = agena_domain::ModelRef::from_str(req.model.trim()).map_err(|error| {
-            PluginError::invalid_params(format!(
-                "skill model must be a fully-qualified provider/model reference: {error}"
-            ))
-        })?;
-        let provider_id = model.provider_id.to_string();
-        let adapter_id = model.adapter_id.as_ref().map(ToString::to_string);
-        let model_id = model.model_id.to_string();
-        let session = self
-            .use_session_manager(|manager| async move {
-                manager.set_session_model_override(session_id, model).await
-            })
-            .await?;
-        Ok(HostSetSessionModelResponse {
-            session: host_session_from_session(&session),
-            provider_id,
-            adapter_id,
-            model_id,
-        })
-    }
-
-    async fn builtin_provider_models(&self) -> Result<serde_json::Value, PluginError> {
-        let context = current_host_callback_context()
-            .ok_or_else(|| host_unavailable("model discovery requires an active tool callback"))?;
-        if context.plugin_id.as_deref() != Some("agena.provider") {
-            return Err(host_unavailable(
-                "provider model discovery is restricted to the bundled provider plugin",
-            ));
-        }
-        let (session_id, _) = self.callback_session_and_call()?;
-        let session = self
-            .session_manager()?
-            .get_session(session_id)
-            .await
-            .map_err(plugin_error)?;
-        let snapshot = self.snapshot()?;
-        let selected = snapshot
-            .provider_registry()
-            .resolve_default_model_selection(&session.execution.selection)
-            .map_err(plugin_error)?
-            .ok_or_else(|| host_unavailable("select a provider before discovering models"))?;
-        let provider_id = selected.provider_id.to_string();
-        let config = snapshot
-            .provider_configs()
-            .get::<str>(&provider_id)
-            .ok_or_else(|| host_unavailable("the current provider has no configuration"))?;
-        let targets =
-            agena_runtime_provider_adapters::config_support::provider_model_discovery_targets(
-                &provider_id,
-                config,
-            )
-            .map_err(plugin_error)?;
-        for target in targets {
-            self.require_network_permission(target).await?;
-        }
-        let discovery = snapshot
-            .discover_provider_models(&provider_id)
-            .await
-            .map_err(plugin_error)?;
-        let mut result = serde_json::to_value(discovery).map_err(plugin_error)?;
-        result["provider_id"] = serde_json::json!(provider_id);
-        result["current_model"] = serde_json::json!(selected.model_id);
-        result["current_adapter"] = serde_json::json!(selected.adapter_id);
-        result["capability_notice"] = serde_json::json!(
-            "All enabled adapters of this provider are queried, subject to configured-only discovery policies. Model presence and catalog metadata do not guarantee operation or account access."
-        );
-        Ok(result)
     }
 
     async fn builtin_provider_connection(
@@ -1588,112 +1800,6 @@ impl HostClient for RuntimeHostClient {
         })
     }
 
-    async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
-            host_unavailable("background process registry is not enabled in this runtime")
-        })?;
-        let command = join_monitor_command(&req.command)?;
-        self.require_callback_invocation("agena.shell.spawn", serde_json::json!({
-            "command": command, "workdir": req.cwd, "reads": req.reads, "writes": req.writes, "network": req.network,
-        })).await?;
-        let cwd = req
-            .cwd
-            .as_deref()
-            .map(|path| executor.resolve_target_path(path))
-            .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-        let env = if req.env.is_empty() {
-            std::env::vars().collect()
-        } else {
-            req.env.into_iter().collect()
-        };
-        let summary = registry
-            .start(MonitorStartParams {
-                argv: None,
-                output: None,
-                owner: Some(agena_runtime_tools::TerminalOwner {
-                    workspace: executor.workspace_root().to_owned(),
-                    session_id: self.callback_context()?.session_id,
-                }),
-                process_id: None,
-                description: req.label.unwrap_or_else(|| command.clone()),
-                command,
-                ws: None,
-                workdir: cwd,
-                timeout_ms: req.timeout_ms,
-                persistent: req.persistent,
-                monitored: true,
-                watch: None,
-                include_pattern: req.include_pattern,
-                success_pattern: None,
-                failure_pattern: None,
-                quiet_period_ms: None,
-                max_buffered_lines: req.max_buffered_lines,
-                capture_stderr: req.capture_stderr,
-                env,
-            })
-            .map_err(map_monitor_error)?
-            .summary;
-        Ok(render_monitor_handle(summary))
-    }
-
-    async fn monitor_list(&self) -> Result<Vec<MonitorHandle>, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
-            host_unavailable("background process registry is not enabled in this runtime")
-        })?;
-        let owner = self.callback_monitor_owner(&executor)?;
-        Ok(registry
-            .list()
-            .into_iter()
-            .filter(|monitor| registry.is_owned(&monitor.process_id, &owner))
-            .map(render_monitor_handle)
-            .collect())
-    }
-
-    async fn monitor_read(
-        &self,
-        req: MonitorReadRequest,
-    ) -> Result<MonitorReadResponse, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
-            host_unavailable("background process registry is not enabled in this runtime")
-        })?;
-        self.require_monitor_owner(&executor, registry.as_ref(), &req.id)?;
-        let read = crate::blocking::PROCESS_LOG_READS
-            .run(move || {
-                registry.read(MonitorReadParams {
-                    monitor_id: req.id,
-                    since_seq: req.since_seq,
-                    limit: req.limit,
-                    wait_ms: if req.follow && req.wait_ms == 0 {
-                        30_000
-                    } else {
-                        req.wait_ms
-                    },
-                })
-            })
-            .await
-            .map_err(|error| PluginError::internal(format!("monitor read worker failed: {error}")))?
-            .map_err(map_monitor_error)?;
-        Ok(render_monitor_read(read))
-    }
-
-    async fn monitor_stop(&self, req: MonitorStopRequest) -> Result<MonitorHandle, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let registry = executor.monitor_registry().cloned().ok_or_else(|| {
-            host_unavailable("background process registry is not enabled in this runtime")
-        })?;
-        self.require_monitor_owner(&executor, registry.as_ref(), &req.id)?;
-        self.require_callback_invocation(
-            "agena.shell.stop",
-            serde_json::json!({"process_id":req.id}),
-        )
-        .await?;
-        let stop = registry.stop(req.id.as_str()).map_err(map_monitor_error)?;
-        Ok(render_monitor_handle(stop.summary))
-    }
-
     async fn storage_get(
         &self,
         req: HostStorageGetRequest,
@@ -1827,189 +1933,6 @@ impl HostClient for RuntimeHostClient {
         Ok(HostLspListServersResponse { servers })
     }
 
-    async fn lsp_list_diagnostics(
-        &self,
-        req: HostLspListDiagnosticsRequest,
-    ) -> Result<HostLspListDiagnosticsResponse, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.lsp_registry().cloned(),
-            "lsp registry is not enabled in this runtime",
-        )?;
-        let pairs = registry.collect_diagnostics().await;
-        let mut diagnostics_out = Vec::new();
-        for (uri, diagnostics) in pairs {
-            if let Some(filter) = req.uri.as_ref()
-                && filter != &uri
-            {
-                continue;
-            }
-            let path = url::Url::parse(&uri)
-                .ok()
-                .and_then(|uri| uri.to_file_path().ok())
-                .ok_or_else(|| {
-                    PluginError::invalid_params("LSP diagnostics must reference a local file URI")
-                })?;
-            self.require_path_permission(PathPermissionQuery::read(path.to_string_lossy()))
-                .await?;
-            for diagnostic in diagnostics {
-                diagnostics_out.push(HostLspDiagnostic {
-                    uri: uri.clone(),
-                    severity: lsp_severity_string(diagnostic.severity),
-                    message: diagnostic.message,
-                    start_line: diagnostic.range.start.line,
-                    start_character: diagnostic.range.start.character,
-                    end_line: diagnostic.range.end.line,
-                    end_character: diagnostic.range.end.character,
-                    source: diagnostic.source,
-                    code: diagnostic.code.map(|code| match code {
-                        agena_lsp::lsp_types::NumberOrString::Number(n) => n.to_string(),
-                        agena_lsp::lsp_types::NumberOrString::String(s) => s,
-                    }),
-                });
-            }
-        }
-        Ok(HostLspListDiagnosticsResponse {
-            diagnostics: diagnostics_out,
-        })
-    }
-
-    async fn scheduler_list(&self) -> Result<HostSchedulerListResponse, PluginError> {
-        let (_, scheduler) = self.executor_feature(
-            |executor| executor.scheduler().cloned(),
-            "scheduler is not enabled in this runtime",
-        )?;
-        self.require_callback_invocation("agena.cron.list", serde_json::json!({}))
-            .await?;
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let workspace = tokio::fs::canonicalize(executor.workspace_root())
-            .await
-            .map_err(plugin_error)?
-            .display()
-            .to_string();
-        let session = self.callback_context()?.session_id;
-        let jobs = scheduler
-            .list_owned(&workspace, session)
-            .await
-            .map_err(|error| PluginError::internal_error(&error))?;
-        let entries = jobs.into_iter().map(scheduler_job_to_sdk).collect();
-        Ok(HostSchedulerListResponse { jobs: entries })
-    }
-
-    async fn scheduler_create(
-        &self,
-        req: HostSchedulerCreateRequest,
-    ) -> Result<HostSchedulerCreateResponse, PluginError> {
-        let (_, scheduler) = self.executor_feature(
-            |executor| executor.scheduler().cloned(),
-            "scheduler is not enabled in this runtime",
-        )?;
-        let (session, _) = self.callback_session_and_call()?;
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let (owner, prompt, expression) = match &req {
-            HostSchedulerCreateRequest::Cron {
-                owner_session_id,
-                prompt,
-                expression,
-                ..
-            } => (*owner_session_id, prompt.clone(), expression.clone()),
-            HostSchedulerCreateRequest::Once {
-                owner_session_id,
-                prompt,
-                ..
-            } => (*owner_session_id, prompt.clone(), "0 * * * * *".to_owned()),
-        };
-        if owner.is_some_and(|owner| owner != session) {
-            return Err(PluginError::invalid_params(
-                "schedules must belong to the callback session",
-            ));
-        }
-        self.require_callback_invocation(
-            "agena.cron.create",
-            serde_json::json!({"expression":expression,"prompt":prompt,"timezone":"UTC"}),
-        )
-        .await?;
-        let mut job = match req {
-            HostSchedulerCreateRequest::Cron {
-                expression,
-                prompt,
-                max_age_days,
-                owner_session_id,
-            } => {
-                let mut job = agena_scheduler::ScheduledJob::new_cron(
-                    expression,
-                    prompt,
-                    max_age_days.unwrap_or(7),
-                )
-                .map_err(|error| PluginError::invalid_params_error(&error))?;
-                if let Some(session) = owner_session_id {
-                    job.set_owner(session);
-                }
-                job
-            }
-            HostSchedulerCreateRequest::Once {
-                at_ms,
-                prompt,
-                owner_session_id,
-            } => {
-                let at = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(at_ms)
-                    .ok_or_else(|| PluginError::invalid_params("invalid at_ms"))?;
-                let mut job = agena_scheduler::ScheduledJob::new_once(at, prompt);
-                if let Some(session) = owner_session_id {
-                    job.set_owner(session);
-                }
-                job
-            }
-        };
-        job.set_owner(session);
-        job.owner_workspace = Some(
-            tokio::fs::canonicalize(executor.workspace_root())
-                .await
-                .map_err(plugin_error)?
-                .display()
-                .to_string(),
-        );
-        let id = job.id;
-        scheduler
-            .add(job)
-            .await
-            .map_err(|error| PluginError::internal_error(&error))?;
-        Ok(HostSchedulerCreateResponse { id: id.to_string() })
-    }
-
-    async fn scheduler_delete(
-        &self,
-        req: HostSchedulerDeleteRequest,
-    ) -> Result<HostSchedulerDeleteResponse, PluginError> {
-        let (_, scheduler) = self.executor_feature(
-            |executor| executor.scheduler().cloned(),
-            "scheduler is not enabled in this runtime",
-        )?;
-        let id = uuid::Uuid::parse_str(&req.id)
-            .map_err(|err| PluginError::invalid_params(format!("invalid scheduler id: {err}")))?;
-        self.require_callback_invocation("agena.cron.delete", serde_json::json!({"id":req.id}))
-            .await?;
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let workspace = tokio::fs::canonicalize(executor.workspace_root())
-            .await
-            .map_err(plugin_error)?
-            .display()
-            .to_string();
-        let removed = scheduler
-            .remove_owned(&workspace, self.callback_context()?.session_id, id)
-            .await
-            .map_err(|error| PluginError::internal_error(&error))?;
-        Ok(HostSchedulerDeleteResponse { removed })
-    }
-
-    async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse, PluginError> {
-        let manager = self.snapshot_feature(
-            |snapshot| snapshot.mcp_manager(),
-            "mcp manager is not enabled in this runtime",
-        )?;
-        let servers = manager.server_names().await;
-        Ok(HostMcpListServersResponse { servers })
-    }
-
     async fn require_mcp_server_permission(
         &self,
         spec: HostMcpServerSpec,
@@ -2048,67 +1971,84 @@ impl HostClient for RuntimeHostClient {
             }
         }
     }
+}
 
-    async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> Result<(), PluginError> {
-        self.require_mcp_server_permission(req.spec.clone()).await?;
-        let manager = self.snapshot_feature(
-            |snapshot| snapshot.mcp_manager(),
-            "mcp manager is not enabled in this runtime",
-        )?;
-        let spec = match req.spec {
-            HostMcpServerSpec::Stdio {
-                command,
-                args,
-                env,
-                cwd,
-            } => agena_mcp_client::ServerSpec::Stdio {
-                command,
-                args,
-                env: env.into_iter().collect(),
-                cwd: cwd.map(std::path::PathBuf::from),
-                tool_policy: Default::default(),
-            },
-            HostMcpServerSpec::Http {
-                url,
-                bearer,
-                headers,
-            } => {
-                let url = url::Url::parse(&url)
-                    .map_err(|e| PluginError::invalid_params(format!("invalid mcp url: {e}")))?;
-                let auth = bearer.map(agena_mcp_client::HttpAuth::Bearer);
-                agena_mcp_client::ServerSpec::Http {
-                    url,
-                    headers: headers.into_iter().collect(),
-                    auth,
-                    tool_policy: Default::default(),
-                }
-            }
-        };
-        manager
-            .add_server(&req.name, spec)
-            .await
-            .map_err(|error| PluginError::internal(error.user_message()))
+fn kernel_session_id(id: i64) -> Result<agena_storage::kernel::SessionId, PluginError> {
+    agena_storage::kernel::SessionId::try_from(id)
+        .map_err(|error| PluginError::invalid_params(error.to_string()))
+}
+
+#[cfg(test)]
+mod agent_capability_tests {
+    use super::*;
+    use agena_plugin_host::sdk::host_api::{
+        HostCallbackContext, run_in_isolated_host_callback_context,
+    };
+
+    fn client() -> RuntimeHostClient {
+        RuntimeHostClient {
+            generation: 1,
+            config: serde_json::Value::Null,
+            runtime: OnceLock::new(),
+        }
     }
 
-    async fn mcp_remove_server(
-        &self,
-        req: HostMcpRemoveServerRequest,
-    ) -> Result<HostMcpRemoveServerResponse, PluginError> {
-        let manager = self.snapshot_feature(
-            |snapshot| snapshot.mcp_manager(),
-            "mcp manager is not enabled in this runtime",
-        )?;
-        match manager.remove_server(&req.name).await {
-            Ok(()) => Ok(HostMcpRemoveServerResponse { removed: true }),
-            Err(agena_mcp_client::McpError::ServerNotConnected(_)) => {
-                Ok(HostMcpRemoveServerResponse { removed: false })
-            }
-            Err(error) => Err(PluginError::internal(
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    "mcp.remove_server failed",
-                    &error,
-                ),
-            )),
+    fn context(plugin: &str) -> HostCallbackContext {
+        HostCallbackContext {
+            plugin_id: Some(plugin.to_string()),
+            session_id: Some(7),
+            call_id: Some(11),
+            ..Default::default()
         }
+    }
+
+    /// The bundled agent plugin is the only holder of the agent capability.
+    #[tokio::test]
+    async fn only_the_agent_plugin_may_coordinate_agents() {
+        let owner = agena_bundled_plugins::tool::agent_plugin_id();
+        let client = client();
+        run_in_isolated_host_callback_context(context(owner), async {
+            assert!(client.require_agent_delegation().is_ok());
+        })
+        .await;
+
+        for foreign in ["example.echo", "agena.fs", "agena.web"] {
+            run_in_isolated_host_callback_context(context(foreign), async {
+                let error = client
+                    .require_agent_delegation()
+                    .expect_err("a non-owner plugin must not hold the agent capability");
+                assert_eq!(
+                    error.kind,
+                    agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                    "{foreign} was allowed to coordinate agents"
+                );
+            })
+            .await;
+        }
+    }
+
+    /// The error names the delegation route so a plugin author can fix it.
+    #[tokio::test]
+    async fn refusal_points_at_tool_invocation() {
+        let client = client();
+        run_in_isolated_host_callback_context(context("example.echo"), async {
+            let error = client.require_agent_delegation().unwrap_err();
+            let text = error.diagnostic_message().to_owned();
+            assert!(text.contains("agena.agent.*"), "{text}");
+            assert!(text.contains("host/tool.invoke"), "{text}");
+        })
+        .await;
+    }
+
+    /// A callback without a plugin identity cannot obtain the capability.
+    #[tokio::test]
+    async fn unattributed_callers_are_refused() {
+        let client = client();
+        let mut bare = context("agena.agent");
+        bare.plugin_id = None;
+        run_in_isolated_host_callback_context(bare, async {
+            assert!(client.require_agent_delegation().is_err());
+        })
+        .await;
     }
 }

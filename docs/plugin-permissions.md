@@ -31,6 +31,21 @@ cdylib ABI 版本为 2，`cancel(request_id)` 独立于 dispatch 队列。原生
 - 同一工具调用并发提出的审批串行处理，避免争抢工具的交互槽。已批准的相同访问可在本次调用内复用；网络按主机与端口复用。每次仍先读取当前规则，明确 Deny 优先。AllowOnce 不跨工具调用复用。
 - 审批等待暂停执行预算，不暂停取消信号。审批结束后继续计算实际工作耗时；并发等待只计一次。SDK、宿主工具调用、HTTP 传输、抓取和搜索协调器共享这一约定。
 
+### 插件间工具委托（`HostClient::invoke_tool`）
+
+插件调用另一个插件的工具时，请求进入完整执行链：输入 schema、`tool.before`、权限引擎、`tool.after` 与输出 schema 校验。委托不是绕过策略的旁路，也不允许插件调用自身。
+
+授权形态取决于来源回调：
+
+- **工具内回调**（`tool.before/after/failure`、`tool.invoke`、`shell.before`、`command.invoke`）携带真实 call id，使用该工具调用的授权与审批槽。
+- **会话级回调**（`session.start/end`、`run.pre/post`、`chat.*`、`shell.env`）没有对话中的工具调用，使用一个负数委托 id，按所属会话的策略与工作区规则授权。
+
+会话级委托没有对话工具身份：不产生工具 part、不携带 launch provenance，子工作归属于会话而非某个 receipt。它同样没有审批槽，因此 `ask` 与 `auto` 会返回明确的 `CapabilityUnavailable`，而不是等待一个无法被询问的用户；只有显式适用规则（或静态 Allow 策略）才放行。每个资源目标仍逐项解析规则，明确 Deny 优先。
+
+单向 hook 不在此列。`notification`、`run.pre`、`run.post`、`session.end` 以 notification 投递，`notify` 在帧写出后即返回，为其签发的回调凭证会在 handler 运行前被撤销，因此这些 hook 目前只做观察。`init`、`shutdown` 没有会话。
+
+每个会话的委托嵌套深度有上限，可拒绝 A→B→A 这类环，同时不误伤对同一插件的并发委托。
+
 ## 逐插件结果
 
 | 插件 | 文件、网络或其他副作用 | 权限入口与本轮处理 |

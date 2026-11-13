@@ -31,20 +31,15 @@ use crate::sdk::host_api::{
     HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
     HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostHookDescriptor, HostHookListResponse,
     HostHookRegistration, HostImageExecuteRequest, HostImageExecuteResponse,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostPluginStatus, HostPluginStatusGetRequest,
+    HostLspListServersResponse, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredCommandListResponse,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
-    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSetSessionModelRequest, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
+    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSecretDeleteRequest,
+    HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
+    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, HostWorkspaceQueryRequest, LogLevel, NoopHostClient,
     PluginNotifyRequest, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
@@ -999,12 +994,6 @@ struct HostListToolsParams {
 }
 
 #[derive(serde::Deserialize)]
-struct HostMonitorListParams {
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
 struct HostStorageListParams {
     #[serde(default)]
     request: HostStorageListRequest,
@@ -1020,26 +1009,6 @@ struct HostSecretListParams {
 
 #[derive(serde::Deserialize, Default)]
 struct HostLspListServersParams {
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct HostLspListDiagnosticsParams {
-    #[serde(default)]
-    request: HostLspListDiagnosticsRequest,
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct HostSchedulerListParams {
-    #[serde(rename = "context", default)]
-    _context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize, Default)]
-struct HostMcpListServersParams {
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

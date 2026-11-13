@@ -7,6 +7,7 @@ use agena_domain::{
 use agena_plugin_host::sdk::host_api::AskUserResponse;
 
 mod operator;
+mod session_scope;
 
 // ToolInvokeInput uses this existing wire sentinel for a call without a
 // session. It never identifies a kernel session or a live transcript tool.
@@ -176,6 +177,22 @@ impl SessionManager {
                 .authorize_operator_checks(&authority, vec![check])
                 .await
                 .map_err(tool_error);
+        }
+        // A session-scoped plugin callback has no live tool slot to hold the
+        // grant cache or the approval interaction. Authorize each concrete
+        // target against the session policy instead.
+        if call < 0 {
+            let state = self.state_for_session(session_id(session)?).await?;
+            let context = self.execution_context_value(session_id(session)?).await?;
+            let executor = state
+                .executor
+                .for_session_context_async(&context)
+                .await
+                .with_cancellation_token(Some(self.shutdown.child_token()));
+            let check = check(&executor).map_err(tool_error)?;
+            return self
+                .authorize_session_scoped_checks(session, &executor, vec![check])
+                .await;
         }
         let (tool, control) = self.live_tool(session, call)?;
         let state = control.state.clone();

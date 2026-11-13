@@ -105,12 +105,9 @@ crate::drivers::impl_callback_host_client!(@proxy HostClientProxy, {
             .await
     }
 
-
-
     async fn get_session(&self, _req: HostGetSessionRequest) -> Result<HostGetSessionResponse> {
         self.run(self.current().get_session(_req)).await
     }
-
 
     async fn rename_session(
         &self,
@@ -118,44 +115,6 @@ crate::drivers::impl_callback_host_client!(@proxy HostClientProxy, {
     ) -> Result<HostRenameSessionResponse> {
         self.run(self.current().rename_session(_req)).await
     }
-
-
-
-
-
-
-
-
-
-
-    async fn list_plugins(&self) -> Result<HostPluginListResponse> {
-        self.run(self.current().list_plugins()).await
-    }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 });
 
 #[cfg(test)]

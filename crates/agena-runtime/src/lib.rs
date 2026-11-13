@@ -250,7 +250,7 @@ pub(crate) use composition::{
     session_build_config_from_resolved, spawn_runtime_maintenance_loops,
 };
 pub(crate) use control_state::RuntimeControlState;
-pub(crate) use invocation_guard::try_enter_invocation;
+pub(crate) use invocation_guard::{try_enter_delegation, try_enter_invocation};
 pub(crate) use live_signal::LiveSignalHub;
 pub use live_signal::{
     RuntimeLiveSignal, RuntimeLiveSignalItem, RuntimeLiveSignalObservation,

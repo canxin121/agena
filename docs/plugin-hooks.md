@@ -210,6 +210,36 @@ bus is separate from lifecycle interception.
 `tool.invoke` and `tool.invoke.stream` are tool-provider capabilities
 recorded in plugin manifests. They are not `#[hook(...)]` interception events.
 
+## Delegating to another plugin's tool
+
+`HostClient::invoke_tool` lets a plugin run another plugin's tool. The request
+goes through the full execution path — input schema, `tool.before`, the
+permission engine, `tool.after`, output schema — so a delegation is never a
+shortcut around policy. A plugin cannot delegate to itself.
+
+There are two authorization shapes, chosen by the callback context:
+
+| Callback | Call id | Authorization |
+| --- | --- | --- |
+| `tool.before/after/failure`, `tool.invoke`, `shell.before`, `command.invoke` | the live tool call | the live tool's authority and approval slot |
+| `session.start/end`, `run.pre/post`, `chat.*`, `shell.env` | a negative delegation id | the owning session's policy and workspace rules |
+
+A session-scoped delegation has no transcript tool call: it publishes no tool
+part, carries no launch provenance, and creates child work owned by the session
+rather than by a receipt. It also has no approval slot, so `ask` and `auto`
+policy resolve to an explicit `CapabilityUnavailable` result instead of waiting
+for a user who cannot be asked; only an explicit applicable rule (or an allowed
+static policy) permits the work.
+
+One-way hooks are excluded. `notification`, `run.pre`, `run.post` and
+`session.end` are delivered as notifications: `notify` completes when the frame
+is written, so a callback authority minted for them would be revoked before the
+handler ran. They remain observation-only until a bounded one-way authority
+exists. `init` and `shutdown` have no session at all.
+
+Delegation depth is bounded per session, which rejects a cycle such as
+A→B→A without rejecting legitimate concurrent delegations to the same plugin.
+
 ## Execution and diagnostics
 
 Lifecycle guards use `PluginGuardPipeline` and deny on handler failure.

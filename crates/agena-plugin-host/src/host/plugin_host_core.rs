@@ -69,6 +69,36 @@ impl PluginHost {
             .await
     }
 
+    /// Dispatch one request/response hook with the owning session only.
+    ///
+    /// A hook that belongs to a session may delegate work to another plugin's
+    /// tool (`HostClient::invoke_tool`). It never carries a call id, so the
+    /// delegation is authorized under the session's policy rather than a
+    /// transcript tool slot it does not have.
+    ///
+    /// Only `dispatch`-style hooks use this. A one-way `notify` returns when
+    /// the frame is written, so its callback authority would already be
+    /// revoked before the handler ran.
+    async fn call_session_hook(
+        &self,
+        plugin: &LoadedPlugin,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+        session_id: Option<i64>,
+    ) -> Result<serde_json::Value, TransportError> {
+        self._host_handle
+            .run_in_authorized_callback_context(
+                &plugin.key(),
+                HostCallbackContext {
+                    session_id,
+                    ..HostCallbackContext::default()
+                },
+                call_with_timeout(plugin, method, params, timeout),
+            )
+            .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn chain_patch_with_default_context<I, P, F>(
         &self,
@@ -92,7 +122,12 @@ impl PluginHost {
             timeout,
             input,
             apply,
-            |_, _| Some(HostCallbackContext::default()),
+            move |_, _| {
+                Some(HostCallbackContext {
+                    session_id,
+                    ..HostCallbackContext::default()
+                })
+            },
             Some(&self._host_handle),
             session_id,
             runs,
@@ -1167,11 +1202,12 @@ impl PluginHost {
             let params = serde_json::to_value(&input)?;
             let result = await_transport_with_cancellation(
                 cancellation.clone(),
-                self.call_hook_with_default_context(
+                self.call_session_hook(
                     plugin,
                     method::HOOK_SHELL_ENV,
                     params,
                     timeout,
+                    input.session_id,
                 ),
             )
             .await
@@ -1380,6 +1416,10 @@ impl PluginHost {
                         return;
                     }
                 };
+                // One-way: `notify` returns when the frame is written, not
+                // when the plugin finishes handling it. A callback authority
+                // minted here would be revoked before the handler could use
+                // it, so this hook deliberately carries no callback authority.
                 match tokio::time::timeout(
                     timeout,
                     plugin.transport.notify(method::HOOK_NOTIFICATION, params),
@@ -1617,6 +1657,10 @@ impl PluginHost {
                         return;
                     }
                 };
+                // One-way observer: `notify` completes when the frame is
+                // written, so a callback authority minted for it would be
+                // revoked before the handler ran. These hooks stay
+                // observation-only until a bounded one-way authority exists.
                 match tokio::time::timeout(timeout, plugin.transport.notify(method, params)).await {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => tracing::warn!(
@@ -1661,7 +1705,13 @@ impl PluginHost {
             let params =
                 serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match self
-                .call_hook_with_default_context(plugin, method::HOOK_SESSION_START, params, timeout)
+                .call_session_hook(
+                    plugin,
+                    method::HOOK_SESSION_START,
+                    params,
+                    timeout,
+                    session_id,
+                )
                 .await
             {
                 Ok(v) => v,
@@ -1804,11 +1854,12 @@ impl PluginHost {
                 .map_err(|e| PluginError::invalid_params_error(&e))?;
             let v = match await_transport_with_cancellation(
                 cancellation.clone(),
-                self.call_hook_with_default_context(
+                self.call_session_hook(
                     plugin,
                     method::HOOK_USER_PROMPT_SUBMIT,
                     params,
                     timeout,
+                    Some(current.session_id),
                 ),
             )
             .await

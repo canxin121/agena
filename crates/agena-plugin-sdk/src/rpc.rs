@@ -220,16 +220,11 @@ pub mod method {
     pub const HOST_AGENT_CANCEL: &str = "host/agent.cancel";
     pub const HOST_TOOL_LIST: &str = "host/tool.list";
     pub const HOST_CONTEXT_STATUS: &str = "host/context.status";
-    pub const HOST_SESSION_SET_MODEL: &str = "host/session.set_model";
-    pub const HOST_SESSION_QUERY: &str = "host/session.query";
-    pub const HOST_SESSION_COMMAND: &str = "host/session.command";
     pub const HOST_SESSION_STREAM: &str = "host/session.stream";
+    /// One typed session operation (`Query` or `Command`).
+    pub const HOST_SESSION_OP: &str = "host/session.op";
     pub const HOST_WORKSPACE_QUERY: &str = "host/workspace.query";
     pub const HOST_IMAGE_EXECUTE: &str = "host/image.execute";
-    pub const HOST_MONITOR_START: &str = "host/monitor.start";
-    pub const HOST_MONITOR_LIST: &str = "host/monitor.list";
-    pub const HOST_MONITOR_READ: &str = "host/monitor.read";
-    pub const HOST_MONITOR_STOP: &str = "host/monitor.stop";
     pub const HOST_COMMAND_REGISTRY_REGISTER: &str = "host/command.registry.register";
     pub const HOST_COMMAND_REGISTRY_UPDATE: &str = "host/command.registry.update";
     pub const HOST_COMMAND_REGISTRY_REMOVE: &str = "host/command.registry.remove";
@@ -248,6 +243,8 @@ pub mod method {
     pub const HOST_SECRET_LIST: &str = "host/secret.list";
     pub const HOST_PLUGIN_STATUS_LIST: &str = "host/plugin.status.list";
     pub const HOST_PLUGIN_STATUS_GET: &str = "host/plugin.status.get";
+    /// Plugin discovery: every loaded plugin with its summary, tags and tools.
+    pub const HOST_PLUGIN_LIST: &str = "host/plugin.list";
     pub const HOST_LSP_LIST_SERVERS: &str = "host/lsp.list_servers";
     pub const HOST_LSP_LIST_DIAGNOSTICS: &str = "host/lsp.list_diagnostics";
     pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";

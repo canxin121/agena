@@ -29,11 +29,40 @@ pub use bot::{BotAction, BotRequest};
 pub use companion::{CompanionAction, CompanionRequest};
 pub use integrations::{IntegrationAction, IntegrationRequest};
 pub use session::{
-    HostSessionCommand, HostSessionCommandRequest, HostSessionCommandResponse, HostSessionEvent,
-    HostSessionQuery, HostSessionQueryRequest, HostSessionQueryResponse, HostSessionStreamKind,
-    HostSessionStreamRequest,
+    HostExecutionList, HostExecutionSummary, HostPartsPage, HostQueuedMessage, HostSessionAgent,
+    HostSessionModel, HostSessionState, HostSessionStreamKind, HostSessionStreamRequest, SessionOp,
+    SessionOpResponse,
 };
 pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// MCP server specification for permission checks.
+pub enum HostMcpServerSpec {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
+    Http {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bearer: Option<String>,
+        #[serde(default)]
+        headers: BTreeMap<String, String>,
+    },
+}
+
+/// Reserved `HostCallbackContext::call_id` for a session-scoped callback.
+///
+/// A session hook (`session.start`, `chat.*`, `run.pre`, …) belongs to a
+/// session but not to any transcript tool call. Host APIs that normally need a
+/// live tool authority accept this value and authorize under the session's
+/// policy instead. It never names a real `ToolId`, which is nonnegative.
+pub const SESSION_SCOPED_CALL_ID: i64 = -1;
 
 #[async_trait]
 /// Client interface used by plugins to call host capabilities.
@@ -226,35 +255,19 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Set the model used by future turns in one session. Callers must supply
-    /// a fully-qualified `provider/model` reference; the host validates the
-    /// model before persisting the selection.
-    async fn set_session_model(
-        &self,
-        _req: HostSetSessionModelRequest,
-    ) -> Result<HostSetSessionModelResponse> {
-        Err(unavailable())
-    }
-
-    /// Read persisted session state (transcript, executions, cost, platforms).
-    async fn session_query(
-        &self,
-        _req: HostSessionQueryRequest,
-    ) -> Result<HostSessionQueryResponse> {
-        Err(unavailable())
-    }
-
-    /// Mutate a session: submit input, cancel, manage the queue, answer a card.
-    async fn session_command(
-        &self,
-        _req: HostSessionCommandRequest,
-    ) -> Result<HostSessionCommandResponse> {
+    /// Run one session operation.
+    ///
+    /// `SessionOp` wraps the same `Query`/`Command` enums every other transport
+    /// uses, so a plugin can reach exactly what the Web and terminal clients
+    /// reach. A new operation is added to those enums once; the host's
+    /// exhaustive match then fails to compile until it is routed.
+    async fn session_op(&self, _op: SessionOp) -> Result<SessionOpResponse> {
         Err(unavailable())
     }
 
     /// Subscribe to a live session stream. Returns a subscription id; events are
     /// delivered through the existing `subscribe_events` channel as
-    /// `EventEnvelope` values whose payload decodes to `HostSessionEvent`.
+    /// `EventEnvelope` values whose payload decodes to `SessionChangeResource`.
     async fn session_stream(&self, _req: HostSessionStreamRequest) -> Result<EventSubscription> {
         Err(unavailable())
     }
@@ -293,26 +306,6 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// Long-lived background process registry — start.
-    async fn monitor_start(&self, _req: MonitorStartRequest) -> Result<MonitorHandle> {
-        Err(unavailable())
-    }
-
-    /// Long-lived background process registry — list active monitors.
-    async fn monitor_list(&self) -> Result<Vec<MonitorHandle>> {
-        Err(unavailable())
-    }
-
-    /// Long-lived background process registry — read pending output.
-    async fn monitor_read(&self, _req: MonitorReadRequest) -> Result<MonitorReadResponse> {
-        Err(unavailable())
-    }
-
-    /// Long-lived background process registry — stop.
-    async fn monitor_stop(&self, _req: MonitorStopRequest) -> Result<MonitorHandle> {
-        Err(unavailable())
-    }
-
     /// Dynamic command registry — register a new user-facing command owned by
     /// this plugin. Commands are the only user-facing surface of their kind:
     /// both clients read them from the server catalog.
@@ -342,6 +335,14 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Dynamic command registry — list the commands visible to the caller.
     async fn list_registered_commands(&self) -> Result<HostRegisteredCommandListResponse> {
+        Err(unavailable())
+    }
+
+    /// LSP observability — list configured language servers.
+    ///
+    /// Kept as a host API because `agena.lsp.servers` is a plugin-implemented
+    /// tool: its handler reads this projection directly.
+    async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse> {
         Err(unavailable())
     }
 
@@ -429,47 +430,8 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// LSP read-only observability — list configured servers.
-    async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse> {
-        Err(unavailable())
-    }
-
-    /// LSP read-only observability — list cached diagnostics.
-    async fn lsp_list_diagnostics(
-        &self,
-        _req: HostLspListDiagnosticsRequest,
-    ) -> Result<HostLspListDiagnosticsResponse> {
-        Err(unavailable())
-    }
-
-    /// Scheduler — list every queued/recurring job.
-    async fn scheduler_list(&self) -> Result<HostSchedulerListResponse> {
-        Err(unavailable())
-    }
-
-    /// Scheduler — register a new job (cron or one-shot).
-    async fn scheduler_create(
-        &self,
-        _req: HostSchedulerCreateRequest,
-    ) -> Result<HostSchedulerCreateResponse> {
-        Err(unavailable())
-    }
-
-    /// Scheduler — delete a job by id.
-    async fn scheduler_delete(
-        &self,
-        _req: HostSchedulerDeleteRequest,
-    ) -> Result<HostSchedulerDeleteResponse> {
-        Err(unavailable())
-    }
-
     /// Hook registry — list every hook currently subscribed across plugins.
     async fn hook_list(&self) -> Result<HostHookListResponse> {
-        Err(unavailable())
-    }
-
-    /// MCP registry — list known MCP servers.
-    async fn mcp_list_servers(&self) -> Result<HostMcpListServersResponse> {
         Err(unavailable())
     }
 
@@ -478,19 +440,6 @@ pub trait HostClient: Send + Sync + 'static {
     /// Native host callback only; remote plugin transports do not expose this
     /// capability. Call before persisting an enabled connection or testing it.
     async fn require_mcp_server_permission(&self, _spec: HostMcpServerSpec) -> Result<()> {
-        Err(unavailable())
-    }
-
-    /// MCP registry — register or replace a server.
-    async fn mcp_add_server(&self, _req: HostMcpAddServerRequest) -> Result<()> {
-        Err(unavailable())
-    }
-
-    /// MCP registry — remove a server by name.
-    async fn mcp_remove_server(
-        &self,
-        _req: HostMcpRemoveServerRequest,
-    ) -> Result<HostMcpRemoveServerResponse> {
         Err(unavailable())
     }
 
@@ -962,18 +911,12 @@ pub struct ToolDescriptor {
     pub input_schema: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Session information visible to a plugin.
-pub struct HostSession {
-    pub id: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<i64>,
-    pub root_id: i64,
-    pub workspace_id: Option<i64>,
-    pub title: String,
-    #[serde(default)]
-    pub is_subagent: bool,
-}
+///
+/// This *is* the HTTP `SessionResource`, not a parallel declaration: a plugin
+/// and a browser client read one session from the same shape, so neither
+/// surface can drift from the other.
+pub type HostSession = agena_session_api::resource::SessionResource;
 
 #[cfg(test)]
 mod host_session_scope_tests {
@@ -984,10 +927,28 @@ mod host_session_scope_tests {
         let mut session = HostSession {
             id: 1,
             parent_id: None,
+            depth: 0,
             root_id: 1,
             workspace_id: None,
             title: "Bot".into(),
+            owner_bot_id: None,
+            owner_surface: None,
+            favorite: false,
+            pinned: false,
+            version: 1,
+            relation_kind: agena_domain::SessionRelationKind::Root,
+            lifecycle_state: agena_domain::SessionLifecycleState::Ready,
+            state: Default::default(),
+            source_cutoff_seq_global: None,
+            source_message_id: None,
             is_subagent: false,
+            agent_name: None,
+            agent_status: None,
+            created_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(0).unwrap(),
+            updated_at: chrono::DateTime::<chrono::Utc>::from_timestamp_millis(0).unwrap(),
+            message_count: 0,
+            child_session_count: 0,
+            last_message_at: None,
         };
         let global = serde_json::to_value(&session).unwrap();
         assert!(global["workspace_id"].is_null());
@@ -1084,25 +1045,6 @@ pub struct HostRenameSessionResponse {
     pub session: HostSession,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// Request to set the model of a session.
-pub struct HostSetSessionModelRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    /// Fully-qualified model reference: `provider/model`.
-    pub model: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of setting the session model.
-pub struct HostSetSessionModelResponse {
-    pub session: HostSession,
-    pub provider_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_id: Option<String>,
-    pub model_id: String,
-}
-
 /// Sensitive, native-only connection for the three bundled provider plugins.
 /// It is intentionally neither serializable nor printable with credentials.
 #[derive(Clone)]
@@ -1185,122 +1127,6 @@ pub struct HostImageExecuteResponse {
 }
 
 // ---------------- monitor ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to start a process monitor.
-pub struct MonitorStartRequest {
-    pub command: Vec<String>,
-    /// Filesystem and network effects, authorized like shell.spawn.
-    #[serde(default)]
-    pub reads: Vec<String>,
-    #[serde(default)]
-    pub writes: Vec<String>,
-    #[serde(default)]
-    pub network: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub env: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    #[serde(default)]
-    pub persistent: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub include_pattern: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_buffered_lines: Option<u32>,
-    #[serde(default = "default_true")]
-    pub capture_stderr: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Handle of a started process monitor.
-pub struct MonitorHandle {
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub persistent: bool,
-    #[serde(default)]
-    pub monitored: bool,
-    #[serde(default)]
-    pub started_at_ms: i64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ended_at_ms: Option<i64>,
-    #[serde(default)]
-    pub buffered_lines: u32,
-    #[serde(default)]
-    pub last_seq: u64,
-    #[serde(default)]
-    pub dropped_lines: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Event emitted by a process monitor.
-pub struct MonitorEvent {
-    pub seq: u64,
-    pub stream: String,
-    pub ts_ms: i64,
-    pub line: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to read monitor output.
-pub struct MonitorReadRequest {
-    pub id: String,
-    #[serde(default)]
-    pub follow: bool,
-    #[serde(default)]
-    pub since_seq: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<u32>,
-    #[serde(default)]
-    pub wait_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response with monitor output.
-pub struct MonitorReadResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub monitor_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub events: Vec<MonitorEvent>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub monitors: Vec<MonitorHandle>,
-    pub stdout: String,
-    pub stderr: String,
-    pub running: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub last_seq: u64,
-    #[serde(default)]
-    pub has_more: bool,
-    #[serde(default)]
-    pub dropped_lines: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion_reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to stop a monitor.
-pub struct MonitorStopRequest {
-    pub id: String,
-    #[serde(default)]
-    pub force: bool,
-}
 
 // ---------------- command registry ----------------
 
@@ -1631,20 +1457,6 @@ pub struct HostLspServer {
     pub running_roots: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Request listing LSP diagnostics.
-pub struct HostLspListDiagnosticsRequest {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub uri: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response listing LSP diagnostics.
-pub struct HostLspListDiagnosticsResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub diagnostics: Vec<HostLspDiagnostic>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// An LSP diagnostic.
 pub struct HostLspDiagnostic {
@@ -1662,69 +1474,6 @@ pub struct HostLspDiagnostic {
 }
 
 // ---------------- scheduler ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response listing scheduler jobs.
-pub struct HostSchedulerListResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub jobs: Vec<HostSchedulerJob>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Descriptor of a scheduler job.
-pub struct HostSchedulerJob {
-    pub id: String,
-    pub kind: String,
-    pub prompt: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cron_expression: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fire_at_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_session_id: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub next_fire_at_ms: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_fired_at_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-/// Request to create a scheduler job.
-pub enum HostSchedulerCreateRequest {
-    Cron {
-        expression: String,
-        prompt: String,
-        #[serde(default)]
-        max_age_days: Option<u32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        owner_session_id: Option<i64>,
-    },
-    Once {
-        at_ms: i64,
-        prompt: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        owner_session_id: Option<i64>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response of creating a scheduler job.
-pub struct HostSchedulerCreateResponse {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to delete a scheduler job.
-pub struct HostSchedulerDeleteRequest {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response of deleting a scheduler job.
-pub struct HostSchedulerDeleteResponse {
-    pub removed: bool,
-}
 
 // ---------------- hooks ----------------
 
@@ -1777,54 +1526,6 @@ pub struct HostHookDescriptor {
 }
 
 // ---------------- mcp ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response listing MCP servers.
-pub struct HostMcpListServersResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub servers: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-/// Specification of an MCP server managed by the host.
-pub enum HostMcpServerSpec {
-    Stdio {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
-    },
-    Http {
-        url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        bearer: Option<String>,
-        #[serde(default)]
-        headers: BTreeMap<String, String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to add an MCP server.
-pub struct HostMcpAddServerRequest {
-    pub name: String,
-    pub spec: HostMcpServerSpec,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Request to remove an MCP server.
-pub struct HostMcpRemoveServerRequest {
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-/// Response of removing an MCP server.
-pub struct HostMcpRemoveServerResponse {
-    pub removed: bool,
-}
 
 // ---------------- UI: declarative display contribution / theme ----------------
 
@@ -1913,10 +1614,6 @@ pub struct HostThemeRemoveResponse {
 pub struct HostThemeListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<HostThemePalette>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Default impl returning `HostUnavailable` for every callback. Use in tests.

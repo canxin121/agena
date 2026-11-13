@@ -67,81 +67,6 @@ pub(super) fn render_tool_descriptor(
     }
 }
 
-pub(super) fn render_monitor_handle(summary: agena_domain::ProcessSummary) -> MonitorHandle {
-    MonitorHandle {
-        id: summary.process_id,
-        label: (!summary.description.trim().is_empty()).then_some(summary.description),
-        command: (!summary.command.trim().is_empty()).then_some(summary.command),
-        status: Some(
-            match summary.status {
-                ProcessStatus::Running => "running",
-                ProcessStatus::Exited => "exited",
-                ProcessStatus::Failed => "failed",
-                ProcessStatus::Stopped => "stopped",
-                ProcessStatus::TimedOut => "timed_out",
-            }
-            .to_string(),
-        ),
-        persistent: summary.background,
-        monitored: summary.monitored,
-        started_at_ms: summary.started_at_ms,
-        ended_at_ms: summary.ended_at_ms,
-        buffered_lines: summary.buffered_lines,
-        last_seq: summary.last_seq,
-        dropped_lines: summary.dropped_lines,
-        exit_code: summary.exit_code,
-        completion_reason: summary.completion_reason,
-    }
-}
-
-pub(super) fn render_monitor_event(event: agena_domain::ProcessEvent) -> MonitorEvent {
-    MonitorEvent {
-        seq: event.seq,
-        stream: event.stream.to_string(),
-        ts_ms: event.ts_ms,
-        line: event.line,
-    }
-}
-
-pub(super) fn render_monitor_read(read: crate::tool::MonitorRead) -> MonitorReadResponse {
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let events = read
-        .events
-        .into_iter()
-        .map(|event| {
-            match event.stream {
-                ProcessStream::Stdout => stdout.push(event.line.clone()),
-                ProcessStream::Stderr => stderr.push(event.line.clone()),
-            }
-            render_monitor_event(event)
-        })
-        .collect::<Vec<_>>();
-    MonitorReadResponse {
-        monitor_id: Some(read.monitor_id),
-        events,
-        monitors: Vec::new(),
-        stdout: stdout.join("\n"),
-        stderr: stderr.join("\n"),
-        running: matches!(read.status, ProcessStatus::Running),
-        status: Some(read.status.to_string()),
-        last_seq: read.last_seq,
-        has_more: read.has_more,
-        dropped_lines: read.dropped_lines,
-        exit_code: read.exit_code,
-        completion_reason: read.completion_reason,
-    }
-}
-
-pub(super) fn map_monitor_error(err: MonitorError) -> PluginError {
-    match err {
-        MonitorError::NotFound(_) | MonitorError::Invalid(_) | MonitorError::InvalidPattern(_) => {
-            PluginError::invalid_params_error(&err)
-        }
-        other => PluginError::internal_error(&other),
-    }
-}
-
 pub(super) fn join_monitor_command(command: &[String]) -> Result<String, PluginError> {
     if command.is_empty() {
         return Err(PluginError::invalid_params(
@@ -212,48 +137,69 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
     )
 }
 
-pub(super) fn host_session_from_session(session: &crate::session::Session) -> HostSession {
-    HostSession {
+/// Project one live session onto the shared wire shape.
+///
+/// This is the same `SessionResource` the HTTP surface returns, so a plugin
+/// and a browser client read one session identically.
+pub(super) fn session_resource_from_session(
+    session: &crate::session::Session,
+) -> agena_session_api::resource::SessionResource {
+    agena_session_api::resource::SessionResource {
         id: session.id,
         parent_id: session.parent_id,
+        depth: session.depth,
         root_id: session.root_id,
         workspace_id: session.workspace_id,
         title: session.title.clone(),
-        is_subagent: session.is_subagent(),
+        owner_bot_id: None,
+        owner_surface: None,
+        favorite: session.favorite,
+        pinned: session.pinned,
+        version: session.version,
+        relation_kind: session.relation_kind,
+        lifecycle_state: session.lifecycle_state,
+        state: agena_session_api::resource::SessionState::default(),
+        source_cutoff_seq_global: None,
+        source_message_id: None,
+        is_subagent: session.relation_kind.is_subagent(),
+        agent_name: session.agent_name.clone(),
+        agent_status: session.agent_status,
+        created_at: session.created_at,
+        updated_at: session.updated_at,
+        message_count: session.message_count,
+        child_session_count: 0,
+        last_message_at: None,
     }
 }
 
-pub(super) fn scheduler_job_to_sdk(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob {
-    let (kind, cron_expression, fire_at_ms) = match &job.kind {
-        agena_scheduler::JobKind::Cron { expression, .. } => {
-            ("cron".to_string(), Some(expression.clone()), None)
-        }
-        agena_scheduler::JobKind::Once { at } => {
-            ("once".to_string(), None, Some(at.timestamp_millis()))
-        }
-    };
-    HostSchedulerJob {
-        id: job.id.to_string(),
-        kind,
-        prompt: job.prompt.clone(),
-        cron_expression,
-        fire_at_ms,
-        owner_session_id: job.owner_session_id,
-        next_fire_at_ms: job.next_fire_at.map(|t| t.timestamp_millis()),
-        last_fired_at_ms: job.last_fired_at.map(|t| t.timestamp_millis()),
-    }
-}
-
-pub(super) fn lsp_severity_string(
-    severity: Option<agena_lsp::lsp_types::DiagnosticSeverity>,
-) -> String {
-    match severity {
-        Some(agena_lsp::lsp_types::DiagnosticSeverity::ERROR) => "error".to_string(),
-        Some(agena_lsp::lsp_types::DiagnosticSeverity::WARNING) => "warning".to_string(),
-        Some(agena_lsp::lsp_types::DiagnosticSeverity::INFORMATION) => "information".to_string(),
-        Some(agena_lsp::lsp_types::DiagnosticSeverity::HINT) => "hint".to_string(),
-        Some(_) => "unknown".to_string(),
-        None => "unknown".to_string(),
+pub(super) fn session_resource_from_summary(
+    summary: &agena_domain::SessionSummary,
+) -> agena_session_api::resource::SessionResource {
+    agena_session_api::resource::SessionResource {
+        id: summary.id,
+        parent_id: summary.parent_id,
+        depth: summary.depth,
+        root_id: summary.root_id,
+        workspace_id: summary.workspace_id,
+        title: summary.title.clone(),
+        owner_bot_id: None,
+        owner_surface: None,
+        favorite: summary.favorite,
+        pinned: summary.pinned,
+        version: summary.version,
+        relation_kind: summary.relation_kind,
+        lifecycle_state: summary.lifecycle_state,
+        state: agena_session_api::resource::SessionState::default(),
+        source_cutoff_seq_global: None,
+        source_message_id: None,
+        is_subagent: summary.relation_kind.is_subagent(),
+        agent_name: summary.agent_name.clone(),
+        agent_status: summary.agent_status,
+        created_at: summary.created_at,
+        updated_at: summary.updated_at,
+        message_count: summary.message_count,
+        child_session_count: summary.child_session_count,
+        last_message_at: summary.last_message_at,
     }
 }
 
@@ -273,9 +219,8 @@ pub(super) fn host_status_to_sdk(
 }
 
 use super::{
-    AskUserRequest, AskUserToolInput, HostPluginStatus, HostSchedulerJob, HostSession,
-    MonitorError, MonitorEvent, MonitorHandle, MonitorReadResponse, PluginError,
-    PluginStorageError, ToolDescriptor, ToolInvokeOutput, UserInputOption, UserInputQuestion,
+    AskUserRequest, AskUserToolInput, HostPluginStatus, PluginError, PluginStorageError,
+    ToolDescriptor, ToolInvokeOutput, UserInputOption, UserInputQuestion,
 };
 use agena_domain::{ProcessStatus, ProcessStream};
 use agena_plugin_sdk::ToolInput;

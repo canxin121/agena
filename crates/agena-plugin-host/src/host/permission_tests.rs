@@ -7,7 +7,6 @@ struct PermissionHost {
     queries: std::sync::atomic::AtomicUsize,
     requirements: std::sync::atomic::AtomicUsize,
     mcp_authorizations: std::sync::atomic::AtomicUsize,
-    mcp_starts: std::sync::atomic::AtomicUsize,
     allow_mcp: std::sync::atomic::AtomicBool,
     allowed_query_session: Option<i64>,
     query_contexts: std::sync::Mutex<Vec<HostCallbackContext>>,
@@ -100,15 +99,6 @@ impl HostClient for PermissionHost {
                 "review declined",
             ))
         }
-    }
-
-    async fn mcp_add_server(
-        &self,
-        _: crate::sdk::host_api::HostMcpAddServerRequest,
-    ) -> crate::sdk::Result<()> {
-        self.mcp_starts
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Ok(())
     }
 }
 
@@ -422,7 +412,6 @@ async fn native_mcp_authorization_preserves_approval_and_never_starts_a_server()
         })
         .await;
     assert_eq!(inner.mcp_authorizations.load(Ordering::Relaxed), 2);
-    assert_eq!(inner.mcp_starts.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]

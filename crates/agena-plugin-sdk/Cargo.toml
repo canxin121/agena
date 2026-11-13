@@ -11,6 +11,8 @@ jsonschema = { workspace = true, optional = true }
 agena-async = { workspace = true }
 portable-atomic = { workspace = true }
 agena-domain = { workspace = true }
+agena-session-api = { workspace = true }
+chrono = { workspace = true }
 agena-failure = { workspace = true }
 agena-macros = { workspace = true }
 agena-plugin-contracts = { workspace = true }

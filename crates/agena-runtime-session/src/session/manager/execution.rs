@@ -1329,6 +1329,16 @@ impl SessionManager {
         self.options_for_selection_with_state(selection, &state)
     }
 
+    /// Run options for a session's own persisted selection.
+    ///
+    /// Host callbacks that must act inside an existing session (compact, reply,
+    /// queue promotion) resolve options exactly as the interactive transports
+    /// do, instead of inventing a model or falling back to a global default.
+    pub async fn session_run_options(&self, id: i64) -> Result<SessionRunOptions, AppError> {
+        let session = self.get_session(id).await?;
+        self.options_for_selection(&session.execution.selection)
+    }
+
     pub(super) fn options_for_selection(
         &self,
         selection: &ExecutionSelection,

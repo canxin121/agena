@@ -3276,6 +3276,17 @@ impl AgenaClient {
             Query::GetSessionState(GetSessionParams { session_id }) => Ok(
                 QueryResult::SessionState(self.get_session_state(session_id).await?),
             ),
+            Query::GetSessionCost(GetSessionParams { session_id }) => Ok(QueryResult::SessionCost(
+                self.get_json(&format!("/api/v1/sessions/{session_id}/cost"))
+                    .await?,
+            )),
+            Query::GetSessionTree(GetSessionParams { session_id }) => Ok(QueryResult::SessionTree(
+                self.get_json(&format!("/api/v1/sessions/tree/{session_id}"))
+                    .await?,
+            )),
+            Query::GetSessionPlatforms(GetSessionParams { session_id }) => Ok(
+                QueryResult::SessionPlatforms(self.platform_inventory(session_id).await?),
+            ),
             Query::ListPermissionRules(ListPermissionRulesParams {
                 cursor,
                 limit,

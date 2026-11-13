@@ -209,6 +209,8 @@ dependencies = [
  "agena-plugin-sdk",
  "agena-prompt-layers",
  "agena-provider",
+ "agena-runtime-contracts",
+ "agena-session-api",
  "agena-skills",
  "chrono",
  "schemars",
@@ -1231,6 +1233,20 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "agena-session-api"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "agena-failure",
+ "agena-prompt-layers",
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

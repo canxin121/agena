@@ -9,6 +9,8 @@ agena-assistant = { workspace = true }
 agena-provider = { workspace = true }
 agena-skills = { workspace = true }
 agena-domain = { workspace = true }
+agena-session-api = { workspace = true }
+agena-runtime-contracts = { workspace = true }
 agena-prompt-layers = { workspace = true }
 agena-failure = { workspace = true }
 agena-notification = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "agena-session-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Session operation contract shared by every Agena transport"
+
+[dependencies]
+agena-domain = { workspace = true }
+agena-failure = { workspace = true }
+agena-prompt-layers = { workspace = true }
+chrono = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

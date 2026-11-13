@@ -6,6 +6,26 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// Session-facing values now live in the shared contract crate so every
+// transport (REST, WebSocket, plugins) reads one definition.
+pub use agena_session_api::activity::{BackgroundActivityLogResource, BackgroundActivityResource};
+pub use agena_session_api::resource::{
+    ActiveExecutionResource, ApprovalModelSelectionResource, DecisionTraceStep,
+    ExecutionAttemptResource, HealthResponse, ModelRef, NetworkPermissionConfigResource,
+    PartAttachment, PartAttachmentKind, PartAttachmentSource, PartCommandReference, PartLoadMode,
+    PathAccessModesResource, PathPermissionConfigResource, PendingInteractiveRequestResource,
+    PermissionActionResource, PermissionConfigResource, PermissionMode, PermissionReply,
+    PermissionReplyKind, PermissionRequest, PermissionRuleResource, PermissionScope,
+    PolicySourceKind, QueuedMessageEditResource, QueuedMessageResource, RunMetadata, RunOptions,
+    RunRole, RunSource, RunUsage, ScheduledJobResource, ScheduledJobRunResource,
+    ScheduledJobRunStatus, ServerIdentityResource, SessionAutomationResource,
+    SessionExecutionContextResource, SessionExecutionReceiptResource, SessionExecutionResource,
+    SessionResource, SessionState, SessionUsageLimitBasis, SessionUsageResource,
+    ToolPermissionConfigResource, ToolPermissionRulesResource, UserInputOption, UserInputQuestion,
+    UserInputReply, UserInputReplyKind, WorkspaceFileKind, WorkspaceFileNode,
+    WorkspaceFileTreeResource, WorkspaceResource, WorkspaceSessionStats,
+};
+
 use std::collections::BTreeMap;
 
 mod activity;
@@ -36,28 +56,6 @@ fn is_false(value: &bool) -> bool {
 
 // ─── Health / runtime ────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Runtime health response.
-pub struct HealthResponse {
-    pub status: String,
-    pub generation: u64,
-    pub loaded_at: DateTime<Utc>,
-    pub database_connected: bool,
-    /// Identity of the long-lived server serving this API.
-    pub server: ServerIdentityResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Stable identity for one server process lifetime.
-pub struct ServerIdentityResource {
-    /// Persistent identity of the owning instance database.
-    pub instance_id: String,
-    pub id: Uuid,
-    pub pid: u32,
-    pub started_at: DateTime<Utc>,
-    pub protocol_version: u32,
-}
-
 /// Atomically-published local discovery record for one server.
 /// The record is only a hint: clients must call health and compare every
 /// identity field before using it for lifecycle operations.
@@ -84,318 +82,6 @@ impl ServerEndpointRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-/// A recurring runtime background task and whether it is enabled.
-pub struct RuntimeTaskResource {
-    pub enabled: bool,
-    pub interval_secs: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// One run of a scheduled job.
-pub struct ScheduledJobRunResource {
-    pub triggered_at: DateTime<Utc>,
-    pub finished_at: DateTime<Utc>,
-    pub status: ScheduledJobRunStatus,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<agena_failure::UserProblem>,
-}
-
-/// Wire status for a scheduler delivery attempt.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ScheduledJobRunStatus {
-    Submitted,
-    Skipped,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A scheduled job definition.
-pub struct ScheduledJobResource {
-    pub id: String,
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expression: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timezone: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<DateTime<Utc>>,
-    pub prompt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub owner_session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_fire_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_fired_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_run: Option<ScheduledJobRunResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Automation (scheduled jobs) attached to a session.
-pub struct SessionAutomationResource {
-    pub job_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_job: Option<ScheduledJobResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Runtime-wide automation overview.
-pub struct RuntimeAutomationResource {
-    pub enabled: bool,
-    pub job_count: usize,
-    pub recent_jobs: Vec<ScheduledJobResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Runtime operator surface: MCP, LSP, agent, commands, and plugins.
-pub struct RuntimeOperatorResource {
-    pub mcp: RuntimeMcpResource,
-    pub lsp: RuntimeLspResource,
-    pub agent_id: String,
-    pub commands: RuntimeCommandsResource,
-    pub plugins: RuntimePluginSurfaceResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Neutral plugin surface with the tool registry generation it reflects.
-pub struct RuntimePluginSurfaceResource {
-    #[serde(default)]
-    pub catalog: PluginSurfaceCatalogResource,
-    pub tool_registry_generation: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_registry_last_event: Option<agena_plugin_sdk::host_api::ToolRegistryChangedEvent>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// Presentation-neutral plugin commands plus terminal-only decoration.
-pub struct PluginSurfaceCatalogResource {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub commands: Vec<PluginCommandResource>,
-    #[serde(default)]
-    pub terminal: PluginTerminalSurfaceCatalogResource,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-/// Terminal-only plugin decoration. No executable action is represented here.
-pub struct PluginTerminalSurfaceCatalogResource {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub display: Vec<PluginDisplayContributionResource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub themes: Vec<PluginThemePaletteResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// One server-owned plugin command.
-pub struct PluginCommandResource {
-    pub plugin_id: String,
-    pub accepts_empty_input: bool,
-    pub default_input: serde_json::Value,
-    #[serde(flatten)]
-    pub command: agena_plugin_sdk::CommandDefinition,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A passive display contribution provided by a plugin.
-pub struct PluginDisplayContributionResource {
-    pub plugin_id: String,
-    pub id: String,
-    pub kind: agena_plugin_sdk::ContributionKind,
-    #[serde(default)]
-    pub priority: i32,
-    pub content: agena_plugin_sdk::PluginDisplayContent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// A plugin-provided terminal theme palette.
-pub struct PluginThemePaletteResource {
-    pub id: String,
-    pub plugin_id: String,
-    pub display_name: String,
-    pub colors: PluginThemeColorsResource,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-/// Colors of a plugin terminal theme palette.
-pub struct PluginThemeColorsResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub muted: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accent: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub info: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub success: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub warning: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub danger: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub special: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_fg: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_bg: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// MCP servers running inside the runtime.
-pub struct RuntimeMcpResource {
-    pub server_count: usize,
-    pub tool_count: usize,
-    pub servers: Vec<RuntimeMcpServerResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// One MCP server with its tool count.
-pub struct RuntimeMcpServerResource {
-    pub name: String,
-    pub tool_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// LSP servers and diagnostics overview.
-pub struct RuntimeLspResource {
-    pub server_count: usize,
-    pub diagnostics_count: usize,
-    pub files_with_diagnostics: usize,
-    pub servers: Vec<RuntimeLspServerResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// One LSP server definition.
-pub struct RuntimeLspServerResource {
-    pub name: String,
-    pub command: String,
-    pub file_extensions: Vec<String>,
-    pub root_markers: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// The published command catalog, exactly as every client renders it.
-pub struct RuntimeCommandsResource {
-    /// Commands a client runs locally through its own action vocabulary.
-    pub client_count: usize,
-    /// Commands served by the plugin that declared them.
-    pub served_count: usize,
-    pub commands: Vec<RuntimeCommandResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// One published command.
-pub struct RuntimeCommandResource {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub slash: Option<String>,
-    pub description: String,
-    pub aliases: Vec<String>,
-    pub group: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub category: Option<String>,
-    pub plugin_id: String,
-    /// `client`, `method` or `tool` — how running the command reaches a handler.
-    pub target: String,
-}
-
-/// The one runtime-wide default execution selection exposed to clients.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default)]
-pub struct DefaultSelectionResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-}
-
-/// The effective default execution selection the runtime applies when a
-/// fresh session starts without explicit run options. Mirrors the
-/// `ExecutionSelection` fields the UI needs to resolve default think/speed
-/// modes before any session exists.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Overall runtime status.
-pub struct RuntimeStatusResponse {
-    pub generation: u64,
-    pub loaded_at: DateTime<Utc>,
-    pub workspace_root: String,
-    pub config_path: String,
-    pub config_found: bool,
-    pub provider_ids: Vec<String>,
-    pub plugin_count: usize,
-    pub session_runtime_available: bool,
-    pub watch_paths: Vec<String>,
-    pub reload: RuntimeTaskResource,
-    pub session_gc: RuntimeTaskResource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_catalog: Option<ModelCatalogResponse>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_selection: Option<DefaultSelectionResource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub background_tasks: Vec<RuntimeBackgroundTaskResource>,
-    pub automation: RuntimeAutomationResource,
-    pub operator: RuntimeOperatorResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A runtime background task.
-pub struct RuntimeBackgroundTaskResource {
-    pub id: String,
-    pub kind: RuntimeBackgroundTaskKind,
-    pub origin: RuntimeBackgroundTaskOrigin,
-    pub title: String,
-    pub status: RuntimeBackgroundTaskStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<agena_failure::UserProblem>,
-    pub created_at: DateTime<Utc>,
-    pub started_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<DateTime<Utc>>,
-    pub cancellable: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Kind of a runtime background task.
-pub enum RuntimeBackgroundTaskKind {
-    ModelCatalogRefresh,
-    RuntimeReload,
-    MarketplaceRegistrySync,
-    MarketplacePluginInstall,
-    MarketplacePluginUninstall,
-    MarketplacePluginUpgrade,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Origin of a runtime background task.
-pub enum RuntimeBackgroundTaskOrigin {
-    System,
-    User,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Status of a runtime background task.
-pub enum RuntimeBackgroundTaskStatus {
-    Running,
-    Succeeded,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// List of runtime background tasks.
 pub struct RuntimeBackgroundTaskListResponse {
     pub items: Vec<RuntimeBackgroundTaskResource>,
@@ -412,20 +98,6 @@ pub struct RuntimeBackgroundTaskStartResponse {
 /// Response to cancelling a runtime background task.
 pub struct RuntimeBackgroundTaskCancelResponse {
     pub task: RuntimeBackgroundTaskResource,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Summary of the model catalog.
-pub struct ModelCatalogResponse {
-    #[serde(default)]
-    pub refreshing: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_refresh_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_successful_source: Option<ModelCatalogSourceKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_failure: Option<agena_failure::UserProblem>,
-    pub model_count: usize,
 }
 
 /// Page-shaped response for the model catalog REST resource.
@@ -489,14 +161,6 @@ pub struct ModelCatalogRefreshResponse {
     pub started: bool,
     pub task: RuntimeBackgroundTaskResource,
     pub summary: ModelCatalogResponse,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Source of a catalog model entry.
-pub enum ModelCatalogSourceKind {
-    Generated,
-    Cache,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -631,244 +295,7 @@ pub struct ConfigSettingsReloadResponse {
 
 // ─── Workspaces ──────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A workspace resource.
-pub struct WorkspaceResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_stats: Option<WorkspaceSessionStats>,
-    pub id: i64,
-    pub path: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_count: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct WorkspaceSessionStats {
-    pub total: u64,
-    pub roots: u64,
-    pub pinned: u64,
-    pub running: u64,
-    pub attention: u64,
-}
-
 // ─── Sessions ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A session resource.
-pub struct SessionResource {
-    pub id: i64,
-    pub parent_id: Option<i64>,
-    pub depth: i64,
-    pub root_id: i64,
-    pub workspace_id: Option<i64>,
-    pub title: String,
-    /// Bot this conversation belongs to, when any. Clients use it to place the
-    /// conversation under the Bot instead of a project.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_bot_id: Option<String>,
-    /// Entrance shape of a Bot conversation: `local`, `direct`, `group`, `broadcast`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_surface: Option<String>,
-    /// Durable user favorite state shared by TUI/Web/API clients.
-    #[serde(default)]
-    pub favorite: bool,
-    /// Durable navigation pin state shared by TUI/Web/API clients.
-    #[serde(default)]
-    pub pinned: bool,
-    pub version: i64,
-    pub relation_kind: SessionRelationKind,
-    pub lifecycle_state: SessionLifecycleState,
-    /// Authoritative processing state derived from persisted run markers and
-    /// pending interactions. Unlike a client's request/loading flag, this
-    /// survives disconnects and can therefore be used by every client to
-    /// identify work still owned by the server.
-    #[serde(default)]
-    pub state: SessionState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_cutoff_seq_global: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_message_id: Option<i64>,
-    #[serde(default)]
-    pub is_subagent: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_status: Option<AgentStatus>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub message_count: u64,
-    pub child_session_count: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_message_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
-/// Current processing state of a session.
-///
-/// This is the single client-facing execution state. Durable session facts are
-/// derived from durable parts; the optional live execution and workflow
-/// payloads are attached by the application service when it has a full
-/// execution snapshot.
-pub enum SessionState {
-    Creating,
-    Ready {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        last_failure: Option<serde_json::Value>,
-    },
-    Running {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        execution: Option<ActiveExecutionResource>,
-        workflow: WorkflowState,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[schemars(with = "Vec<serde_json::Value>")]
-        requests: Vec<PendingInteractiveRequestResource>,
-    },
-    AwaitingInteraction {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        run_id: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        execution: Option<ActiveExecutionResource>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[schemars(with = "Vec<serde_json::Value>")]
-        requests: Vec<PendingInteractiveRequestResource>,
-    },
-    Failed {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        failure: Option<serde_json::Value>,
-    },
-}
-
-impl Default for SessionState {
-    fn default() -> Self {
-        Self::Ready { last_failure: None }
-    }
-}
-
-impl SessionState {
-    pub const fn as_str(&self) -> &'static str {
-        self.kind().as_str()
-    }
-
-    /// The canonical state kind shared with storage, TUI, CLI, RPC, and the
-    /// generated TypeScript mirror.
-    pub const fn kind(&self) -> SessionStateKind {
-        match self {
-            Self::Creating => SessionStateKind::Creating,
-            Self::Ready { .. } => SessionStateKind::Ready,
-            Self::Running { .. } => SessionStateKind::Running,
-            Self::AwaitingInteraction { .. } => SessionStateKind::AwaitingInteraction,
-            Self::Failed { .. } => SessionStateKind::Failed,
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        SessionStateKind::parse(value).map(Self::from)
-    }
-
-    pub const fn is_running(&self) -> bool {
-        self.kind().is_busy()
-    }
-
-    pub const fn is_awaiting_interaction(&self) -> bool {
-        matches!(self.kind(), SessionStateKind::AwaitingInteraction)
-    }
-
-    pub const fn is_failed(&self) -> bool {
-        self.kind().is_failed()
-    }
-
-    /// True only while a durable run is still executing. Waiting for a user
-    /// is attention, not active model work.
-    pub const fn is_busy(&self) -> bool {
-        self.is_running()
-    }
-
-    pub const fn is_attention(&self) -> bool {
-        self.kind().is_attention()
-            || matches!(self, Self::Running { requests, .. } if !requests.is_empty())
-    }
-
-    pub const fn workflow_state(&self) -> WorkflowState {
-        match self {
-            Self::Running { workflow, .. } => *workflow,
-            Self::AwaitingInteraction { .. } => WorkflowState::AwaitingInteraction,
-            _ => WorkflowState::Quiescent,
-        }
-    }
-
-    pub fn active_execution(&self) -> Option<&ActiveExecutionResource> {
-        match self {
-            Self::Running { execution, .. } | Self::AwaitingInteraction { execution, .. } => {
-                execution.as_ref()
-            }
-            _ => None,
-        }
-    }
-
-    pub fn pending_interactive_requests(&self) -> &[PendingInteractiveRequestResource] {
-        match self {
-            Self::Running { requests, .. } | Self::AwaitingInteraction { requests, .. } => {
-                requests.as_slice()
-            }
-            _ => &[],
-        }
-    }
-
-    pub fn with_execution_snapshot(
-        self,
-        execution: Option<ActiveExecutionResource>,
-        workflow: WorkflowState,
-        requests: Vec<PendingInteractiveRequestResource>,
-    ) -> Self {
-        match self {
-            // A foreground conversation can be idle while one of its durable
-            // workers needs the real user's input. Preserve that attention in
-            // the source chat without inventing a foreground execution lease.
-            Self::Ready { .. } | Self::Failed { .. } if !requests.is_empty() => {
-                Self::AwaitingInteraction {
-                    run_id: None,
-                    execution,
-                    requests,
-                }
-            }
-            Self::Running { .. } => Self::Running {
-                execution,
-                workflow,
-                requests,
-            },
-            Self::AwaitingInteraction { run_id, .. } => Self::AwaitingInteraction {
-                run_id,
-                execution,
-                requests,
-            },
-            other => other,
-        }
-    }
-}
-
-impl From<SessionStateKind> for SessionState {
-    /// The payload-free projection of a derived state kind.
-    fn from(kind: SessionStateKind) -> Self {
-        match kind {
-            SessionStateKind::Creating => Self::Creating,
-            SessionStateKind::Ready => Self::Ready { last_failure: None },
-            SessionStateKind::Running => Self::Running {
-                execution: None,
-                workflow: WorkflowState::Quiescent,
-                requests: Vec::new(),
-            },
-            SessionStateKind::AwaitingInteraction => Self::AwaitingInteraction {
-                run_id: None,
-                execution: None,
-                requests: Vec::new(),
-            },
-            SessionStateKind::Failed => Self::Failed { failure: None },
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Server-owned session home view.
@@ -889,103 +316,6 @@ pub struct SessionOverviewResource {
     pub generated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
-/// An active execution inside a session.
-pub struct ActiveExecutionResource {
-    #[schemars(with = "String")]
-    pub execution_id: Uuid,
-    pub phase: ExecutionPhase,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Execution context of a session: agent, access, and permission configuration.
-pub struct SessionExecutionContextResource {
-    /// The session prompt layer: inline fragments that apply to this session.
-    #[serde(
-        default,
-        skip_serializing_if = "agena_prompt_layers::PromptLayer::is_empty"
-    )]
-    pub prompts: agena_prompt_layers::PromptLayer,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_retry: Option<agena_domain::ProviderRetryStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conversation: Option<agena_domain::SessionConversation>,
-    pub agent_id: String,
-    #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
-    pub selected_permission: PermissionConfigResource,
-    #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
-    pub effective_permission: PermissionConfigResource,
-    #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
-    pub permission_ceiling: PermissionConfigResource,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_provider_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_adapter_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_thinking_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_speed_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_verbosity: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_parallel_tool_calls: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub effective_workspace_root: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_status: Option<AgentStatus>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_started_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_finished_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_failure: Option<agena_failure::UserProblem>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Basis of a session usage limit.
-pub enum SessionUsageLimitBasis {
-    ContextWindow,
-    PromptThreshold,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Token usage of a session.
-pub struct SessionUsageResource {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub measured_prompt_tokens: Option<u64>,
-    pub current_tokens: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub projected_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_limit_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit_tokens: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub limit_basis: Option<SessionUsageLimitBasis>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reserved_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_context_window_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_max_input_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_max_output_tokens: Option<u32>,
-    /// Prompt tokens the last request read from the provider cache.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_cache_read_tokens: Option<u64>,
-    /// Prompt tokens the last request could have cached.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_cache_input_tokens: Option<u64>,
-    /// `last_cache_read_tokens / last_cache_input_tokens` (0.0–1.0).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_cache_hit_rate: Option<f64>,
-}
-
 /// Identity of the session atomically published by an archive import.
 /// This receipt does not require a provider or a subsequent state/history read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -993,162 +323,9 @@ pub struct SessionArchiveImportResource {
     pub session_id: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Full execution view of a session.
-pub struct SessionExecutionResource {
-    /// Identity of this accepted command, independent of the returned Part window.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub receipt: Option<SessionExecutionReceiptResource>,
-    /// Server-owned FIFO of accepted input that has not started. These are
-    /// references to durable user messages, not client-local composer drafts.
-    #[serde(default)]
-    pub queued_messages: Vec<QueuedMessageResource>,
-    /// Paused inputs remain durable and require an explicit backend resume.
-    #[serde(default)]
-    pub queue_paused: bool,
-    pub session: SessionResource,
-    /// The session's parts (ordered parts, including `run` markers).
-    pub parts: Vec<crate::part::PartResource>,
-    /// `None` means no transcript page was requested. Status shells may still
-    /// include the durable owners of pending interactions. A bounded history
-    /// selection always carries metadata, including when its window is empty.
-    pub part_page: Option<crate::pagination::PageInfo>,
-    /// Durable session control version for ordering execution snapshots and
-    /// mutation receipts. The legacy field name is retained for wire
-    /// compatibility; this is neither a metadata version nor an SSE cursor.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_event_seq: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub automation: Option<SessionAutomationResource>,
-    /// Non-terminal background members owned by this session. This is the
-    /// single session-scoped projection consumed by both composer footers and
-    /// Web; clients must not maintain a second counter.
-    #[serde(default)]
-    pub background_activities: Vec<BackgroundActivityResource>,
-    pub execution: SessionExecutionContextResource,
-    pub usage: SessionUsageResource,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QueuedMessageResource {
-    pub execution_id: uuid::Uuid,
-    pub message_id: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct QueuedMessageEditResource {
-    pub execution_id: uuid::Uuid,
-    pub message_id: i64,
-    pub revision: i64,
-    pub document: agena_domain::ComposerDocument,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionExecutionReceiptResource {
-    pub execution_id: uuid::Uuid,
-    /// Committed user/control input identity, independent of transcript paging.
-    pub message_id: i64,
-    /// Allocated when accepted, including while the attempt is still queued.
-    pub attempt_generation: i64,
-    pub turn_id: uuid::Uuid,
-    pub reply_id: uuid::Uuid,
-}
-
 pub use agena_domain::session_kernel::ExecutionAttemptSettlement;
 
-/// Exact-attempt observation. A terminal phase alone does not mean that
-/// post-run work has retired. Recovery/supersession must not be treated as
-/// successful settlement, even when the durable phase is succeeded.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExecutionAttemptResource {
-    pub session_id: i64,
-    pub execution_id: Uuid,
-    pub message_id: i64,
-    pub attempt_generation: i64,
-    pub current_attempt_generation: i64,
-    pub phase: agena_domain::session_kernel::ExecutionPhase,
-    pub settlement: ExecutionAttemptSettlement,
-    pub kernel_epoch: Uuid,
-    pub owner_epoch: Option<Uuid>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// A pending interactive request (permission or user input).
-pub struct PendingInteractiveRequestResource {
-    pub session_id: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
-    #[serde(flatten)]
-    pub request: PendingInteractiveRequest,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-/// Run options for a session execution.
-pub struct RunOptions {
-    #[serde(default)]
-    pub model: Option<ModelRef>,
-    #[serde(default)]
-    pub thinking_mode: Option<String>,
-    #[serde(default)]
-    pub speed_mode: Option<String>,
-    #[serde(default)]
-    pub verbosity: Option<String>,
-    /// Temporary additional instructions; an empty string overrides inherited values.
-    #[serde(default)]
-    pub system: Option<String>,
-    #[serde(default)]
-    pub temperature: Option<f32>,
-    #[serde(default)]
-    pub max_output_tokens: Option<u32>,
-}
-
-/// Provider, optional adapter, and model selection carried over the public
-/// wire. The application validates these strings and constructs its internal
-/// model identifier only after receiving the request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct ModelRef {
-    pub provider_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter_id: Option<String>,
-    pub model_id: String,
-}
-
-impl ModelRef {
-    pub fn new(provider_id: impl Into<String>, model_id: impl Into<String>) -> Self {
-        Self {
-            provider_id: provider_id.into(),
-            adapter_id: None,
-            model_id: model_id.into(),
-        }
-    }
-
-    pub fn new_with_adapter(
-        provider_id: impl Into<String>,
-        adapter_id: impl Into<String>,
-        model_id: impl Into<String>,
-    ) -> Self {
-        Self {
-            provider_id: provider_id.into(),
-            adapter_id: Some(adapter_id.into()),
-            model_id: model_id.into(),
-        }
-    }
-}
-
 // ─── Messages ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Role of a message.
-pub enum RunRole {
-    User,
-    Assistant,
-    System,
-    Tool,
-}
 
 /// Public execution state of a message.
 ///
@@ -1157,555 +334,13 @@ pub enum RunRole {
 /// an operation part's [`PartExecutionStatusResource`] cannot drift apart.
 pub use agena_domain::ExecutionStatus as RunStatus;
 
-/// Token and cost accounting for one public message projection.
-///
-/// The wire representation intentionally does not carry the runtime's
-/// database serialization implementation.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct RunUsage {
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub reasoning_tokens: u64,
-    pub cache_write_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub total_cost: f64,
-}
-
-/// Origin of a message in the public conversation projection.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "snake_case")]
-pub enum RunSource {
-    User,
-    Assistant,
-    System,
-}
-
-/// Display and lineage metadata for a message. Provider-private replay state
-/// remains runtime-only and is intentionally absent from this wire contract.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RunMetadata {
-    pub source: RunSource,
-    /// Stable external delivery key, when this message was submitted by a
-    /// retry-capable integration such as the scheduler.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idempotency_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_turn_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_message_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub generated_by_call_id: Option<i64>,
-    pub model_provider_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_adapter_id: Option<String>,
-    pub model_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_speed_mode: Option<String>,
-}
-
-impl Default for RunMetadata {
-    fn default() -> Self {
-        Self {
-            source: RunSource::Assistant,
-            idempotency_key: None,
-            model_turn_id: None,
-            parent_message_id: None,
-            generated_by_call_id: None,
-            model_provider_id: String::new(),
-            model_adapter_id: None,
-            model_id: String::new(),
-            model_thinking_mode: None,
-            model_speed_mode: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// How message parts are loaded in a listing.
-pub enum PartLoadMode {
-    None,
-    #[default]
-    Summary,
-    Full,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-/// Reference to a command attached to a message.
-pub struct PartCommandReference {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    pub content_hash: String,
-    pub source: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skill_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// An attachment of a message part.
-pub struct PartAttachment {
-    pub kind: PartAttachmentKind,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub mime: String,
-    pub source: PartAttachmentSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub filename: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub height: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub page_count: Option<u32>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Kind of a message attachment.
-pub enum PartAttachmentKind {
-    Image,
-    Audio,
-    Video,
-    Pdf,
-    File,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "source", rename_all = "snake_case")]
-/// Source of a message attachment.
-pub enum PartAttachmentSource {
-    Url {
-        url: String,
-    },
-    DataUrl {
-        url: String,
-    },
-    /// Bytes bound to the exact provider route they were authorized for.
-    ProviderData {
-        route: String,
-        data: String,
-    },
-    Base64 {
-        data: String,
-    },
-    FileId {
-        file_id: String,
-    },
-    LocalPath {
-        path: String,
-    },
-    /// The bytes are gone: an upload from a route that is no longer selected,
-    /// an expired provider file id, or a blob that no longer belongs to this
-    /// conversation. The attachment keeps its identity and display metadata so
-    /// the transcript still reads correctly; clients render the notice instead
-    /// of media.
-    Unavailable {
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        reason: String,
-    },
-}
-
-impl From<&agena_domain::AttachmentSource> for PartAttachmentSource {
-    fn from(source: &agena_domain::AttachmentSource) -> Self {
-        match source {
-            agena_domain::AttachmentSource::Url { url } => Self::Url { url: url.clone() },
-            agena_domain::AttachmentSource::DataUrl { url } => Self::DataUrl { url: url.clone() },
-            agena_domain::AttachmentSource::ProviderData { route, data } => Self::ProviderData {
-                route: route.clone(),
-                data: data.clone(),
-            },
-            agena_domain::AttachmentSource::Base64 { data } => Self::Base64 { data: data.clone() },
-            agena_domain::AttachmentSource::FileId { file_id } => Self::FileId {
-                file_id: file_id.clone(),
-            },
-            agena_domain::AttachmentSource::LocalPath { path } => {
-                Self::LocalPath { path: path.clone() }
-            }
-            agena_domain::AttachmentSource::Unavailable { reason } => Self::Unavailable {
-                reason: reason.clone(),
-            },
-        }
-    }
-}
-
 // ─── Permission rules ────────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A persisted permission rule.
-pub struct PermissionRuleResource {
-    pub id: i64,
-    pub action_key: String,
-    pub subject_kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub qualifier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path_access_kind: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workspace_root: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_target: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub network_port: Option<u16>,
-    pub mode: PermissionMode,
-    pub scope: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workspace_id: Option<i64>,
-    pub source: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub operator: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revoked_at: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revoked_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub revoked_by: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Stable permission-rule decision persisted and exposed by the API.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionMode {
-    Allow,
-    Auto,
-    Ask,
-    Deny,
-}
-
-/// Public projection of an execution permission configuration.
-///
-/// This is a declarative wire value. It deliberately contains no policy
-/// evaluation code, filesystem handles, or plugin runtime types; the
-/// application layer translates it to and from the runtime policy model.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct PermissionConfigResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<PathPermissionConfigResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub network: Option<NetworkPermissionConfigResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<ToolPermissionConfigResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_model: Option<ApprovalModelSelectionResource>,
-}
-
-impl PermissionConfigResource {
-    pub fn is_empty(&self) -> bool {
-        self.path
-            .as_ref()
-            .is_none_or(PathPermissionConfigResource::is_empty)
-            && self
-                .network
-                .as_ref()
-                .is_none_or(NetworkPermissionConfigResource::is_empty)
-            && self
-                .tools
-                .as_ref()
-                .is_none_or(ToolPermissionConfigResource::is_empty)
-            && self.approval_model.is_none()
-    }
-}
-
-/// Concrete automatic-permission model selection, including the inference
-/// variants chosen for the approval request.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ApprovalModelSelectionResource {
-    pub provider: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub adapter: Option<String>,
-    pub model: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub verbosity: Option<String>,
-}
-
-/// Path permission configuration of a session.
-///
-/// Every key is optional: an omitted key keeps the built-in default, so
-/// deleting a key restores it. The built-ins are ordinary entries in `rules`,
-/// which a user's same-pattern entry replaces; deleting the user's entry brings
-/// the built-in back. A rule always takes the explicit read/write object form —
-/// there is no shorthand string form.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct PathPermissionConfigResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<PathAccessModesResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external: Option<PathAccessModesResource>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, PathAccessModesResource>,
-}
-
-impl PathPermissionConfigResource {
-    pub fn is_empty(&self) -> bool {
-        self.workspace.is_none() && self.external.is_none() && self.rules.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-/// Read/write access modes for a path scope.
-pub struct PathAccessModesResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub write: Option<PermissionMode>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-/// Network permission configuration of a session.
-pub struct NetworkPermissionConfigResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub internet: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub private: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub loopback: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, PermissionMode>,
-}
-
-impl NetworkPermissionConfigResource {
-    pub fn is_empty(&self) -> bool {
-        self.internet.is_none()
-            && self.private.is_none()
-            && self.loopback.is_none()
-            && self.rules.is_empty()
-    }
-}
-
-/// Tool permission configuration of a session.
-///
-/// The built-in classes are ordinary entries: the interaction tool by name in
-/// `names`, the command classes as keywords inside a shell tool's `rules`, and
-/// the read-only class as the `read-only` keyword under the `*` tool. A user
-/// entry of the same key replaces the built-in one.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct ToolPermissionConfigResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub names: BTreeMap<String, PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, ToolPermissionRulesResource>,
-}
-
-impl ToolPermissionConfigResource {
-    pub fn is_empty(&self) -> bool {
-        self.default.is_none() && self.names.is_empty() && self.rules.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-/// Tool permission rules: a single mode or an ordered name-to-mode map.
-pub enum ToolPermissionRulesResource {
-    Mode(PermissionMode),
-    Ordered(BTreeMap<String, PermissionMode>),
-}
-
-/// Persistence scope selected for a permission decision in the public API.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionScope {
-    Session,
-    Workspace,
-    Global,
-}
-
-/// Permission decision sent by a client. It is a wire value, not a runtime
-/// policy or persistence type.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionReplyKind {
-    AllowOnce,
-    AllowAlways,
-    DenyOnce,
-    DenyAlways,
-    AutoApprove,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Reply to a pending permission request.
-pub struct PermissionReply {
-    pub request_id: String,
-    pub kind: PermissionReplyKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<PermissionScope>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Kind of a user-input reply.
-pub enum UserInputReplyKind {
-    Submit,
-    Cancel,
-    Timeout,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Reply to a pending user-input request.
-pub struct UserInputReply {
-    pub request_id: String,
-    pub kind: UserInputReplyKind,
-    #[serde(default, skip_serializing_if = "user_input_answers_is_empty")]
-    pub answers: std::collections::BTreeMap<String, Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-/// An action subject to permission checks.
-pub enum PermissionActionResource {
-    Tool {
-        tool_name: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        qualifier: Option<String>,
-    },
-    PathAccess {
-        access_kind: String,
-        workspace_root: String,
-        target_path: String,
-    },
-    NetworkAccess {
-        target: String,
-        host: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        port: Option<u16>,
-    },
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Source of a permission policy decision.
-pub enum PolicySourceKind {
-    StaticPolicy,
-    PersistedRule,
-    PluginAdvice,
-    ManagedPolicy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// One step of a permission decision trace.
-pub struct DecisionTraceStep {
-    pub source_kind: PolicySourceKind,
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<PermissionScope>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// A pending permission request.
-pub struct PermissionRequest {
-    pub request_id: String,
-    pub session_id: Option<i64>,
-    pub action: PermissionActionResource,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub related_actions: Vec<PermissionActionResource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requested_actions: Vec<PermissionActionResource>,
-    pub reason: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub explanation: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<PermissionScope>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub trace: Vec<DecisionTraceStep>,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// An option of a user-input question.
-pub struct UserInputOption {
-    pub label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub custom: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// A question asked to the user.
-pub struct UserInputQuestion {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub header: String,
-    pub question: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub options: Vec<UserInputOption>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub multiple: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub allow_custom: bool,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 /// Request to list saved provider adapter models.
 pub struct SavedProviderAdapterModelsRequest {
     #[serde(default)]
     pub adapter_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Adapter model probe result for one adapter.
-pub struct ProviderAdapterModelsResource {
-    pub adapter_id: String,
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_base_url: Option<String>,
-    pub models: Vec<ProviderModelResource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<agena_failure::UserProblem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response containing provider adapter model probes.
-pub struct ProviderAdapterModelsResponse {
-    pub provider_id: String,
-    pub adapters: Vec<ProviderAdapterModelsResource>,
 }
 
 #[cfg(test)]
@@ -1799,37 +434,6 @@ pub struct WorkspaceFileUploadResource {
     pub size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-/// Kind of a workspace file entry.
-pub enum WorkspaceFileKind {
-    Directory,
-    File,
-    Symlink,
-    Other,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A node in a workspace file tree.
-pub struct WorkspaceFileNode {
-    pub name: String,
-    pub path: String,
-    pub kind: WorkspaceFileKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub size: Option<u64>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub children: Vec<WorkspaceFileNode>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A workspace file tree.
-pub struct WorkspaceFileTreeResource {
-    pub workspace_id: i64,
-    pub root: String,
-    pub path: String,
-    pub entries: Vec<WorkspaceFileNode>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Git status of a workspace.
 pub struct GitStatusResource {
@@ -1897,3 +501,306 @@ pub struct ConfigJsonSources {
 
 mod plugins;
 pub use plugins::*;
+
+/// The one runtime-wide default execution selection exposed to clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct DefaultSelectionResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of the model catalog.
+pub struct ModelCatalogResponse {
+    #[serde(default)]
+    pub refreshing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_refresh_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_successful_source: Option<ModelCatalogSourceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_failure: Option<agena_failure::UserProblem>,
+    pub model_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Source of a catalog model entry.
+pub enum ModelCatalogSourceKind {
+    Generated,
+    Cache,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// One server-owned plugin command.
+pub struct PluginCommandResource {
+    pub plugin_id: String,
+    pub accepts_empty_input: bool,
+    pub default_input: serde_json::Value,
+    #[serde(flatten)]
+    pub command: agena_plugin_sdk::CommandDefinition,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A passive display contribution provided by a plugin.
+pub struct PluginDisplayContributionResource {
+    pub plugin_id: String,
+    pub id: String,
+    pub kind: agena_plugin_sdk::ContributionKind,
+    #[serde(default)]
+    pub priority: i32,
+    pub content: agena_plugin_sdk::PluginDisplayContent,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Presentation-neutral plugin commands plus terminal-only decoration.
+pub struct PluginSurfaceCatalogResource {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<PluginCommandResource>,
+    #[serde(default)]
+    pub terminal: PluginTerminalSurfaceCatalogResource,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Terminal-only plugin decoration. No executable action is represented here.
+pub struct PluginTerminalSurfaceCatalogResource {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display: Vec<PluginDisplayContributionResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub themes: Vec<PluginThemePaletteResource>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+/// Colors of a plugin terminal theme palette.
+pub struct PluginThemeColorsResource {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub muted: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub danger: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub special: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_fg: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_bg: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A plugin-provided terminal theme palette.
+pub struct PluginThemePaletteResource {
+    pub id: String,
+    pub plugin_id: String,
+    pub display_name: String,
+    pub colors: PluginThemeColorsResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime-wide automation overview.
+pub struct RuntimeAutomationResource {
+    pub enabled: bool,
+    pub job_count: usize,
+    pub recent_jobs: Vec<ScheduledJobResource>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Kind of a runtime background task.
+pub enum RuntimeBackgroundTaskKind {
+    ModelCatalogRefresh,
+    RuntimeReload,
+    MarketplaceRegistrySync,
+    MarketplacePluginInstall,
+    MarketplacePluginUninstall,
+    MarketplacePluginUpgrade,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Origin of a runtime background task.
+pub enum RuntimeBackgroundTaskOrigin {
+    System,
+    User,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A runtime background task.
+pub struct RuntimeBackgroundTaskResource {
+    pub id: String,
+    pub kind: RuntimeBackgroundTaskKind,
+    pub origin: RuntimeBackgroundTaskOrigin,
+    pub title: String,
+    pub status: RuntimeBackgroundTaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<agena_failure::UserProblem>,
+    pub created_at: DateTime<Utc>,
+    pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<DateTime<Utc>>,
+    pub cancellable: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+/// Status of a runtime background task.
+pub enum RuntimeBackgroundTaskStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One published command.
+pub struct RuntimeCommandResource {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slash: Option<String>,
+    pub description: String,
+    pub aliases: Vec<String>,
+    pub group: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    pub plugin_id: String,
+    /// `client`, `method` or `tool` — how running the command reaches a handler.
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// The published command catalog, exactly as every client renders it.
+pub struct RuntimeCommandsResource {
+    /// Commands a client runs locally through its own action vocabulary.
+    pub client_count: usize,
+    /// Commands served by the plugin that declared them.
+    pub served_count: usize,
+    pub commands: Vec<RuntimeCommandResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// LSP servers and diagnostics overview.
+pub struct RuntimeLspResource {
+    pub server_count: usize,
+    pub diagnostics_count: usize,
+    pub files_with_diagnostics: usize,
+    pub servers: Vec<RuntimeLspServerResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One LSP server definition.
+pub struct RuntimeLspServerResource {
+    pub name: String,
+    pub command: String,
+    pub file_extensions: Vec<String>,
+    pub root_markers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// MCP servers running inside the runtime.
+pub struct RuntimeMcpResource {
+    pub server_count: usize,
+    pub tool_count: usize,
+    pub servers: Vec<RuntimeMcpServerResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// One MCP server with its tool count.
+pub struct RuntimeMcpServerResource {
+    pub name: String,
+    pub tool_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime operator surface: MCP, LSP, agent, commands, and plugins.
+pub struct RuntimeOperatorResource {
+    pub mcp: RuntimeMcpResource,
+    pub lsp: RuntimeLspResource,
+    pub agent_id: String,
+    pub commands: RuntimeCommandsResource,
+    pub plugins: RuntimePluginSurfaceResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Neutral plugin surface with the tool registry generation it reflects.
+pub struct RuntimePluginSurfaceResource {
+    #[serde(default)]
+    pub catalog: PluginSurfaceCatalogResource,
+    pub tool_registry_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_registry_last_event: Option<agena_plugin_sdk::host_api::ToolRegistryChangedEvent>,
+}
+
+/// The effective default execution selection the runtime applies when a
+/// fresh session starts without explicit run options. Mirrors the
+/// `ExecutionSelection` fields the UI needs to resolve default think/speed
+/// modes before any session exists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Overall runtime status.
+pub struct RuntimeStatusResponse {
+    pub generation: u64,
+    pub loaded_at: DateTime<Utc>,
+    pub workspace_root: String,
+    pub config_path: String,
+    pub config_found: bool,
+    pub provider_ids: Vec<String>,
+    pub plugin_count: usize,
+    pub session_runtime_available: bool,
+    pub watch_paths: Vec<String>,
+    pub reload: RuntimeTaskResource,
+    pub session_gc: RuntimeTaskResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_catalog: Option<ModelCatalogResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_selection: Option<DefaultSelectionResource>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_tasks: Vec<RuntimeBackgroundTaskResource>,
+    pub automation: RuntimeAutomationResource,
+    pub operator: RuntimeOperatorResource,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A recurring runtime background task and whether it is enabled.
+pub struct RuntimeTaskResource {
+    pub enabled: bool,
+    pub interval_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// Adapter model probe result for one adapter.
+pub struct ProviderAdapterModelsResource {
+    pub adapter_id: String,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_base_url: Option<String>,
+    pub models: Vec<ProviderModelResource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<agena_failure::UserProblem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response containing provider adapter model probes.
+pub struct ProviderAdapterModelsResponse {
+    pub provider_id: String,
+    pub adapters: Vec<ProviderAdapterModelsResource>,
+}

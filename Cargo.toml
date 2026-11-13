@@ -16,6 +16,7 @@ members = [
     "crates/agena-cli",
     "crates/agena-application",
     "crates/agena-domain",
+    "crates/agena-session-api",
     "crates/agena-failure",
     "crates/agena-provider",
     "crates/agena-provider-bedrock-auth",
@@ -89,6 +90,7 @@ authors = ["Agena Contributors"]
 agena-cli = { path = "crates/agena-cli" }
 agena-application = { path = "crates/agena-application" }
 agena-domain = { path = "crates/agena-domain" }
+agena-session-api = { path = "crates/agena-session-api" }
 agena-prompt-layers = { path = "crates/agena-prompt-layers" }
 agena-failure = { path = "crates/agena-failure" }
 agena-provider = { path = "crates/agena-provider" }

@@ -2,8 +2,8 @@
 //! In-process, cdylib, stdio and HTTP providers use the same three methods.
 pub use agena_assistant::{
     AdapterBatch, AdapterDescribeRequest, AdapterDescription, AdapterKind, AdapterPollRequest,
-    ChannelDelivery, ChannelEnvelope, ChannelIdentity, ChannelKind, ChannelReceipt, ExternalEvent,
-    INTEGRATION_API_VERSION, INTEGRATION_SERVICE, SendDisposition,
+    ChannelDelivery, ChannelEnvelope, ChannelIdentity, ChannelReceipt, ConversationKind,
+    ExternalEvent, INTEGRATION_API_VERSION, INTEGRATION_SERVICE, SendDisposition,
 };
 
 /// Export the standard adapter service. Source plugins omit send; channels

@@ -152,6 +152,7 @@
                     },
                     {
                       "constraints": {},
+                      "description": "The chat transport identity: tenant plus account. No room shape here.",
                       "fields": [
                         {
                           "constraints": {},
@@ -162,38 +163,6 @@
                           "secret": false,
                           "sensitive": false,
                           "title": "Account"
-                        },
-                        {
-                          "constraints": {},
-                          "id": "kind",
-                          "kind": "choice",
-                          "options": [
-                            {
-                              "id": "direct",
-                              "title": "Direct",
-                              "value": "direct"
-                            },
-                            {
-                              "id": "group",
-                              "title": "Group",
-                              "value": "group"
-                            },
-                            {
-                              "id": "public_channel",
-                              "title": "Public Channel",
-                              "value": "public_channel"
-                            },
-                            {
-                              "id": "private_channel",
-                              "title": "Private Channel",
-                              "value": "private_channel"
-                            }
-                          ],
-                          "path": "/channel_identity/kind",
-                          "required": true,
-                          "secret": false,
-                          "sensitive": false,
-                          "title": "Kind"
                         },
                         {
                           "constraints": {},
@@ -213,6 +182,45 @@
                       "secret": false,
                       "sensitive": false,
                       "title": "Channel Identity"
+                    },
+                    {
+                      "constraints": {},
+                      "description": "Room shapes the binding authorizes. Empty means every shape; an adapter\nmay use it to narrow what it reports, but the host rechecks each event.",
+                      "id": "channel_kinds",
+                      "item": {
+                        "constraints": {},
+                        "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
+                        "id": "channel_kinds_item",
+                        "kind": "choice",
+                        "options": [
+                          {
+                            "id": "direct",
+                            "title": "Direct",
+                            "value": "direct"
+                          },
+                          {
+                            "id": "group",
+                            "title": "Group",
+                            "value": "group"
+                          },
+                          {
+                            "id": "broadcast",
+                            "title": "Broadcast",
+                            "value": "broadcast"
+                          }
+                        ],
+                        "path": "/channel_kinds/*",
+                        "required": true,
+                        "secret": false,
+                        "sensitive": false,
+                        "title": "Channel Kinds Item"
+                      },
+                      "kind": "list",
+                      "path": "/channel_kinds",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel Kinds"
                     },
                     {
                       "constraints": {},
@@ -350,6 +358,7 @@
                               },
                               {
                                 "constraints": {},
+                                "description": "The chat transport identity: tenant plus account. No room shape here.",
                                 "fields": [
                                   {
                                     "constraints": {},
@@ -360,38 +369,6 @@
                                     "secret": false,
                                     "sensitive": false,
                                     "title": "Account"
-                                  },
-                                  {
-                                    "constraints": {},
-                                    "id": "kind",
-                                    "kind": "choice",
-                                    "options": [
-                                      {
-                                        "id": "direct",
-                                        "title": "Direct",
-                                        "value": "direct"
-                                      },
-                                      {
-                                        "id": "group",
-                                        "title": "Group",
-                                        "value": "group"
-                                      },
-                                      {
-                                        "id": "public_channel",
-                                        "title": "Public Channel",
-                                        "value": "public_channel"
-                                      },
-                                      {
-                                        "id": "private_channel",
-                                        "title": "Private Channel",
-                                        "value": "private_channel"
-                                      }
-                                    ],
-                                    "path": "/events/*/channel/identity/kind",
-                                    "required": true,
-                                    "secret": false,
-                                    "sensitive": false,
-                                    "title": "Kind"
                                   },
                                   {
                                     "constraints": {},
@@ -421,6 +398,34 @@
                                 "secret": false,
                                 "sensitive": false,
                                 "title": "Is Member"
+                              },
+                              {
+                                "constraints": {},
+                                "description": "The shape of the room this specific message arrived in. It lives on the\nmessage, not on the account: one account serves direct chats, groups and\nbroadcast channels at once.",
+                                "id": "kind",
+                                "kind": "choice",
+                                "options": [
+                                  {
+                                    "id": "direct",
+                                    "title": "Direct",
+                                    "value": "direct"
+                                  },
+                                  {
+                                    "id": "group",
+                                    "title": "Group",
+                                    "value": "group"
+                                  },
+                                  {
+                                    "id": "broadcast",
+                                    "title": "Broadcast",
+                                    "value": "broadcast"
+                                  }
+                                ],
+                                "path": "/events/*/channel/kind",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Kind"
                               },
                               {
                                 "constraints": {},
@@ -769,6 +774,7 @@
                     },
                     {
                       "constraints": {},
+                      "description": "The chat transport identity: tenant plus account. No room shape here.",
                       "fields": [
                         {
                           "constraints": {},
@@ -779,38 +785,6 @@
                           "secret": false,
                           "sensitive": false,
                           "title": "Account"
-                        },
-                        {
-                          "constraints": {},
-                          "id": "kind",
-                          "kind": "choice",
-                          "options": [
-                            {
-                              "id": "direct",
-                              "title": "Direct",
-                              "value": "direct"
-                            },
-                            {
-                              "id": "group",
-                              "title": "Group",
-                              "value": "group"
-                            },
-                            {
-                              "id": "public_channel",
-                              "title": "Public Channel",
-                              "value": "public_channel"
-                            },
-                            {
-                              "id": "private_channel",
-                              "title": "Private Channel",
-                              "value": "private_channel"
-                            }
-                          ],
-                          "path": "/channel_identity/kind",
-                          "required": true,
-                          "secret": false,
-                          "sensitive": false,
-                          "title": "Kind"
                         },
                         {
                           "constraints": {},
@@ -830,6 +804,45 @@
                       "secret": false,
                       "sensitive": false,
                       "title": "Channel Identity"
+                    },
+                    {
+                      "constraints": {},
+                      "description": "Room shapes the binding authorizes. Empty means every shape; an adapter\nmay use it to narrow what it reports, but the host rechecks each event.",
+                      "id": "channel_kinds",
+                      "item": {
+                        "constraints": {},
+                        "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
+                        "id": "channel_kinds_item",
+                        "kind": "choice",
+                        "options": [
+                          {
+                            "id": "direct",
+                            "title": "Direct",
+                            "value": "direct"
+                          },
+                          {
+                            "id": "group",
+                            "title": "Group",
+                            "value": "group"
+                          },
+                          {
+                            "id": "broadcast",
+                            "title": "Broadcast",
+                            "value": "broadcast"
+                          }
+                        ],
+                        "path": "/channel_kinds/*",
+                        "required": true,
+                        "secret": false,
+                        "sensitive": false,
+                        "title": "Channel Kinds Item"
+                      },
+                      "kind": "list",
+                      "path": "/channel_kinds",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Channel Kinds"
                     },
                     {
                       "constraints": {},
@@ -967,6 +980,7 @@
                               },
                               {
                                 "constraints": {},
+                                "description": "The chat transport identity: tenant plus account. No room shape here.",
                                 "fields": [
                                   {
                                     "constraints": {},
@@ -977,38 +991,6 @@
                                     "secret": false,
                                     "sensitive": false,
                                     "title": "Account"
-                                  },
-                                  {
-                                    "constraints": {},
-                                    "id": "kind",
-                                    "kind": "choice",
-                                    "options": [
-                                      {
-                                        "id": "direct",
-                                        "title": "Direct",
-                                        "value": "direct"
-                                      },
-                                      {
-                                        "id": "group",
-                                        "title": "Group",
-                                        "value": "group"
-                                      },
-                                      {
-                                        "id": "public_channel",
-                                        "title": "Public Channel",
-                                        "value": "public_channel"
-                                      },
-                                      {
-                                        "id": "private_channel",
-                                        "title": "Private Channel",
-                                        "value": "private_channel"
-                                      }
-                                    ],
-                                    "path": "/events/*/channel/identity/kind",
-                                    "required": true,
-                                    "secret": false,
-                                    "sensitive": false,
-                                    "title": "Kind"
                                   },
                                   {
                                     "constraints": {},
@@ -1038,6 +1020,34 @@
                                 "secret": false,
                                 "sensitive": false,
                                 "title": "Is Member"
+                              },
+                              {
+                                "constraints": {},
+                                "description": "The shape of the room this specific message arrived in. It lives on the\nmessage, not on the account: one account serves direct chats, groups and\nbroadcast channels at once.",
+                                "id": "kind",
+                                "kind": "choice",
+                                "options": [
+                                  {
+                                    "id": "direct",
+                                    "title": "Direct",
+                                    "value": "direct"
+                                  },
+                                  {
+                                    "id": "group",
+                                    "title": "Group",
+                                    "value": "group"
+                                  },
+                                  {
+                                    "id": "broadcast",
+                                    "title": "Broadcast",
+                                    "value": "broadcast"
+                                  }
+                                ],
+                                "path": "/events/*/channel/kind",
+                                "required": true,
+                                "secret": false,
+                                "sensitive": false,
+                                "title": "Kind"
                               },
                               {
                                 "constraints": {},
@@ -1194,6 +1204,7 @@
                     },
                     {
                       "constraints": {},
+                      "description": "The chat transport identity: tenant plus account. No room shape here.",
                       "fields": [
                         {
                           "constraints": {},
@@ -1204,38 +1215,6 @@
                           "secret": false,
                           "sensitive": false,
                           "title": "Account"
-                        },
-                        {
-                          "constraints": {},
-                          "id": "kind",
-                          "kind": "choice",
-                          "options": [
-                            {
-                              "id": "direct",
-                              "title": "Direct",
-                              "value": "direct"
-                            },
-                            {
-                              "id": "group",
-                              "title": "Group",
-                              "value": "group"
-                            },
-                            {
-                              "id": "public_channel",
-                              "title": "Public Channel",
-                              "value": "public_channel"
-                            },
-                            {
-                              "id": "private_channel",
-                              "title": "Private Channel",
-                              "value": "private_channel"
-                            }
-                          ],
-                          "path": "/channel/kind",
-                          "required": true,
-                          "secret": false,
-                          "sensitive": false,
-                          "title": "Kind"
                         },
                         {
                           "constraints": {},
@@ -1277,6 +1256,34 @@
                       "secret": false,
                       "sensitive": false,
                       "title": "Delivery ID"
+                    },
+                    {
+                      "constraints": {},
+                      "description": "Room shape of the conversation this reply belongs to. It lets an adapter\npick the right platform surface when one account serves several.",
+                      "id": "kind",
+                      "kind": "choice",
+                      "options": [
+                        {
+                          "id": "direct",
+                          "title": "Direct",
+                          "value": "direct"
+                        },
+                        {
+                          "id": "group",
+                          "title": "Group",
+                          "value": "group"
+                        },
+                        {
+                          "id": "broadcast",
+                          "title": "Broadcast",
+                          "value": "broadcast"
+                        }
+                      ],
+                      "path": "/kind",
+                      "required": false,
+                      "secret": false,
+                      "sensitive": false,
+                      "title": "Kind"
                     },
                     {
                       "constraints": {},

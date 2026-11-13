@@ -28,4 +28,8 @@ pub(super) fn routes() -> Router<AppState> {
             "/api/v1/bots/{id}/session",
             post(rest::ensure_named_bot_session),
         )
+        .route(
+            "/api/v1/bots/{id}/sessions",
+            post(rest::create_bot_conversation),
+        )
 }

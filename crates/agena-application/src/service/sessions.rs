@@ -29,6 +29,8 @@ impl ApplicationService {
             .reader
             .query_summaries(SummaryQuery {
                 include_global: query.parent_id.is_some(),
+                owner_bot_id: query.owner_bot_id.map(|id| id.to_string()),
+                owner_surface: query.owner_surface.map(|s| s.as_str().to_owned()),
                 workspace_id: query.workspace_id,
                 parent_id: query.parent_id.map(crate::kernel_session_id).transpose()?,
                 roots_only: query.roots,
@@ -244,6 +246,8 @@ pub(crate) fn session_resource_from_kernel_summary(
         root_id: summary.root_session_id.get(),
         workspace_id: summary.workspace_id,
         title: summary.title.clone(),
+        owner_bot_id: summary.owner_bot_id.clone(),
+        owner_surface: summary.owner_surface.clone(),
         favorite: summary.favorite,
         pinned: summary.pinned,
         version: summary.metadata_version.get(),
@@ -276,6 +280,8 @@ pub(crate) fn session_resource_from_summary(
         root_id: summary.root_id,
         workspace_id: summary.workspace_id,
         title: summary.title,
+        owner_bot_id: None,
+        owner_surface: None,
         favorite: summary.favorite,
         pinned: summary.pinned,
         version: summary.version,

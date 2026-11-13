@@ -42,7 +42,6 @@ pub struct BotProfile {
     pub id: Uuid,
     pub name: String,
     pub persona: BotPersona,
-    pub session_id: i64,
     pub revision: i64,
     pub archived: bool,
     pub created_at_ms: i64,
@@ -82,12 +81,12 @@ pub struct BotSession {
     pub bot_id: Uuid,
     pub name: String,
 }
-impl From<BotProfile> for BotSession {
-    fn from(profile: BotProfile) -> Self {
+impl BotSession {
+    pub fn new(session_id: i64, profile: &BotProfile) -> Self {
         Self {
-            session_id: profile.session_id,
+            session_id,
             bot_id: profile.id,
-            name: profile.name,
+            name: profile.name.clone(),
         }
     }
 }

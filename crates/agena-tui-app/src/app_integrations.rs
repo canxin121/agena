@@ -124,8 +124,8 @@ fn template(p: &IntegrationProvider) -> IntegrationSpec {
                 identity: ChannelIdentity {
                     tenant: "tenant-id".into(),
                     account: "bot-account-id".into(),
-                    kind: ChannelKind::Group,
                 },
+                kinds: Default::default(),
                 session_mode: ChannelSessionMode::PerConversation,
                 thread_mode: ChannelThreadMode::Exact,
                 trigger: ChannelTrigger::DirectOrMention,

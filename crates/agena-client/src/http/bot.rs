@@ -81,6 +81,26 @@ impl AgenaClient {
             .await?;
         self.parse_json(response).await
     }
+    /// Start a new conversation for this Bot instead of reopening the latest.
+    pub async fn create_bot_conversation(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+    ) -> Result<BotSession, ClientError> {
+        let body = match title {
+            Some(title) => serde_json::json!({ "title": title }),
+            None => serde_json::json!({}),
+        };
+        let response = self
+            .send_request(
+                reqwest::Method::POST,
+                self.endpoint(&format!("/api/v1/bots/{id}/sessions")),
+                Some(&body),
+                None,
+            )
+            .await?;
+        self.parse_json(response).await
+    }
     pub async fn ensure_named_bot_session(&self, id: Uuid) -> Result<BotSession, ClientError> {
         let response = self
             .send_request(

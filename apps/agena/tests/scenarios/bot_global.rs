@@ -6,7 +6,10 @@ use anyhow::{Context, ensure};
 use reqwest::Method;
 use serde_json::{Value, json};
 
-use super::{bot_profiles::create, fixture};
+use super::{
+    bot_profiles::{create, ensure_named},
+    fixture,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn bot_global_registry_does_not_register_or_inherit_project() -> TestResult {
@@ -29,14 +32,17 @@ async fn bot_global_registry_does_not_register_or_inherit_project() -> TestResul
             let b = create(&case, "global-b", "Global Beta", None).await?;
             let _: Value = http.get("/api/v1/bots").await?.require_success()?.json()?;
             let _: Value = http.get(&format!("/api/v1/bots/{}", a.id)).await?.require_success()?.json()?;
-            let preview = serde_json::to_value(case.client().await.session_prompt_preview(a.session_id).await?)?.to_string();
+            let a_session = ensure_named(&case, a.id).await?.session_id;
+            let b_session = ensure_named(&case, b.id).await?.session_id;
+            let preview = serde_json::to_value(case.client().await.session_prompt_preview(a_session).await?)?.to_string();
             ensure!(!preview.contains(case.workspace().to_string_lossy().as_ref()) && !preview.contains("PROJECT-GUIDANCE-ONLY-785"), "global prompt preview leaked project context: {preview}");
             let after: Value = http.get("/api/v1/workspaces").await?.require_success()?.json()?;
             ensure!(after["items"].as_array().context("workspace list")?.is_empty(), "Bot registry registered a project: {after}");
-            for bot in [&a, &b] {
-                let resource: Value = http.get(&format!("/api/v1/sessions/{}", bot.session_id)).await?.require_success()?.json()?;
+            for (bot, bot_session) in [(&a, a_session), (&b, b_session)] {
+                let resource: Value = http.get(&format!("/api/v1/sessions/{bot_session}")).await?.require_success()?.json()?;
                 ensure!(resource.get("workspace_id") == Some(&Value::Null), "Bot has a project: {resource}");
-                let session = case.user().attach_session(bot.session_id).await?;
+                ensure!(resource["owner_bot_id"] == json!(bot.id.to_string()), "Bot session lost its owner: {resource}");
+                let session = case.user().attach_session(bot_session).await?;
                 let state = session.snapshot().await?;
                 ensure!(state.session.workspace_id.is_none());
                 ensure!(state.execution.effective_workspace_root.is_none(), "Bot inherited a root");
@@ -47,17 +53,17 @@ async fn bot_global_registry_does_not_register_or_inherit_project() -> TestResul
             let restored: Value = http.get("/api/v1/workspaces").await?.require_success()?.json()?;
             let restored_items = restored["items"].as_array().context("workspace list after crash")?;
             ensure!(restored_items.len() <= 1 && restored_items.iter().all(|p| p["path"] == case.workspace().to_string_lossy().as_ref()), "restart added a synthetic project: {restored}");
-            for bot in [&a, &b] {
+            for (bot, bot_session) in [(&a, a_session), (&b, b_session)] {
                 ensure!(super::bot_profiles::profile(&case, bot.id).await? == *bot, "Bot identity or persona changed after crash");
-                ensure!(case.user().attach_session(bot.session_id).await?.snapshot().await?.session.workspace_id.is_none());
+                ensure!(case.user().attach_session(bot_session).await?.snapshot().await?.session.workspace_id.is_none());
             }
             let project = case.user().new_session().await?;
             let project_id = project.snapshot().await?.session.workspace_id.context("project association")?;
             let listed: Value = http.get(&format!("/api/v1/sessions?workspace_id={project_id}&limit=50")).await?.require_success()?.json()?;
             let items = listed["items"].as_array().context("project sessions")?;
             ensure!(items.iter().any(|s| s["id"] == project.id()));
-            ensure!(!items.iter().any(|s| s["id"] == a.session_id || s["id"] == b.session_id), "Bot appeared in project sessions");
-            let bot = case.user().attach_session(a.session_id).await?;
+            ensure!(!items.iter().any(|s| s["id"] == a_session || s["id"] == b_session), "Bot appeared in project sessions");
+            let bot = case.user().attach_session(a_session).await?;
             let project_path = case.workspace().to_string_lossy().into_owned();
             case.model().expect(RequestMatch::user_text("global-provider-scope")).check(move |r| {
                 let body = r.body.to_string();
@@ -121,24 +127,26 @@ async fn bot_global_attachments_are_owned_by_exact_session() -> TestResult {
         .run(|case| async move {
             let a = create(&case, "asset-a", "Asset Alpha", None).await?;
             let b = create(&case, "asset-b", "Asset Beta", None).await?;
+            let a_session = ensure_named(&case, a.id).await?.session_id;
+            let b_session = ensure_named(&case, b.id).await?.session_id;
             let client = case.client().await;
             let uploaded = client
                 .upload_session_file(
-                    a.session_id,
+                    a_session,
                     "evidence.txt",
                     "Z2xvYmFsLWFzc2V0LW93bmVk",
                     Some("text/plain"),
                 )
                 .await?;
-            ensure!(uploaded.workspace_id.is_none() && uploaded.session_id == Some(a.session_id));
+            ensure!(uploaded.workspace_id.is_none() && uploaded.session_id == Some(a_session));
             ensure!(std::path::Path::new(&uploaded.path).is_absolute());
             let (_, bytes) = client
-                .download_session_media_file(a.session_id, &uploaded.path)
+                .download_session_media_file(a_session, &uploaded.path)
                 .await?;
             ensure!(bytes == b"global-asset-owned");
             ensure!(
                 client
-                    .download_session_media_file(b.session_id, &uploaded.path)
+                    .download_session_media_file(b_session, &uploaded.path)
                     .await
                     .is_err(),
                 "another Bot read the attachment"
@@ -174,7 +182,7 @@ async fn bot_global_attachments_are_owned_by_exact_session() -> TestResult {
             let (_, bytes) = case
                 .client()
                 .await
-                .download_session_media_file(a.session_id, &uploaded.path)
+                .download_session_media_file(a_session, &uploaded.path)
                 .await?;
             ensure!(bytes == b"global-asset-owned");
             Ok(())
@@ -186,7 +194,8 @@ async fn bot_global_attachments_are_owned_by_exact_session() -> TestResult {
 async fn bot_global_native_subagent_inherits_scope_permissions_and_reports() -> TestResult {
     fixture().case_timeout(Duration::from_secs(180)).run(|case| async move {
         let profile = create(&case, "global-child", "Global parent", None).await?;
-        let bot = case.user().attach_session(profile.session_id).await?;
+        let bot_session = ensure_named(&case, profile.id).await?.session_id;
+        let bot = case.user().attach_session(bot_session).await?;
         let forbidden = case.workspace().join("subagent-denied.txt");
         super::path_permission(&bot, &forbidden, "deny").await?;
         let model = case.model();

@@ -272,6 +272,10 @@ fn structured_roots() -> Vec<(&'static str, Value)> {
             schema_of::<agena_api::integrations::IntegrationDetail>(),
         ),
         (
+            "PlatformInventory",
+            schema_of::<agena_api::integrations::PlatformInventory>(),
+        ),
+        (
             "CreateIntegration",
             schema_of::<agena_api::integrations::CreateIntegration>(),
         ),

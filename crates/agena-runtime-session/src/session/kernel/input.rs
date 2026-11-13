@@ -1141,12 +1141,12 @@ mod message_source_tests {
         let origin = MessageOrigin {
             platform: Platform::chat("telegram", "bot-1"),
             conversation: "chat-9".into(),
-            kind: ConversationKind::PrivateChannel,
+            kind: ConversationKind::Broadcast,
             thread: None,
         };
         assert_eq!(
             message_source_line(Some(&author), Some(&origin)).unwrap(),
-            "source: chat:telegram/bot-1 conversation chat-9 (private_channel); sender: Ann (channel_member:member)"
+            "source: chat:telegram/bot-1 conversation chat-9 (broadcast); sender: Ann (channel_member:member)"
         );
     }
 }

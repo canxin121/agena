@@ -249,7 +249,7 @@ instance does not address another instance's service.
 
 ### Database baseline
 
-The current database baseline is `agena-2026-10-31`. A new database creates
+The current database baseline is `agena-2026-11-12`. A new database creates
 the complete session, Scheduler, and server schema together with that baseline
 identity in one transaction. The baseline is a fixed identity, not an upgrade
 counter. Each initialized database also receives its own instance identity.
@@ -263,10 +263,21 @@ admission needs temporary space beside the database for that copy; clean
 shutdowns without recovery logs avoid the copy.
 
 A database from another baseline, one with missing identity, or one with
-incompatible schema is rejected. Agena does not migrate, reset, or delete that
-database. Start the new baseline with a new empty `--data-dir` (`-DataDir` in
-PowerShell) and keep the previous data root separately. Changing the selected
-root does not import its contents.
+incompatible schema is rejected by the server. Agena never rewrites or deletes
+that database in place. Two recovery paths are supported:
+
+- `agena migrate` copies an older database into a complete new one under the
+  current baseline. It reads the source read-only, builds the destination at
+  `<source>.migrated` (or `--to`), moves Bot identities out of the legacy JSON
+  registry into `agena_bots`, records conversation ownership, and collapses the
+  retired room-kind values onto `group`. The destination must not already
+  exist, so a failed run never destroys a good database.
+- Start with a new empty `--data-dir` (`-DataDir` in PowerShell) and keep the
+  previous data root separately. Changing the selected root does not import its
+  contents.
+
+This baseline changes the conversation ownership model: Bot conversations are
+now ordinary sessions with an `owner`, and a Bot may own many of them.
 
 Recovery of an interrupted execution and rollback of a failed installer
 replacement remain part of the current contract; neither upgrades a database

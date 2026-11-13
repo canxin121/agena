@@ -49,7 +49,7 @@ async fn list(case: &TestCase, archived: bool) -> Result<BotList> {
         .require_success()?
         .json()
 }
-async fn ensure_named(case: &TestCase, id: uuid::Uuid) -> Result<BotSession> {
+pub(super) async fn ensure_named(case: &TestCase, id: uuid::Uuid) -> Result<BotSession> {
     case.http()
         .await
         .send_bytes(
@@ -179,7 +179,9 @@ async fn bot_profiles_registry_auth_validation_concurrency_and_receipts() -> Tes
         rejected(http.anonymous().get("/api/v1/bots").await?, &["auth","unauthorized"])?;
         rejected(http.anonymous().send_json(Method::POST,"/api/v1/bots",&json!({"request_key":"anon","name":"No"})).await?, &["auth","unauthorized"])?;
         let a = create(&case,"create-alpha"," Alpha ",None).await?;
-        ensure!(a.name == "Alpha" && a.id != uuid::Uuid::nil() && a.session_id > 0 && !a.archived);
+        ensure!(a.name == "Alpha" && a.id != uuid::Uuid::nil() && !a.archived);
+        let a_session = ensure_named(&case, a.id).await?.session_id;
+        ensure!(a_session > 0, "opening a Bot returned no conversation");
         ensure!(a.persona == BotPersona::default(), "fresh Bot inherited another persona");
         let replay = create(&case,"create-alpha"," Alpha ",None).await?;
         ensure!(replay == a, "lost acknowledgment retry changed registry receipt");
@@ -231,12 +233,15 @@ async fn bot_profiles_registry_auth_validation_concurrency_and_receipts() -> Tes
             b = Some(p); default = Some(d);
         }
         let b = b.context("Beta")?;
-        ensure!(b.id != a.id && b.session_id != a.session_id);
+        let b_session = ensure_named(&case, b.id).await?.session_id;
+        ensure!(b.id != a.id && b_session != a_session);
+        let _ = &b_session;
         let registry = list(&case,false).await?;
         ensure!(registry.items.iter().filter(|p|p.name == "Beta").count() == 1);
         ensure!(registry.default_bot_id == Some(default.context("default")?.bot_id));
         for bot in &registry.items {
-            ensure!(resource(&case,bot.session_id).await?["workspace_id"].is_null(), "registry session is not global");
+            let session = ensure_named(&case, bot.id).await?.session_id;
+            ensure!(resource(&case,session).await?["workspace_id"].is_null(), "Bot conversation is not global");
         }
         // Inspect the disposable fixture database to retain the orphan check:
         // public project lists deliberately exclude global sessions.
@@ -256,8 +261,8 @@ async fn bot_profiles_registry_auth_validation_concurrency_and_receipts() -> Tes
         let before = profile(&case,a.id).await?;
         let update = json!({"request_key":"rename-alpha","expected_revision":before.revision,"name":"Alpha revised","persona":{"instructions":"DIRECT-REST-INSTRUCTIONS-710"}});
         let updated: BotProfile = http.send_json(Method::PUT,&format!("/api/v1/bots/{}",a.id),&update).await?.require_success()?.json()?;
-        ensure!(updated.revision > before.revision && updated.session_id == a.session_id && updated.persona.instructions == "DIRECT-REST-INSTRUCTIONS-710");
-        let direct_session = case.user().attach_session(updated.session_id).await?;
+        ensure!(updated.revision > before.revision && updated.persona.instructions == "DIRECT-REST-INSTRUCTIONS-710");
+        let direct_session = case.user().attach_session(a_session).await?;
         case.model().expect(RequestMatch::user_text("direct-rest-prompt-check")).check(|r| {
             let body = r.body.to_string();
             ensure!(body.contains("Alpha revised") && body.contains("DIRECT-REST-INSTRUCTIONS-710"), "directly updated Bot instructions missing from model request");
@@ -286,13 +291,14 @@ async fn bot_profiles_registry_auth_validation_concurrency_and_receipts() -> Tes
 async fn bot_profiles_persist_persona_and_history_without_project_overlay() -> TestResult {
     fixture().case_timeout(Duration::from_secs(150)).run(|case|async move {
         let bot = create(&case, "persist-persona", "Persistent persona", Some(json!({"instructions":"persistent-instructions-marker-42"}))).await?;
-        let session = case.user().attach_session(bot.session_id).await?;
+        let bot_session = ensure_named(&case, bot.id).await?.session_id;
+        let session = case.user().attach_session(bot_session).await?;
         case.model().expect(RequestMatch::user_text("persistent-history-marker")).reply(Reply::text("persistent-history-preserved"));
         session.send("persistent-history-marker").await?.wait_settled().await?.assert_succeeded()?;
         case.crash().await?;
         case.restart().await?;
         ensure!(profile(&case,bot.id).await? == bot, "restart changed Bot identity or persona");
-        ensure!(resource(&case,bot.session_id).await?["workspace_id"].is_null());
+        ensure!(resource(&case,bot_session).await?["workspace_id"].is_null());
         let ordinary = case.user().new_session().await?;
         let snapshot = ordinary.client().assistant_snapshot(ordinary.id()).await?;
         case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",ordinary.id()),&json!({"request_key":"workspace-after-restart","expected_revision":snapshot.profile.revision,"patch":{"name":"Later workspace name","instructions":"later-workspace-instructions"}})).await?.require_success()?;
@@ -300,7 +306,7 @@ async fn bot_profiles_persist_persona_and_history_without_project_overlay() -> T
         ensure!(fresh.persona == BotPersona::default());
         case.restart().await?;
         ensure!(profile(&case,bot.id).await? == bot, "workspace change/restart rewrote persona");
-        let restored = case.user().attach_session(bot.session_id).await?;
+        let restored = case.user().attach_session(bot_session).await?;
         case.model().expect(RequestMatch::user_text("check-persistent-transcript")).check(|r| {
             let body = r.body.to_string();
             ensure!(body.contains("persistent-history-preserved") && body.contains("persistent-instructions-marker-42") && !body.contains("later-workspace-instructions")); Ok(())
@@ -319,8 +325,10 @@ async fn bot_profiles_personas_replace_workspace_and_natural_edit_is_local() -> 
         let workspace = ordinary.client().assistant_snapshot(ordinary.id()).await?.profile;
         let a = create(&case,"persona-a","AuroraPersona",Some(json!({"instructions":"A-PRIVATE-INSTRUCTIONS-431"}))).await?;
         let b = create(&case,"persona-b","BorealisPersona",Some(json!({"instructions":"B-PRIVATE-INSTRUCTIONS-862"}))).await?;
-        let sa = case.user().attach_session(a.session_id).await?;
-        let sb = case.user().attach_session(b.session_id).await?;
+        let a_session = ensure_named(&case, a.id).await?.session_id;
+        let b_session = ensure_named(&case, b.id).await?.session_id;
+        let sa = case.user().attach_session(a_session).await?;
+        let sb = case.user().attach_session(b_session).await?;
         for (session,marker,name,instructions,other_name,other_instructions,reply) in [
             (&sa,"persona-check-a","AuroraPersona","A-PRIVATE-INSTRUCTIONS-431","BorealisPersona","B-PRIVATE-INSTRUCTIONS-862","A-PRIVATE-TRANSCRIPT-214"),
             (&sb,"persona-check-b","BorealisPersona","B-PRIVATE-INSTRUCTIONS-862","AuroraPersona","A-PRIVATE-INSTRUCTIONS-431","B-PRIVATE-TRANSCRIPT-563"),
@@ -389,8 +397,10 @@ async fn bot_profiles_reminder_inspection_and_control_are_source_owned() -> Test
     fixture().case_timeout(Duration::from_secs(120)).run(|case|async move {
         let a = create(&case,"reminder-a","Reminder A",None).await?;
         let b = create(&case,"reminder-b","Reminder B",None).await?;
-        let sa = case.user().attach_session(a.session_id).await?;
-        let sb = case.user().attach_session(b.session_id).await?;
+        let a_session = ensure_named(&case, a.id).await?.session_id;
+        let b_session = ensure_named(&case, b.id).await?.session_id;
+        let sa = case.user().attach_session(a_session).await?;
+        let sb = case.user().attach_session(b_session).await?;
         for (session,marker) in [(&sa,"source-a-reminder"),(&sb,"source-b-reminder")] {
             phase(&companion(&case,session,marker,json!({"action":"remind","reminder":{"text":marker,"after_seconds":3600}})).await?,"succeeded")?;
         }
@@ -421,7 +431,9 @@ async fn bot_profiles_restart_and_deleted_session_recovery_remain_independent() 
             )
             .await?;
             let b = create(&case, "recover-b", "Recovery B", None).await?;
-            let sb = case.user().attach_session(b.session_id).await?;
+            let a_session = ensure_named(&case, a.id).await?.session_id;
+            let b_session_id = ensure_named(&case, b.id).await?.session_id;
+            let sb = case.user().attach_session(b_session_id).await?;
             case.model()
                 .expect(RequestMatch::user_text("b-history-before-recovery"))
                 .reply(Reply::text("b-history-survives-a-deletion"));
@@ -434,13 +446,13 @@ async fn bot_profiles_restart_and_deleted_session_recovery_remain_independent() 
                 .await
                 .send_json(
                     Method::PUT,
-                    &format!("/api/v1/sessions/{}", b.session_id),
+                    &format!("/api/v1/sessions/{b_session_id}"),
                     &json!({"title":"Human custom title B"}),
                 )
                 .await?
                 .require_success()?;
-            let b_session = resource(&case, b.session_id).await?;
-            delete_session(&case, a.session_id).await?;
+            let b_resource = resource(&case, b_session_id).await?;
+            delete_session(&case, a_session).await?;
             let mut jobs = Vec::new();
             for _ in 0..10 {
                 let case = case.clone();
@@ -451,8 +463,8 @@ async fn bot_profiles_restart_and_deleted_session_recovery_remain_independent() 
                 let next = job.await??;
                 ensure!(
                     next.bot_id == a.id
-                        && next.session_id != a.session_id
-                        && next.session_id != b.session_id
+                        && next.session_id != a_session
+                        && next.session_id != b_session_id
                 );
                 if let Some(id) = replacement {
                     ensure!(
@@ -465,22 +477,19 @@ async fn bot_profiles_restart_and_deleted_session_recovery_remain_independent() 
             let replacement = replacement.context("replacement")?;
             let recovered = profile(&case, a.id).await?;
             ensure!(
-                recovered.id == a.id
-                    && recovered.persona == a.persona
-                    && recovered.name == a.name
-                    && recovered.session_id == replacement
+                recovered.id == a.id && recovered.persona == a.persona && recovered.name == a.name
             );
             ensure!(
                 profile(&case, b.id).await? == b
-                    && resource(&case, b.session_id).await? == b_session
+                    && resource(&case, b_session_id).await? == b_resource
             );
             case.crash().await?;
             case.restart().await?;
             ensure!(
                 ensure_named(&case, a.id).await?.session_id == replacement
-                    && ensure_named(&case, b.id).await?.session_id == b.session_id
+                    && ensure_named(&case, b.id).await?.session_id == b_session_id
             );
-            let sb = case.user().attach_session(b.session_id).await?;
+            let sb = case.user().attach_session(b_session_id).await?;
             case.model()
                 .expect(RequestMatch::user_text("b-history-after-restart"))
                 .check(|r| {
@@ -501,7 +510,7 @@ async fn bot_profiles_restart_and_deleted_session_recovery_remain_independent() 
                 &case,
                 &sb,
                 "deny-replaced-bot-id",
-                json!({"action":"status","session_id":a.session_id}),
+                json!({"action":"status","session_id":a_session}),
             )
             .await?;
             phase(&denied, "failed")?;
@@ -509,7 +518,7 @@ async fn bot_profiles_restart_and_deleted_session_recovery_remain_independent() 
                 &case,
                 &sa,
                 "deny-other-bot-after-recovery",
-                json!({"action":"read","session_id":b.session_id}),
+                json!({"action":"read","session_id":b_session_id}),
             )
             .await?;
             phase(&denied, "failed")?;
@@ -525,7 +534,9 @@ async fn bot_profiles_archive_requires_idle_cas_revokes_authority_and_never_resu
         let a=create(&case,"archive-a","Archive A",None).await?;
         let a:BotProfile=case.http().await.send_json(Method::PUT,&format!("/api/v1/bots/{}",a.id),&json!({"request_key":"archive-positive-stale-revision","expected_revision":a.revision,"name":"Archive A revised","persona":a.persona})).await?.require_success()?.json()?;
         let b=create(&case,"archive-b","Archive B",None).await?;
-        let sa=case.user().attach_session(a.session_id).await?;
+        let a_session=ensure_named(&case,a.id).await?.session_id;
+        let b_session=ensure_named(&case,b.id).await?.session_id;
+        let sa=case.user().attach_session(a_session).await?;
         let ordinary=case.user().new_session().await?;
         let workspace_before=ordinary.client().assistant_snapshot(ordinary.id()).await?.profile;
         let held=case.model().expect(RequestMatch::user_text("archive-running-gate")).reply(Reply::text("running gate released").held());
@@ -551,7 +562,7 @@ async fn bot_profiles_archive_requires_idle_cas_revokes_authority_and_never_resu
         let current=profile(&case,a.id).await?;
         rejected(case.http().await.send_json(Method::POST,&format!("/api/v1/bots/{}/archive",a.id),&json!({"request_key":"archive-stale","expected_revision":current.revision-1})).await?, &["revision","conflict","changed"])?;
         let archived=archive(&case,&current,"archive-idle").await?;
-        ensure!(archived.archived && archived.session_id==a.session_id && archived.revision>current.revision);
+        ensure!(archived.archived && archived.revision>current.revision);
         ensure!(archive(&case,&current,"archive-idle").await?==archived,"archive retry lost receipt");
         ensure!(profile(&case,a.id).await?==archived && !list(&case,false).await?.items.iter().any(|p|p.id==a.id));
         rejected(case.http().await.send_bytes(Method::POST,&format!("/api/v1/bots/{}/session",a.id),None,vec![]).await?, &["archiv","inactive"])?;
@@ -560,8 +571,9 @@ async fn bot_profiles_archive_requires_idle_cas_revokes_authority_and_never_resu
         rejected(case.http().await.send_json(Method::POST,&format!("/api/v1/sessions/{}/messages",sa.id()),&json!({"document":[{"type":"text","text":"archived cannot request bot.sessions or companion.manage"}]})).await?, &["archiv","read-only"])?;
         rejected(case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",sa.id()),&json!({"request_key":"archived-profile-fallthrough","expected_revision":workspace_before.revision,"patch":{"name":"MUST NOT CHANGE WORKSPACE"}})).await?, &["archiv","reserved","bot"])?;
         ensure!(ordinary.client().assistant_snapshot(ordinary.id()).await?.profile==workspace_before);
-        let sb=case.user().attach_session(b.session_id).await?;
-        phase(&operation(&case,&sb,"deny-archived-target",json!({"action":"read","session_id":a.session_id})).await?,"failed")?;
+        let sb=case.user().attach_session(b_session).await?;
+        phase(&operation(&case,&sb,"deny-archived-target",json!({"action":"read","session_id":a_session})).await?,"failed")?;
+        let _ = b_session;
         let active=list(&case,false).await?.items;
         for (index,p) in active.iter().enumerate() {
             archive(&case,p,&format!("archive-all-{}",p.id)).await?;
@@ -582,11 +594,13 @@ async fn bot_profiles_both_manage_projects_but_never_each_other() -> TestResult 
     fixture().case_timeout(Duration::from_secs(240)).run(|case|async move {
         let a=create(&case,"management-a","Management A",None).await?;
         let b=create(&case,"management-b","Management B",None).await?;
-        let sa=case.user().attach_session(a.session_id).await?;
-        let sb=case.user().attach_session(b.session_id).await?;
+        let a_session=ensure_named(&case,a.id).await?.session_id;
+        let b_session=ensure_named(&case,b.id).await?.session_id;
+        let sa=case.user().attach_session(a_session).await?;
+        let sb=case.user().attach_session(b_session).await?;
         let project=case.user().new_session().await?;
         let workspace=resource(&case,project.id()).await?["workspace_id"].as_i64().context("project workspace")?;
-        for (source,other,tag) in [(&sa,&b,"a"),(&sb,&a,"b")] {
+        for (source, _other, other_session, tag) in [(&sa, &b, b_session, "a"), (&sb, &a, a_session, "b")] {
             let created=operation(&case,source,&format!("create-project-{tag}"),json!({"action":"create","workspace_id":workspace,"title":format!("Ordinary project {tag}"),"_test_retry":true})).await?;phase(&created,"succeeded")?;
             let target=field(&created,"session_id").and_then(|v|v.as_i64()).context("created ordinary project")?;
             let before=resource(&case,target).await?;
@@ -594,11 +608,11 @@ async fn bot_profiles_both_manage_projects_but_never_each_other() -> TestResult 
             phase(&operation(&case,source,&format!("rename-project-{tag}"),json!({"action":"rename","session_id":target,"title":format!("Renamed project {tag}"),"expected_version":before["version"]})).await?,"succeeded")?;
             ensure!(resource(&case,target).await?["title"]==format!("Renamed project {tag}"));
             for action in ["read","status","export","models","queue"] {
-                phase(&operation(&case,source,&format!("deny-cross-{tag}-{action}"),json!({"action":action,"session_id":other.session_id})).await?,"failed")?;
+                phase(&operation(&case,source,&format!("deny-cross-{tag}-{action}"),json!({"action":action,"session_id":other_session})).await?,"failed")?;
             }
-            let before_other=resource(&case,other.session_id).await?;
-            phase(&operation(&case,source,&format!("deny-cross-rename-{tag}"),json!({"action":"rename","session_id":other.session_id,"title":"forged foreign title","expected_version":before_other["version"]})).await?,"failed")?;
-            ensure!(resource(&case,other.session_id).await?==before_other);
+            let before_other=resource(&case,other_session).await?;
+            phase(&operation(&case,source,&format!("deny-cross-rename-{tag}"),json!({"action":"rename","session_id":other_session,"title":"forged foreign title","expected_version":before_other["version"]})).await?,"failed")?;
+            ensure!(resource(&case,other_session).await?==before_other);
             let listed=operation(&case,source,&format!("discover-projects-{tag}"),json!({"action":"sessions","workspace_id":workspace})).await?;phase(&listed,"succeeded")?;
             ensure!(!listed.to_string().contains("Management A") && !listed.to_string().contains("Management B"),"Bot profiles appeared as ordinary project targets: {listed}");
 
@@ -620,8 +634,10 @@ async fn bot_profiles_reserved_descendants_stay_hidden_after_archive_and_replace
         .run(|case| async move {
             let a = create(&case, "descendant-a", "Descendant A", None).await?;
             let b = create(&case, "descendant-b", "Descendant B", None).await?;
-            let sa = case.user().attach_session(a.session_id).await?;
-            let sb = case.user().attach_session(b.session_id).await?;
+            let a_session = ensure_named(&case, a.id).await?.session_id;
+            let b_session = ensure_named(&case, b.id).await?.session_id;
+            let sa = case.user().attach_session(a_session).await?;
+            let sb = case.user().attach_session(b_session).await?;
             case.model()
                 .expect(RequestMatch::user_text("reserved-parent-history"))
                 .reply(Reply::text("RESERVED-PARENT-TRANSCRIPT-957"));
@@ -631,17 +647,14 @@ async fn bot_profiles_reserved_descendants_stay_hidden_after_archive_and_replace
                 .await?
                 .assert_succeeded()?;
             let http = case.http().await;
-            let version = resource(&case, a.session_id).await?["version"]
+            let version = resource(&case, a_session).await?["version"]
                 .as_i64()
                 .context("fork version")?;
             let descendant: Value = http
                 .execute(
-                    http.request(
-                        Method::POST,
-                        &format!("/api/v1/sessions/{}/fork", a.session_id),
-                    )?
-                    .header("if-match", format!("\"{version}\""))
-                    .json(&json!({"title":"Reserved descendant marker"})),
+                    http.request(Method::POST, &format!("/api/v1/sessions/{a_session}/fork"))?
+                        .header("if-match", format!("\"{version}\""))
+                        .json(&json!({"title":"Reserved descendant marker"})),
                 )
                 .await?
                 .require_success()?
@@ -650,7 +663,8 @@ async fn bot_profiles_reserved_descendants_stay_hidden_after_archive_and_replace
                 .as_i64()
                 .context("forked descendant id")?;
             let c = create(&case, "descendant-c", "Recovery neighbor", None).await?;
-            let sc = case.user().attach_session(c.session_id).await?;
+            let c_session = ensure_named(&case, c.id).await?.session_id;
+            let sc = case.user().attach_session(c_session).await?;
             case.model()
                 .expect(RequestMatch::user_text("reserved-replaced-parent-history"))
                 .reply(Reply::text("RESERVED-REPLACED-TRANSCRIPT-268"));
@@ -659,17 +673,14 @@ async fn bot_profiles_reserved_descendants_stay_hidden_after_archive_and_replace
                 .wait_settled()
                 .await?
                 .assert_succeeded()?;
-            let version = resource(&case, c.session_id).await?["version"]
+            let version = resource(&case, c_session).await?["version"]
                 .as_i64()
                 .context("replacement fork version")?;
             let fork: Value = http
                 .execute(
-                    http.request(
-                        Method::POST,
-                        &format!("/api/v1/sessions/{}/fork", c.session_id),
-                    )?
-                    .header("if-match", format!("\"{version}\""))
-                    .json(&json!({"title":"Replaced descendant marker"})),
+                    http.request(Method::POST, &format!("/api/v1/sessions/{c_session}/fork"))?
+                        .header("if-match", format!("\"{version}\""))
+                        .json(&json!({"title":"Replaced descendant marker"})),
                 )
                 .await?
                 .require_success()?
@@ -687,10 +698,10 @@ async fn bot_profiles_reserved_descendants_stay_hidden_after_archive_and_replace
                     .await?;
                 }
                 if state == "replaced" {
-                    delete_session(&case, c.session_id).await?;
+                    delete_session(&case, c_session).await?;
                     ensure_named(&case, c.id).await?;
                 }
-                for target in [a.session_id, child, c.session_id, replaced_child] {
+                for target in [a_session, child, c_session, replaced_child] {
                     let result = operation(
                         &case,
                         &sb,
@@ -733,8 +744,10 @@ async fn bot_profiles_reminder_delivery_stays_in_original_bot_with_bounded_caden
     fixture().case_timeout(Duration::from_secs(120)).run(|case|async move {
         let a=create(&case,"delivery-a","Delivery A",None).await?;
         let b=create(&case,"delivery-b","Delivery B",None).await?;
-        let sa=case.user().attach_session(a.session_id).await?;
-        let sb=case.user().attach_session(b.session_id).await?;
+        let a_session=ensure_named(&case,a.id).await?.session_id;
+        let b_session=ensure_named(&case,b.id).await?.session_id;
+        let sa=case.user().attach_session(a_session).await?;
+        let sb=case.user().attach_session(b_session).await?;
         let model=case.model();
         // Register before scheduling: the actual native scheduler polls every
         // 30 seconds. No sleep-based assumption or second foreground fake turn.
@@ -761,8 +774,10 @@ async fn bot_profiles_both_route_native_subagents_with_hidden_source_and_target_
     fixture().case_timeout(Duration::from_secs(240)).run(|case|async move {
         let a=create(&case,"native-a","Native A",None).await?;
         let b=create(&case,"native-b","Native B",None).await?;
-        let sa=case.user().attach_session(a.session_id).await?;
-        let sb=case.user().attach_session(b.session_id).await?;
+        let a_session=ensure_named(&case,a.id).await?.session_id;
+        let b_session=ensure_named(&case,b.id).await?.session_id;
+        let sa=case.user().attach_session(a_session).await?;
+        let sb=case.user().attach_session(b_session).await?;
         for (source,tag) in [(&sa,"a"),(&sb,"b")] {
             let target=case.user().new_session().await?.id();
             // Existing native Subagent execution, routed by each Bot in turn.
@@ -813,8 +828,9 @@ async fn long_persona_is_stored_and_a_small_context_model_reports_a_readable_bud
             ensure!(bot.persona.instructions == persona, "long persona was not stored verbatim");
             ensure!(profile(&case, bot.id).await?.persona.instructions == persona, "long persona did not survive a reload");
 
-            let session = case.user().attach_session(bot.session_id).await?;
-            session.client().update_session_selection(bot.session_id, RunOptions {
+            let bot_session = ensure_named(&case, bot.id).await?.session_id;
+            let session = case.user().attach_session(bot_session).await?;
+            session.client().update_session_selection(bot_session, RunOptions {
                 model: Some(ModelRef::new_with_adapter("testkit", "openai_responses", "tiny-context-model")),
                 ..Default::default()
             }).await?;
@@ -823,7 +839,7 @@ async fn long_persona_is_stored_and_a_small_context_model_reports_a_readable_bud
             outcome.assert_failed()?;
             // The manager-level failure is projected as a durable error notice
             // on the session transcript.
-            let all = session.client().session_all_parts(bot.session_id).await?;
+            let all = session.client().session_all_parts(bot_session).await?;
             let notice = all
                 .iter()
                 .filter_map(|part| part.content.get("message").and_then(Value::as_str))

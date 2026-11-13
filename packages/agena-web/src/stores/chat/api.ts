@@ -25,7 +25,15 @@ import { toolFailurePresentation } from '../../lib/toolFailures'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PromptLayer, PromptResolution } from '@/lib/promptLayers'
-import type { MessageEntry, MessageFold, MessagePart, MessageInfo, Session, SessionState } from '../../types/chat'
+import type {
+  MessageEntry,
+  MessageFold,
+  MessageInfo,
+  MessagePart,
+  Session,
+  SessionOwnerSurface,
+  SessionState,
+} from '../../types/chat'
 import { compareChatIds } from './messageIndex'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE } from '@/pages/chat/transcriptPartPaging'
 import { buildRunRequestBody, type RunOptionsPayload } from './runOptions'
@@ -54,6 +62,10 @@ export type AgenaSession = {
   last_message_at?: string | null
   created_at?: string
   updated_at?: string
+  /** Bot that owns this conversation, when any. */
+  owner_bot_id?: string | null
+  /** Entrance shape of a Bot conversation. */
+  owner_surface?: string | null
   [k: string]: JsonValue
 }
 
@@ -619,6 +631,8 @@ export function normalizeAgenaPart(
 
 export function sessionListResourceKey(opts?: {
   workspaceId?: number | string
+  ownerBotId?: string
+  ownerSurface?: string
   parentId?: number | string
   roots?: boolean
   bucket?: string
@@ -632,6 +646,13 @@ export function sessionListResourceKey(opts?: {
     if (Number.isSafeInteger(parent) && parent > 0) return `${base}:parent:${parent}`
     return opts?.roots ? `${base}:roots` : base
   }
+  // A Bot's conversations are one resource: its list must not share a cache
+  // entry with the project-wide list or with another Bot's.
+  const bot = typeof opts?.ownerBotId === 'string' ? opts.ownerBotId.trim() : ''
+  if (bot) {
+    const base = `bot:${bot}:sessions`
+    return opts?.ownerSurface ? `${base}:surface:${opts.ownerSurface}` : base
+  }
   return opts?.bucket ? `sessions:bucket:${opts.bucket}${opts.countOnly ? ':count' : ''}` : 'sessions'
 }
 
@@ -641,6 +662,8 @@ export async function listSessions(opts?: {
   cursor?: string
   search?: string
   workspaceId?: number | string
+  ownerBotId?: string
+  ownerSurface?: SessionOwnerSurface
   parentId?: number | string
   roots?: boolean
   excludeSubagents?: boolean
@@ -665,6 +688,9 @@ export async function listSessions(opts?: {
   if (Number.isSafeInteger(workspaceId) && workspaceId > 0) {
     params.push(`workspace_id=${encodeURIComponent(String(workspaceId))}`)
   }
+  const ownerBotId = typeof opts?.ownerBotId === 'string' ? opts.ownerBotId.trim() : ''
+  if (ownerBotId) params.push(`owner_bot_id=${encodeURIComponent(ownerBotId)}`)
+  if (opts?.ownerSurface) params.push(`owner_surface=${encodeURIComponent(opts.ownerSurface)}`)
   const parentId = Number(opts?.parentId)
   if (Number.isSafeInteger(parentId) && parentId > 0) {
     params.push(`parent_id=${encodeURIComponent(String(parentId))}`)

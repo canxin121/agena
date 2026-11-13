@@ -100,6 +100,28 @@ impl SqliteIntegrationRepository {
             .map(|r| decode(r, "record_json"))
             .transpose()
     }
+    /// Drop the scope record for a room whose conversation no longer exists.
+    ///
+    /// Deleting a conversation soft-deletes the session row; the scope record
+    /// would otherwise keep resolving that room to a dead session and every
+    /// later message would fail. Removing the row lets the next message create
+    /// a fresh conversation under the same binding and authority.
+    pub(super) async fn channel_session_forget(&self, id: Uuid, key: &str) -> Result<()> {
+        let _permit = crate::acquire_write_permit(&self.database)
+            .await
+            .map_err(error)?;
+        let tx = self.database.begin().await.map_err(error)?;
+        // Keep the memory directory layout stable: it is keyed by the scope
+        // hash, not by the session row, so a fresh conversation reuses it.
+        tx.execute(statement(
+            "DELETE FROM agena_channel_sessions WHERE binding_id=? AND scope_key=?",
+            vec![id.to_string().into(), key.into()],
+        ))
+        .await
+        .map_err(error)?;
+        tx.commit().await.map_err(error)?;
+        Ok(())
+    }
     pub(super) async fn channel_session_write(
         &self,
         record: ChannelSessionRecord,

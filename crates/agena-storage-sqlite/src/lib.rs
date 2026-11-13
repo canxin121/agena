@@ -16,9 +16,11 @@
 //! The session-kernel schema enforces ownership, immutable content, and fact
 //! invariants with foreign keys, checks, and transaction-scoped commands.
 
+mod bot_repository;
 mod companion_repository;
 mod connection;
 mod kernel;
+pub mod migration;
 mod model_catalog_repository;
 mod permission_rule_repository;
 mod schema;
@@ -26,6 +28,7 @@ mod server_state_repository;
 mod transaction;
 mod workspace_repository;
 
+pub use bot_repository::SqliteBotRepository;
 pub use companion_repository::SqliteCompanionRepository;
 pub use connection::{KernelDatabase, is_memory_database};
 pub use kernel::{

@@ -236,6 +236,32 @@ describe('chat session consistency', () => {
     expect(chat.sessionBackgroundActivities('1')[0]?.status).toBe('completed')
   })
 
+  test('a send acknowledgement cannot insert unloaded history above the loaded page', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    chat.selectedSessionId = '1'
+    const page = (ids: number[]) => ({
+      entries: ids.map((id) => ({
+        info: { id: String(id), sessionID: '1', role: id % 2 ? 'assistant' : 'user', runId: id, runState: 'completed' },
+        parts: [],
+      })),
+      hasMore: true,
+      nextCursor: 'older',
+      userMessageCount: 8,
+    })
+    spyOn(chatApi, 'listMessages').mockResolvedValue(page([310, 311]))
+    await chat.refreshMessages('1')
+    expect(chat.getMessagesForSession('1').map((entry) => entry.info.id)).toEqual(['310', '311'])
+
+    // POST /messages returns a wider recent window that ends at the new tail.
+    const acknowledged = execution(13)
+    acknowledged.parts = [300, 301, 302, 303, 304, 305, 306, 307, 310, 311, 312].map((id) =>
+      part({ part_id: id, run_id: id, message_boundary: true }),
+    )
+    spyOn(chatApi, 'sendMessage').mockResolvedValue(acknowledged)
+    await chat.sendMessage('1', { text: 'next question' })
+    expect(chat.getMessagesForSession('1').map((entry) => entry.info.id)).toEqual(['310', '311', '312'])
+  })
+
   test('an old session list with an unchanged metadata version cannot undo a newer execution snapshot', async () => {
     const chat = useChatStoreUnscoped(pinia)
     const listed = deferred<chatApi.SessionListResponse>()

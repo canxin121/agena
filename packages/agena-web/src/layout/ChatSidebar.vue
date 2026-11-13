@@ -736,13 +736,43 @@ const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
     },
     {
       id: 'delete',
-      label: String(t('chat.sidebar.sessionActions.delete.label')),
-      description: String(t('chat.sidebar.sessionActions.delete.description')),
+      label: String(
+        t(
+          target?.session?.id && chat.sessionIsBusy(target.session.id)
+            ? 'chat.sidebar.sessionActions.deleteBusy.label'
+            : 'chat.sidebar.sessionActions.delete.label',
+        ),
+      ),
+      description: String(
+        t(
+          target?.session?.id && chat.sessionIsBusy(target.session.id)
+            ? 'chat.sidebar.sessionActions.deleteBusy.description'
+            : 'chat.sidebar.sessionActions.delete.description',
+        ),
+      ),
       icon: RiDeleteBinLine,
       variant: 'destructive',
-      confirmTitle: String(t('chat.sidebar.sessionActions.delete.confirmTitle')),
-      confirmDescription: String(t('chat.sidebar.sessionActions.delete.confirmDescription')),
-      confirmText: String(t('chat.sidebar.sessionActions.delete.confirmText')),
+      confirmTitle: String(
+        t(
+          target?.session?.id && chat.sessionIsBusy(target.session.id)
+            ? 'chat.sidebar.sessionActions.deleteBusy.confirmTitle'
+            : 'chat.sidebar.sessionActions.delete.confirmTitle',
+        ),
+      ),
+      confirmDescription: String(
+        t(
+          target?.session?.id && chat.sessionIsBusy(target.session.id)
+            ? 'chat.sidebar.sessionActions.deleteBusy.confirmDescription'
+            : 'chat.sidebar.sessionActions.delete.confirmDescription',
+        ),
+      ),
+      confirmText: String(
+        t(
+          target?.session?.id && chat.sessionIsBusy(target.session.id)
+            ? 'chat.sidebar.sessionActions.deleteBusy.confirmText'
+            : 'chat.sidebar.sessionActions.delete.confirmText',
+        ),
+      ),
       cancelText: String(t('common.cancel')),
     },
   ]
@@ -1003,8 +1033,15 @@ function sessionActionTogglePin() {
 async function sessionActionDelete() {
   const t = sessionActionsTarget.value
   if (!t) return
-  await deleteSession(t.session.id)
   sessionActionsOpen.value = false
+  try {
+    // Confirmation already happened in the menu. A live execution is stopped
+    // first so the transcript never vanishes mid-stream; the server settles
+    // the rest of the queue inside the delete command either way.
+    await chat.deleteSession(t.session.id, { stopFirst: chat.sessionIsBusy(t.session.id) })
+  } catch (err) {
+    toasts.push('error', err instanceof Error ? err.message : String(err))
+  }
 }
 
 function openRenameDialogForSession(session: SessionLike) {

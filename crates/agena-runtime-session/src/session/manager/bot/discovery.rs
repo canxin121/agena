@@ -538,14 +538,13 @@ impl SessionManager {
             .management_ancestry(id)
             .await
             .map_err(kernel_error)?;
-        let excluded = self.bot_session_ids().await?;
         let mut eligible = true;
         for ancestor in ancestors.iter() {
             let Some(ancestor_workspace) = ancestor.workspace_id else {
                 eligible = false;
                 break;
             };
-            if excluded.contains(&ancestor.session.get())
+            if ancestor.owner.is_some()
                 || ancestor.excluded_scope
                 || ancestor
                     .effective_workspace_root

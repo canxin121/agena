@@ -1112,7 +1112,6 @@ provider-model-field-catalog-template = 目录模板
 provider-model-catalog-selection-note = 按 Enter 选择模板；保存只写入字段值，不保存目录 ID。
 provider-model-field-enabled = 已启用
 provider-model-field-native-compaction = 原生压缩
-provider-model-field-manual-overrides = 手动覆盖（不跟随目录）
 provider-model-field-agena-tool-mode = 工具模式（agena_tools.mode）
 agena-tool-mode-provider-protocol-label = provider_protocol
 agena-tool-mode-provider-protocol-detail = 通过 Provider API 的工具协议传输由 Agena 管理的工具定义和调用。
@@ -1131,7 +1130,6 @@ provider-model-field-speed-modes = 速度模式
 provider-model-field-description = 描述
 provider-model-enabled-detail = 是否启用这个模型路由。
 provider-model-native-compaction-detail = 是否优先调用该 Provider 的原生会话压缩接口；失败或不支持时仍会回退到 Agena 文本总结。
-provider-model-manual-overrides-detail = 开启：该路由保留自己的值，不跟随目录；关闭：跟随目录，目录更新会在下次列取时自动生效。
 provider-model-lifecycle-detail = 模型生命周期值。
 
 provider-studio-auth-status-pending = 待完成
@@ -2948,6 +2946,16 @@ bot-confirm-keys = Enter 确认 · Esc 取消
 bot-editor-keys = Ctrl+Enter/Alt+Enter 应用 · Esc 取消
 bot-form-keys = ↑↓ 字段 · Enter 编辑 · s 保存
     r 重新加载 · Esc 返回
+bot-conversation-stop-delete-confirm = 停止执行并删除这条会话？正在执行的工作会停止，排队的工作会丢弃。
+bot-conversation-delete-confirm = 删除这条会话？其他会话和 Bot 本身都不受影响。
+bot-conversations-empty = 还没有会话。
+bot-surface-local = 本机
+bot-surface-direct = 私聊
+bot-surface-group = 群聊
+bot-surface-broadcast = 频道
+bot-conversation-messages = 条消息
+bot-conversation-running = 正在执行
+
 bot-current = （当前）
 bot-empty = 没有可用的 Bot。按 n 创建。
 bot-archive-confirm = 归档此 Bot？服务器要求它处于空闲状态。对话历史会保留。

@@ -8,7 +8,7 @@ pub(super) const HISTORY_PREFLIGHT_SQL: &str = "SELECT m.entry_id,m.ordinal,e.bo
 pub(super) const PENDING_INTERACTIONS_PREFLIGHT_SQL: &str = "SELECT id,request_bytes FROM agena_interactions INDEXED BY idx_agena_interaction_pending_session WHERE session_id=? AND decision_json IS NULL AND id>? ORDER BY id LIMIT ?";
 pub(super) static SUMMARY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!("SELECT {}", super::lifecycle::summary_fields())
-        + "s.id,s.workspace_id,s.title,s.favorite,s.pinned,s.metadata_version,s.membership_generation,s.created_at_ms,s.updated_at_ms,t.entry_count,t.user_message_count,t.queued_executions,t.running_executions,t.last_message_at_ms FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.id=? AND s.deleted_at_ms IS NULL"
+        + "s.id,s.workspace_id,s.title,s.owner_bot_id,s.owner_surface,s.favorite,s.pinned,s.metadata_version,s.membership_generation,s.created_at_ms,s.updated_at_ms,t.entry_count,t.user_message_count,t.queued_executions,t.running_executions,t.last_message_at_ms FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.id=? AND s.deleted_at_ms IS NULL"
 });
 
 pub(super) fn summaries_sql(before: bool) -> String {
@@ -123,6 +123,8 @@ pub(super) fn summary_row(row: &SqliteRow) -> Result<SessionSummaryView> {
         id: SessionId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?,
         workspace_id: row.try_get("workspace_id").map_err(storage)?,
         title: row.try_get("title").map_err(storage)?,
+        owner_bot_id: row.try_get("owner_bot_id").map_err(storage)?,
+        owner_surface: row.try_get("owner_surface").map_err(storage)?,
         favorite: row.try_get("favorite").map_err(storage)?,
         pinned: row.try_get("pinned").map_err(storage)?,
         metadata_version: MetadataVersion::try_from(

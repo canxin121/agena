@@ -18,6 +18,7 @@ pub struct SessionConfiguration {
     pub message_queue_paused: bool,
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: SessionRelationKind,
+    /// Present only on a conversation beside an existing run (side / btw).
     pub conversation: Option<SessionConversation>,
     /// Session-scoped prompt layer: inline fragments for this session only.
     pub prompts: agena_prompt_layers::PromptLayer,
@@ -25,6 +26,11 @@ pub struct SessionConfiguration {
     pub permission_ceiling: PermissionConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_authority: Option<agena_domain::ChannelAuthority>,
+    /// Bot ownership. `None` is an ordinary project conversation; `Some`
+    /// names the instance Bot this conversation belongs to. Ownership is
+    /// projected into `agena_sessions.owner_*` columns for indexed listing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<agena_domain::SessionOwner>,
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
     pub agent: Option<SessionAgentConfiguration>,
@@ -97,6 +103,7 @@ pub struct SessionConfigurationChange {
     pub permission_ceiling: Option<PermissionConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_authority: Option<agena_domain::ChannelAuthority>,
+    pub owner: Option<Option<agena_domain::SessionOwner>>,
     pub capability_denied_tool_names: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<Option<PathBuf>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
@@ -109,7 +116,21 @@ pub struct ManagementAncestor {
     pub session: SessionId,
     pub workspace_id: Option<i64>,
     pub effective_workspace_root: Option<PathBuf>,
+    pub owner: Option<agena_domain::SessionOwner>,
     pub excluded_scope: bool,
+}
+
+impl ManagementAncestor {
+    /// True when this ancestor is a Bot's operator conversation: a local root
+    /// with no project scope, which may manage ordinary project sessions.
+    pub fn is_operator_bot(&self) -> bool {
+        self.workspace_id.is_none()
+            && self
+                .owner
+                .as_ref()
+                .is_some_and(|owner| owner.surface.is_local())
+            && !self.excluded_scope
+    }
 }
 /// Native Bot fork fence. Captured once and persisted with the operation intent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +208,12 @@ pub struct SummaryQuery {
     /// Include global sessions when no particular workspace is selected.
     #[serde(default)]
     pub include_global: bool,
+    /// Restrict to conversations owned by this Bot (UUID text).
+    #[serde(default)]
+    pub owner_bot_id: Option<String>,
+    /// Restrict to one entrance shape (`local`/`direct`/`group`/`broadcast`).
+    #[serde(default)]
+    pub owner_surface: Option<String>,
     pub parent_id: Option<SessionId>,
     pub roots_only: bool,
     pub exclude_subagents: bool,

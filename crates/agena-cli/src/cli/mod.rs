@@ -167,6 +167,11 @@ pub enum AgenaCommand {
     Pr(PrArgs),
     Debug(DebugCommand),
     Diagnostics(DiagnosticsArgs),
+    /// Copy an incompatible database into the current schema baseline.
+    ///
+    /// The source file is never modified: a complete new database is built
+    /// beside it and the server is then started against that file.
+    Migrate(MigrateArgs),
     Exec(ExecArgs),
     Fork(ForkArgs),
     Cost(CostArgs),
@@ -299,6 +304,17 @@ pub struct DebugCommand {
 pub struct DiagnosticsArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+/// Offline upgrade of an existing database into the current baseline.
+pub struct MigrateArgs {
+    /// Existing database to read. Defaults to this instance's database file.
+    #[arg(long)]
+    pub from: Option<PathBuf>,
+    /// Destination database. Must not exist. Defaults to `<from>.migrated`.
+    #[arg(long)]
+    pub to: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]

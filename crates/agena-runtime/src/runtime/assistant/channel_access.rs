@@ -90,6 +90,7 @@ impl AssistantRuntime {
         b: &IntegrationBinding,
         resource: &str,
         actor: &str,
+        kind: agena_domain::ConversationKind,
         thread: Option<String>,
         now: i64,
     ) -> Result<ChannelSessionRecord> {
@@ -119,17 +120,33 @@ impl AssistantRuntime {
         let speaker_key =
             (policy.session_mode == ChannelSessionMode::PerActor).then_some(principal.as_str());
         let privacy_key = hash(
-            &json!({"binding":b.id,"provider":b.spec.provider,"identity":policy.identity,"resource":resource,"thread":thread,"speaker":speaker_key}),
+            &json!({"binding":b.id,"provider":b.spec.provider,"identity":policy.identity,"kind":kind,"resource":resource,"thread":thread,"speaker":speaker_key}),
         )?;
         // Capabilities are one per binding, so they cannot split a scope.
         let scope_key = hash(&json!({"private_scope":privacy_key,"epoch":b.epoch}))?;
+        let manager = self.manager()?;
         if let Some(record) = self.integrations.channel_session(b.id, &scope_key).await? {
             if !b.authorizes_scope(&record.authority, now) {
                 return Err(Error::Conflict(
                     "channel scope has expired or lost its role",
                 ));
             }
-            return Ok(record);
+            // The user may have deleted this conversation through ordinary
+            // session management. A deleted session is a tombstone, so the
+            // cached scope would address it forever and every later message
+            // would fail; drop the record and let the create path below mint a
+            // fresh conversation under the same authority.
+            if !manager
+                .session_exists(record.session_id)
+                .await
+                .map_err(runtime_error)?
+            {
+                self.integrations
+                    .forget_channel_session(b.id, &scope_key)
+                    .await?;
+            } else {
+                return Ok(record);
+            }
         }
         // A shared transcript must never imply shared private memory. The
         // conversation directory holds what the room may see; each speaker's
@@ -159,6 +176,7 @@ impl AssistantRuntime {
             role,
             identity: policy.identity.clone(),
             resource: resource.to_owned(),
+            kind,
             thread,
             session_mode: policy.session_mode,
             grant,
@@ -170,8 +188,7 @@ impl AssistantRuntime {
             revoked: false,
         };
         let _ = &authority.scope();
-        let session_id = self
-            .manager()?
+        let session_id = manager
             .ensure_channel_session(b.source_session_id, &scope_key, authority.clone())
             .await
             .map_err(runtime_error)?;
@@ -206,6 +223,7 @@ impl AssistantRuntime {
                     &b,
                     &resource,
                     "@service",
+                    agena_domain::ConversationKind::Group,
                     b.spec.thread.clone(),
                     Utc::now().timestamp_millis(),
                 )
@@ -273,7 +291,7 @@ impl AssistantRuntime {
         let words = text.split_whitespace().collect::<Vec<_>>();
         let mut current = b.clone();
         let response=match words.as_slice(){
-            ["/access"]|["/access","whoami"]=>format!("Scope: {}/{}/{} · {:?} · thread {:?}\nUser: {} · local role: {}\nTools: {} · private memory: {}\nPlatform administrator labels do not grant instance privileges.",policy.identity.tenant,policy.identity.account,b.spec.resource.display(),policy.identity.kind,event.event.thread,event.event.actor,role.as_str(),grant.tools.len(),grant.private_memory),
+            ["/access"]|["/access","whoami"]=>format!("Scope: {}/{}/{} · {:?} · thread {:?}\nUser: {} · local role: {}\nTools: {} · private memory: {}\nPlatform administrator labels do not grant instance privileges.",policy.identity.tenant,policy.identity.account,b.spec.resource.display(),event.event.channel.as_ref().map(|c| c.kind.as_str()).unwrap_or("unknown"),event.event.thread,event.event.actor,role.as_str(),grant.tools.len(),grant.private_memory),
             ["/access","members"] if role.can_manage()=>policy.members.iter().map(|m|format!("{}: {}{}",m.actor,m.role.as_str(),if m.expires_at_ms.is_some_and(|expiry|now>=expiry){" (expired)"}else{""})).collect::<Vec<_>>().join("\n"),
             ["/access","set",target,requested]=>{
                 let assigned=ChannelRole::parse(requested);
@@ -311,6 +329,12 @@ impl AssistantRuntime {
                     identity: policy.identity.clone(),
                     resource: event.event.resource.clone(),
                     thread: event.event.thread.clone(),
+                    kind: event
+                        .event
+                        .channel
+                        .as_ref()
+                        .map(|channel| channel.kind)
+                        .unwrap_or(agena_domain::ConversationKind::Group),
                     epoch: current.epoch,
                     session_id: None,
                 }),

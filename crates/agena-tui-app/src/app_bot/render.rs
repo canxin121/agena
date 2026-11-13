@@ -34,7 +34,7 @@ impl App {
         let help_key = match view {
             BotView::List => "bot-list-keys",
             BotView::Opening => "bot-entry-keys",
-            BotView::Archive | BotView::Reload => "bot-confirm-keys",
+            BotView::Archive | BotView::Reload | BotView::DeleteConversation => "bot-confirm-keys",
             BotView::Form if self.bot.accepts_text() => "bot-editor-keys",
             _ => "bot-form-keys",
         };
@@ -84,45 +84,117 @@ impl App {
         frame.render_widget(Paragraph::new(help).wrap(Wrap { trim: true }), help_area);
         match view {
             BotView::List => {
-                let rows: Vec<_> = self
-                    .bot
-                    .profiles
-                    .iter()
-                    .filter(|p| !p.archived)
-                    .map(|p| {
-                        let marker = if Some(p.id) == self.bot.selected {
-                            text("bot-current")
-                        } else {
-                            String::new()
-                        };
-                        let preview = if p.persona.instructions.is_empty() {
-                            text("bot-instructions-empty")
-                        } else {
-                            p.persona.instructions.clone()
-                        };
-                        ListItem::new(vec![
-                            Line::from(format!(
-                                "{} {marker}",
-                                short(
-                                    &p.name,
-                                    body.width.saturating_sub(
-                                        3 + UnicodeWidthStr::width(marker.as_str()) as u16
-                                    )
+                // One scrolling list: the Bot rows, then the highlighted Bot's
+                // conversations under surface headings. The cursor moves through
+                // both halves, so the view is a flat List with section rows.
+                let palette = agena_tui_components::theme::active_palette();
+                let mut items: Vec<ListItem> = Vec::new();
+                // Flat index -> whether the item is selectable (a Bot row or a
+                // conversation row); headings are not.
+                let mut selectable = Vec::new();
+                let muted = Style::default().fg(palette.muted);
+                let heading = Style::default()
+                    .fg(palette.muted)
+                    .add_modifier(Modifier::BOLD);
+                for (index, p) in self.bot.profiles.iter().filter(|p| !p.archived).enumerate() {
+                    let marker = if Some(p.id) == self.bot.selected {
+                        text("bot-current")
+                    } else {
+                        String::new()
+                    };
+                    let preview = if p.persona.instructions.is_empty() {
+                        text("bot-instructions-empty")
+                    } else {
+                        p.persona.instructions.clone()
+                    };
+                    items.push(ListItem::new(vec![
+                        Line::from(format!(
+                            "{} {marker}",
+                            short(
+                                &p.name,
+                                body.width.saturating_sub(
+                                    3 + UnicodeWidthStr::width(marker.as_str()) as u16
                                 )
-                            )),
-                            Line::from(short(&preview, body.width.saturating_sub(2))),
-                        ])
-                    })
-                    .collect();
-                if rows.is_empty() {
+                            )
+                        )),
+                        Line::from(short(&preview, body.width.saturating_sub(2))),
+                    ]));
+                    selectable.push(Some(index));
+                }
+                if !self.bot.conversations.is_empty() {
+                    let row_total = self.bot.conversation_rows().len();
+                    if row_total == 0 {
+                        items.push(ListItem::new(Line::from(short(
+                            &text("bot-conversations-empty"),
+                            body.width.saturating_sub(2),
+                        ))));
+                        selectable.push(None);
+                    }
+                    let focused = if self.bot.focus_conversations {
+                        "▸ "
+                    } else {
+                        ""
+                    };
+                    for group in &self.bot.conversations {
+                        let label = format!(
+                            "{focused}{} ({})",
+                            text(match group.surface {
+                                "local" => "bot-surface-local",
+                                "direct" => "bot-surface-direct",
+                                "group" => "bot-surface-group",
+                                _ => "bot-surface-broadcast",
+                            }),
+                            group.rows.len()
+                        );
+                        items.push(
+                            ListItem::new(Line::from(short(&label, body.width.saturating_sub(2))))
+                                .style(heading),
+                        );
+                        selectable.push(None);
+                        for row in &group.rows {
+                            let mut meta = format!(
+                                "{} · {}",
+                                row.message_count,
+                                text("bot-conversation-messages")
+                            );
+                            if row.running {
+                                meta = text("bot-conversation-running");
+                            }
+                            if row.favorite {
+                                meta.push_str(" · ★");
+                            }
+                            items.push(ListItem::new(vec![
+                                Line::from(format!(
+                                    "  {}",
+                                    short(&row.title, body.width.saturating_sub(4))
+                                )),
+                                Line::from(short(
+                                    &format!("  {meta}"),
+                                    body.width.saturating_sub(2),
+                                ))
+                                .style(muted),
+                            ]));
+                            selectable.push(None);
+                        }
+                    }
+                }
+                if items.is_empty() {
                     frame.render_widget(
                         Paragraph::new(text("bot-empty")).wrap(Wrap { trim: true }),
                         body,
                     );
                 } else {
-                    let mut state = ListState::default().with_selected(Some(self.bot.index));
+                    // Selecting a conversation row: its flat position is the
+                    // Bot rows plus every heading and row before it.
+                    let mut selected = self.bot.index;
+                    if self.bot.focus_conversations {
+                        let before = self.bot.flat_conversation_offset();
+                        selected = before + self.bot.conversation_index;
+                    }
+                    let mut state = ListState::default().with_selected(Some(selected));
+                    let _ = selectable;
                     frame.render_stateful_widget(
-                        List::new(rows)
+                        List::new(items)
                             .highlight_symbol("› ")
                             .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
                         body,
@@ -175,6 +247,33 @@ impl App {
                         "{}\n{}",
                         agena_tui::sanitize_picker_text(name),
                         text("bot-archive-confirm")
+                    ))
+                    .wrap(Wrap { trim: true }),
+                    body,
+                );
+            }
+            BotView::DeleteConversation => {
+                // A conversation with a live execution says so before the user
+                // confirms, because confirming stops that work as well.
+                let running = self
+                    .bot
+                    .delete_conversation
+                    .as_ref()
+                    .is_some_and(|row| row.running);
+                let prompt = text(if running {
+                    "bot-conversation-stop-delete-confirm"
+                } else {
+                    "bot-conversation-delete-confirm"
+                });
+                let title = self
+                    .bot
+                    .delete_conversation
+                    .as_ref()
+                    .map_or("", |row| row.title.as_str());
+                frame.render_widget(
+                    Paragraph::new(format!(
+                        "{}\n{prompt}",
+                        agena_tui::sanitize_picker_text(title)
                     ))
                     .wrap(Wrap { trim: true }),
                     body,

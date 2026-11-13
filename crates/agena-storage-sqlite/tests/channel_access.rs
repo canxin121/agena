@@ -8,8 +8,8 @@ fn policy() -> ChannelAccessPolicy {
         identity: ChannelIdentity {
             tenant: "tenant-a".into(),
             account: "bot-a".into(),
-            kind: ChannelKind::Group,
         },
+        kinds: Default::default(),
         session_mode: ChannelSessionMode::PerConversation,
         thread_mode: ChannelThreadMode::PerThread,
         trigger: ChannelTrigger::DirectOrMention,
@@ -70,6 +70,7 @@ fn event(id: &str, actor: &str) -> ExternalEvent {
         data: Value::Null,
         channel: Some(ChannelEnvelope {
             identity: policy().identity,
+            kind: ConversationKind::Group,
             actor_verified: true,
             is_member: true,
             addressed_to_bot: true,
@@ -85,6 +86,7 @@ fn authority(b: &IntegrationBinding) -> ChannelAuthority {
         role: ChannelRole::Member,
         identity: policy().identity,
         resource: "room".into(),
+        kind: ConversationKind::Group,
         thread: Some("thread-1".into()),
         session_mode: ChannelSessionMode::PerConversation,
         grant: Default::default(),
@@ -97,7 +99,8 @@ fn authority(b: &IntegrationBinding) -> ChannelAuthority {
 async fn enabled(repo: &SqliteIntegrationRepository) -> IntegrationBinding {
     let mut b = repo
         .create_binding(
-            IntegrationBinding::new(1, 1, "one".into(), spec(), "fp".into(), 1000).unwrap(),
+            IntegrationBinding::new(Some(1), None, 1, "one".into(), spec(), "fp".into(), 1000)
+                .unwrap(),
         )
         .await
         .unwrap();
@@ -230,7 +233,7 @@ async fn foreign_identity_unverified_membership_and_unaddressed_group_messages_n
     let mut tenant = event("a", "alice");
     tenant.channel.as_mut().unwrap().identity.tenant = "tenant-b".into();
     let mut kind = event("b", "alice");
-    kind.channel.as_mut().unwrap().identity.kind = ChannelKind::Direct;
+    kind.channel.as_mut().unwrap().kind = ConversationKind::Direct;
     let mut member = event("c", "alice");
     member.channel.as_mut().unwrap().is_member = false;
     let mut mention = event("d", "alice");

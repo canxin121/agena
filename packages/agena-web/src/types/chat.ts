@@ -189,8 +189,15 @@ export type Session = {
   updated_at?: string
   last_message_at?: string | null
   workspace_id?: number
+  /** Bot that owns this conversation, when any. */
+  owner_bot_id?: string
+  /** Entrance shape of a Bot conversation: local | direct | group | broadcast. */
+  owner_surface?: SessionOwnerSurface
   [k: string]: JsonLike
 }
+
+/** Where a Bot conversation was entered from. */
+export type SessionOwnerSurface = 'local' | 'direct' | 'group' | 'broadcast'
 
 /** Agena part execution states → tool status mapping in reducers.ts. */
 export type PartState = ExecutionStatus

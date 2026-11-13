@@ -41,7 +41,7 @@ import { localStorageKeys } from '../lib/persistence/storageKeys'
 import { useToastsStore } from './toasts'
 import { useDirectoryStoreUnscoped } from './directory'
 import { i18n } from '../i18n'
-import { normalizeSessionState, sessionStateRequests } from '../types/chat'
+import { normalizeSessionState, sessionStateIsBusy, sessionStateRequests } from '../types/chat'
 import type { SseEvent } from '../lib/sse'
 import type {
   AttentionEvent,
@@ -1339,11 +1339,44 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const current = ensureSessionMessages(sid)
     const entries = chatApi.entriesFromParts(
       sid,
-      parts,
+      restrictToLoadedWindow(current, parts),
       [],
       current.map((entry) => Number(entry.info.id)),
     )
     setSessionMessages(sid, mergeMessageLists(current, entries, { preferCachedOnTie: true }))
+  }
+
+  /**
+   * An execution response carries a wider recent window than the page the
+   * client loaded. Its window still ends at the newest entry, so anything
+   * sorting before the oldest loaded message is history the reader never
+   * asked for. Merging it would insert unread messages above the viewport and
+   * push the message the user just sent out of sight. Updates to known
+   * identities and genuinely newer entries always pass through.
+   */
+  function restrictToLoadedWindow(current: MessageEntry[], parts: readonly chatApi.AgenaPart[]): chatApi.AgenaPart[] {
+    if (!current.length) return [...parts]
+    let floor: { id: string; runIds: Set<string> } | null = null
+    for (const entry of current) {
+      const msg = entry.info
+      if (!floor || compareChatIds(msg.id, floor.id) < 0) {
+        floor = {
+          id: msg.id,
+          runIds: new Set(
+            [msg.id, msg.runId, ...(entry.parts || []).map((part) => part.id)]
+              .filter((id): id is number | string => typeof id === 'number' || (typeof id === 'string' && id !== ''))
+              .map(String),
+          ),
+        }
+      }
+    }
+    if (!floor) return [...parts]
+    return parts.filter((part) => {
+      const id = String(part.part_id)
+      const runId = typeof part.run_id === 'number' ? String(part.run_id) : null
+      if (runId != null && floor.runIds.has(runId)) return true
+      return compareChatIds(id, floor.id) >= 0
+    })
   }
 
   function applyExecutionStatus(st: chatApi.SessionExecutionStatus, activityGeneration?: number) {
@@ -1730,12 +1763,36 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return await createSessionInFlight
   }
 
-  async function deleteSession(sessionId: string) {
+  /**
+   * Delete a conversation, stopping its work first when asked to.
+   *
+   * The server soft-deletes a session and settles any queued or running work
+   * inside the same kernel command, so a plain delete never leaves orphans.
+   * `stopFirst` exists for the confirmed "stop and delete" path: it fences the
+   * queue and cancels the live attempt before the row is removed, so the
+   * transcript never disappears while a provider is still streaming into it.
+   */
+  async function deleteSession(sessionId: string, options?: { stopFirst?: boolean }) {
     const sid = (sessionId || '').trim()
     if (!sid) return
 
+    if (options?.stopFirst) {
+      const brief = await chatApi.cancelSession(sid, null)
+      // An already-finished run needs no second stop; a mismatched execution
+      // means a newer run took over, so the delete must not claim it stopped.
+      if (brief.result === 'execution_mismatch') {
+        throw new Error('This conversation started new work; review it before deleting.')
+      }
+    }
     await chatApi.deleteSession(sid)
     forgetSession(sid)
+  }
+
+  /** Whether the session currently has a live execution worth stopping. */
+  function sessionIsBusy(sessionId: string): boolean {
+    // The chat store keeps session state on its own session objects, so this
+    // reads the same value the sidebar's status dot uses.
+    return sessionStateIsBusy(getSessionById((sessionId || '').trim())?.state)
   }
 
   function forgetSession(sid: string) {
@@ -2560,6 +2617,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     renameSession,
     updateSessionMetadata,
     abortSession,
+    sessionIsBusy,
     editQueuedMessage,
     deleteQueuedMessage,
     updateMessageQueue,

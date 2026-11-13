@@ -9,7 +9,7 @@ use crate::{
 };
 pub use agena_domain::{
     ChannelAccessPolicy, ChannelAuthority, ChannelEnvelope, ChannelGrant, ChannelIdentity,
-    ChannelKind, ChannelMember, ChannelRole, ChannelSessionMode, ChannelThreadMode, ChannelTrigger,
+    ChannelMember, ChannelRole, ChannelSessionMode, ChannelThreadMode, ChannelTrigger,
     ConversationKind,
 };
 use async_trait::async_trait;
@@ -119,6 +119,10 @@ pub struct AdapterPollRequest {
     pub not_before_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel_identity: Option<ChannelIdentity>,
+    /// Room shapes the binding authorizes. Empty means every shape; an adapter
+    /// may use it to narrow what it reports, but the host rechecks each event.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_kinds: Vec<ConversationKind>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -142,6 +146,10 @@ pub struct ChannelDelivery {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<ChannelIdentity>,
+    /// Room shape of the conversation this reply belongs to. It lets an adapter
+    /// pick the right platform surface when one account serves several.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ConversationKind>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -376,7 +384,9 @@ impl IntegrationSpec {
                     "channel roles belong in channel_policy.members; actors must be empty and event type must be message",
                 ));
             }
-            if policy.identity.kind == ChannelKind::Direct && self.thread.is_some() {
+            // Only a binding that serves direct chats alone may pin a thread id;
+            // a mixed binding resolves each message's room and thread itself.
+            if policy.direct_only() && self.thread.is_some() {
                 return Err(Error::Invalid(
                     "direct messages cannot carry a thread binding",
                 ));
@@ -446,11 +456,25 @@ impl BindingState {
         }
     }
 }
+/// Which authority owns a grant: one project workspace, or one instance Bot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IntegrationScope {
+    pub workspace_id: Option<i64>,
+    pub owner_bot_id: Option<Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IntegrationBinding {
     #[schemars(with = "String")]
     pub id: Uuid,
-    pub workspace_id: i64,
+    /// Project scope. `None` when the grant belongs to an instance Bot, which
+    /// has no project; exactly one of `workspace_id` and `owner_bot_id` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<i64>,
+    /// Bot scope for a grant created from a Bot conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "bounded_adapter_json")]
+    pub owner_bot_id: Option<Uuid>,
     pub source_session_id: i64,
     /// Channel-specific isolated root. Other sessions are never exported.
     pub channel_session_id: Option<i64>,
@@ -476,7 +500,8 @@ pub struct IntegrationBinding {
 }
 impl IntegrationBinding {
     pub fn new(
-        workspace: i64,
+        workspace: Option<i64>,
+        owner_bot_id: Option<Uuid>,
         source: i64,
         key: String,
         spec: IntegrationSpec,
@@ -485,12 +510,15 @@ impl IntegrationBinding {
     ) -> Result<Self> {
         spec.validate(now)?;
         validate_key(&key)?;
-        if workspace <= 0 || source <= 0 {
-            return Err(Error::Invalid("invalid integration scope"));
+        if workspace.is_some() == owner_bot_id.is_some() || source <= 0 {
+            return Err(Error::Invalid(
+                "an integration grant belongs to exactly one project or one Bot",
+            ));
         }
         Ok(Self {
             id: Uuid::new_v4(),
             workspace_id: workspace,
+            owner_bot_id,
             source_session_id: source,
             channel_session_id: None,
             request_key: key,
@@ -590,7 +618,8 @@ pub struct IntegrationDelivery {
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IntegrationsSnapshot {
     pub source_session_id: i64,
-    pub workspace_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<i64>,
     pub providers: Vec<IntegrationProvider>,
     pub bindings: Vec<IntegrationBinding>,
 }
@@ -637,8 +666,7 @@ pub struct PlatformEntry {
 pub struct ConversationCounts {
     pub direct: usize,
     pub group: usize,
-    pub public_channel: usize,
-    pub private_channel: usize,
+    pub broadcast: usize,
 }
 
 impl ConversationCounts {
@@ -646,13 +674,12 @@ impl ConversationCounts {
         match kind {
             ConversationKind::Direct => self.direct += 1,
             ConversationKind::Group => self.group += 1,
-            ConversationKind::PublicChannel => self.public_channel += 1,
-            ConversationKind::PrivateChannel => self.private_channel += 1,
+            ConversationKind::Broadcast => self.broadcast += 1,
         }
     }
 
     pub fn total(&self) -> usize {
-        self.direct + self.group + self.public_channel + self.private_channel
+        self.direct + self.group + self.broadcast
     }
 }
 
@@ -728,7 +755,7 @@ impl PlatformInventory {
                 .filter(|s| s.binding_id == binding.id)
                 .map(|s| ConversationEntry {
                     resource: s.authority.resource.clone(),
-                    kind: s.authority.identity.kind.into(),
+                    kind: s.authority.kind,
                     thread: s.authority.thread.clone(),
                     session_id: Some(s.session_id),
                     title: titles.get(&s.session_id).cloned(),
@@ -786,10 +813,14 @@ pub trait IntegrationRepository: Send + Sync {
         record: ChannelSessionRecord,
     ) -> Result<ChannelSessionRecord>;
     async fn channel_session(&self, id: Uuid, key: &str) -> Result<Option<ChannelSessionRecord>>;
+    /// Forget one admitted scope, so the next message for that room creates a
+    /// fresh conversation instead of addressing a deleted one.
+    async fn forget_channel_session(&self, id: Uuid, key: &str) -> Result<()>;
 
     async fn create_binding(&self, binding: IntegrationBinding) -> Result<IntegrationBinding>;
     async fn binding(&self, id: Uuid) -> Result<IntegrationBinding>;
-    async fn bindings(&self, workspace: Option<i64>) -> Result<Vec<IntegrationBinding>>;
+    /// Bindings in one scope. `None` selects every scheduled binding.
+    async fn bindings(&self, scope: Option<IntegrationScope>) -> Result<Vec<IntegrationBinding>>;
     async fn save_binding(
         &self,
         binding: IntegrationBinding,
@@ -888,7 +919,9 @@ mod tests {
     }
     #[test]
     fn event_filters_are_host_owned() {
-        let mut b = IntegrationBinding::new(1, 1, "r".into(), spec(), "fp".into(), 1000).unwrap();
+        let mut b =
+            IntegrationBinding::new(Some(1), None, 1, "r".into(), spec(), "fp".into(), 1000)
+                .unwrap();
         b.state = BindingState::Enabled;
         b.activated_at_ms = Some(2000);
         let mut e = ExternalEvent {
@@ -929,8 +962,8 @@ mod tests {
                 identity: ChannelIdentity {
                     tenant: "t".into(),
                     account: "a".into(),
-                    kind: ChannelKind::Group,
                 },
+                kinds: Default::default(),
                 session_mode: Default::default(),
                 thread_mode: Default::default(),
                 trigger: Default::default(),
@@ -951,7 +984,7 @@ mod tests {
     fn session_record(
         binding: Uuid,
         resource: &str,
-        kind: ChannelKind,
+        kind: ConversationKind,
         session: i64,
     ) -> ChannelSessionRecord {
         ChannelSessionRecord {
@@ -966,9 +999,9 @@ mod tests {
                 identity: ChannelIdentity {
                     tenant: "t".into(),
                     account: "a".into(),
-                    kind,
                 },
                 resource: resource.into(),
+                kind,
                 thread: None,
                 session_mode: Default::default(),
                 grant: Default::default(),
@@ -984,7 +1017,8 @@ mod tests {
     #[test]
     fn platform_inventory_groups_by_platform_and_counts_kinds() {
         let a = IntegrationBinding::new(
-            1,
+            Some(1),
+            None,
             1,
             "k1".into(),
             channel_spec("telegram", "chat-1"),
@@ -993,7 +1027,8 @@ mod tests {
         )
         .unwrap();
         let b = IntegrationBinding::new(
-            1,
+            Some(1),
+            None,
             1,
             "k2".into(),
             channel_spec("feishu", "oc_9"),
@@ -1002,10 +1037,10 @@ mod tests {
         )
         .unwrap();
         let sessions = vec![
-            session_record(a.id, "chat-1", ChannelKind::Group, 10),
-            session_record(a.id, "chat-2", ChannelKind::Group, 11),
-            session_record(a.id, "dm-1", ChannelKind::Direct, 12),
-            session_record(b.id, "oc_9", ChannelKind::PublicChannel, 20),
+            session_record(a.id, "chat-1", ConversationKind::Group, 10),
+            session_record(a.id, "chat-2", ConversationKind::Group, 11),
+            session_record(a.id, "dm-1", ConversationKind::Direct, 12),
+            session_record(b.id, "oc_9", ConversationKind::Broadcast, 20),
         ];
         let mut titles = BTreeMap::new();
         titles.insert(10, "Team".to_string());
@@ -1034,12 +1069,14 @@ mod tests {
             .iter()
             .find(|p| p.platform == "feishu")
             .unwrap();
-        assert_eq!(feishu.conversation_counts.public_channel, 1);
+        assert_eq!(feishu.conversation_counts.broadcast, 1);
     }
 
     #[test]
     fn platform_inventory_ignores_non_channel_bindings_and_empty_conversations() {
-        let source = IntegrationBinding::new(1, 1, "k0".into(), spec(), "fp".into(), 1000).unwrap();
+        let source =
+            IntegrationBinding::new(Some(1), None, 1, "k0".into(), spec(), "fp".into(), 1000)
+                .unwrap();
         let inventory = PlatformInventory::build(&[source], &[], &BTreeMap::new());
         assert!(inventory.platforms.is_empty());
     }

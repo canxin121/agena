@@ -780,14 +780,13 @@ mod persona_tests {
         }
     }
 
-    fn bot(name: &str, session: i64, _language: &str, _tone: AssistantTone) -> BotProfile {
+    fn bot(name: &str, _session: i64, _language: &str, _tone: AssistantTone) -> BotProfile {
         BotProfile {
             id: Uuid::new_v4(),
             name: name.into(),
             persona: BotPersona {
                 instructions: format!("Instructions for {name} only"),
             },
-            session_id: session,
             revision: 3,
             archived: false,
             created_at_ms: 100,

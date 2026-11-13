@@ -17,6 +17,7 @@ agena-application = { workspace = true }
 agena-bundled-plugins = { workspace = true }
 agena-runtime = { workspace = true }
 agena-storage = { workspace = true }
+agena-storage-sqlite = { workspace = true }
 agena-tool = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-mcp-client = { workspace = true }

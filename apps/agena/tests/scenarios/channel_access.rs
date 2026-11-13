@@ -32,15 +32,16 @@ fn channel_fixture(replies: Replies) -> TestAgenaBuilder {
         case.write_config(SettingsLayer::Global,config).await
     })
 }
-fn policy(kind: ChannelKind) -> ChannelAccessPolicy {
+fn policy(kind: ConversationKind) -> ChannelAccessPolicy {
+    let direct = kind == ConversationKind::Direct;
     ChannelAccessPolicy {
         identity: ChannelIdentity {
             tenant: "tenant-a".into(),
             account: "bot-a".into(),
-            kind,
         },
+        kinds: [kind].into_iter().collect(),
         session_mode: ChannelSessionMode::PerConversation,
-        thread_mode: if kind == ChannelKind::Direct {
+        thread_mode: if direct {
             ChannelThreadMode::Exact
         } else {
             ChannelThreadMode::PerThread
@@ -132,6 +133,16 @@ fn sign(time: &str, body: &[u8]) -> String {
             .collect::<String>()
     )
 }
+/// The room shape a policy authorizes, as the wire spelling the adapter signs.
+fn kind_of(policy: &ChannelAccessPolicy) -> &'static str {
+    policy
+        .kinds
+        .iter()
+        .next()
+        .copied()
+        .unwrap_or(ConversationKind::Group)
+        .as_str()
+}
 async fn message(
     case: &TestCase,
     policy: &ChannelAccessPolicy,
@@ -140,8 +151,9 @@ async fn message(
     thread: Option<&str>,
     text: &str,
 ) -> Result<()> {
+    let kind = kind_of(policy);
     signed_channel_event(case, json!({"id":id,"event_type":"message","resource":"room","actor":actor,"thread":thread,"bot":false,"occurred_at_ms":Utc::now().timestamp_millis(),"text":text,
-        "channel":{"identity":policy.identity,"actor_verified":true,"is_member":true,"addressed_to_bot":true,"verified_at_ms":Utc::now().timestamp_millis()}})).await
+        "channel":{"identity":policy.identity,"kind":kind,"actor_verified":true,"is_member":true,"addressed_to_bot":true,"verified_at_ms":Utc::now().timestamp_millis()}})).await
 }
 async fn signed_channel_event(case: &TestCase, event: Value) -> Result<()> {
     let status: Value =
@@ -213,9 +225,9 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
                     },
                 )
                 .await?;
-            let group = policy(ChannelKind::Group);
+            let group = policy(ConversationKind::Group);
             let g = bind(&source, "group", group.clone()).await?;
-            let direct = policy(ChannelKind::Direct);
+            let direct = policy(ConversationKind::Direct);
             let d = bind(&source, "direct", direct.clone()).await?;
             model
                 .expect(RequestMatch::user_text("ALICE-GROUP-PRIVATE-882b"))
@@ -294,7 +306,8 @@ async fn users_threads_direct_messages_and_instance_memories_are_separate() -> T
             )
             .await?;
             let result = reply(&replies, "direct-isolated-ack").await?;
-            ensure!(result["channel"]["kind"] == "direct" && result["thread"].is_null());
+            // The room shape travels beside the account identity, not inside it.
+            ensure!(result["kind"] == "direct" && result["thread"].is_null());
             let scopes = source
                 .client()
                 .integration_detail(source.id(), g.id)
@@ -344,7 +357,7 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
         .run(move |case| async move {
             let source = case.user().new_session().await?;
             let model = case.model();
-            let mut p = policy(ChannelKind::Group);
+            let mut p = policy(ConversationKind::Group);
             // Capabilities belong to the binding, not to a role: everyone in
             // this room can read the project, and nobody can write it.
             p.grant = ChannelGrant {
@@ -524,7 +537,7 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
 async fn private_memory_is_scoped_and_native_subagents_inherit_channel_tool_limits() -> TestResult {
     let replies: Replies = Default::default();
     channel_fixture(replies.clone()).run(move|case|async move{
-        let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ChannelKind::Group);
+        let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ConversationKind::Group);
         p.grant=ChannelGrant{private_memory:true,tools:BTreeSet::from(["agena.agent.spawn".into(),"agena.agent.cancel".into()]),..Default::default()};
         let b=bind(&source,"private-memory",p.clone()).await?;
         let remember=model.expect(RequestMatch::user_text("记住我的私人报告偏好"))
@@ -567,7 +580,7 @@ async fn platform_membership_removal_stops_held_models_and_survives_restart() ->
     let replies: Replies = Default::default();
     channel_fixture(replies.clone()).run(move |case| async move {
         let source=case.user().new_session().await?;
-        let p=policy(ChannelKind::PublicChannel);
+        let p=policy(ConversationKind::Broadcast);
         let binding=bind(&source,"platform-revocation",p.clone()).await?;
         let model=case.model();
         let held=model.expect(RequestMatch::user_text("waiting-when-platform-removes-member"))
@@ -576,7 +589,7 @@ async fn platform_membership_removal_stops_held_models_and_survives_restart() ->
         held.observed().await?;
         let removed=json!({"id":"signed-member-removal","event_type":"membership.revoked","resource":"room","actor":"alice","thread":null,"bot":false,
             "occurred_at_ms":Utc::now().timestamp_millis(),"text":"Platform confirmed this member was removed",
-            "channel":{"identity":p.identity,"actor_verified":true,"is_member":false,"addressed_to_bot":false,"verified_at_ms":Utc::now().timestamp_millis()}});
+            "channel":{"identity":p.identity,"kind":kind_of(&p),"actor_verified":true,"is_member":false,"addressed_to_bot":false,"verified_at_ms":Utc::now().timestamp_millis()}});
         signed_channel_event(&case,removed.clone()).await?;
         let changed=wait(||async{
             let d=source.client().integration_detail(source.id(),binding.id).await?;
@@ -613,7 +626,7 @@ async fn explicit_shared_chat_shares_only_its_thread_and_never_acquires_tools() 
             let model = case.model();
             // A private channel is one shared conversation by default. The
             // transcript is shared, and so is the (empty) capability grant.
-            let p = policy(ChannelKind::PrivateChannel);
+            let p = policy(ConversationKind::Group);
             let b = bind(&source, "explicit-shared-context", p.clone()).await?;
             model
                 .expect(RequestMatch::user_text("shared-thread-context-35e1"))
@@ -700,7 +713,7 @@ async fn expiring_membership_stops_active_generation_without_new_messages() -> T
         .run(move |case| async move {
             let source = case.user().new_session().await?;
             let model = case.model();
-            let mut p = policy(ChannelKind::Group);
+            let mut p = policy(ConversationKind::Group);
             p.members
                 .iter_mut()
                 .find(|m| m.actor == "alice")
@@ -763,7 +776,7 @@ async fn lost_policy_receipt_retry_does_not_cancel_a_newer_authorized_session() 
         .run(move |case| async move {
             let source = case.user().new_session().await?;
             let model = case.model();
-            let p = policy(ChannelKind::Group);
+            let p = policy(ConversationKind::Group);
             let b = bind(&source, "cached-access-receipt", p.clone()).await?;
             let mut first = p.clone();
             first.per_user_daily_limit = 25;
@@ -831,7 +844,7 @@ async fn authorized_operator_cannot_cancel_another_members_native_execution() ->
         .run(move |case| async move {
             let source = case.user().new_session().await?;
             let model = case.model();
-            let mut p = policy(ChannelKind::Group);
+            let mut p = policy(ConversationKind::Group);
             p.members
                 .iter_mut()
                 .find(|m| m.actor == "bob")
@@ -929,7 +942,7 @@ async fn native_permission_reply_cannot_resurrect_a_revoked_channel_write() -> T
         let source=case.user().new_session().await?;let model=case.model();
         let target=case.workspace().join("revoked-pending-approval.txt");
         super::path_permission(&source,&target,"ask").await?;
-        let mut p=policy(ChannelKind::Group);
+        let mut p=policy(ConversationKind::Group);
         p.grant=ChannelGrant{tools:BTreeSet::from(["agena.fs.write".into()]),source_workspace:true,..Default::default()};
         let binding=bind(&source,"revoke-after-permission-request",p.clone()).await?;
         let requested=model.expect(RequestMatch::user_text("申请写入测试文件"))
@@ -982,7 +995,7 @@ async fn channel_mcp_gateway_allows_only_the_authorized_server_and_remote_tool()
         tokio::fs::write(case.workspace().join("channel-mcp-url"),peer.url("/mcp")).await?;
         case.write_config(SettingsLayer::Global,config).await
     }).run(move|case|async move{
-        let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ChannelKind::Group);
+        let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ConversationKind::Group);
         let url=reqwest::Url::parse(&tokio::fs::read_to_string(case.workspace().join("channel-mcp-url")).await?)?;
         let network_target=format!("{}:{}",url.host_str().unwrap(),url.port().unwrap());
         source.client().set_session_permission(source.id(),serde_json::from_value(json!({"network":{"rules":{(network_target):"allow"}}}))?).await?;

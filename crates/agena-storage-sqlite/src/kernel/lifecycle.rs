@@ -107,6 +107,32 @@ async fn configure(
     if let Some(value) = &change.prompts {
         next.prompts = value.clone();
     }
+    if let Some(owner) = &change.owner {
+        if original.owner.is_some() || owner.is_none() {
+            // Ownership is assigned once, when the conversation is created.
+            // Letting it change hands would silently move a Bot's history.
+            if original.owner != *owner {
+                return Err(KernelError::Conflict(
+                    "conversation ownership is immutable after creation".into(),
+                ));
+            }
+        } else {
+            let count: i64 = sqlx::query_scalar(
+                "SELECT entry_count FROM agena_session_statistics WHERE session_id=?",
+            )
+            .bind(session.get())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if count > 0 {
+                return Err(KernelError::Conflict(
+                    "conversation ownership cannot be assigned to a conversation with history"
+                        .into(),
+                ));
+            }
+            next.owner = owner.clone();
+        }
+    }
     if let Some(value) = &change.permission {
         next.permission = value.clone();
     }
@@ -719,6 +745,7 @@ async fn management_ancestry_on(
             session: current,
             workspace_id: row.try_get("workspace_id").map_err(storage)?,
             effective_workspace_root: config.effective_workspace_root,
+            owner: config.owner,
             excluded_scope: relation.is_subagent()
                 || config.conversation.is_some()
                 || config.channel_authority.is_some()
@@ -1135,6 +1162,7 @@ pub(super) async fn apply(
                     permission: Some(config.permission.clone()),
                     permission_ceiling: Some(config.permission_ceiling.clone()),
                     channel_authority: config.channel_authority.clone(),
+                    owner: Some(config.owner.clone()),
                     capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),
                     effective_workspace_root: Some(config.effective_workspace_root.clone()),
                     agent: Some(config.agent.clone()),
@@ -1413,7 +1441,7 @@ pub(super) async fn refresh_paused_summary(
 
 pub(super) const STATE_SQL: &str = "t.processing_state";
 pub(super) fn summary_fields() -> String {
-    "s.parent_session_id,COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.agent_name,s.agent_status AS agent_status,t.child_session_count,t.processing_state,".to_owned()
+    "s.parent_session_id,COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.agent_name,s.agent_status AS agent_status,s.owner_bot_id,s.owner_surface,t.child_session_count,t.processing_state,".to_owned()
 }
 fn filter<'a>(
     builder: &mut sqlx::QueryBuilder<'a, sqlx::Sqlite>,
@@ -1421,6 +1449,14 @@ fn filter<'a>(
     cursor: bool,
 ) {
     builder.push("s.deleted_at_ms IS NULL");
+    if let Some(bot) = &query.owner_bot_id {
+        builder.push(" AND s.owner_bot_id=").push_bind(bot.clone());
+    }
+    if let Some(surface) = &query.owner_surface {
+        builder
+            .push(" AND s.owner_surface=")
+            .push_bind(surface.clone());
+    }
     if let Some(workspace) = query.workspace_id {
         builder.push(" AND s.workspace_id=").push_bind(workspace);
     } else if !query.include_global {

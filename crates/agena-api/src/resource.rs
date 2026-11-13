@@ -664,6 +664,13 @@ pub struct SessionResource {
     pub root_id: i64,
     pub workspace_id: Option<i64>,
     pub title: String,
+    /// Bot this conversation belongs to, when any. Clients use it to place the
+    /// conversation under the Bot instead of a project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_bot_id: Option<String>,
+    /// Entrance shape of a Bot conversation: `local`, `direct`, `group`, `broadcast`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_surface: Option<String>,
     /// Durable user favorite state shared by TUI/Web/API clients.
     #[serde(default)]
     pub favorite: bool,

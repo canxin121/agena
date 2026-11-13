@@ -12,6 +12,7 @@ import type {
   ChannelRole,
   ChannelGrant,
   ChannelPolicyUpdate,
+  ConversationKind,
 } from '@/generated/agenaState'
 
 const props = defineProps<{ source: number; detail: IntegrationDetail; readonly?: boolean }>()
@@ -51,6 +52,19 @@ function close() {
     pending.value = null
     emit('editing', false)
   }
+}
+/** Toggle one allowed room shape. An empty selection means every shape. */
+function toggleKind(kind: ConversationKind) {
+  if (!draft.value) return
+  const current = draft.value.kinds || (draft.value.kinds = [])
+  draft.value.kinds = current.includes(kind)
+    ? current.filter((value) => value !== kind)
+    : [...current, kind]
+}
+function kindSummary(kinds: ConversationKind[] | undefined) {
+  return !kinds || kinds.length === 0
+    ? t('channelAccess.kind_any')
+    : kinds.map((kind) => t(`channelAccess.kind_${kind}`)).join(' / ')
 }
 function add() {
   if (draft.value && draft.value.members.length < 128)
@@ -156,7 +170,7 @@ onBeforeUnmount(() => {
       ><p class="break-all text-xs">
         {{ detail.binding.spec.channel_policy.identity.tenant }} /
         {{ detail.binding.spec.channel_policy.identity.account }} ·
-        {{ t(`channelAccess.kind_${detail.binding.spec.channel_policy.identity.kind}`) }} ·
+        {{ kindSummary(detail.binding.spec.channel_policy.kinds) }} ·
         {{ t(`channelAccess.mode_${detail.binding.spec.channel_policy.session_mode || 'per_conversation'}`) }}
       </p>
       <div class="overflow-x-auto">
@@ -207,18 +221,25 @@ onBeforeUnmount(() => {
             ><label class="channel-field"
               >{{ t('channelAccess.account')
               }}<input v-model="draft.identity.account" :disabled="!!detail.binding.spec.channel_policy" /></label
-            ><label class="channel-field"
-              >{{ t('channelAccess.kind')
-              }}<select v-model="draft.identity.kind" :disabled="!!detail.binding.spec.channel_policy">
-                <option
-                  v-for="kind in ['direct', 'group', 'public_channel', 'private_channel'] as const"
+            ><div class="channel-field">
+              <span>{{ t('channelAccess.kinds') }}</span>
+              <div class="flex flex-wrap gap-3 pt-1">
+                <label
+                  v-for="kind in ['direct', 'group', 'broadcast'] as const"
                   :key="kind"
-                  :value="kind"
+                  class="flex items-center gap-2 text-sm"
+                  ><input
+                    type="checkbox"
+                    :value="kind"
+                    :checked="draft.kinds.includes(kind)"
+                    :disabled="!!detail.binding.spec.channel_policy"
+                    @change="toggleKind(kind)"
+                  />{{ t(`channelAccess.kind_${kind}`) }}</label
                 >
-                  {{ t(`channelAccess.kind_${kind}`) }}
-                </option>
-              </select></label
-            ><label class="channel-field"
+              </div>
+              <span class="text-xs text-muted-foreground">{{ t('channelAccess.kinds_hint') }}</span>
+            </div>
+            <label class="channel-field"
               >{{ t('channelAccess.context')
               }}<select v-model="draft.session_mode">
                 <option value="per_conversation">{{ t('channelAccess.mode_per_conversation') }}</option>
@@ -228,7 +249,7 @@ onBeforeUnmount(() => {
               >{{ t('channelAccess.thread')
               }}<select v-model="draft.thread_mode">
                 <option value="exact">{{ t('channelAccess.exact') }}</option>
-                <option value="per_thread" :disabled="draft.identity.kind === 'direct'">
+                <option value="per_thread" :disabled="draft.kinds.includes('direct') && draft.kinds.length === 1">
                   {{ t('channelAccess.perThread') }}
                 </option>
               </select></label
@@ -245,7 +266,7 @@ onBeforeUnmount(() => {
               ><input
                 type="checkbox"
                 v-model="draft.allow_unlisted_chat"
-                :disabled="draft.identity.kind === 'direct'"
+                :disabled="draft.kinds.includes('direct') && draft.kinds.length === 1"
               />{{ t('channelAccess.unlisted') }}</label
             >
           </div>

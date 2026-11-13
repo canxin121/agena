@@ -94,7 +94,7 @@ Bot 会自己将项目名、路径和会话标题解析为真实目标；有多�
 
 ## 实现与验证
 
-默认入口使用 `POST /api/v1/bot/session`，返回 `{ "session_id": 123, "bot_id": "UUID", "name": "Agena" }`。`/api/v1/bots` 提供列表和创建；`/api/v1/bots/{id}` 提供精确读取和带版本保护的修改，`/{id}/session` 绑定指定 Bot，`/{id}/archive` 归档。身份、修订号、创建意图和幂等操作回执保存在现有实例 JSON 状态存储，原生创建回执保证崩溃重试不重复创建，执行仍使用 Session Kernel。
+默认入口使用 `POST /api/v1/bot/session`，返回 `{ "session_id": 123, "bot_id": "UUID", "name": "Agena" }`。`/api/v1/bots` 提供列表和创建；`/api/v1/bots/{id}` 提供精确读取和带版本保护的修改，`/{id}/session` 打开该 Bot 最近使用的本机会话（不存在时新建），`/{id}/archive` 归档。Bot 身份保存在独立的 `agena_bots` 表，幂等操作回执保存在 `agena_bot_receipts`；会话归属写在会话配置的 `owner` 里，并由生成列 `owner_bot_id` / `owner_surface` / `owner_scope_key` 投影成可索引的列。修改与归档都是单条带 `revision` 比较的条件更新，重试不会重复产生效果，执行仍使用 Session Kernel。
 
 主要实现：
 

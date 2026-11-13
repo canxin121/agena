@@ -117,6 +117,32 @@ fn mock_response(
     let path = parts.next().unwrap();
     let default = profiles.iter().find(|p| !p.archived).map(|p| p.id);
     let ok = |value| ("200 OK", value);
+    if method == "GET" && path.starts_with("/api/v1/sessions?") {
+        // Owner-filtered session list: one local and one group conversation so
+        // the sidebar has two surfaces to group.
+        let owner = path
+            .split('&')
+            .find_map(|part| part.trim_start_matches('?').strip_prefix("owner_bot_id="));
+        let items: Vec<serde_json::Value> = match owner {
+            Some(id) if !id.is_empty() => vec![
+                json!({"id": 901, "title": "Local chat", "depth": 0, "root_id": 901, "version": 1, "child_session_count": 0, "relation_kind": "root", "lifecycle_state": "ready", "owner_bot_id": id, "owner_surface": "local",
+                       "message_count": 2, "favorite": false, "pinned": false, "state": {"kind": "ready", "data": {}},
+                       "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+                       "last_message_at": "2026-01-01T00:01:00Z"}),
+                json!({"id": 902, "title": "Team room", "depth": 0, "root_id": 902, "version": 1, "child_session_count": 0, "relation_kind": "root", "lifecycle_state": "ready", "owner_bot_id": id, "owner_surface": "group",
+                       "message_count": 5, "favorite": true, "pinned": false, "state": {"kind": "ready", "data": {}},
+                       "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+                       "last_message_at": "2026-01-01T00:02:00Z"}),
+            ],
+            _ => vec![],
+        };
+        let total = items.len();
+        return ok(json!({
+            "items": items,
+            "page": {"has_more": false, "returned": total},
+            "total": total,
+        }));
+    }
     if method == "GET" && path.starts_with("/api/v1/bots?") {
         return ok(to_value(BotList {
             items: profiles.clone(),
@@ -131,7 +157,7 @@ fn mock_response(
         return profiles
             .iter()
             .find(|p| !p.archived)
-            .map(|p| ok(to_value(BotSession::from(p.clone())).unwrap()))
+            .map(|p| ok(to_value(BotSession::new(900 + p.id.as_u128() as i64, p)).unwrap()))
             .unwrap_or(("404 Not Found", json!({"message":"All Bots are archived"})));
     }
     if method == "POST" && path == "/api/v1/bots" {
@@ -149,13 +175,12 @@ fn mock_response(
             match (method, segments.next()) {
                 ("GET", None) => return ok(to_value(p).unwrap()),
                 ("POST", Some("session")) if !p.archived => {
+                    // Return the staged binding verbatim, even when it names a
+                    // different Bot: the client must reject that mismatch.
                     if let Some(session) = binding {
-                        if session.bot_id == p.id {
-                            p.session_id = session.session_id;
-                        }
                         return ok(to_value(session).unwrap());
                     }
-                    return ok(to_value(BotSession::from(p.clone())).unwrap());
+                    return ok(to_value(BotSession::new(900 + p.id.as_u128() as i64, p)).unwrap());
                 }
                 ("PUT", None) => {
                     let update: BotUpdate = serde_json::from_value(body).unwrap();
@@ -527,7 +552,6 @@ fn profile(id: u128, name: &str) -> BotProfile {
         id: Uuid::from_u128(id),
         name: name.into(),
         persona: BotPersona::default(),
-        session_id: 900 + id as i64,
         revision: 1,
         archived: false,
         created_at_ms: 0,
@@ -535,8 +559,10 @@ fn profile(id: u128, name: &str) -> BotProfile {
     }
 }
 fn opened() -> BotReply {
+    let bot = profile(1, "AI Bot");
     BotReply::Opened {
-        profile: profile(1, "AI Bot"),
+        session: agena_api::bot::BotSession::new(901, &bot),
+        profile: bot,
         list: BotList {
             items: vec![profile(1, "AI Bot")],
             default_bot_id: Some(Uuid::from_u128(1)),
@@ -958,7 +984,7 @@ async fn stale_profile_and_archive_results_cannot_replace_new_picker_or_session(
 }
 
 #[tokio::test]
-async fn generic_session_entry_resolves_registry_name_and_persona_independently_of_native_title() {
+async fn generic_session_entry_resolves_registry_name_and_persona_from_its_owner() {
     let server = Server::start().await;
     server
         .profiles
@@ -967,6 +993,9 @@ async fn generic_session_entry_resolves_registry_name_and_persona_independently_
         .push(profile(2, "Research persona"));
     let (_temp, mut app) = app(Some(&server.endpoint));
     app.open_session(902, "Custom durable chat title".into());
+    // Ownership arrives on the session resource (`owner_bot_id`), not from a
+    // registry lookup by session id: the registry no longer names a session.
+    app.transcript.owner_bot_id = Some(Uuid::from_u128(2));
     timeout(Duration::from_secs(10), async {
         while !app.is_bot_session() {
             let message = app.rx.recv().await.unwrap();
@@ -995,6 +1024,7 @@ async fn long_profile_names_keep_current_marker_and_chat_navigation_hints_visibl
     app.handle_bot_session_ready(
         app.bot.request_id,
         Ok(BotReply::Opened {
+            session: agena_api::bot::BotSession::new(901, &p),
             profile: p.clone(),
             list: BotList {
                 items: vec![p.clone()],
@@ -1092,5 +1122,121 @@ async fn narrow_list_clips_long_utf8_instructions_and_shows_empty_hint() {
     assert!(
         rendered.contains("No additional system instructions"),
         "{rendered}"
+    );
+}
+
+#[tokio::test]
+async fn tab_loads_one_bots_conversations_grouped_by_surface() {
+    let server = Server::start().await;
+    let (_temp, mut app) = app(Some(&server.endpoint));
+    app.open_bot_picker();
+    resolve(&mut app).await;
+    assert!(matches!(app.bot.view, BotView::List));
+    assert!(
+        app.bot.conversations.is_empty(),
+        "the Bot list loads before any rooms"
+    );
+
+    // Tab fetches only the highlighted Bot's conversations.
+    app.handle_key_event(key(KeyCode::Tab));
+    resolve(&mut app).await;
+    let surfaces: Vec<&str> = app
+        .bot
+        .conversations
+        .iter()
+        .filter(|group| !group.rows.is_empty())
+        .map(|group| group.surface)
+        .collect();
+    assert_eq!(
+        surfaces,
+        vec!["local", "group"],
+        "surfaces keep the sidebar order"
+    );
+    assert_eq!(
+        app.bot
+            .conversations
+            .iter()
+            .map(|g| g.rows.len())
+            .sum::<usize>(),
+        2
+    );
+    assert!(
+        app.bot.focus_conversations,
+        "Tab moves the cursor into the rooms"
+    );
+
+    // Newest first inside a surface.
+    let group = app
+        .bot
+        .conversations
+        .iter()
+        .find(|g| g.surface == "group")
+        .unwrap();
+    assert_eq!(group.rows[0].session_id, 902);
+    assert!(group.rows[0].favorite);
+
+    // Moving off the Bot must not leave another Bot's rooms on screen.
+    app.bot.focus_conversations = false;
+    app.handle_key_event(key(KeyCode::Down));
+    assert!(app.bot.conversations.is_empty(), "rooms are per Bot");
+}
+
+#[tokio::test]
+async fn new_and_delete_act_on_one_conversation_not_the_bot() {
+    let server = Server::start().await;
+    let (_temp, mut app) = app(Some(&server.endpoint));
+    app.open_bot_picker();
+    resolve(&mut app).await;
+    app.handle_key_event(key(KeyCode::Tab));
+    resolve(&mut app).await;
+    assert!(app.bot.focus_conversations);
+
+    // `n` while the cursor is in the rooms starts a conversation, not a Bot.
+    app.handle_key_event(key(KeyCode::Char('n')));
+    resolve(&mut app).await;
+    assert!(
+        !server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("POST /api/v1/bots ")),
+        "the room list must not create a Bot"
+    );
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains("/sessions")),
+        "the room list asks the server for a new conversation"
+    );
+
+    // `d` asks for confirmation before deleting.
+    app.bot.view = BotView::List;
+    app.bot.focus_conversations = true;
+    app.bot.conversation_index = 0;
+    app.handle_key_event(key(KeyCode::Char('d')));
+    assert!(matches!(app.bot.view, BotView::DeleteConversation));
+    let pending = app.bot.delete_conversation.clone().expect("pending row");
+    // Escape keeps it.
+    app.handle_key_event(key(KeyCode::Esc));
+    assert!(app.bot.delete_conversation.is_none());
+    assert!(matches!(app.bot.view, BotView::List));
+    // Enter deletes exactly that conversation.
+    app.bot.focus_conversations = true;
+    app.bot.delete_conversation = Some(pending.clone());
+    app.bot.view = BotView::DeleteConversation;
+    app.handle_key_event(key(KeyCode::Enter));
+    resolve(&mut app).await;
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(&format!("/api/v1/sessions/{}", pending.session_id))),
+        "the delete targets the conversation, not the Bot"
     );
 }

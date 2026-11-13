@@ -34,7 +34,7 @@ function botPath(id: string) {
   if (!isBotId(id)) throw new Error('Invalid Bot ID')
   return `/api/v1/bots/${encodeURIComponent(id)}`
 }
-function jsonBody(method: string, value: BotCreate | BotUpdate | BotArchive): RequestInit {
+function jsonBody(method: string, value: BotCreate | BotUpdate | BotArchive | { title?: string }): RequestInit {
   return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }
 }
 export const listBots = (signal?: AbortSignal) => apiJson<BotList>('/api/v1/bots', { signal })
@@ -43,6 +43,17 @@ export const createBot = (value: BotCreate) => apiJson<BotProfile>('/api/v1/bots
 export const updateBot = (id: string, value: BotUpdate) => apiJson<BotProfile>(botPath(id), jsonBody('PUT', value))
 export const archiveBot = (id: string, value: BotArchive) =>
   apiJson<BotProfile>(`${botPath(id)}/archive`, jsonBody('POST', value))
+/**
+ * Start a new conversation for this Bot.
+ *
+ * Distinct from `resolveBotSession`, which reopens the latest one: this always
+ * creates an empty conversation, so a Bot can hold several at once.
+ */
+export const createBotConversation = (id: string, title?: string) => {
+  const body = title && title.trim() ? { title: title.trim() } : {}
+  return apiJson<BotSession>(`${botPath(id)}/sessions`, jsonBody('POST', body))
+}
+
 export async function resolveBotSession(id?: string, signal?: AbortSignal): Promise<BotSession> {
   const response = await apiJson<BotSession>(id ? `${botPath(id)}/session` : '/api/v1/bot/session', {
     method: 'POST',

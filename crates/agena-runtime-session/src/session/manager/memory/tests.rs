@@ -957,9 +957,9 @@ async fn private_channel_learning_uses_its_authorized_store_and_rechecks_revocat
             identity: agena_domain::ChannelIdentity {
                 tenant: "test-tenant".into(),
                 account: "test-account".into(),
-                kind: agena_domain::ChannelKind::Direct,
             },
             resource: "private-conversation".into(),
+            kind: agena_domain::ConversationKind::Direct,
             thread: None,
             session_mode: agena_domain::ChannelSessionMode::PerConversation,
             grant: agena_domain::ChannelGrant {

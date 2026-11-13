@@ -176,12 +176,34 @@ impl AssistantRuntime {
             .ok_or(Error::Unavailable("runtime unavailable"))?;
         Ok(runtime.current_snapshot().plugin_manager())
     }
-    async fn integration_scope(&self, source: i64) -> Result<i64> {
+    /// The scope a grant belongs to: a project workspace, or the Bot that owns
+    /// the source conversation. A conversation with neither cannot host one.
+    async fn integration_scope(&self, source: i64) -> Result<IntegrationScope> {
         self.require_integration_owner(source).await?;
-        self.manager()?.get_session(source).await.map_err(runtime_error)?
-            .workspace_id.ok_or(Error::Invalid(
-                "Select a project conversation for this integration; a global Bot has no project scope",
-            ))
+        let manager = self.manager()?;
+        let session = manager.get_session(source).await.map_err(runtime_error)?;
+        if let Some(workspace) = session.workspace_id {
+            return Ok(IntegrationScope {
+                workspace_id: Some(workspace),
+                owner_bot_id: None,
+            });
+        }
+        let owner = manager
+            .bot_profile_for_session(source)
+            .await
+            .map_err(runtime_error)?
+            .ok_or(Error::Invalid(
+                "Select a project conversation or a Bot conversation for this integration",
+            ))?;
+        if owner.archived {
+            return Err(Error::Invalid(
+                "an archived Bot cannot host an integration; select an active Bot",
+            ));
+        }
+        Ok(IntegrationScope {
+            workspace_id: None,
+            owner_bot_id: Some(owner.id),
+        })
     }
     pub(super) fn provider_identity(&self, provider: &str) -> Result<String> {
         let host = self.integration_host()?;
@@ -238,7 +260,7 @@ impl AssistantRuntime {
         })
     }
     pub(super) async fn integration_snapshot(&self, source: i64) -> Result<IntegrationsSnapshot> {
-        let workspace = self.integration_scope(source).await?;
+        let scope = self.integration_scope(source).await?;
         let host = self.integration_host()?;
         let ids = host
             .plugins()
@@ -270,9 +292,9 @@ impl AssistantRuntime {
         providers.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
         Ok(IntegrationsSnapshot {
             source_session_id: source,
-            workspace_id: workspace,
+            workspace_id: scope.workspace_id,
             providers,
-            bindings: self.integrations.bindings(Some(workspace)).await?,
+            bindings: self.integrations.bindings(Some(scope)).await?,
         })
     }
     pub(super) async fn add_integration(
@@ -280,7 +302,7 @@ impl AssistantRuntime {
         source: i64,
         request: CreateIntegration,
     ) -> Result<IntegrationBinding> {
-        let workspace = self.integration_scope(source).await?;
+        let scope = self.integration_scope(source).await?;
         let now = Utc::now().timestamp_millis();
         request.spec.validate(now)?;
         if request.spec.mode == IntegrationMode::Channel
@@ -328,7 +350,8 @@ impl AssistantRuntime {
         .validate_value(&request.spec.config)
         .map_err(|_| Error::Invalid("adapter settings do not match its declared schema"))?;
         let b = IntegrationBinding::new(
-            workspace,
+            scope.workspace_id,
+            scope.owner_bot_id,
             source,
             request.request_key,
             request.spec,
@@ -338,9 +361,9 @@ impl AssistantRuntime {
         self.integrations.create_binding(b).await
     }
     pub(super) async fn scoped_binding(&self, source: i64, id: Uuid) -> Result<IntegrationBinding> {
-        let workspace = self.integration_scope(source).await?;
+        let scope = self.integration_scope(source).await?;
         let b = self.integrations.binding(id).await?;
-        if b.workspace_id != workspace {
+        if b.workspace_id != scope.workspace_id || b.owner_bot_id != scope.owner_bot_id {
             return Err(Error::NotFound);
         }
         Ok(b)
@@ -364,8 +387,8 @@ impl AssistantRuntime {
     /// Nothing here polls an adapter or dispatches work: bindings, their
     /// channel sessions and the session titles come from persisted state only.
     pub(super) async fn read_platform_inventory(&self, source: i64) -> Result<PlatformInventory> {
-        let workspace = self.integration_scope(source).await?;
-        let bindings = self.integrations.bindings(Some(workspace)).await?;
+        let scope = self.integration_scope(source).await?;
+        let bindings = self.integrations.bindings(Some(scope)).await?;
         let host = self.integration_host().ok();
         let mut channel_sessions = Vec::new();
         for binding in bindings
@@ -647,6 +670,12 @@ impl AssistantRuntime {
             now_ms: Utc::now().timestamp_millis(),
             not_before_ms: b.activated_at_ms.unwrap_or(b.created_at_ms),
             channel_identity: b.spec.channel_policy.as_ref().map(|p| p.identity.clone()),
+            channel_kinds: b
+                .spec
+                .channel_policy
+                .as_ref()
+                .map(|p| p.kinds.iter().copied().collect())
+                .unwrap_or_default(),
         };
         let batch: AdapterBatch = decode(
             host.invoke_integration_service(
@@ -702,6 +731,12 @@ impl AssistantRuntime {
                             &b,
                             &event.event.resource,
                             &event.event.actor,
+                            event
+                                .event
+                                .channel
+                                .as_ref()
+                                .map(|channel| channel.kind)
+                                .unwrap_or(agena_domain::ConversationKind::Group),
                             event.event.thread.clone(),
                             now,
                         )
@@ -720,7 +755,7 @@ impl AssistantRuntime {
                             scope.authority.identity.account.clone(),
                         ),
                         conversation: event.event.resource.clone(),
-                        kind: scope.authority.identity.kind.into(),
+                        kind: scope.authority.kind,
                         thread: event.event.thread.clone(),
                     };
                     let result = manager
@@ -961,6 +996,7 @@ impl AssistantRuntime {
             thread: d.route.as_ref().and_then(|route| route.thread.clone()),
             text: d.text.clone(),
             channel: d.route.as_ref().map(|route| route.identity.clone()),
+            kind: d.route.as_ref().map(|route| route.kind),
         };
         let outcome = host
             .invoke_integration_service(

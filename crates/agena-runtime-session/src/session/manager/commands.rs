@@ -1013,6 +1013,15 @@ impl SessionExecutionCommandService for SessionManager {
             .await
             .map_err(command_error)
     }
+    async fn create_bot_conversation(
+        &self,
+        id: uuid::Uuid,
+        title: Option<String>,
+    ) -> Result<agena_assistant::bot::BotSession, SessionExecutionCommandError> {
+        SessionManager::create_bot_conversation_for(self, id, title)
+            .await
+            .map_err(command_error)
+    }
     async fn ensure_default_bot_profile(
         &self,
     ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError> {

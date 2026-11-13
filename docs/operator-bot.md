@@ -21,23 +21,23 @@ creation order, with `default_bot_id`. The authenticated registry API also offer
   the source has no active/queued execution, pending native interaction, active
   direct Subagent, or native background activity.
 
-A persona contains `address_user`, `tone` (`balanced`, `warm`, `direct`, or
-`playful`), `language`, and `instructions` (up to 4096 bytes). Active names are
-trimmed, Unicode case-folded for uniqueness, and reject empty/control/overlong
-input. New Bots start with fresh balanced/auto/empty persona fields. First access
-migrates the original operator session and snapshots its installed workspace
-assistant presentation preferences once, preserving the original name and persona.
-The original singleton key is used only for this migration.
+A persona carries exactly one field, `instructions` (up to 256 KiB). Active
+names are trimmed and Unicode case-folded for uniqueness against other active
+Bots, and reject empty/control/overlong input.
 
-The existing instance JSON store holds the registry and operation receipts.
-An instance-scoped gate serializes profile changes across manager handles;
-persisted creation intents and native kernel command receipts close crash and
-lost-acknowledgment windows. Create/archive receipts remain for the registry
-lifetime (at most 256 profiles). The newest 256 profile-update result receipts
-are retained; older exact retries conflict through their stale expected revision
-and do not repeat an effect. Retired session IDs remain exact and are never
-evicted; after 4096 replacements, further recovery requires archiving that Bot
-and creating a new named Bot. Repeated opens preserve human-edited conversation
+Bots live in their own `agena_bots` table. Every conversation that belongs to a
+Bot is an ordinary `agena_sessions` row whose configuration carries
+`owner.bot` and `owner.surface`, projected into indexed `owner_bot_id` /
+`owner_surface` / `owner_scope_key` columns. A Bot therefore has no single bound
+conversation: `POST /api/v1/bots/{id}/session` returns its most recently used
+local root and creates a fresh one when that conversation was deleted.
+Ownership is immutable after creation, so an archived conversation stays
+read-only because its row still names the Bot.
+
+All writes are single compare-and-set statements: `PUT` and archive carry
+`expected_revision`, and each `request_key` has a stored receipt, so a stale
+edit cannot overwrite a newer one and a retried request cannot repeat an effect.
+Repeated opens preserve human-edited conversation
 titles and model settings. Deleting a conversation through ordinary session
 management recovers a fresh conversation for the same Bot UUID and persona;
 other Bots keep their own conversations. Reopening while another operation waits

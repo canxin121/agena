@@ -38,8 +38,16 @@ pub struct ChannelOutputRoute {
     pub identity: ChannelIdentity,
     pub resource: String,
     pub thread: Option<String>,
+    /// Room shape of the destination, so a multi-surface account can address
+    /// the right one and the host can recheck the binding still serves it.
+    #[serde(default = "default_kind")]
+    pub kind: ConversationKind,
     pub epoch: i64,
     pub session_id: Option<i64>,
+}
+
+fn default_kind() -> ConversationKind {
+    ConversationKind::Group
 }
 impl ChannelOutputRoute {
     pub fn from_authority(a: &ChannelAuthority, session: i64) -> Self {
@@ -48,6 +56,7 @@ impl ChannelOutputRoute {
             identity: a.identity.clone(),
             resource: a.resource.clone(),
             thread: a.thread.clone(),
+            kind: a.kind,
             epoch: a.epoch,
             session_id: Some(session),
         }
@@ -65,7 +74,11 @@ impl IntegrationBinding {
             return Some("verified_channel_context_required");
         };
         if channel.identity != policy.identity {
-            return Some("tenant_account_or_kind_mismatch");
+            return Some("tenant_or_account_mismatch");
+        }
+        let kind = channel.kind;
+        if !policy.serves(kind) {
+            return Some("conversation_kind_not_authorized");
         }
         if !self.spec.resource.matches(&event.resource) {
             return Some("conversation_not_authorized");
@@ -73,8 +86,13 @@ impl IntegrationBinding {
         if policy.thread_mode == ChannelThreadMode::Exact && event.thread != self.spec.thread {
             return Some("thread_not_authorized");
         }
-        if policy.identity.kind == ChannelKind::Direct && event.thread.is_some() {
+        if kind == ConversationKind::Direct
+            && (event.thread.is_some() || policy.thread_mode != ChannelThreadMode::Exact)
+        {
             return Some("direct_message_thread_invalid");
+        }
+        if kind == ConversationKind::Direct && policy.allow_unlisted_chat {
+            return Some("direct_message_open_membership_invalid");
         }
         if !channel.actor_verified || !channel.is_member {
             return Some("platform_membership_not_verified");
@@ -91,7 +109,7 @@ impl IntegrationBinding {
         if let Err(reason) = policy.member(&event.actor, now) {
             return Some(reason);
         }
-        if policy.identity.kind != ChannelKind::Direct
+        if kind != ConversationKind::Direct
             && policy.trigger == ChannelTrigger::DirectOrMention
             && !channel.addressed_to_bot
         {
@@ -113,8 +131,14 @@ impl IntegrationBinding {
             return false;
         };
         if a.identity != p.identity
+            || !p.serves(a.kind)
             || !self.spec.resource.matches(&a.resource)
             || a.session_mode != p.session_mode
+        {
+            return false;
+        }
+        if a.kind == ConversationKind::Direct
+            && (a.thread.is_some() || p.thread_mode != ChannelThreadMode::Exact)
         {
             return false;
         }
@@ -164,8 +188,8 @@ mod tests {
             identity: ChannelIdentity {
                 tenant: "one".into(),
                 account: "bot".into(),
-                kind: ChannelKind::Group,
             },
+            kinds: Default::default(),
             session_mode: ChannelSessionMode::PerConversation,
             thread_mode: ChannelThreadMode::PerThread,
             trigger: ChannelTrigger::DirectOrMention,
@@ -199,7 +223,8 @@ mod tests {
             channel_policy: Some(policy),
         };
         let mut b =
-            IntegrationBinding::new(1, 1, "create".into(), spec, "fp".into(), 1000).unwrap();
+            IntegrationBinding::new(Some(1), None, 1, "create".into(), spec, "fp".into(), 1000)
+                .unwrap();
         b.state = BindingState::Enabled;
         b.epoch = 1;
         b.activated_at_ms = Some(1000);
@@ -220,6 +245,7 @@ mod tests {
             data: serde_json::Value::Null,
             channel: Some(ChannelEnvelope {
                 identity: b.spec.channel_policy.as_ref().unwrap().identity.clone(),
+                kind: ConversationKind::Group,
                 actor_verified: true,
                 is_member: true,
                 addressed_to_bot: true,
@@ -228,10 +254,7 @@ mod tests {
         };
         assert!(b.rejection(&e, 2100).is_none());
         e.channel.as_mut().unwrap().identity.tenant = "two".into();
-        assert_eq!(
-            b.rejection(&e, 2100),
-            Some("tenant_account_or_kind_mismatch")
-        );
+        assert_eq!(b.rejection(&e, 2100), Some("tenant_or_account_mismatch"));
         e.channel.as_mut().unwrap().identity.tenant = "one".into();
         e.channel.as_mut().unwrap().addressed_to_bot = false;
         assert_eq!(

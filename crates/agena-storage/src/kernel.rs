@@ -155,6 +155,10 @@ pub struct SessionSummaryView {
     pub id: SessionId,
     pub workspace_id: Option<i64>,
     pub title: String,
+    /// Bot this conversation belongs to, when any.
+    pub owner_bot_id: Option<String>,
+    /// Entrance shape of a Bot conversation: `local`, `direct`, `group`, `broadcast`.
+    pub owner_surface: Option<String>,
     pub favorite: bool,
     pub pinned: bool,
     pub metadata_version: MetadataVersion,

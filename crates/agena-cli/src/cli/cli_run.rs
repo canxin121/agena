@@ -2,10 +2,11 @@ use super::{
     AgenaCli, AgenaCommand, AppError, ApplyArgs, AuthCommand, CommitArgs, CompletionArgs,
     ConfigCommand, ContinueArgs, CostArgs, DebugCommand, DiagnosticsArgs, ExecArgs, ForkArgs,
     GitArgs, InspectArgs, LoginArgs, LogoutArgs, McpCommand, McpGetArgs, McpServerArgs,
-    McpStatusArgs, McpSubcommand, MemoryCommand, OutputFormat, PermissionsArgs, PluginCommand,
-    PluginReleaseSubcommand, PluginSubcommand, PluginTemplateArg, PrArgs, ProviderCommand,
-    ResumeArgs, ReviewArgs, SessionsCommand, UsageArgs, normalized_mcp_server_name,
-    render_completion_command, render_plugin_validate_output, validate_plugin_target,
+    McpStatusArgs, McpSubcommand, MemoryCommand, MigrateArgs, OutputFormat, PermissionsArgs,
+    PluginCommand, PluginReleaseSubcommand, PluginSubcommand, PluginTemplateArg, PrArgs,
+    ProviderCommand, ResumeArgs, ReviewArgs, SessionsCommand, UsageArgs,
+    normalized_mcp_server_name, render_completion_command, render_plugin_validate_output,
+    validate_plugin_target,
 };
 impl AgenaCli {
     pub async fn run_command(self) -> Result<(), AppError> {
@@ -25,6 +26,7 @@ impl AgenaCli {
             Some(AgenaCommand::Pr(args)) => self.run_pr(args).await,
             Some(AgenaCommand::Debug(command)) => self.run_debug(command).await,
             Some(AgenaCommand::Diagnostics(args)) => self.run_diagnostics(args).await,
+            Some(AgenaCommand::Migrate(args)) => self.run_migrate(args).await,
             Some(AgenaCommand::Exec(args)) => self.run_exec(args).await,
             Some(AgenaCommand::Fork(args)) => self.run_fork(args).await,
             Some(AgenaCommand::Cost(args)) => self.run_cost(args).await,
@@ -320,6 +322,32 @@ impl AgenaCli {
     pub(super) async fn run_diagnostics(self, args: DiagnosticsArgs) -> Result<(), AppError> {
         let output = self.render_server_diagnostics_command(args).await?;
         println!("{output}");
+        Ok(())
+    }
+
+    /// Offline baseline upgrade. Runs without the server: it opens the source
+    /// file read-only, builds a complete new database beside it, and reports
+    /// what moved. The source file is never written.
+    pub(super) async fn run_migrate(self, args: MigrateArgs) -> Result<(), AppError> {
+        let from = args
+            .from
+            .unwrap_or_else(|| agena_storage_layout::StorageLayout::current().database_path());
+        let to = args
+            .to
+            .unwrap_or_else(|| agena_storage_sqlite::migration::migrated_path(&from));
+        let counts = agena_storage_sqlite::migration::migrate_database(&from, &to)
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        println!(
+            "Migrated {} to {}\n{}",
+            from.display(),
+            to.display(),
+            counts
+                .iter()
+                .map(|(table, rows)| format!("  {table}: {rows}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
         Ok(())
     }
 

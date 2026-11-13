@@ -16,7 +16,7 @@
   → 已验证的发送者 actor
 ```
 
-支持 `direct` 私聊、`group` 群聊、`public_channel` 公开频道、`private_channel` 私有频道。显示昵称、消息中的“我是管理员”和事件附带的任意 `role` 字段都不作为授权依据。平台管理员身份也不会自动得到 Agena 的实例管理权限。
+房间形状只有三种：`direct` 私聊、`group` 多人房间（含 Slack MPIM、Discord 群私聊、可交互频道）、`broadcast` 单向广播（Telegram 频道、WhatsApp newsletter，Bot 可能没有发言权）。形状是**消息属性**，不是账号属性：一个账号同时服务多种房间，因此绑定用 `channel_policy.kinds` 声明允许的形状（留空表示全部）。线程是独立维度，由消息的 `thread` 携带，不计入形状。显示昵称、消息中的“我是管理员”和事件附带的任意 `role` 字段都不作为授权依据。平台管理员身份也不会自动得到 Agena 的实例管理权限。
 
 `resource` 必须是稳定、精确的外部会话 ID。相同消息 ID、用户 ID 或频道名在不同租户/账号中可以存在，但不会共用收件记录、会话或回复路由。内部保留主体名如 `@service`、`@shared` 不能被外部发送者占用。
 
@@ -133,7 +133,8 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
 
 ```json
 {
-  "identity": {"tenant": "tenant-123", "account": "bot-456", "kind": "group"},
+  "identity": {"tenant": "tenant-123", "account": "bot-456"},
+  "kinds": ["group"],
   "session_mode": "per_conversation",
   "thread_mode": "per_thread",
   "trigger": "direct_or_mention",
@@ -167,7 +168,8 @@ TUI `/integrations` 中选中连接后按 `a` 打开权限编辑器，修改类�
 ```json
 {
   "channel": {
-    "identity": {"tenant": "tenant-123", "account": "bot-456", "kind": "group"},
+    "identity": {"tenant": "tenant-123", "account": "bot-456"},
+    "kind": "group",
     "actor_verified": true,
     "is_member": true,
     "addressed_to_bot": true,

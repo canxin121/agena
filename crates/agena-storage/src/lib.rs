@@ -241,6 +241,85 @@ pub enum WorkspaceRepositoryError {
     Backend(String),
 }
 
+/// One Bot identity record. Persona is presentation, never authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BotRecord {
+    pub id: uuid::Uuid,
+    pub name: String,
+    /// Trimmed and case-folded name used for active-name uniqueness.
+    pub name_folded: String,
+    pub instructions: String,
+    pub revision: i64,
+    pub archived: bool,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Debug, thiserror::Error)]
+/// Backend error from the Bot repository.
+pub enum BotRepositoryError {
+    #[error("invalid Bot input: {0}")]
+    Invalid(String),
+    #[error("an active Bot already uses this name")]
+    NameTaken,
+    #[error("Bot revision or archive state changed")]
+    Conflict,
+    #[error("the Bot was not found")]
+    NotFound,
+    #[error("the Bot registry limit was reached")]
+    Capacity,
+    #[error("request key was reused with different input")]
+    ReplayedInput,
+    #[error("Bot repository backend error: {0}")]
+    Backend(String),
+}
+
+/// Provider-independent persistence port for stable instance Bot identities.
+///
+/// A Bot has no single bound conversation: its local conversations and its chat
+/// conversations are ordinary sessions carrying `owner.bot`, resolved by the
+/// session manager. Every mutation here is a single compare-and-set statement,
+/// so two clients editing the same Bot cannot overwrite each other and a
+/// replayed request key cannot repeat an effect.
+#[async_trait]
+pub trait BotRepository: Send + Sync {
+    /// Insert a Bot identity. Returns `NameTaken` when an active Bot already
+    /// uses the folded name.
+    async fn create(&self, record: &BotRecord) -> Result<BotRecord, BotRepositoryError>;
+
+    /// Replace name, folded name, instructions and revision when `revision`
+    /// still matches and the Bot is active.
+    async fn update(
+        &self,
+        record: &BotRecord,
+        expected_revision: i64,
+    ) -> Result<BotRecord, BotRepositoryError>;
+
+    /// Mark a Bot archived when `revision` still matches.
+    async fn archive(
+        &self,
+        id: uuid::Uuid,
+        expected_revision: i64,
+        now_ms: i64,
+    ) -> Result<BotRecord, BotRepositoryError>;
+
+    async fn get(&self, id: uuid::Uuid) -> Result<BotRecord, BotRepositoryError>;
+
+    /// Active Bots in creation order, or every Bot when `include_archived`.
+    async fn list(&self, include_archived: bool) -> Result<Vec<BotRecord>, BotRepositoryError>;
+
+    async fn count(&self) -> Result<u64, BotRepositoryError>;
+
+    /// Idempotence receipts for Bot operations, keyed by `request_key`.
+    async fn receipt(&self, key: &str) -> Result<Option<(String, String)>, BotRepositoryError>;
+    async fn save_receipt(
+        &self,
+        key: &str,
+        input: &str,
+        result: &str,
+    ) -> Result<(), BotRepositoryError>;
+}
+
 /// Provider-independent persistence port for workspace identity resolution.
 #[async_trait]
 pub trait WorkspaceRepository: Send + Sync {

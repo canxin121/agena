@@ -1,5 +1,32 @@
 export default {
   bot: {
+    conversations: {
+      title: 'Conversas de {name}',
+      toggle: 'Mostrar ou ocultar {group}',
+      actions: 'Ações para {name}',
+      running: 'Em execução',
+      awaiting: 'Aguardando você',
+      messages: '{count} mensagens',
+      empty: 'Ainda sem mensagens',
+      create: 'Nova conversa',
+      deleteBusy: 'Parar e excluir conversa',
+      deleteBusyHint: 'O trabalho em andamento é interrompido e a conversa é excluída. As demais e o Bot permanecem.',
+      deleteHint: 'Exclui apenas esta conversa; as demais e o Bot permanecem.',
+      delete: 'Excluir conversa',
+      renamePrompt: 'Título da conversa',
+      surfaces: {
+        local: 'Este dispositivo',
+        direct: 'Mensagens diretas',
+        group: 'Grupos',
+        broadcast: 'Canais',
+      },
+      surfaceHints: {
+        local: 'Conversas abertas no Web ou TUI.',
+        direct: 'Conversas individuais às quais o Bot foi adicionado.',
+        group: 'Conversas em grupo e salas.',
+        broadcast: 'Canais de transmissão onde o Bot pode não conseguir responder.',
+      },
+    },
     profiles: {
       created: '{name} criado',
       search: 'Buscar Bots',
@@ -74,8 +101,10 @@ export default {
     kind: 'Tipo de conversa',
     kind_direct: 'Mensagem direta',
     kind_group: 'Conversa em grupo',
-    kind_public_channel: 'Canal público',
-    kind_private_channel: 'Canal privado',
+    kind_broadcast: 'Canal de transmissão',
+    kinds: 'Tipos de sala permitidos',
+    kinds_hint: 'Qualquer tipo informado pelo adaptador',
+    kind_any: 'Qualquer tipo informado pelo adaptador',
     context: 'Isolamento de conversas',
     mode_per_conversation: 'Uma sessão por conversa',
     mode_per_actor: 'Uma sessão por falante em cada conversa',
@@ -123,8 +152,7 @@ export default {
     noSession: 'Ainda sem sessão',
     kind_direct: 'Privado',
     kind_group: 'Grupo',
-    kind_public_channel: 'Canal público',
-    kind_private_channel: 'Canal privado',
+    kind_broadcast: 'Transmissão',
   },
   integrations: {
     retryHint:
@@ -1333,6 +1361,13 @@ export default {
           confirmTitle: 'Excluir sessão?',
           confirmDescription: 'Esta ação não pode ser desfeita.',
           confirmText: 'Excluir',
+        },
+        deleteBusy: {
+          label: 'Parar e excluir sessão',
+          description: 'O trabalho em andamento será interrompido primeiro',
+          confirmTitle: 'Parar esta sessão e excluí-la?',
+          confirmDescription: 'O trabalho em andamento será interrompido, a fila será descartada e a conversa removida. Não pode ser desfeito.',
+          confirmText: 'Parar e excluir',
         },
       },
       contextMenu: {

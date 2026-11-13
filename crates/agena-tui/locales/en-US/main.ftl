@@ -1084,7 +1084,6 @@ provider-model-field-catalog-template = Catalog template
 provider-model-catalog-selection-note = Enter to choose a template. Save writes its fields, not its catalog ID.
 provider-model-field-enabled = Enabled
 provider-model-field-native-compaction = Native Compaction
-provider-model-field-manual-overrides = Manual overrides
 provider-model-field-agena-tool-mode = Tool Mode (agena_tools.mode)
 agena-tool-mode-provider-protocol-label = provider_protocol
 agena-tool-mode-provider-protocol-detail = Transport Agena-managed tool definitions and calls through the provider API's tool protocol.
@@ -1103,7 +1102,6 @@ provider-model-field-speed-modes = Speed Modes
 provider-model-field-description = Description
 provider-model-enabled-detail = Whether this model route is enabled.
 provider-model-native-compaction-detail = Try this provider's native conversation compaction endpoint before falling back to Agena's text summarizer.
-provider-model-manual-overrides-detail = On: keep this route's own values instead of the catalog's. Off: follow the catalog and pick up its updates on the next listing.
 provider-model-lifecycle-detail = Model lifecycle value.
 
 provider-studio-auth-status-pending = pending
@@ -2940,14 +2938,24 @@ bot-ready = Ready
 
 # Named Bot registry and independent persona editor
 bot-manager-title = Named Bots
-bot-list-keys = ↑↓ select · Enter open · n create
-    e edit · a archive · r refresh
-    w workspace settings · Esc back
+bot-list-keys = ↑↓ select · Enter open · Tab rooms
+    n new (room) · d delete room · e edit · a archive
+    r refresh · w workspace settings · Esc back
 bot-entry-keys = Enter/r retry · l Bot list · Esc back
 bot-confirm-keys = Enter confirm · Esc cancel
 bot-editor-keys = Ctrl+Enter/Alt+Enter apply · Esc cancel
 bot-form-keys = ↑↓ field · Enter edit · s save
     r reload profile · Esc back
+bot-conversation-stop-delete-confirm = Stop this conversation and delete it? Running work is stopped and queued work is discarded.
+bot-conversation-delete-confirm = Delete this conversation? Other conversations and the Bot itself are kept.
+bot-conversations-empty = No conversations yet.
+bot-surface-local = This machine
+bot-surface-direct = Direct messages
+bot-surface-group = Groups
+bot-surface-broadcast = Channels
+bot-conversation-messages = messages
+bot-conversation-running = running
+
 bot-current = (current)
 bot-empty = No active Bots. Press n to create one.
 bot-archive-confirm = Archive this Bot? The server requires it to be idle. Conversation history is retained.

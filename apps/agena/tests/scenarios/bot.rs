@@ -146,7 +146,10 @@ async fn bot_ensure_is_authenticated_concurrent_persistent_and_preserves_user_se
                 .context("default Bot registry UUID")?;
             uuid::Uuid::parse_str(bot_id)?;
             let profile = client.get_bot(bot_id.parse()?).await?;
-            ensure!(profile.session_id == id && body["name"] == profile.name);
+            // A Bot owns many conversations; the binding names the Bot, not a
+            // session, and the session resource names its owner.
+            ensure!(body["name"] == profile.name);
+            ensure!(resource(&case, id).await?["owner_bot_id"] == json!(bot_id));
             http.send_json(
                 Method::PUT,
                 &format!("/api/v1/sessions/{id}"),
@@ -244,7 +247,9 @@ async fn bot_authority_rejects_ordinary_callers_self_targets_bad_quotes_and_conf
         let denied=operation(&case,&ordinary,"not-an-operator",json!({"action":"projects"})).await?;
         ensure!(denied["phase"]=="failed" && denied.to_string().contains("active registered Bot"),"{denied}");
         let denied=operation(&case,&bot,"self-target",json!({"action":"send","session_id":id,"instruction":"loop"})).await?;
-        ensure!(denied["phase"]=="failed" && denied.to_string().contains("cannot target any Bot conversation"),"{denied}");
+        // A Bot conversation is refused as a project target before any deeper
+        // ownership check runs, because it has no project scope.
+        ensure!(denied["phase"]=="failed" && denied.to_string().contains("not project targets"),"{denied}");
         let denied=operation(&case,&bot,"missing-target",json!({"action":"read","session_id":9223372036854775807_i64})).await?;
         ensure!(denied["phase"]=="failed");
         let denied=operation(&case,&bot,"malformed-cursor",json!({"action":"read","session_id":ordinary.id(),"cursor":"not a cursor"})).await?;

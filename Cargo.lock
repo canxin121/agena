@@ -391,6 +391,7 @@ dependencies = [
  "agena-runtime",
  "agena-storage",
  "agena-storage-layout",
+ "agena-storage-sqlite",
  "agena-tool",
  "async-trait",
  "blake3",
@@ -1284,6 +1285,7 @@ dependencies = [
  "tokio",
  "tracing",
  "urlencoding",
+ "uuid",
  "yaml_serde",
 ]
 

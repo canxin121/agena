@@ -1,17 +1,21 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 
 import BotSidebarHeader from '@/features/bots/BotSidebarHeader.vue'
 import BotSidebarRow from '@/features/bots/BotSidebarRow.vue'
+import BotConversationGroup from '@/features/bots/BotConversationGroup.vue'
 import { searchBots } from '@/features/bots/profiles'
 import { useBotConversationActions } from '@/features/bots/useBotConversationActions'
+import { useBotConversations, type BotConversation } from '@/features/bots/useBotConversations'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { getLocalString, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
-import type { BotProfile } from '@/lib/bots'
+import IconButton from '@/components/ui/IconButton.vue'
+import { RiAddLine, RiDeleteBinLine } from '@remixicon/vue'
+import { botIdQuery, createBotConversation, type BotProfile } from '@/lib/bots'
 import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import {
@@ -25,6 +29,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
+import type { SessionOwnerSurface } from '@/types/chat'
 
 const PAGE_SIZE = 12
 
@@ -112,13 +117,169 @@ const activeProfile = computed(
   () => bots.profiles.find((profile) => profile.id === (menu.sessionActionMenuTarget.value?.session?.id || '')) || null,
 )
 
+// The Bot whose conversations the sidebar lists: the one the route selected,
+// falling back to the first active Bot so the section is never empty on arrival.
+const selectedProfile = computed<BotProfile | null>(() => {
+  const requested = botIdQuery(route.query)
+  if (requested && !requested.startsWith('!')) {
+    const match = bots.profiles.find((profile) => profile.id === requested && !profile.archived)
+    if (match) return match
+  }
+  return bots.profiles.find((profile) => !profile.archived) || null
+})
+
+const conversations = useBotConversations()
+
+// Which surface groups are expanded. They default open: a Bot usually has one
+// local conversation plus whatever rooms it serves, and collapsing those would
+// hide the very thing this section exists to show.
+const openSurfaces = ref<Record<SessionOwnerSurface, boolean>>({
+  local: true,
+  direct: true,
+  group: true,
+  broadcast: true,
+})
+
+watch(
+  () => selectedProfile.value?.id,
+  (id) => {
+    menu.sessionActionMenuTarget.value = null
+    menu.sessionActionMenuAnchorRef.value = null
+    if (id) void conversations.load(id)
+    else conversations.reset()
+  },
+  { immediate: true },
+)
+
+const conversationMenuTarget = ref<BotConversation | null>(null)
+
+const conversationMenuItems = computed<SessionActionItem[]>(() => {
+  const conversation = conversationMenuTarget.value
+  if (!conversation) return []
+  const busy = Boolean(conversation.running)
+  // A conversation row acts on its own transcript, so it gets the project
+  // row's conversation actions plus an explicit, confirmed delete. It has no
+  // Bot profile to edit: the row above owns that identity.
+  return [
+    ...buildSessionActionItemsForSessionI18n(
+      t,
+      { id: conversation.id, favorite: conversation.favorite },
+      { bot: true, fork: false },
+    ),
+    // A conversation with live work is stopped before it is deleted: the
+    // menu says so up front, and confirming performs both steps. Without live
+    // work the plain delete wording is accurate.
+    {
+      id: 'delete-conversation',
+      label: String(
+        t(
+          busy
+            ? 'bot.conversations.deleteBusy'
+            : 'bot.conversations.delete',
+        ),
+      ),
+      description: String(
+        t(busy ? 'bot.conversations.deleteBusyHint' : 'bot.conversations.deleteHint'),
+      ),
+      icon: RiDeleteBinLine,
+      variant: 'destructive' as const,
+      confirmTitle: String(
+        t(busy ? 'bot.conversations.deleteBusy' : 'bot.conversations.delete'),
+      ),
+      confirmDescription: String(
+        t(busy ? 'bot.conversations.deleteBusyHint' : 'bot.conversations.deleteHint'),
+      ),
+      confirmText: String(t(busy ? 'bot.conversations.deleteBusy' : 'common.delete')),
+      cancelText: String(t('common.cancel')),
+    },
+  ]
+})
+
+function openConversationMenu(conversation: BotConversation) {
+  conversationMenuTarget.value = conversation
+}
+
+function runConversationAction(item: SessionActionItem): void {
+  const conversation = conversationMenuTarget.value
+  if (!conversation) return
+  conversationMenuTarget.value = null
+  if (item.id === 'toggle-favorite') {
+    void toggleFavorite(conversation)
+    return
+  }
+  if (item.id === 'copy-transcript') {
+    void conversationActions.copyTranscript(conversation.id)
+    return
+  }
+  if (item.id === 'export-transcript') {
+    void conversationActions.exportTranscript(conversation.id)
+    return
+  }
+  if (item.id === 'rename') {
+    void renameConversation(conversation)
+    return
+  }
+  if (item.id === 'delete-conversation') {
+    void chat
+      .deleteSession(conversation.id, { stopFirst: conversation.running })
+      .then(() => conversations.load(String(selectedProfile.value?.id || ''), true))
+      .catch((error: unknown) => toasts.push('error', error instanceof Error ? error.message : String(error)))
+  }
+}
+
+async function renameConversation(conversation: BotConversation): Promise<void> {
+  const title = window.prompt(String(t('bot.conversations.renamePrompt')), conversation.title)?.trim()
+  if (!title || title === conversation.title) return
+  try {
+    await chat.renameSession(conversation.id, title)
+    await conversations.load(String(selectedProfile.value?.id || ''), true)
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+/**
+ * Start an empty conversation for the selected Bot and open it.
+ *
+ * Unlike opening the Bot (which reopens the latest conversation), this always
+ * creates a new one, so several topics can coexist without deleting history.
+ */
+async function startConversation() {
+  const profile = selectedProfile.value
+  if (!profile) return
+  try {
+    const session = await createBotConversation(profile.id)
+    await conversations.load(profile.id, true)
+    openConversation({
+      id: String(session.session_id),
+      title: session.name,
+      surface: 'local',
+      favorite: false,
+      pinned: false,
+      updatedAtMs: 0,
+      lastMessageAtMs: 0,
+      messageCount: 0,
+    })
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  }
+}
+
+function openConversation(conversation: BotConversation) {
+  ui.setSessionSwitcherOpen(false)
+  void navigation.openWorkspaceLocation('bot', {
+    query: { botId: selectedProfile.value?.id, sessionId: conversation.id },
+    title: conversation.title,
+    matchKeys: ['botId', 'sessionId'],
+  })
+}
+
 const menuItems = computed<SessionActionItem[]>(() => {
   const profile = activeProfile.value
   if (!profile) return []
-  const session = chat.getSessionById(String(profile.session_id))
   return buildSessionActionItemsForSessionI18n(
     t,
-    { id: profile.id, favorite: session?.favorite === true },
+    { id: profile.id, favorite: false },
     { bot: true },
   )
 })
@@ -142,26 +303,15 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
     bots.open('rename', profile.id)
     return true
   }
-  if (item.id === 'copy-transcript') {
-    await conversationActions.copyTranscript(String(profile.session_id))
-    return true
-  }
-  if (item.id === 'export-transcript') {
-    await conversationActions.exportTranscript(String(profile.session_id))
-    return true
-  }
-  if (item.id === 'toggle-favorite') {
-    await toggleFavorite(profile.session_id)
-    return true
-  }
+  // A Bot row is an identity, not a conversation. The conversation-level
+  // actions live on the rows under it, where they have a real session id.
   return true
 }
 
-async function toggleFavorite(sessionId: number) {
-  const sid = String(sessionId)
-  const current = chat.getSessionById(sid)?.favorite === true
+async function toggleFavorite(conversation: BotConversation) {
   try {
-    await chat.updateSessionMetadata(sid, { favorite: !current })
+    await chat.updateSessionMetadata(conversation.id, { favorite: !conversation.favorite })
+    await conversations.load(String(selectedProfile.value?.id || ''), true)
   } catch (error) {
     toasts.push('error', error instanceof Error ? error.message : String(error))
   }
@@ -226,6 +376,79 @@ async function toggleFavorite(sessionId: number) {
           :next-label="String(t('chat.sidebar.directoriesList.nextSessionsPage'))"
           @update:page="(p) => (page = p)"
         />
+
+        <!--
+          Conversations of the selected Bot, grouped by the entrance shape the
+          server recorded. This is the same sidebar row primitive the project
+          sidebar uses; only the data source differs, because these
+          conversations have no project and are found by owner instead.
+        -->
+        <div
+          v-if="selectedProfile"
+          class="mt-3 border-t border-sidebar-border/60 pt-2"
+          :aria-label="String(t('bot.conversations.title', { name: selectedProfile.name }))"
+        >
+          <div class="flex items-center justify-between gap-2 px-1.5 pb-1">
+            <span class="truncate typography-ui-label font-medium text-muted-foreground">
+              {{ t('bot.conversations.title', { name: selectedProfile.name }) }}
+            </span>
+            <div class="flex shrink-0 items-center gap-1">
+              <span class="font-mono text-[11px] text-muted-foreground/70">{{ conversations.total.value }}</span>
+              <IconButton
+                data-testid="sidebar-bot-new-conversation"
+                :tooltip="String(t('bot.conversations.create'))"
+                :title="String(t('bot.conversations.create'))"
+                :aria-label="String(t('bot.conversations.create'))"
+                :is-touch-pointer="ui.isTouchPointer || ui.isCompactTouch"
+                @click="startConversation"
+              >
+                <RiAddLine class="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
+          </div>
+
+          <SidebarSectionSkeleton v-if="conversations.loading.value && !conversations.total.value" :rows="2" compact />
+
+          <p
+            v-else-if="conversations.error.value"
+            role="alert"
+            class="break-words px-1.5 py-2 text-xs text-destructive"
+          >
+            {{ conversations.error.value }}
+            <button class="underline" @click="conversations.load(selectedProfile.id, true)">
+              {{ t('common.retry') }}
+            </button>
+          </p>
+
+          <template v-else>
+            <BotConversationGroup
+              v-for="group in conversations.groups.value"
+              :key="group.surface"
+              :bot-name="selectedProfile.name"
+              :group="group"
+              :open="openSurfaces[group.surface]"
+              :selected-session-id="String(route.query.sessionId || '')"
+              :ui-is-compact-layout="ui.isCompactLayout"
+              :menu-open-for="(id) => conversationMenuTarget?.id === id"
+              :menu-query="menu.sessionActionMenuQuery.value"
+              :menu-items-for="() => conversationMenuItems"
+              :menu-anchor-el="menu.sessionActionMenuAnchorRef.value"
+              :set-menu-ref="menu.setSessionActionMenuRef"
+              @update:open="(v) => (openSurfaces[group.surface] = v)"
+              @open="openConversation"
+              @open-action-menu="
+                (conversation, event) => {
+                  menu.sessionActionMenuAnchorRef.value = event.currentTarget as HTMLElement
+                  openConversationMenu(conversation)
+                  event.preventDefault()
+                  event.stopPropagation()
+                }
+              "
+              @update:menu-query="(v) => (menu.sessionActionMenuQuery.value = v)"
+              @select="runConversationAction"
+            />
+          </template>
+        </div>
       </div>
     </div>
   </aside>

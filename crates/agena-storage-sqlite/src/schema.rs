@@ -3,7 +3,7 @@ pub(crate) mod validation;
 
 /// Identity of this complete persistence and payload contract. This is not an
 /// upgrade counter: databases from another baseline must use another data root.
-pub(crate) const SCHEMA_BASELINE: &str = "agena-2026-10-31";
+pub(crate) const SCHEMA_BASELINE: &str = "agena-2026-11-12";
 
 pub(crate) fn instance_table() -> String {
     format!(

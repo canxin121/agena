@@ -3207,6 +3207,8 @@ impl AgenaClient {
                 cursor,
                 limit,
                 workspace_id,
+                owner_bot_id,
+                owner_surface,
                 parent_id,
                 roots,
                 exclude_subagents,
@@ -3239,6 +3241,12 @@ impl AgenaClient {
                     if let Some(workspace_id) = workspace_id {
                         q.append_pair("workspace_id", &workspace_id.to_string());
                     }
+                    if let Some(bot) = owner_bot_id {
+                        q.append_pair("owner_bot_id", &bot.to_string());
+                    }
+                    if let Some(surface) = owner_surface {
+                        q.append_pair("owner_surface", surface.as_str());
+                    }
                     if let Some(parent_id) = parent_id {
                         q.append_pair("parent_id", &parent_id.to_string());
                     }
@@ -3252,9 +3260,11 @@ impl AgenaClient {
                         q.append_pair("search", &search);
                     }
                 }
-                let resource = workspace_id
-                    .map(|id| format!("workspace:{id}:sessions"))
-                    .unwrap_or_else(|| "sessions".to_owned());
+                let resource = match (workspace_id, owner_bot_id) {
+                    (Some(id), _) => format!("workspace:{id}:sessions"),
+                    (None, Some(bot)) => format!("bot:{bot}:sessions"),
+                    (None, None) => "sessions".to_owned(),
+                };
                 Ok(QueryResult::Sessions(
                     self.conditional_json(&resource, url, force).await?,
                 ))

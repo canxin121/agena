@@ -26,8 +26,8 @@ fn channel_policy() -> ChannelAccessPolicy {
         identity: ChannelIdentity {
             tenant: "fixture-tenant".into(),
             account: "fixture-bot".into(),
-            kind: ChannelKind::Group,
         },
+        kinds: Default::default(),
         session_mode: ChannelSessionMode::PerConversation,
         thread_mode: ChannelThreadMode::Exact,
         trigger: ChannelTrigger::DirectOrMention,
@@ -44,7 +44,7 @@ fn channel_policy() -> ChannelAccessPolicy {
     }
 }
 fn channel_event_context() -> Value {
-    json!({"identity":{"tenant":"fixture-tenant","account":"fixture-bot","kind":"group"},"actor_verified":true,"is_member":true,"addressed_to_bot":true,"verified_at_ms":Utc::now().timestamp_millis()})
+    json!({"identity":{"tenant":"fixture-tenant","account":"fixture-bot"},"kind":"group","actor_verified":true,"is_member":true,"addressed_to_bot":true,"verified_at_ms":Utc::now().timestamp_millis()})
 }
 fn spec(provider: &str, mode: IntegrationMode, resource: &str) -> IntegrationSpec {
     IntegrationSpec{title:"Test integration".into(),provider:provider.into(),mode,config:json!({}),resource:resource.into(),thread:None,

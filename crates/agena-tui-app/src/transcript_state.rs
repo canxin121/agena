@@ -466,6 +466,7 @@ impl TranscriptState {
             math_render_context: agena_tui_media::MathRenderContext::default(),
             session_id: None,
             session_title: String::new(),
+            owner_bot_id: None,
             parts: Vec::new(),
             refreshing: false,
             reconcile_loaded_parts: true,
@@ -523,6 +524,8 @@ impl TranscriptState {
     pub(crate) fn reset(&mut self, session_id: i64, title: String) {
         self.session_id = Some(session_id);
         self.session_title = title;
+        // A different conversation cannot inherit the previous one's owner.
+        self.owner_bot_id = None;
 
         self.parts.clear();
         self.refreshing = false;
@@ -642,6 +645,16 @@ impl TranscriptState {
 
     fn apply_execution_with(&mut self, execution: SessionExecutionResource) {
         self.session_title = execution.session.title.clone();
+        // The server is authoritative when it reports an owner; an older shell
+        // that omits the field must not erase the Bot the session was opened as.
+        if let Some(owner) = execution
+            .session
+            .owner_bot_id
+            .as_deref()
+            .and_then(|id| id.parse().ok())
+        {
+            self.owner_bot_id = Some(owner);
+        }
         self.last_event_seq = execution.latest_event_seq;
         self.merge_execution_parts(execution.parts.clone());
         let mut execution = execution;
@@ -918,7 +931,17 @@ impl TranscriptState {
     /// A bounded window or an execution shell cannot remove memberships by
     /// omission. Keep loaded history and live parts that arrived after the
     /// snapshot; explicit removals and membership reconciliation own deletion.
+    ///
+    /// It also cannot *add* history above the window the reader actually
+    /// loaded. A write acknowledgement and the status shell carry a much wider
+    /// recent window than the initial transcript page, so merging them
+    /// verbatim would silently insert unread history above the viewport and
+    /// push the message the user just sent below the fold.
     pub(crate) fn merge_execution_parts(&mut self, recent: Vec<agena_api::part::PartResource>) {
+        if recent.is_empty() {
+            return;
+        }
+        let recent = self.restrict_to_loaded_window(recent);
         if recent.is_empty() {
             return;
         }
@@ -938,6 +961,37 @@ impl TranscriptState {
         if let Some(execution) = &mut self.execution {
             execution.parts = self.parts.clone();
         }
+    }
+
+    /// Clip an execution window to what this transcript has actually shown.
+    /// A window is contiguous, ending at the newest entry, so an entry that
+    /// sorts before the oldest loaded part is unloaded history: showing it
+    /// would insert rows above the reader. Updates to loaded identities and
+    /// genuinely newer entries always pass.
+    fn restrict_to_loaded_window(
+        &self,
+        recent: Vec<agena_api::part::PartResource>,
+    ) -> Vec<agena_api::part::PartResource> {
+        let Some(floor) = self
+            .parts
+            .iter()
+            .min_by_key(|part| (part.created_at_ms, part.run_id, part.part_id))
+        else {
+            return recent;
+        };
+        let floor_key = (floor.created_at_ms, floor.run_id, floor.part_id);
+        let loaded = self
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<BTreeSet<_>>();
+        recent
+            .into_iter()
+            .filter(|part| {
+                loaded.contains(&part.part_id)
+                    || (part.created_at_ms, part.run_id, part.part_id) >= floor_key
+            })
+            .collect()
     }
 
     pub(crate) fn set_transcript_page(&mut self, next_cursor: Option<String>, has_more: bool) {

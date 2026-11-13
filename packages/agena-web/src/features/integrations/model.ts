@@ -74,7 +74,8 @@ export function parseIntegration(text: string): IntegrationSpec {
 
 export function channelPolicyTemplate(): ChannelAccessPolicy {
   return {
-    identity: { tenant: 'tenant-id', account: 'bot-account-id', kind: 'group' },
+    identity: { tenant: 'tenant-id', account: 'bot-account-id' },
+    kinds: [],
     session_mode: 'per_conversation',
     thread_mode: 'exact',
     trigger: 'direct_or_mention',

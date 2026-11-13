@@ -171,6 +171,19 @@ impl SessionManager {
         }
     }
 
+    /// Whether a live (not deleted) conversation still exists.
+    ///
+    /// Callers that cached a session id — channel scopes, reminders — use this
+    /// instead of matching an error string: a deleted conversation reads as
+    /// absent, and any other failure stays a real error.
+    pub async fn session_exists(&self, id: i64) -> Result<bool, AppError> {
+        match self.kernel().reader.metadata(session_id(id)?).await {
+            Ok(_) => Ok(true),
+            Err(KernelError::NotFound(_)) => Ok(false),
+            Err(error) => Err(kernel_error(error)),
+        }
+    }
+
     pub async fn get_session(&self, id: i64) -> Result<Session, AppError> {
         let session = session_id(id)?;
         let snapshot = self

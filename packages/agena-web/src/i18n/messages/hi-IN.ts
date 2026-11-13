@@ -1,5 +1,32 @@
 export default {
   bot: {
+    conversations: {
+      title: '{name} की बातचीत',
+      toggle: '{group} दिखाएँ या छिपाएँ',
+      actions: '{name} के लिए क्रियाएँ',
+      running: 'चल रहा है',
+      awaiting: 'आपका इंतज़ार',
+      messages: '{count} संदेश',
+      empty: 'अभी कोई संदेश नहीं',
+      create: 'नई बातचीत',
+      deleteBusy: 'रोकें और बातचीत हटाएँ',
+      deleteBusyHint: 'चल रहा काम पहले रोका जाएगा, फिर बातचीत हटेगी। अन्य बातचीत और Bot बने रहते हैं।',
+      deleteHint: 'केवल यही बातचीत हटाएँ; अन्य बातचीत और Bot बने रहते हैं।',
+      delete: 'बातचीत हटाएँ',
+      renamePrompt: 'बातचीत का शीर्षक',
+      surfaces: {
+        local: 'यह मशीन',
+        direct: 'सीधे संदेश',
+        group: 'समूह',
+        broadcast: 'चैनल',
+      },
+      surfaceHints: {
+        local: 'Web या TUI में खोली गई बातचीत।',
+        direct: 'एक-से-एक चैट जिनमें Bot जोड़ा गया है।',
+        group: 'समूह चैट और कमरे।',
+        broadcast: 'प्रसारण चैनल जहाँ Bot शायद उत्तर न दे सके।',
+      },
+    },
     profiles: {
       created: '{name} बनाया गया',
       search: 'Bot खोजें',
@@ -71,8 +98,10 @@ export default {
     kind: 'बातचीत का प्रकार',
     kind_direct: 'निजी संदेश',
     kind_group: 'समूह चैट',
-    kind_public_channel: 'सार्वजनिक चैनल',
-    kind_private_channel: 'निजी चैनल',
+    kind_broadcast: 'प्रसारण चैनल',
+    kinds: 'अनुमत रूम प्रकार',
+    kinds_hint: 'एडाप्टर द्वारा बताया गया कोई भी प्रकार',
+    kind_any: 'एडाप्टर द्वारा बताया गया कोई भी प्रकार',
     context: 'बातचीत का अलगाव',
     mode_per_conversation: 'प्रति बातचीत एक सत्र',
     mode_per_actor: 'हर बातचीत में प्रति वक्ता एक सत्र',
@@ -120,8 +149,7 @@ export default {
     noSession: 'अभी कोई सत्र नहीं',
     kind_direct: 'निजी',
     kind_group: 'समूह',
-    kind_public_channel: 'सार्वजनिक चैनल',
-    kind_private_channel: 'निजी चैनल',
+    kind_broadcast: 'प्रसारण',
   },
   integrations: {
     retryHint:
@@ -2115,6 +2143,13 @@ export default {
           confirmTitle: 'सेशन मिटाएँ?',
           confirmDescription: 'इसे पूर्ववत नहीं किया जा सकता।',
           confirmText: 'मिटाएँ',
+        },
+        deleteBusy: {
+          label: 'रोकें और सत्र हटाएँ',
+          description: 'चल रहा काम पहले रोका जाएगा',
+          confirmTitle: 'यह सत्र रोककर हटाएँ?',
+          confirmDescription: 'चल रहा काम रुकेगा, कतार छोड़ दी जाएगी और बातचीत हट जाएगी। इसे वापस नहीं लाया जा सकता।',
+          confirmText: 'रोकें और हटाएँ',
         },
       },
       contextMenu: {

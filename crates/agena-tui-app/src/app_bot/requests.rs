@@ -7,6 +7,7 @@ impl App {
         let request_id = self.bot.request_id;
         self.current_route = Route::BotEntry(request_id);
         let client = self.application.client().clone();
+        let backend = self.application.clone();
         let tx = self.tx.clone();
         let task = tokio::spawn(async move {
             let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -43,12 +44,14 @@ impl App {
                         );
                         let profile = client.get_bot(session.bot_id).await?;
                         anyhow::ensure!(
-                            !profile.archived
-                                && profile.id == session.bot_id
-                                && profile.session_id == session.session_id,
+                            !profile.archived && profile.id == session.bot_id,
                             "Bot identity changed while opening; retry"
                         );
-                        Ok(BotReply::Opened { profile, list })
+                        Ok(BotReply::Opened {
+                            profile,
+                            list,
+                            session,
+                        })
                     }
                     BotOperation::Save(create, base) => {
                         let profile = if let Some((id, revision)) = base {
@@ -71,6 +74,107 @@ impl App {
                             "Server returned another Bot identity"
                         );
                         Ok(BotReply::Saved(profile))
+                    }
+                    BotOperation::Conversations(id) => {
+                        let mut groups = BOT_SURFACES
+                            .iter()
+                            .map(|surface| BotConversationGroup {
+                                surface,
+                                rows: Vec::new(),
+                            })
+                            .collect::<Vec<_>>();
+                        // The owner-filtered list is the same query the Web
+                        // sidebar uses; TUI reads one page and keeps the order
+                        // the server returns so both surfaces agree.
+                        let page = backend
+                            .list_sessions(agena_api::queries::ListSessionsParams {
+                                limit: Some(200),
+                                owner_bot_id: Some(id),
+                                exclude_subagents: true,
+                                ..Default::default()
+                            })
+                            .await?;
+                        for session in page.items {
+                            let Some(surface) = session.owner_surface.as_deref().map(str::to_owned)
+                            else {
+                                continue;
+                            };
+                            let Some(group) = groups.iter_mut().find(|g| g.surface == surface)
+                            else {
+                                continue;
+                            };
+                            group.rows.push(BotConversationRow {
+                                session_id: session.id,
+                                title: session.title,
+                                favorite: session.favorite,
+                                message_count: session.message_count,
+                                last_message_at_ms: session
+                                    .last_message_at
+                                    .map(|t| t.timestamp_millis()),
+                                running: matches!(
+                                    session.state,
+                                    agena_api::resource::SessionState::Running { .. }
+                                ),
+                            });
+                        }
+                        for group in &mut groups {
+                            // Newest first inside a group, matching the sidebar.
+                            group.rows.sort_by(|a, b| {
+                                b.last_message_at_ms
+                                    .cmp(&a.last_message_at_ms)
+                                    .then_with(|| b.session_id.cmp(&a.session_id))
+                            });
+                        }
+                        Ok(BotReply::Conversations { bot: id, groups })
+                    }
+                    BotOperation::NewConversation(id) => {
+                        let session = client.create_bot_conversation(id, None).await?;
+                        anyhow::ensure!(
+                            session.bot_id == id && session.session_id > 0,
+                            "Server returned an invalid conversation"
+                        );
+                        // Open the new conversation directly; it is empty and
+                        // already owned by this Bot.
+                        Ok(BotReply::Opened {
+                            profile: client.get_bot(id).await?,
+                            list: client.list_bots(true).await?,
+                            session,
+                        })
+                    }
+                    BotOperation::DeleteConversation { bot, session_id } => {
+                        // Match the Web path: a conversation with live work is
+                        // fenced and stopped before the row is removed, so the
+                        // transcript never disappears mid-stream. The plain
+                        // delete already settles the queue inside its command;
+                        // the explicit stop additionally ends the live attempt.
+                        // Best effort: an already-finished run answers with a
+                        // terminal outcome, and the delete below settles the
+                        // rest of the queue inside its own command.
+                        let _ = client
+                            .command(agena_api::commands::Command::CancelRun(
+                                agena_api::commands::CancelRunParams {
+                                    session_id,
+                                    execution_id: None,
+                                },
+                            ))
+                            .await;
+                        let result = client
+                            .command(agena_api::commands::Command::DeleteSession(
+                                agena_api::commands::DeleteSessionParams {
+                                    session_id,
+                                    expected_version: None,
+                                },
+                            ))
+                            .await?;
+                        anyhow::ensure!(
+                            matches!(
+                                result,
+                                agena_api::commands::CommandResult::SessionDeleted { id }
+                                    if id == session_id
+                            ),
+                            "Server did not confirm the deletion"
+                        );
+                        Ok(BotReply::DeletedConversation { bot })
                     }
                     BotOperation::Archive(id, body) => {
                         let profile = client.archive_bot(id, &body).await?;

@@ -90,3 +90,20 @@ pub async fn ensure_named_bot_session(
         .map(Json)
         .map_err(Into::into)
 }
+/// Start a new conversation for this Bot.
+///
+/// Distinct from `/session`, which reopens the latest one: this always creates
+/// an empty conversation, so a Bot can hold several without deleting the old.
+pub async fn create_bot_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    body: Option<Json<BotConversationCreate>>,
+) -> Result<Json<BotSession>, ServerError> {
+    let title = body.and_then(|Json(request)| request.title);
+    state
+        .application()
+        .create_bot_conversation(bot_id(&id)?, title)
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}

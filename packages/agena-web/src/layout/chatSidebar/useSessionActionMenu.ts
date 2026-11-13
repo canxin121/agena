@@ -22,6 +22,12 @@ export type SessionActionItem = {
   description?: string
   icon?: Component
   disabled?: boolean
+  /** A destructive action asks for confirmation inside the menu. */
+  variant?: 'default' | 'destructive'
+  confirmTitle?: string
+  confirmDescription?: string
+  confirmText?: string
+  cancelText?: string
 }
 
 type TFunction = (key: string, params?: Record<string, unknown>) => string

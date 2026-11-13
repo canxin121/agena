@@ -23,7 +23,39 @@ pub(crate) struct BotState {
     scope_request: u64,
     scope_assistant_pending: bool,
     archive_request: Option<(Uuid, BotArchive)>,
+    /// The selected Bot's conversations, grouped by entrance shape.
+    ///
+    /// A Bot owns many conversations and no longer names a single one, so the
+    /// list view is the only place that can say which conversation Enter opens.
+    conversations: Vec<BotConversationGroup>,
+    conversation_index: usize,
+    conversations_loading: bool,
+    conversations_error: Option<String>,
+    /// True when the cursor is on the conversation list rather than the Bot
+    /// list. Tab moves between them.
+    focus_conversations: bool,
+    /// The conversation awaiting delete confirmation.
+    delete_conversation: Option<BotConversationRow>,
 }
+
+/// One entrance shape's conversations, in sidebar order.
+#[derive(Default, Clone)]
+pub(crate) struct BotConversationGroup {
+    pub(crate) surface: &'static str,
+    pub(crate) rows: Vec<BotConversationRow>,
+}
+
+#[derive(Clone)]
+pub(crate) struct BotConversationRow {
+    pub(crate) session_id: i64,
+    pub(crate) title: String,
+    pub(crate) favorite: bool,
+    pub(crate) message_count: u64,
+    pub(crate) last_message_at_ms: Option<i64>,
+    pub(crate) running: bool,
+}
+
+const BOT_SURFACES: [&str; 4] = ["local", "direct", "group", "broadcast"];
 #[derive(Default, PartialEq)]
 enum BotView {
     #[default]
@@ -32,6 +64,8 @@ enum BotView {
     Form,
     Archive,
     Reload,
+    /// Confirm deleting one conversation of the highlighted Bot.
+    DeleteConversation,
 }
 struct BotForm {
     base: Option<BotProfile>,
@@ -74,10 +108,23 @@ impl BotForm {
 }
 pub(crate) enum BotReply {
     List(BotList),
-    Opened { profile: BotProfile, list: BotList },
+    Opened {
+        profile: BotProfile,
+        list: BotList,
+        session: agena_api::bot::BotSession,
+    },
     Saved(BotProfile),
     Archived(BotProfile),
     Edit(BotProfile),
+    /// One Bot's conversations, already grouped by entrance shape.
+    Conversations {
+        bot: Uuid,
+        groups: Vec<BotConversationGroup>,
+    },
+    /// A conversation was deleted; the Bot's list must be reloaded.
+    DeletedConversation {
+        bot: Uuid,
+    },
 }
 enum BotOperation {
     List,
@@ -85,8 +132,48 @@ enum BotOperation {
     Save(BotCreate, Option<(Uuid, i64)>),
     Archive(Uuid, BotArchive),
     Edit(Uuid),
+    Conversations(Uuid),
+    NewConversation(Uuid),
+    DeleteConversation { bot: Uuid, session_id: i64 },
 }
 impl BotState {
+    /// Every conversation row across all groups, in display order.
+    pub(crate) fn conversation_rows(&self) -> Vec<&BotConversationRow> {
+        self.conversations
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .collect()
+    }
+
+    /// The row the conversation cursor points at.
+    pub(crate) fn highlighted_conversation(&self) -> Option<&BotConversationRow> {
+        self.conversation_rows()
+            .get(self.conversation_index)
+            .copied()
+    }
+
+    /// Flat list index where the first conversation row is drawn.
+    ///
+    /// The Bot rows come first, then one heading per non-empty surface; a
+    /// conversation row's flat position is this offset plus its own index.
+    pub(crate) fn flat_conversation_offset(&self) -> usize {
+        self.profiles.iter().filter(|p| !p.archived).count()
+            + if self.conversations.is_empty() { 0 } else { 1 }
+            + self.conversations.len()
+    }
+
+    /// Drop the cached conversation list when the Bot under the cursor changes.
+    ///
+    /// The rows belong to one Bot, so they must never be shown under another;
+    /// Tab fetches them again for whichever Bot is then highlighted.
+    pub(crate) fn forget_conversations(&mut self) {
+        self.conversations.clear();
+        self.conversation_index = 0;
+        self.focus_conversations = false;
+        self.conversations_loading = false;
+        self.conversations_error = None;
+    }
+
     pub(crate) fn cancel_scope(&mut self) {
         self.scope_request = self.scope_request.wrapping_add(1);
         self.scope_assistant_pending = false;
@@ -115,21 +202,25 @@ impl BotState {
     }
 }
 impl App {
-    pub(crate) fn select_known_bot_for_session(&mut self, session_id: i64) {
-        if let Some(profile) = self
-            .bot
-            .profiles
-            .iter()
-            .find(|p| !p.archived && p.session_id == session_id)
+    pub(crate) fn select_known_bot_for_session(&mut self, _session_id: i64) {
+        // The Bot id arrives on the session itself (`owner_bot_id`), so the
+        // registry list cannot disagree with the conversation being shown.
+        if let Some(bot) = self.transcript.owner_bot_id
+            && self
+                .bot
+                .profiles
+                .iter()
+                .any(|profile| !profile.archived && profile.id == bot)
         {
-            self.bot.selected = Some(profile.id);
+            self.bot.selected = Some(bot);
         }
     }
     pub(crate) fn current_bot_profile(&self) -> Option<&BotProfile> {
+        let bot = self.transcript.owner_bot_id?;
         self.bot
             .profiles
             .iter()
-            .find(|p| !p.archived && Some(p.session_id) == self.transcript.session_id)
+            .find(|p| !p.archived && p.id == bot)
     }
     pub(crate) fn refresh_bot_registry(&mut self, assistant: bool) {
         if !assistant && self.bot.scope_assistant_pending {
@@ -172,7 +263,7 @@ impl App {
                                 .bot
                                 .profiles
                                 .iter()
-                                .find(|p| !p.archived && p.session_id == source)
+                                .find(|p| !p.archived && Some(p.id) == app.transcript.owner_bot_id)
                                 .map(|p| p.id)
                             {
                                 app.open_bot_persona_id(id);
@@ -180,7 +271,7 @@ impl App {
                                 .bot
                                 .profiles
                                 .iter()
-                                .any(|p| p.archived && p.session_id == source)
+                                .any(|p| p.archived && Some(p.id) == app.transcript.owner_bot_id)
                             {
                                 app.open_bot_picker();
                             } else {
@@ -280,14 +371,47 @@ impl App {
                     .position(|p| Some(p.id) == self.bot.selected)
                     .unwrap_or(0);
                 self.bot.view = BotView::List;
+                // Conversations load on Tab rather than with the list: the Bot
+                // list must stay immediately interactive, and most opens use
+                // the default conversation anyway.
+                self.bot.conversations.clear();
+                self.bot.conversation_index = 0;
+                self.bot.focus_conversations = false;
             }
-            Ok(BotReply::Opened { profile, list }) => {
+            Ok(BotReply::DeletedConversation { bot }) => {
+                self.bot.delete_conversation = None;
+                self.bot.view = BotView::List;
+                if self.bot.highlighted().map(|p| p.id) == Some(bot) {
+                    self.bot.conversations_loading = true;
+                    self.request_bot(BotOperation::Conversations(bot));
+                }
+            }
+            Ok(BotReply::Conversations { bot, groups }) => {
+                // Ignore a response for a Bot the cursor has left: the sidebar
+                // must never show one identity's conversations under another.
+                if self.bot.highlighted().map(|p| p.id) == Some(bot) {
+                    self.bot.conversations = groups;
+                    self.bot.conversations_loading = false;
+                    self.bot.conversations_error = None;
+                    self.bot.conversation_index = 0;
+                    self.bot.focus_conversations = !self.bot.conversation_rows().is_empty();
+                }
+                self.bot.view = BotView::List;
+            }
+            Ok(BotReply::Opened {
+                profile,
+                list,
+                session,
+            }) => {
                 self.bot.profiles = list.items;
                 self.remember_bot_profile(profile.clone());
                 self.bot.selected = Some(profile.id);
                 self.current_route = Route::Main;
                 self.route_stack.clear();
-                self.open_session(profile.session_id, profile.name);
+                self.open_session(session.session_id, profile.name);
+                // Opening from the Bot picker is itself proof of ownership; a
+                // later state shell may confirm it but cannot remove it.
+                self.transcript.owner_bot_id = Some(profile.id);
                 self.focus = Focus::Composer;
             }
             Ok(BotReply::Saved(profile)) => {
@@ -383,6 +507,11 @@ impl App {
                 }
                 return true;
             }
+            if self.bot.view == BotView::DeleteConversation {
+                self.bot.delete_conversation = None;
+                self.bot.view = BotView::List;
+                return false;
+            }
             if self.bot.view == BotView::Reload {
                 self.bot.view = BotView::Form;
             } else {
@@ -410,21 +539,82 @@ impl App {
             },
             BotView::List => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
-                    self.bot.index = self.bot.index.saturating_sub(1)
+                    if self.bot.focus_conversations {
+                        self.bot.conversation_index = self.bot.conversation_index.saturating_sub(1);
+                    } else {
+                        self.bot.index = self.bot.index.saturating_sub(1);
+                        self.bot.forget_conversations();
+                    }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    self.bot.index = (self.bot.index + 1).min(
-                        self.bot
-                            .profiles
-                            .iter()
-                            .filter(|p| !p.archived)
-                            .count()
-                            .saturating_sub(1),
-                    )
+                    if self.bot.focus_conversations {
+                        self.bot.conversation_index = (self.bot.conversation_index + 1)
+                            .min(self.bot.conversation_rows().len().saturating_sub(1));
+                    } else {
+                        self.bot.index = (self.bot.index + 1).min(
+                            self.bot
+                                .profiles
+                                .iter()
+                                .filter(|p| !p.archived)
+                                .count()
+                                .saturating_sub(1),
+                        );
+                        self.bot.forget_conversations();
+                    }
                 }
-                KeyCode::Char('n') => self.new_bot_form(),
+                // Conversations are a second list under the highlighted Bot.
+                // Tab moves into it so a Bot with several rooms can be opened
+                // on the one the user wants rather than the server default.
+                KeyCode::Tab => {
+                    if self.bot.focus_conversations {
+                        self.bot.focus_conversations = false;
+                    } else if !self.bot.conversations.is_empty() {
+                        self.bot.focus_conversations = true;
+                        self.bot.conversation_index = 0;
+                    } else if let Some(id) = self.bot.highlighted().map(|p| p.id) {
+                        // First Tab on a Bot fetches its rooms; the reply moves
+                        // the cursor down into them.
+                        self.bot.conversations_loading = true;
+                        self.bot.conversations_error = None;
+                        self.request_bot(BotOperation::Conversations(id));
+                    }
+                }
+                KeyCode::Char('n') => {
+                    if self.bot.focus_conversations {
+                        // A new conversation is the Bot's, not a new Bot.
+                        if let Some(id) = self.bot.highlighted().map(|p| p.id) {
+                            self.request_bot(BotOperation::NewConversation(id));
+                        }
+                    } else {
+                        self.new_bot_form();
+                    }
+                }
+                KeyCode::Char('d') if self.bot.focus_conversations => {
+                    if let Some(row) = self.bot.highlighted_conversation().cloned() {
+                        self.bot.delete_conversation = Some(row);
+                        self.bot.view = BotView::DeleteConversation;
+                    }
+                }
                 KeyCode::Char('r') => self.request_bot(BotOperation::List),
                 KeyCode::Enter => {
+                    let conversation = self
+                        .bot
+                        .highlighted_conversation()
+                        .map(|row| (row.session_id, row.title.clone()));
+                    if self.bot.focus_conversations
+                        && let Some((session_id, title)) = conversation
+                    {
+                        self.bot.view = BotView::Opening;
+                        self.open_session(session_id, title);
+                        // Ownership is already known: this row is one of the
+                        // highlighted Bot's conversations.
+                        if let Some(id) = self.bot.highlighted().map(|p| p.id) {
+                            self.bot.selected = Some(id);
+                            self.transcript.owner_bot_id = Some(id);
+                        }
+                        self.focus = Focus::Composer;
+                        return false;
+                    }
                     if let Some(id) = self.bot.highlighted().map(|p| p.id) {
                         self.bot.selected = Some(id);
                         self.bot.view = BotView::Opening;
@@ -484,6 +674,24 @@ impl App {
                     self.request_bot(BotOperation::Archive(id, body));
                 }
             }
+            BotView::DeleteConversation => match key.code {
+                KeyCode::Enter => {
+                    if let (Some(bot), Some(row)) = (
+                        self.bot.highlighted().map(|p| p.id),
+                        self.bot.delete_conversation.clone(),
+                    ) {
+                        self.request_bot(BotOperation::DeleteConversation {
+                            bot,
+                            session_id: row.session_id,
+                        });
+                    }
+                }
+                KeyCode::Esc => {
+                    self.bot.delete_conversation = None;
+                    self.bot.view = BotView::List;
+                }
+                _ => {}
+            },
             BotView::Reload => {
                 if key.code == KeyCode::Enter
                     && let Some(id) = self

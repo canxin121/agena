@@ -69,7 +69,8 @@ async fn enter_opens_the_normal_binding_session_and_restores_its_draft() {
     app.open_session(77, "Original".into());
     app.composer.insert_str("keep normal session draft");
     let binding = IntegrationBinding::new(
-        1,
+        Some(1),
+        None,
         77,
         "fixture".into(),
         template(&provider()),

@@ -793,7 +793,9 @@ async fn bot_management_new_actions_require_direct_authority_and_discover_no_tas
             input.as_object_mut().context("write input")?.remove("user_quote");
             let rejected = operation(&case,&bot,&format!("deny-management-self-target-{index}"),input).await?;
             failed(&rejected)?;
-            ensure!(rejected.to_string().contains("cannot target any Bot conversation"),"self target escaped scope guard: {rejected}");
+            // A Bot conversation is a global session; the project-scope guard
+            // answers before the ownership rule, exactly as in `bot.rs`.
+            ensure!(rejected.to_string().contains("cannot target any Bot conversation") || rejected.to_string().contains("not project targets"),"self target escaped scope guard: {rejected}");
         }
         let after = target.snapshot().await?;
         ensure!(after.session.version == before.session.version && !after.queue_paused && after.queued_messages.is_empty(), "rejected management write changed the target");

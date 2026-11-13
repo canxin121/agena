@@ -192,6 +192,12 @@ pub struct ListSessionsParams {
     pub limit: Option<u64>,
     #[serde(default)]
     pub workspace_id: Option<i64>,
+    /// Restrict to conversations owned by this Bot (UUID).
+    #[serde(default)]
+    pub owner_bot_id: Option<uuid::Uuid>,
+    /// Restrict to one entrance shape: `local`, `direct`, `group`, `broadcast`.
+    #[serde(default)]
+    pub owner_surface: Option<agena_domain::SessionSurface>,
     #[serde(default)]
     pub parent_id: Option<i64>,
     #[serde(default)]

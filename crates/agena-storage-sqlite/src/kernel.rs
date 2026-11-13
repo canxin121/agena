@@ -122,6 +122,7 @@ pub struct SqliteKernel {
     pub permissions: Arc<dyn agena_storage::PermissionRuleRepository>,
     pub model_catalog: Arc<dyn agena_storage::ModelCatalogRepository>,
     pub instance_state: Arc<dyn agena_storage::instance_state::InstanceStateRepository>,
+    pub bots: Arc<dyn agena_storage::BotRepository>,
     pub instance_id: String,
     pub diagnostics: KernelDiagnostics,
     pub maintenance: port::KernelMaintenance,
@@ -147,6 +148,7 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
             .await
             .map_err(storage)?,
     );
+    let bots = Arc::new(crate::SqliteBotRepository::new(database.writer.clone()));
     let diagnostics = KernelDiagnostics::default();
     let repository_database = database.writer.clone();
     let (ports, maintenance) = compose_database(database, diagnostics.clone()).await?;
@@ -157,6 +159,7 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
         permissions,
         model_catalog,
         instance_state,
+        bots,
         instance_id,
         diagnostics,
         maintenance,

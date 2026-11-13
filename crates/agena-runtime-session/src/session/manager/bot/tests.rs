@@ -131,7 +131,8 @@ async fn global_bot_root_is_an_operator_but_not_a_project_target() {
         .await
         .unwrap();
     assert_eq!(metadata.workspace_id, None);
-    manager.require_bot_root(bot).await.unwrap();
+    let owner = manager.session_owner(bot).await.unwrap().unwrap();
+    manager.require_bot_root(bot, &owner).await.unwrap();
     manager.require_operator_bot(bot).await.unwrap();
     assert!(manager.require_project_session(bot).await.is_err());
     manager
@@ -165,9 +166,9 @@ async fn operator_and_target_guards_reject_subagents_side_conversations_and_chan
         identity: agena_domain::ChannelIdentity {
             tenant: "test".into(),
             account: "test".into(),
-            kind: agena_domain::ChannelKind::Direct,
         },
         resource: "private".into(),
+        kind: agena_domain::ConversationKind::Direct,
         thread: None,
         session_mode: agena_domain::ChannelSessionMode::PerConversation,
         grant: Default::default(),

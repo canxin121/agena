@@ -105,6 +105,12 @@ pub trait SessionExecutionCommandService: Send + Sync {
         &self,
         id: uuid::Uuid,
     ) -> Result<agena_assistant::bot::BotSession, SessionExecutionCommandError>;
+    /// Start a new conversation for this Bot instead of reusing the latest one.
+    async fn create_bot_conversation(
+        &self,
+        id: uuid::Uuid,
+        title: Option<String>,
+    ) -> Result<agena_assistant::bot::BotSession, SessionExecutionCommandError>;
     async fn ensure_default_bot_profile(
         &self,
     ) -> Result<agena_assistant::bot::BotProfile, SessionExecutionCommandError>;

@@ -23,12 +23,19 @@ use crate::{Application, ApplicationError};
 
 impl Application {
     pub async fn ensure_bot_session(&self) -> Result<agena_api::bot::BotSession, ApplicationError> {
-        self.session_execution_services()?
+        let profile = self
+            .session_execution_services()?
             .commands
             .ensure_default_bot_profile()
             .await
-            .map(Into::into)
-            .map_err(|e| ApplicationError::from_failure(e.failure))
+            .map_err(|e| ApplicationError::from_failure(e.failure))?;
+        let session = self
+            .session_execution_services()?
+            .commands
+            .ensure_named_bot_session(profile.id)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))?;
+        Ok(session)
     }
     pub async fn list_bots(
         &self,
@@ -79,6 +86,18 @@ impl Application {
         self.session_execution_services()?
             .commands
             .archive_bot(id, archive)
+            .await
+            .map_err(|e| ApplicationError::from_failure(e.failure))
+    }
+    /// Start a new conversation for a Bot instead of reopening its latest one.
+    pub async fn create_bot_conversation(
+        &self,
+        id: uuid::Uuid,
+        title: Option<String>,
+    ) -> Result<agena_assistant::bot::BotSession, ApplicationError> {
+        self.session_execution_services()?
+            .commands
+            .create_bot_conversation(id, title)
             .await
             .map_err(|e| ApplicationError::from_failure(e.failure))
     }

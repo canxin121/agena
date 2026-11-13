@@ -59,7 +59,7 @@ async fn bot_profiles_ui_web_and_tui_select_edit_and_continue_two_named_bots() -
             let pa=profile(&case,a.id).await?;let pb=profile(&case,b.id).await?;
             ensure!(pa.name=="Aurora Web edited" && pa.persona.instructions=="Web edited A personality persisted");
             ensure!(pb.name=="Borealis TUI edited" && pb.persona.instructions=="TUI edited B personality persisted");
-            ensure!(pa.session_id==a.session_id && pb.session_id==b.session_id);
+            // Identity and persona are the Bot's; its conversations are separate rows.
             Ok(())
         }).await
 }

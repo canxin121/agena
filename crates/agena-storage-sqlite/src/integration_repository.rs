@@ -12,8 +12,10 @@ mod channel_access;
 pub(crate) use channel_access::DECLARATIONS as CHANNEL_DECLARATIONS;
 
 pub(crate) const DECLARATIONS: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS agena_integration_bindings (id TEXT PRIMARY KEY, workspace_id INTEGER NOT NULL CHECK(workspace_id>0), source_session_id INTEGER NOT NULL CHECK(source_session_id>0), request_key TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), state TEXT NOT NULL, next_poll_ms INTEGER NOT NULL, binding_json TEXT NOT NULL CHECK(json_valid(binding_json)), UNIQUE(source_session_id,request_key))",
+    "CREATE TABLE IF NOT EXISTS agena_integration_bindings (id TEXT PRIMARY KEY, workspace_id INTEGER NULL CHECK(workspace_id IS NULL OR workspace_id>0), owner_bot_id TEXT NULL CHECK(owner_bot_id IS NULL OR length(owner_bot_id)=36), source_session_id INTEGER NOT NULL CHECK(source_session_id>0), request_key TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), state TEXT NOT NULL, next_poll_ms INTEGER NOT NULL, binding_json TEXT NOT NULL CHECK(json_valid(binding_json)), UNIQUE(source_session_id,request_key), CHECK((workspace_id IS NULL) <> (owner_bot_id IS NULL)))",
     "CREATE INDEX IF NOT EXISTS idx_agena_integration_bindings_workspace ON agena_integration_bindings(workspace_id,state,next_poll_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_integration_bindings_owner ON agena_integration_bindings(owner_bot_id,state,next_poll_ms) WHERE owner_bot_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_agena_integration_due ON agena_integration_bindings(next_poll_ms,id) WHERE state='enabled'",
     "CREATE TABLE IF NOT EXISTS agena_integration_inbox (binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), event_id TEXT NOT NULL, state TEXT NOT NULL, received_at_ms INTEGER NOT NULL, event_json TEXT NOT NULL CHECK(json_valid(event_json) AND length(CAST(event_json AS BLOB))<=65536), PRIMARY KEY(binding_id,event_id)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS idx_agena_integration_inbox_pending ON agena_integration_inbox(binding_id,state,received_at_ms)",
     "CREATE TABLE IF NOT EXISTS agena_integration_outbox (id TEXT PRIMARY KEY, binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), state TEXT NOT NULL, attempts INTEGER NOT NULL, next_attempt_ms INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, delivery_json TEXT NOT NULL CHECK(json_valid(delivery_json) AND length(CAST(delivery_json AS BLOB))<=65536))",
@@ -115,6 +117,9 @@ impl IntegrationRepository for SqliteIntegrationRepository {
     async fn channel_session(&self, id: Uuid, key: &str) -> Result<Option<ChannelSessionRecord>> {
         self.channel_session_read(id, key).await
     }
+    async fn forget_channel_session(&self, id: Uuid, key: &str) -> Result<()> {
+        self.channel_session_forget(id, key).await
+    }
 
     async fn create_binding(&self, b: IntegrationBinding) -> Result<IntegrationBinding> {
         let _permit = crate::acquire_write_permit(&self.database)
@@ -127,8 +132,11 @@ impl IntegrationRepository for SqliteIntegrationRepository {
         }
         let count = tx
             .query_one(statement(
-                "SELECT COUNT(*) AS n FROM agena_integration_bindings WHERE workspace_id=?",
-                vec![b.workspace_id.into()],
+                "SELECT COUNT(*) AS n FROM agena_integration_bindings WHERE workspace_id IS ? AND owner_bot_id IS ?",
+                vec![
+                    b.workspace_id.into(),
+                    b.owner_bot_id.map(|id| id.to_string()).into(),
+                ],
             ))
             .await
             .map_err(error)?
@@ -138,20 +146,30 @@ impl IntegrationRepository for SqliteIntegrationRepository {
         if count >= 64 {
             return Err(Error::Conflict("workspace integration limit reached (64)"));
         }
-        tx.execute(statement("INSERT INTO agena_integration_bindings(id,workspace_id,source_session_id,request_key,revision,state,next_poll_ms,binding_json) VALUES(?,?,?,?,?,?,?,?)",vec![b.id.to_string().into(),b.workspace_id.into(),b.source_session_id.into(),b.request_key.clone().into(),b.revision.into(),b.state.as_str().into(),b.next_poll_ms.into(),json(&b)?.into()])).await.map_err(error)?;
+        tx.execute(statement("INSERT INTO agena_integration_bindings(id,workspace_id,owner_bot_id,source_session_id,request_key,revision,state,next_poll_ms,binding_json) VALUES(?,?,?,?,?,?,?,?,?)",vec![b.id.to_string().into(),b.workspace_id.into(),b.owner_bot_id.map(|id| id.to_string()).into(),b.source_session_id.into(),b.request_key.clone().into(),b.revision.into(),b.state.as_str().into(),b.next_poll_ms.into(),json(&b)?.into()])).await.map_err(error)?;
         tx.commit().await.map_err(error)?;
         Ok(b)
     }
     async fn binding(&self, id: Uuid) -> Result<IntegrationBinding> {
         read_binding(self.database.as_ref(), id).await
     }
-    async fn bindings(&self, workspace: Option<i64>) -> Result<Vec<IntegrationBinding>> {
-        let (sql, args) = match workspace {
-            Some(w) => (
+    async fn bindings(&self, scope: Option<IntegrationScope>) -> Result<Vec<IntegrationBinding>> {
+        let (sql, args) = match scope {
+            Some(IntegrationScope {
+                workspace_id: Some(workspace),
+                owner_bot_id: None,
+            }) => (
                 "SELECT binding_json FROM agena_integration_bindings WHERE workspace_id=? ORDER BY next_poll_ms,id LIMIT 64",
-                vec![w.into()],
+                vec![workspace.into()],
             ),
-            None => (
+            Some(IntegrationScope {
+                workspace_id: None,
+                owner_bot_id: Some(bot),
+            }) => (
+                "SELECT binding_json FROM agena_integration_bindings WHERE owner_bot_id=? ORDER BY next_poll_ms,id LIMIT 64",
+                vec![bot.to_string().into()],
+            ),
+            _ => (
                 "SELECT binding_json FROM agena_integration_bindings WHERE state='enabled' OR EXISTS(SELECT 1 FROM agena_integration_inbox i WHERE i.binding_id=agena_integration_bindings.id AND i.state IN ('processing','executing') AND (json_extract(i.event_json,'$.execution_id') IS NOT NULL OR EXISTS(SELECT 1 FROM agena_deliveries d WHERE d.business_key='integration:'||i.binding_id||':'||i.event_id))) ORDER BY next_poll_ms,id LIMIT 256",
                 vec![],
             ),

@@ -40,7 +40,8 @@ async fn enabled(repo: &SqliteIntegrationRepository) -> IntegrationBinding {
     let mut b = repo
         .create_binding(
             IntegrationBinding::new(
-                1,
+                Some(1),
+                None,
                 1,
                 "create".into(),
                 spec(),
@@ -214,13 +215,31 @@ async fn sending_recovery_never_silently_requeues_unknown_remote_effects() {
 async fn same_creation_key_cannot_rebind_identity_or_authority() {
     let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
     let repo = SqliteIntegrationRepository::new(db.database.clone());
-    let b = IntegrationBinding::new(1, 1, "creation".into(), spec(), "fp".into(), 1000).unwrap();
+    let b = IntegrationBinding::new(
+        Some(1),
+        None,
+        1,
+        "creation".into(),
+        spec(),
+        "fp".into(),
+        1000,
+    )
+    .unwrap();
     let saved = repo.create_binding(b.clone()).await.unwrap();
     assert_eq!(repo.create_binding(b.clone()).await.unwrap().id, saved.id);
     let mut changed = b;
     changed.spec.resource = "other/repo".into();
     assert!(repo.create_binding(changed).await.is_err());
-    assert_eq!(repo.bindings(Some(2)).await.unwrap().len(), 0);
+    assert_eq!(
+        repo.bindings(Some(agena_assistant::IntegrationScope {
+            workspace_id: Some(2),
+            owner_bot_id: None,
+        }))
+        .await
+        .unwrap()
+        .len(),
+        0
+    );
     assert_eq!(
         repo.binding(saved.id).await.unwrap().state,
         BindingState::Disabled
@@ -350,7 +369,8 @@ async fn native_receipt_recovers_lost_inbox_ack_and_stays_reconcilable_after_pau
         .id;
     let repo = SqliteIntegrationRepository::new(db.database.clone());
     let mut binding = IntegrationBinding::new(
-        workspace,
+        Some(workspace),
+        None,
         session.get(),
         "native-receipt".into(),
         spec(),

@@ -1,5 +1,32 @@
 export default {
   bot: {
+    conversations: {
+      title: 'Conversations de {name}',
+      toggle: 'Afficher ou masquer {group}',
+      actions: 'Actions pour {name}',
+      running: 'En cours',
+      awaiting: 'En attente de vous',
+      messages: '{count} messages',
+      empty: 'Pas encore de message',
+      create: 'Nouvelle conversation',
+      deleteBusy: 'Arrêter et supprimer la conversation',
+      deleteBusyHint: 'Le travail en cours est arrêté, puis la conversation est supprimée. Les autres et le Bot restent.',
+      deleteHint: 'Supprime cette conversation uniquement ; les autres et le Bot restent.',
+      delete: 'Supprimer la conversation',
+      renamePrompt: 'Titre de la conversation',
+      surfaces: {
+        local: 'Cet appareil',
+        direct: 'Messages privés',
+        group: 'Groupes',
+        broadcast: 'Canaux',
+      },
+      surfaceHints: {
+        local: 'Conversations ouvertes dans Web ou TUI.',
+        direct: 'Discussions individuelles où le Bot a été ajouté.',
+        group: 'Discussions de groupe et salons.',
+        broadcast: 'Canaux de diffusion où le Bot peut ne pas pouvoir répondre.',
+      },
+    },
     profiles: {
       created: '{name} créé',
       search: 'Rechercher des Bots',
@@ -74,8 +101,10 @@ export default {
     kind: 'Type de conversation',
     kind_direct: 'Message direct',
     kind_group: 'Discussion de groupe',
-    kind_public_channel: 'Canal public',
-    kind_private_channel: 'Canal privé',
+    kind_broadcast: 'Canal de diffusion',
+    kinds: 'Types de salle autorisés',
+    kinds_hint: 'Tout type signalé par l’adaptateur',
+    kind_any: 'Tout type signalé par l’adaptateur',
     context: 'Isolation des conversations',
     mode_per_conversation: 'Une session par conversation',
     mode_per_actor: 'Une session par locuteur dans chaque conversation',
@@ -123,8 +152,7 @@ export default {
     noSession: 'Pas encore de session',
     kind_direct: 'Privé',
     kind_group: 'Groupe',
-    kind_public_channel: 'Canal public',
-    kind_private_channel: 'Canal privé',
+    kind_broadcast: 'Diffusion',
   },
   integrations: {
     retryHint:
@@ -1822,6 +1850,13 @@ export default {
           confirmTitle: 'Supprimer la session ?',
           confirmDescription: 'Cette action est irréversible.',
           confirmText: 'Supprimer',
+        },
+        deleteBusy: {
+          label: 'Arrêter et supprimer la session',
+          description: 'Le travail en cours sera arrêté',
+          confirmTitle: 'Arrêter cette session et la supprimer ?',
+          confirmDescription: 'Le travail en cours sera arrêté, la file sera abandonnée et la conversation supprimée. Action irréversible.',
+          confirmText: 'Arrêter et supprimer',
         },
       },
       contextMenu: {

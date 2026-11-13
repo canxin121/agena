@@ -64,6 +64,8 @@ pub async fn dispatch_query(
             cursor,
             limit,
             workspace_id,
+            owner_bot_id,
+            owner_surface,
             parent_id,
             roots,
             exclude_subagents,
@@ -75,6 +77,8 @@ pub async fn dispatch_query(
             http_page_result(state.service().list_sessions(SessionListQuery {
                 pagination: search_pagination(cursor, limit, search),
                 workspace_id,
+                owner_bot_id,
+                owner_surface,
                 parent_id,
                 roots,
                 exclude_subagents,

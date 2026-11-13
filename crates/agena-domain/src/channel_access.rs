@@ -7,42 +7,12 @@ use std::{
     path::PathBuf,
 };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelKind {
-    #[default]
-    Direct,
-    Group,
-    PublicChannel,
-    PrivateChannel,
-}
-
-impl From<ChannelKind> for crate::ConversationKind {
-    fn from(value: ChannelKind) -> Self {
-        match value {
-            ChannelKind::Direct => Self::Direct,
-            ChannelKind::Group => Self::Group,
-            ChannelKind::PublicChannel => Self::PublicChannel,
-            ChannelKind::PrivateChannel => Self::PrivateChannel,
-        }
-    }
-}
-
-impl From<crate::ConversationKind> for ChannelKind {
-    fn from(value: crate::ConversationKind) -> Self {
-        match value {
-            crate::ConversationKind::Direct => Self::Direct,
-            crate::ConversationKind::Group => Self::Group,
-            crate::ConversationKind::PublicChannel => Self::PublicChannel,
-            crate::ConversationKind::PrivateChannel => Self::PrivateChannel,
-        }
-    }
-}
-
 /// A chat platform account owned by one binding.
 ///
 /// The conversation kind is not part of the account: one account serves direct
-/// chats, groups and channels at once, and each message carries its own kind.
+/// chats, groups and broadcast channels at once, and each message carries its
+/// own kind. Keeping the kind out of the account identity is what lets one
+/// binding serve every room shape the adapter reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelAccount {
@@ -50,16 +20,12 @@ pub struct ChannelAccount {
     pub account: String,
 }
 
-/// The set of conversation kinds one account is authorized to serve.
-///
-/// A policy may narrow this (for example, "this account only serves groups"),
-/// but the kind of any individual message is decided per message.
+/// The chat transport identity: tenant plus account. No room shape here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelIdentity {
     pub tenant: String,
     pub account: String,
-    pub kind: ChannelKind,
 }
 
 impl ChannelIdentity {
@@ -74,6 +40,10 @@ impl ChannelIdentity {
 #[serde(deny_unknown_fields)]
 pub struct ChannelEnvelope {
     pub identity: ChannelIdentity,
+    /// The shape of the room this specific message arrived in. It lives on the
+    /// message, not on the account: one account serves direct chats, groups and
+    /// broadcast channels at once.
+    pub kind: crate::ConversationKind,
     /// The installed adapter verifies these facts with its platform. A user
     /// cannot obtain membership just by putting an ID/role in message text.
     pub actor_verified: bool,
@@ -275,6 +245,12 @@ impl ChannelGrant {
 #[serde(deny_unknown_fields)]
 pub struct ChannelAccessPolicy {
     pub identity: ChannelIdentity,
+    /// Room shapes this binding may serve. Empty means every shape the adapter
+    /// reports. The shape of any individual message is still decided per
+    /// message, and `Direct` keeps its stricter session rules wherever it
+    /// appears.
+    #[serde(default)]
+    pub kinds: BTreeSet<crate::ConversationKind>,
     #[serde(default)]
     pub session_mode: ChannelSessionMode,
     #[serde(default)]
@@ -317,6 +293,20 @@ pub fn valid_channel_id(value: &str) -> bool {
         && !matches!(value, "*" | "@service" | "@shared" | "@unattributed")
 }
 impl ChannelAccessPolicy {
+    /// True when this binding may serve the given room shape.
+    pub fn serves(&self, kind: crate::ConversationKind) -> bool {
+        self.kinds.is_empty() || self.kinds.contains(&kind)
+    }
+
+    /// True when this binding is limited to one-to-one conversations.
+    pub fn direct_only(&self) -> bool {
+        !self.kinds.is_empty()
+            && self
+                .kinds
+                .iter()
+                .all(|kind| *kind == crate::ConversationKind::Direct)
+    }
+
     pub fn validate(&self, now: i64) -> Result<(), String> {
         if !valid_channel_id(&self.identity.tenant) || !valid_channel_id(&self.identity.account) {
             return Err("channel tenant and account must be exact stable IDs".into());
@@ -342,7 +332,10 @@ impl ChannelAccessPolicy {
         if !owner {
             return Err("channel policy needs at least one unexpired local owner".into());
         }
-        if self.identity.kind == ChannelKind::Direct
+        // A direct-only binding keeps the strict one-partner rules. A binding
+        // that also serves groups may use per-thread and open-member options,
+        // which stay gated per message by `serves`/`admits_direct`.
+        if self.kinds.contains(&crate::ConversationKind::Direct)
             && (self.thread_mode != ChannelThreadMode::Exact || self.allow_unlisted_chat)
         {
             return Err(
@@ -434,14 +427,14 @@ pub struct SessionChannelScope {
     pub identity: ChannelAccount,
     pub resource: String,
     pub thread: Option<String>,
-    pub kind: ChannelKind,
+    pub kind: crate::ConversationKind,
     pub memory_workspace_root: PathBuf,
     pub private_paths: BTreeSet<PathBuf>,
 }
 
 impl SessionChannelScope {
     pub fn conversation_kind(&self) -> crate::ConversationKind {
-        self.kind.into()
+        self.kind
     }
 
     /// Resolve the directories this conversation may touch through the
@@ -464,6 +457,7 @@ pub struct ChannelAuthority {
     pub role: ChannelRole,
     pub identity: ChannelIdentity,
     pub resource: String,
+    pub kind: crate::ConversationKind,
     pub thread: Option<String>,
     pub session_mode: ChannelSessionMode,
     pub grant: ChannelGrant,
@@ -492,9 +486,9 @@ impl ChannelAuthority {
             identity: ChannelIdentity {
                 tenant: scope.identity.tenant.clone(),
                 account: scope.identity.account.clone(),
-                kind: scope.kind,
             },
             resource: scope.resource.clone(),
+            kind: scope.kind,
             thread: scope.thread.clone(),
             session_mode,
             grant,
@@ -512,7 +506,7 @@ impl ChannelAuthority {
             identity: self.identity.account(),
             resource: self.resource.clone(),
             thread: self.thread.clone(),
-            kind: self.identity.kind,
+            kind: self.kind,
             memory_workspace_root: self.memory_workspace_root.clone(),
             private_paths: self.private_paths.clone(),
         }
@@ -595,8 +589,8 @@ mod tests {
             identity: ChannelIdentity {
                 tenant: "tenant-a".into(),
                 account: "bot-a".into(),
-                kind: ChannelKind::Group,
             },
+            kinds: BTreeSet::from([crate::ConversationKind::Group]),
             session_mode: Default::default(),
             thread_mode: Default::default(),
             trigger: Default::default(),

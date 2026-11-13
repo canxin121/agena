@@ -3117,7 +3117,7 @@ impl TuiBackend {
         rx
     }
 
-    pub(super) async fn list_sessions(
+    pub(crate) async fn list_sessions(
         &self,
         params: ListSessionsParams,
     ) -> Result<PaginatedResponse<SessionResource>> {

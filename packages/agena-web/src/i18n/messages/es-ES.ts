@@ -1,5 +1,32 @@
 export default {
   bot: {
+    conversations: {
+      title: 'Conversaciones de {name}',
+      toggle: 'Mostrar u ocultar {group}',
+      actions: 'Acciones para {name}',
+      running: 'En ejecución',
+      awaiting: 'Te espera',
+      messages: '{count} mensajes',
+      empty: 'Aún sin mensajes',
+      create: 'Nueva conversación',
+      deleteBusy: 'Detener y eliminar conversación',
+      deleteBusyHint: 'Se detiene primero el trabajo en curso y luego se elimina la conversación. Las demás y el Bot se conservan.',
+      deleteHint: 'Elimina solo esta conversación; las demás y el Bot se conservan.',
+      delete: 'Eliminar conversación',
+      renamePrompt: 'Título de la conversación',
+      surfaces: {
+        local: 'Este equipo',
+        direct: 'Mensajes directos',
+        group: 'Grupos',
+        broadcast: 'Canales',
+      },
+      surfaceHints: {
+        local: 'Conversaciones que abres en Web o TUI.',
+        direct: 'Chats uno a uno a los que se añadió el Bot.',
+        group: 'Chats de grupo y salas.',
+        broadcast: 'Canales de difusión donde el Bot puede no poder responder.',
+      },
+    },
     profiles: {
       created: '{name} creado',
       search: 'Buscar Bots',
@@ -74,8 +101,10 @@ export default {
     kind: 'Tipo de conversación',
     kind_direct: 'Mensaje directo',
     kind_group: 'Chat de grupo',
-    kind_public_channel: 'Canal público',
-    kind_private_channel: 'Canal privado',
+    kind_broadcast: 'Canal de difusión',
+    kinds: 'Tipos de sala permitidos',
+    kinds_hint: 'Cualquier tipo que informe el adaptador',
+    kind_any: 'Cualquier tipo que informe el adaptador',
     context: 'Aislamiento de conversaciones',
     mode_per_conversation: 'Una sesión por conversación',
     mode_per_actor: 'Una sesión por hablante en cada conversación',
@@ -123,8 +152,7 @@ export default {
     noSession: 'Aún sin sesión',
     kind_direct: 'Directo',
     kind_group: 'Grupo',
-    kind_public_channel: 'Canal público',
-    kind_private_channel: 'Canal privado',
+    kind_broadcast: 'Difusión',
   },
   integrations: {
     retryHint:
@@ -2521,6 +2549,13 @@ export default {
           confirmTitle: '¿Eliminar la sesión?',
           confirmDescription: 'Esta acción no se puede deshacer.',
           confirmText: 'Eliminar',
+        },
+        deleteBusy: {
+          label: 'Detener y eliminar sesión',
+          description: 'Se detendrá primero el trabajo en curso',
+          confirmTitle: '¿Detener esta sesión y eliminarla?',
+          confirmDescription: 'Se detendrá el trabajo en curso, se descartará la cola y se eliminará la conversación. No se puede deshacer.',
+          confirmText: 'Detener y eliminar',
         },
       },
       contextMenu: {

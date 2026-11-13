@@ -113,9 +113,7 @@ defineExpose({ reload: load })
           {{ t('platforms.conversations', { count: entry.conversation_count }) }} ·
           {{ t('platforms.groups', { count: entry.conversation_counts.group }) }} ·
           {{ t('platforms.directs', { count: entry.conversation_counts.direct }) }} ·
-          {{ t('platforms.channels', {
-            count: entry.conversation_counts.public_channel + entry.conversation_counts.private_channel,
-          }) }}
+          {{ t('platforms.channels', { count: entry.conversation_counts.broadcast }) }}
         </span>
       </button>
       <div v-if="!collapsed[entry.platform]" class="mt-3 space-y-3">

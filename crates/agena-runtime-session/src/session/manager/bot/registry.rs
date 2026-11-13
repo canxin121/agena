@@ -1,52 +1,23 @@
-//! One atomic JSON registry and durable native creation receipts. The short
-//! instance gate is shared by independently constructed manager handles.
+//! Bot identities in their own table, and ownership projected onto sessions.
+//!
+//! A Bot has no single bound conversation. Its Web/TUI conversation and its
+//! chat conversations are ordinary sessions whose configuration carries
+//! `owner.bot`; the kernel projects that into indexed `owner_*` columns. This
+//! module owns the Bot identity table, the ownership-based admission checks and
+//! the lookup that every conversation shares.
 use super::*;
 use agena_assistant::bot::*;
+use agena_domain::{SessionOwner, SessionSurface};
+use agena_storage::{BotRecord, BotRepositoryError};
 use caseless::Caseless;
 use uuid::Uuid;
 
-const REGISTRY: &str = "bot_registry_v1";
-const UPDATE_RECEIPTS: usize = 256;
-/// Idempotence receipts hold the full request payload. With multi-kilobyte
-/// persona prompts, retaining 256 of them would bloat every registry read,
-/// write and backup. Keep a small recent window instead; a replay outside it
-/// is answered from the current profile, which is still revision-safe.
-const MAX_RECEIPT_BYTES: usize = 4 * 1024 * 1024;
-const RETIRED_SESSIONS: usize = 4096;
-#[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Registry {
-    bots: Vec<BotProfile>,
-    retired_sessions: Vec<i64>,
-    receipts: HashMap<String, Receipt>,
-    pending: Option<Creation>,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Receipt {
-    payload: Value,
-    result: BotProfile,
-}
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Creation {
-    profile: BotProfile,
-    command: RequestId,
-    title: String,
-    receipt: Option<(String, Value)>,
-}
+const MAX_BOTS: u64 = 256;
+
 fn conflict(message: &'static str) -> AppError {
     AppError::BotConflict(message)
 }
-/// Serialized footprint of one idempotence receipt, used to bound registry growth.
-fn receipt_size(receipt: &Receipt) -> usize {
-    serde_json::to_vec(&receipt.payload)
-        .map(|encoded| encoded.len())
-        .unwrap_or(0)
-        + serde_json::to_vec(&receipt.result)
-            .map(|encoded| encoded.len())
-            .unwrap_or(0)
-}
+
 fn validate_key(key: &str) -> Result<(), AppError> {
     if key.is_empty() || key.len() > 160 || key.trim() != key || key.chars().any(char::is_control) {
         return Err(invalid(
@@ -55,421 +26,405 @@ fn validate_key(key: &str) -> Result<(), AppError> {
     }
     Ok(())
 }
-fn normalized(name: &str) -> String {
+
+/// The uniqueness key for active Bot names: trimmed and case-folded.
+pub(super) fn folded_name(name: &str) -> String {
     name.trim().chars().default_case_fold().collect()
 }
-impl Registry {
-    fn default_profile(&self) -> Option<BotProfile> {
-        self.bots.iter().find(|p| !p.archived).cloned()
+
+fn validate_name(name: &str, persona: &BotPersona) -> Result<String, AppError> {
+    if name.chars().any(char::is_control) {
+        return Err(invalid("Bot names cannot contain control characters"));
     }
-    fn profile(&self, id: Uuid) -> Result<BotProfile, AppError> {
-        self.bots
-            .iter()
-            .find(|p| p.id == id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::BotNotFound(
-                    "Bot was not found; select an existing Bot or create one".into(),
-                )
-            })
-    }
-    fn validate_name(
-        &self,
-        id: Option<Uuid>,
-        name: &str,
-        persona: &BotPersona,
-    ) -> Result<String, AppError> {
-        if name.chars().any(char::is_control) {
-            return Err(invalid("Bot names cannot contain control characters"));
+    let name = name.trim();
+    persona
+        .validate(name)
+        .map_err(|error| invalid(&error.to_string()))?;
+    Ok(name.into())
+}
+
+fn repository_error(error: BotRepositoryError) -> AppError {
+    match error {
+        BotRepositoryError::Invalid(message) => invalid(&message),
+        BotRepositoryError::NameTaken => conflict("an active Bot already has this name"),
+        BotRepositoryError::Conflict => {
+            conflict("stale Bot revision; reload the profile before editing")
         }
-        let name = name.trim();
-        persona
-            .validate(name)
-            .map_err(|e| invalid(&e.to_string()))?;
-        if self
-            .bots
-            .iter()
-            .any(|p| !p.archived && Some(p.id) != id && normalized(&p.name) == normalized(name))
-        {
-            return Err(conflict("an active Bot already has this name"));
+        BotRepositoryError::NotFound => {
+            AppError::BotNotFound("Bot was not found; select an existing Bot or create one".into())
         }
-        Ok(name.into())
-    }
-    fn trim_update_receipts(&mut self, newest: &str) {
-        // Oldest first, so eviction is deterministic. `newest` stays put.
-        let mut updates: Vec<_> = self
-            .receipts
-            .iter()
-            .filter(|(key, _)| key.starts_with("update:"))
-            .map(|(key, r)| (r.result.updated_at_ms, key.clone()))
-            .collect();
-        updates.sort();
-        let mut count = updates.len();
-        let mut bytes: usize = updates
-            .iter()
-            .filter_map(|(_, key)| {
-                self.receipts
-                    .get(key)
-                    .map(|receipt| key.len() + receipt_size(receipt))
-            })
-            .sum();
-        for (_, key) in updates {
-            if key == newest {
-                continue;
-            }
-            if count <= UPDATE_RECEIPTS && bytes <= MAX_RECEIPT_BYTES {
-                break;
-            }
-            if let Some(receipt) = self.receipts.remove(&key) {
-                count -= 1;
-                bytes = bytes.saturating_sub(key.len() + receipt_size(&receipt));
-            }
+        BotRepositoryError::Capacity => {
+            invalid("Bot registry limit is 256; archived histories also count")
         }
-    }
-    fn replay(&self, key: &str, payload: &Value) -> Result<Option<BotProfile>, AppError> {
-        match self.receipts.get(key) {
-            Some(receipt) if receipt.payload != *payload => Err(conflict(
-                "request_key belongs to a different Bot operation payload",
-            )),
-            Some(receipt) => Ok(Some(receipt.result.clone())),
-            None => Ok(None),
+        BotRepositoryError::ReplayedInput => {
+            conflict("request_key belongs to a different Bot operation payload")
         }
+        BotRepositoryError::Backend(message) => AppError::Internal(message),
     }
 }
+
+fn profile(record: BotRecord) -> BotProfile {
+    BotProfile {
+        id: record.id,
+        name: record.name,
+        persona: BotPersona {
+            instructions: record.instructions,
+        },
+        revision: record.revision,
+        archived: record.archived,
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
+    }
+}
+
+fn record(profile: &BotProfile) -> BotRecord {
+    BotRecord {
+        id: profile.id,
+        name: profile.name.clone(),
+        name_folded: folded_name(&profile.name),
+        instructions: profile.persona.instructions.clone(),
+        revision: profile.revision,
+        archived: profile.archived,
+        created_at_ms: profile.created_at_ms,
+        updated_at_ms: profile.updated_at_ms,
+    }
+}
+
 impl SessionManager {
-    fn bot_registry_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
+    fn bots(&self) -> &dyn agena_storage::BotRepository {
+        self.kernel_runtime.bots.as_ref()
+    }
+
+    /// Short instance-wide gate for Bot creation and first-open.
+    ///
+    /// The identity row is protected by its own unique index, but "does this
+    /// Bot already have a local conversation?" and "create one" must be one
+    /// step: without the gate, concurrent first opens would each create a
+    /// conversation. The gate covers only that sequence — reads, admission and
+    /// every message path stay lock-free.
+    fn bot_creation_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
         card_lock(format!(
-            "bot-registry:{}",
+            "bot-creation:{}",
             self.kernel_runtime.instance_state.path().display()
         ))
     }
-    async fn save_registry(&self, registry: &Registry) -> Result<(), AppError> {
-        self.save_bot_state(REGISTRY, registry).await
+
+    /// Ownership recorded on one conversation, read from its configuration.
+    pub(super) async fn session_owner(&self, id: i64) -> Result<Option<SessionOwner>, AppError> {
+        Ok(self
+            .kernel()
+            .reader
+            .configuration(session_id(id)?)
+            .await
+            .map_err(kernel_error)?
+            .owner
+            .clone())
     }
 
-    async fn finish_bot_creation(&self, registry: &mut Registry) -> Result<(), AppError> {
-        let Some(creation) = &registry.pending else {
-            return Ok(());
+    /// Create a conversation owned by `bot` and return its id.
+    ///
+    /// `Local` conversations run in the instance scope with no working
+    /// directory; chat conversations are created by the channel path, which
+    /// already knows its isolated workspace and authority.
+    async fn create_bot_conversation(
+        &self,
+        bot: Uuid,
+        surface: SessionSurface,
+        title: &str,
+    ) -> Result<i64, AppError> {
+        let owner = SessionOwner {
+            bot,
+            surface,
+            scope_key: None,
         };
-        let session = persist(|| {
-            self.kernel().sessions.create_global(
-                creation.command,
-                creation.title.clone(),
-                SessionConfiguration::default(),
-            )
+        // A fresh key per creation. The caller always looks for an existing
+        // local root first, so a retry after a lost reply reuses that root
+        // instead of reaching this path again; a deleted root must produce a
+        // genuinely new conversation, not replay the deleted one's receipt.
+        let command = request_key(
+            "bot-conversation",
+            &format!("{bot}:{}:{}", surface.as_str(), Uuid::new_v4()),
+        );
+        let configuration = SessionConfiguration {
+            owner: Some(owner),
+            ..Default::default()
+        };
+        persist(|| {
+            self.kernel()
+                .sessions
+                .create_global(command, title.to_owned(), configuration.clone())
         })
         .await
-        .map_err(kernel_error)?
-        .value
-        .id
-        .get();
-        let creation = registry.pending.take().expect("pending creation");
-        let mut profile = creation.profile;
-        profile.session_id = session;
-        if let Some(existing) = registry.bots.iter_mut().find(|p| p.id == profile.id) {
-            *existing = profile.clone();
-        } else {
-            registry.bots.push(profile.clone());
+        .map(|receipt| receipt.value.id.get())
+        .map_err(kernel_error)
+    }
+
+    /// The Bot's most recently used local root, if it still exists.
+    pub(super) async fn default_bot_conversation(
+        &self,
+        bot: Uuid,
+    ) -> Result<Option<i64>, AppError> {
+        let page = self
+            .kernel()
+            .reader
+            .query_summaries(SummaryQuery {
+                owner_bot_id: Some(bot.to_string()),
+                owner_surface: Some(SessionSurface::Local.as_str().to_owned()),
+                roots_only: true,
+                include_global: true,
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .map_err(kernel_error)?;
+        Ok(page.sessions.first().map(|summary| summary.id.get()))
+    }
+
+    /// Replay a receipt for `key`, or refuse a reused key with new input.
+    async fn replay(
+        &self,
+        key: &str,
+        input: &impl Serialize,
+    ) -> Result<Option<BotProfile>, AppError> {
+        let input = serde_json::to_string(input)?;
+        match self.bots().receipt(key).await.map_err(repository_error)? {
+            Some((stored, _)) if stored != input => {
+                Err(repository_error(BotRepositoryError::ReplayedInput))
+            }
+            Some((_, result)) => Ok(Some(profile(
+                serde_json::from_str(&result).map_err(AppError::from)?,
+            ))),
+            None => Ok(None),
         }
-        if let Some((key, payload)) = creation.receipt {
-            registry.receipts.insert(
-                key,
-                Receipt {
-                    payload,
-                    result: profile,
-                },
-            );
-        }
-        self.save_registry(registry).await
     }
-    async fn read_registry(&self) -> Result<Option<Registry>, AppError> {
-        let Some(value) = self.bot_state::<Value>(REGISTRY).await? else {
-            return Ok(None);
-        };
-        serde_json::from_value(value).map(Some).map_err(|error| {
-            invalid(&format!("Invalid Bot registry ({error}); run the one-time migration before starting the application"))
-        })
+
+    async fn remember(
+        &self,
+        key: &str,
+        input: &impl Serialize,
+        result: &BotProfile,
+    ) -> Result<(), AppError> {
+        let input = serde_json::to_string(input)?;
+        let result = serde_json::to_string(&record(result))?;
+        self.bots()
+            .save_receipt(key, &input, &result)
+            .await
+            .map_err(repository_error)
     }
-    async fn existing_registry(&self) -> Result<Option<Registry>, AppError> {
-        let Some(mut registry) = self.read_registry().await? else {
-            return Ok(None);
-        };
-        self.finish_bot_creation(&mut registry).await?;
-        Ok(Some(registry))
+
+    /// The first active Bot, or `None` when every Bot is archived.
+    async fn default_bot(&self) -> Result<Option<BotProfile>, AppError> {
+        Ok(self
+            .bots()
+            .list(false)
+            .await
+            .map_err(repository_error)?
+            .into_iter()
+            .next()
+            .map(profile))
     }
-    async fn require_registry(&self) -> Result<Registry, AppError> {
-        self.existing_registry().await?.ok_or_else(|| {
-            AppError::BotNotFound(
-                "Bot was not found; open the Bot entry or create a named Bot".into(),
-            )
-        })
+
+    async fn bot_or_not_found(&self, id: Uuid) -> Result<BotProfile, AppError> {
+        self.bots()
+            .get(id)
+            .await
+            .map(profile)
+            .map_err(repository_error)
     }
-    async fn load_registry(&self) -> Result<Registry, AppError> {
-        let mut registry = self.existing_registry().await?.unwrap_or_default();
-        if registry.bots.is_empty() {
-            let now = chrono::Utc::now().timestamp_millis();
-            let id = Uuid::new_v4();
-            let profile = BotProfile {
-                id,
-                name: agena_assistant::AssistantPreferences::default().name,
-                persona: BotPersona::default(),
-                session_id: 0,
-                revision: 1,
-                archived: false,
-                created_at_ms: now,
-                updated_at_ms: now,
-            };
-            registry.pending = Some(Creation {
-                profile,
-                command: request_key("default-bot-create", &id.to_string()),
-                title: "Bot".into(),
-                receipt: None,
-            });
-            self.save_registry(&registry).await?;
-            self.finish_bot_creation(&mut registry).await?;
-        }
-        Ok(registry)
-    }
-    pub async fn list_bot_profiles(&self, include_archived: bool) -> Result<BotList, AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let registry = self.load_registry().await?;
-        Ok(BotList {
-            default_bot_id: registry.default_profile().map(|p| p.id),
-            items: registry
-                .bots
-                .into_iter()
-                .filter(|p| include_archived || !p.archived)
-                .collect(),
-        })
-    }
-    pub async fn get_bot_profile(&self, id: Uuid) -> Result<BotProfile, AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        self.require_registry().await?.profile(id)
-    }
-    pub async fn bot_profile_for_session(
+
+    /// Archive-state check shared by every write into a Bot conversation.
+    /// `None` when `source` belongs to no Bot at all.
+    pub(super) async fn bot_owner_of(
         &self,
         source: i64,
-    ) -> Result<Option<BotProfile>, AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let registry = match self.existing_registry().await? {
-            Some(registry) => registry,
-            None => return Ok(None),
+    ) -> Result<Option<(BotProfile, SessionOwner)>, AppError> {
+        let Some(owner) = self.session_owner(source).await? else {
+            return Ok(None);
         };
-        Ok(registry
-            .bots
-            .into_iter()
-            .find(|p| !p.archived && p.session_id == source))
+        let profile = self.bot_or_not_found(owner.bot).await?;
+        Ok(Some((profile, owner)))
     }
+
+    pub async fn list_bot_profiles(&self, include_archived: bool) -> Result<BotList, AppError> {
+        let records = self
+            .bots()
+            .list(include_archived)
+            .await
+            .map_err(repository_error)?;
+        let items = records.into_iter().map(profile).collect::<Vec<_>>();
+        let default_bot_id = self.default_bot().await?.map(|bot| bot.id);
+        Ok(BotList {
+            items,
+            default_bot_id,
+        })
+    }
+
+    pub async fn get_bot_profile(&self, id: Uuid) -> Result<BotProfile, AppError> {
+        self.bot_or_not_found(id).await
+    }
+
     pub async fn create_bot_profile(&self, create: BotCreate) -> Result<BotProfile, AppError> {
         validate_key(&create.request_key)?;
-        Registry::default().validate_name(
-            None,
-            &create.name,
-            &create.persona.clone().unwrap_or_default(),
-        )?;
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let mut registry = self.load_registry().await?;
+        let persona = create.persona.clone().unwrap_or_default();
+        validate_name(&create.name, &persona)?;
         let key = format!("create:{}", create.request_key);
-        let payload = serde_json::to_value(&create)?;
-        if let Some(profile) = registry.replay(&key, &payload)? {
+        // Creation is the one place where "is this request already done?" and
+        // "insert it" must be one step: the unique name index makes concurrent
+        // identical requests fail as name conflicts unless the loser can see
+        // the winner's receipt. The gate covers only this short sequence.
+        let _gate = self.bot_creation_gate().lock_owned().await;
+        if let Some(profile) = self.replay(&key, &create).await? {
             return Ok(profile);
         }
-        if registry.bots.len() >= 256 {
-            return Err(invalid(
-                "Bot registry limit is 256; archived histories also count",
-            ));
+        if self.bots().count().await.map_err(repository_error)? >= MAX_BOTS {
+            return Err(repository_error(BotRepositoryError::Capacity));
         }
-        let persona = create.persona.unwrap_or_default();
-        let name = registry.validate_name(None, &create.name, &persona)?;
+        let name = validate_name(&create.name, &persona)?;
         let now = chrono::Utc::now().timestamp_millis();
-        let profile = BotProfile {
+        let candidate = BotProfile {
             id: Uuid::new_v4(),
             name,
             persona,
-            session_id: 0,
             revision: 1,
             archived: false,
             created_at_ms: now,
             updated_at_ms: now,
         };
-        let id = profile.id;
-        registry.pending = Some(Creation {
-            title: profile.name.clone(),
-            profile,
-            command: request_key("named-bot-create", &id.to_string()),
-            receipt: Some((key, payload)),
-        });
-        self.save_registry(&registry).await?;
-        self.finish_bot_creation(&mut registry).await?;
-        registry.profile(id)
+        let created = self
+            .bots()
+            .create(&record(&candidate))
+            .await
+            .map_err(repository_error)?;
+        let created = profile(created);
+        // The Bot's first conversation is an ordinary local root owned by it.
+        // Created after the identity row so a crash leaves an identity with no
+        // conversation, which `ensure_named_bot_session` repairs on open.
+        self.create_bot_conversation(created.id, SessionSurface::Local, &created.name)
+            .await?;
+        self.remember(&key, &create, &created).await?;
+        Ok(created)
     }
+
     pub async fn update_bot_profile(
         &self,
         id: Uuid,
         update: BotUpdate,
     ) -> Result<BotProfile, AppError> {
         validate_key(&update.request_key)?;
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let mut registry = self.require_registry().await?;
         let key = format!("update:{id}:{}", update.request_key);
-        let payload = serde_json::to_value(&update)?;
-        if let Some(profile) = registry.replay(&key, &payload)? {
+        if let Some(profile) = self.replay(&key, &update).await? {
             return Ok(profile);
         }
-        let mut profile = registry.profile(id)?;
-        if profile.archived {
+        let current = self.bot_or_not_found(id).await?;
+        if current.archived {
             return Err(conflict("archived Bot history is read-only"));
         }
-        if profile.revision != update.expected_revision {
-            return Err(conflict(
-                "stale Bot revision; reload the profile before editing",
-            ));
+        if current.revision != update.expected_revision {
+            return Err(repository_error(BotRepositoryError::Conflict));
         }
-        profile.name = registry.validate_name(Some(id), &update.name, &update.persona)?;
-        profile.persona = update.persona;
-        profile.revision += 1;
-        profile.updated_at_ms = chrono::Utc::now().timestamp_millis();
-        *registry
-            .bots
-            .iter_mut()
-            .find(|p| p.id == id)
-            .expect("profile") = profile.clone();
-        registry.receipts.insert(
-            key.clone(),
-            Receipt {
-                payload,
-                result: profile.clone(),
-            },
-        );
-        registry.trim_update_receipts(&key);
-        self.save_registry(&registry).await?;
-        Ok(profile)
+        let name = validate_name(&update.name, &update.persona)?;
+        let persona = update.persona.clone();
+        let next = BotProfile {
+            name,
+            persona,
+            revision: update.expected_revision + 1,
+            updated_at_ms: chrono::Utc::now().timestamp_millis(),
+            ..current
+        };
+        let updated = self
+            .bots()
+            .update(&record(&next), update.expected_revision)
+            .await
+            .map_err(repository_error)?;
+        let updated = profile(updated);
+        self.remember(&key, &update, &updated).await?;
+        Ok(updated)
     }
+
     pub async fn archive_bot_profile(
         &self,
         id: Uuid,
         archive: BotArchive,
     ) -> Result<BotProfile, AppError> {
         validate_key(&archive.request_key)?;
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let mut registry = self.require_registry().await?;
         let key = format!("archive:{id}:{}", archive.request_key);
-        let payload = serde_json::to_value(&archive)?;
-        if let Some(profile) = registry.replay(&key, &payload)? {
+        if let Some(profile) = self.replay(&key, &archive).await? {
             return Ok(profile);
         }
-        let mut profile = registry.profile(id)?;
-        if profile.archived || profile.revision != archive.expected_revision {
+        let current = self.bot_or_not_found(id).await?;
+        if current.archived {
             return Err(conflict("stale or archived Bot; reload the profile"));
         }
-        let dispatch = self.session_dispatch(session_id(profile.session_id)?);
-        let _submission = dispatch.submission.try_lock().map_err(|_| {
-            conflict(
-                "Bot is accepting or changing native work; wait until it is idle before archiving",
-            )
-        })?;
-        let native_live = match self
-            .kernel()
-            .reader
-            .control_snapshot(session_id(profile.session_id)?, 1)
-            .await
-        {
-            Ok(snapshot)
-                if !snapshot.active_executions.executions.is_empty()
-                    || snapshot.active_execution.is_some()
-                    || !snapshot.pending_interactions.interactions.is_empty()
-                    || snapshot.summary.queued_executions > 0
-                    || snapshot.summary.running_executions > 0 =>
-            {
-                return Err(conflict(
-                    "Bot must be idle with no queued executions or pending native interactions before archiving",
-                ));
-            }
-            Ok(_) => true,
-            Err(KernelError::NotFound(_)) => false,
-            Err(error) => return Err(kernel_error(error)),
-        };
-        if native_live {
-            self.require_bot_source_idle(session_id(profile.session_id)?)
-                .await?;
+        if current.revision != archive.expected_revision {
+            return Err(conflict("stale or archived Bot; reload the profile"));
         }
-        profile.archived = true;
-        profile.revision += 1;
-        profile.updated_at_ms = chrono::Utc::now().timestamp_millis();
-        *registry
-            .bots
-            .iter_mut()
-            .find(|p| p.id == id)
-            .expect("profile") = profile.clone();
-        registry.receipts.insert(
-            key.clone(),
-            Receipt {
-                payload,
-                result: profile.clone(),
-            },
-        );
-        registry.trim_update_receipts(&key);
-        self.save_registry(&registry).await?;
-        Ok(profile)
+        self.require_bot_idle(id).await?;
+        let now = chrono::Utc::now().timestamp_millis();
+        let archived = self
+            .bots()
+            .archive(id, archive.expected_revision, now)
+            .await
+            .map_err(repository_error)?;
+        let archived = profile(archived);
+        self.remember(&key, &archive, &archived).await?;
+        Ok(archived)
     }
-    async fn require_bot_source_idle(&self, session: SessionId) -> Result<(), AppError> {
-        if !self
-            .kernel()
-            .reader
-            .active_activities(session, None, 1)
-            .await
-            .map_err(kernel_error)?
-            .activities
-            .is_empty()
-        {
-            return Err(conflict(
-                "Bot has a native background activity; finish it before archiving",
-            ));
-        }
+
+    /// Refuse to archive while any conversation of this Bot still holds work.
+    ///
+    /// Chat conversations are checked too: a channel transcript that can still
+    /// run would otherwise keep writing into an archived Bot.
+    async fn require_bot_idle(&self, id: Uuid) -> Result<(), AppError> {
         let mut before = None;
         loop {
             let page = self
                 .kernel()
                 .reader
                 .query_summaries(SummaryQuery {
-                    parent_id: Some(session),
+                    owner_bot_id: Some(id.to_string()),
+                    roots_only: false,
                     include_global: true,
-                    agents_only: true,
                     before,
                     limit: 128,
                     ..Default::default()
                 })
                 .await
                 .map_err(kernel_error)?;
-            for child in &page.sessions {
-                if child
+            for summary in &page.sessions {
+                if summary
                     .agent_status
                     .is_some_and(|status| !status.is_terminal())
-                    || child.queued_executions > 0
-                    || child.running_executions > 0
+                    || summary.queued_executions > 0
+                    || summary.running_executions > 0
                 {
                     return Err(conflict(
-                        "Bot has an active native Subagent; finish it before archiving",
+                        "Bot must be idle with no queued executions or pending native interactions before archiving",
                     ));
                 }
                 let control = self
                     .kernel()
                     .reader
-                    .control_snapshot(child.id, 1)
+                    .control_snapshot(summary.id, 1)
                     .await
                     .map_err(kernel_error)?;
                 if !control.pending_interactions.interactions.is_empty()
-                    || !self
-                        .kernel()
-                        .reader
-                        .active_activities(child.id, None, 1)
-                        .await
-                        .map_err(kernel_error)?
-                        .activities
-                        .is_empty()
+                    || !control.active_executions.executions.is_empty()
                 {
                     return Err(conflict(
-                        "Bot Subagent has pending interaction or native background activity; finish it before archiving",
+                        "Bot has a pending native interaction; finish it before archiving",
+                    ));
+                }
+                if !self
+                    .kernel()
+                    .reader
+                    .active_activities(summary.id, None, 1)
+                    .await
+                    .map_err(kernel_error)?
+                    .activities
+                    .is_empty()
+                {
+                    return Err(conflict(
+                        "Bot has a native background activity; finish it before archiving",
                     ));
                 }
             }
@@ -480,105 +435,158 @@ impl SessionManager {
         }
         Ok(())
     }
-    async fn resolve_bot_profile(
-        &self,
-        registry: &mut Registry,
-        id: Uuid,
-    ) -> Result<BotProfile, AppError> {
-        let mut profile = registry.profile(id)?;
-        if profile.archived {
+
+    /// Resolve the conversation a client should open for this Bot.
+    ///
+    /// The most recently used local root wins; when the Bot has none (first
+    /// open, or its conversation was deleted through ordinary session
+    /// management) a fresh local root is created. Retired conversations stay
+    /// read-only because their rows keep `owner.bot`.
+    pub async fn ensure_named_bot_session(&self, id: Uuid) -> Result<BotSession, AppError> {
+        let _gate = self.bot_creation_gate().lock_owned().await;
+        let bot = self.bot_or_not_found(id).await?;
+        if bot.archived {
             return Err(AppError::BotNotFound(
                 "Bot is archived; inspect its history or select an active Bot".into(),
             ));
         }
-        match self
-            .kernel()
-            .reader
-            .metadata(session_id(profile.session_id)?)
-            .await
-        {
-            Ok(_) => {
-                self.require_bot_root(profile.session_id).await?;
-                return Ok(profile);
+        let session = match self.default_bot_conversation(id).await? {
+            Some(session) => session,
+            None => {
+                self.create_bot_conversation(id, SessionSurface::Local, &bot.name)
+                    .await?
             }
-            Err(KernelError::NotFound(_)) => {}
-            Err(error) => return Err(kernel_error(error)),
+        };
+        Ok(BotSession::new(session, &bot))
+    }
+
+    /// Open the oldest active Bot, creating the default Bot when none exists.
+    pub async fn ensure_default_bot_profile(&self) -> Result<BotProfile, AppError> {
+        let _gate = self.bot_creation_gate().lock_owned().await;
+        match self.default_bot().await? {
+            Some(bot) => Ok(bot),
+            None => {
+                if self.bots().count().await.map_err(repository_error)? > 0 {
+                    return Err(AppError::BotNotFound(
+                        "No active Bots; create a named Bot to start a conversation".into(),
+                    ));
+                }
+                self.create_default_bot().await
+            }
         }
-        let previous = profile.session_id;
-        if registry.retired_sessions.len() >= RETIRED_SESSIONS {
-            return Err(conflict(
-                "Bot recovery history limit reached; archive this Bot and create a named Bot",
+    }
+
+    async fn create_default_bot(&self) -> Result<BotProfile, AppError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let name = agena_assistant::AssistantPreferences::default().name;
+        let candidate = BotProfile {
+            id: Uuid::new_v4(),
+            name,
+            persona: BotPersona::default(),
+            revision: 1,
+            archived: false,
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        // Two clients may race the very first open. The unique active-name
+        // index decides the winner; the loser reads back the stored Bot.
+        match self.bots().create(&record(&candidate)).await {
+            Ok(created) => {
+                let created = profile(created);
+                self.create_bot_conversation(created.id, SessionSurface::Local, &created.name)
+                    .await?;
+                Ok(created)
+            }
+            Err(BotRepositoryError::NameTaken) => self
+                .bots()
+                .list(false)
+                .await
+                .map_err(repository_error)?
+                .into_iter()
+                .next()
+                .map(profile)
+                .ok_or_else(|| {
+                    AppError::BotNotFound(
+                        "No active Bots; create a named Bot to start a conversation".into(),
+                    )
+                }),
+            Err(error) => Err(repository_error(error)),
+        }
+    }
+
+    /// Create a new local conversation for this Bot and return it.
+    ///
+    /// This is the explicit "new conversation" action: unlike
+    /// [`Self::ensure_named_bot_session`] it never reuses an existing one. The
+    /// Bot must be active, and the conversation starts empty with a title the
+    /// user can rename afterwards.
+    pub async fn create_bot_conversation_for(
+        &self,
+        id: Uuid,
+        title: Option<String>,
+    ) -> Result<BotSession, AppError> {
+        let _gate = self.bot_creation_gate().lock_owned().await;
+        let bot = self.bot_or_not_found(id).await?;
+        if bot.archived {
+            return Err(AppError::BotNotFound(
+                "Bot is archived; select an active Bot to start a conversation".into(),
             ));
         }
-        registry.retired_sessions.push(previous);
-        profile.revision += 1;
-        profile.updated_at_ms = chrono::Utc::now().timestamp_millis();
-        registry.pending = Some(Creation {
-            title: profile.name.clone(),
-            profile,
-            command: request_key("named-bot-recovery", &format!("{id}:{previous}")),
-            receipt: None,
-        });
-        self.save_registry(registry).await?;
-        self.finish_bot_creation(registry).await?;
-        registry.profile(id)
+        let title = match title {
+            Some(title) => {
+                let title = title.trim();
+                if title.is_empty() || title.chars().count() > 512 {
+                    return Err(invalid("conversation title must contain 1..512 characters"));
+                }
+                title.to_owned()
+            }
+            None => bot.name.clone(),
+        };
+        let session = self
+            .create_bot_conversation(id, SessionSurface::Local, &title)
+            .await?;
+        Ok(BotSession::new(session, &bot))
     }
-    pub async fn ensure_default_bot_profile(&self) -> Result<BotProfile, AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let mut registry = self.load_registry().await?;
-        let id = registry
-            .default_profile()
-            .ok_or_else(|| {
-                AppError::BotNotFound(
-                    "No active Bots; create a named Bot to start a conversation".into(),
-                )
-            })?
-            .id;
-        self.resolve_bot_profile(&mut registry, id).await
-    }
-    pub async fn ensure_named_bot_session(&self, id: Uuid) -> Result<BotSession, AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let mut registry = self.require_registry().await?;
-        Ok(self.resolve_bot_profile(&mut registry, id).await?.into())
-    }
+
     pub async fn ensure_bot_session(&self) -> Result<i64, AppError> {
-        Ok(self.ensure_default_bot_profile().await?.session_id)
+        let bot = self.ensure_default_bot_profile().await?;
+        self.ensure_named_bot_session(bot.id)
+            .await
+            .map(|session| session.session_id)
     }
-    /// Called under native admission before any transcript/model mutation.
-    /// Ordinary project traffic must not initialize a registry as a side effect.
+
+    /// The Bot owning a conversation, active or archived.
+    pub async fn bot_profile_for_session(
+        &self,
+        source: i64,
+    ) -> Result<Option<BotProfile>, AppError> {
+        match self.bot_owner_of(source).await? {
+            Some((profile, _)) => Ok(Some(profile)),
+            None => Ok(None),
+        }
+    }
+
+    /// Admission check before any transcript or model mutation.
+    ///
+    /// Archived Bot history is read-only, and ordinary project traffic never
+    /// touches the Bot table.
     pub(in crate::session::manager) async fn require_writable_bot_history(
         &self,
         source: i64,
     ) -> Result<(), AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        if let Some(registry) = self.read_registry().await?
-            && (registry
-                .bots
-                .iter()
-                .any(|p| p.session_id == source && p.archived)
-                || registry.retired_sessions.contains(&source))
+        if let Some((profile, _)) = self.bot_owner_of(source).await?
+            && profile.archived
         {
             return Err(conflict(
-                "Archived or replaced Bot history is read-only; select an active Bot or create one",
+                "Archived Bot history is read-only; select an active Bot or create one",
             ));
         }
         Ok(())
     }
+
+    /// True when this conversation belongs to a Bot, archived or not.
     pub async fn is_reserved_bot_session(&self, source: i64) -> Result<bool, AppError> {
-        Ok(self.bot_session_ids().await?.contains(&source))
-    }
-    /// Shared routing/discovery exclusion, including archived and replaced roots.
-    pub(super) async fn bot_session_ids(&self) -> Result<std::collections::HashSet<i64>, AppError> {
-        let _gate = self.bot_registry_gate().lock_owned().await;
-        let Some(registry) = self.existing_registry().await? else {
-            return Ok(Default::default());
-        };
-        Ok(registry
-            .bots
-            .iter()
-            .map(|p| p.session_id)
-            .chain(registry.retired_sessions)
-            .collect())
+        Ok(self.session_owner(source).await?.is_some())
     }
 }
 

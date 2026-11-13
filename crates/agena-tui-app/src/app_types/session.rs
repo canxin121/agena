@@ -184,6 +184,10 @@ pub(crate) struct TranscriptState {
     pub(crate) math_render_context: MathRenderContext,
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
+    /// Bot that owns the open conversation, when any. It arrives on the
+    /// session resource, so the Bot chrome never depends on a separate
+    /// registry↔session mapping that could disagree.
+    pub(crate) owner_bot_id: Option<uuid::Uuid>,
     /// The session's canonical part transcript (ordered parts, including
     /// `run` markers), mirroring `SessionExecutionResource.parts`.
     pub(crate) parts: Vec<agena_api::part::PartResource>,

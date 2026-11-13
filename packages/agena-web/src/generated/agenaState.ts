@@ -180,6 +180,7 @@ export type ChannelAccessPolicy = {
   allow_unlisted_chat?: boolean
   grant?: ChannelGrant
   identity: ChannelIdentity
+  kinds?: ConversationKind[]
   members: ChannelMember[]
   per_user_daily_limit?: number
   service_grant?: ChannelGrant
@@ -188,8 +189,9 @@ export type ChannelAccessPolicy = {
   trigger?: ChannelTrigger
 }
 
-/** Immutable capability fence stored with a session and inherited by workers, agents and forks. Current membership is rechecked by the host verifier. */
+/** The authority of one message's speaker, valid for that execution only. Workers, agents and forks inherit the authority of the execution that spawned them, never the authority of another speaker in the same room. */
 export type ChannelAuthority = {
+  kind: ConversationKind
   actor: string
   binding_id: string
   epoch: number
@@ -206,6 +208,7 @@ export type ChannelAuthority = {
 }
 
 export type ChannelEnvelope = {
+  kind: ConversationKind
   actor_verified: boolean
   addressed_to_bot: boolean
   identity: ChannelIdentity
@@ -221,13 +224,11 @@ export type ChannelGrant = {
   tools?: string[]
 }
 
+/** The chat transport identity: tenant plus account. No room shape here. */
 export type ChannelIdentity = {
-  kind: ChannelKind
   account: string
   tenant: string
 }
-
-export type ChannelKind = 'direct' | 'group' | 'public_channel' | 'private_channel'
 
 export type ChannelMember = {
   actor: string
@@ -246,6 +247,7 @@ export type ChannelOutputRoute = {
 
 export type ChannelRole = 'blocked' | 'member' | 'operator' | 'administrator' | 'owner'
 
+/** How one conversation's sessions are partitioned. `PerConversation` is the default: a group is one session shared by all of its members, a direct chat is one session per participant, and a channel is one session per channel. Context is never merged across conversations or across platform accounts. `PerActor` additionally splits a single conversation by speaker. It is an explicit opt-in for rooms whose members must not share a transcript. */
 export type ChannelSessionMode = 'per_conversation' | 'per_actor'
 
 export type ChannelSessionRecord = {
@@ -259,6 +261,27 @@ export type ChannelSessionRecord = {
 export type ChannelThreadMode = 'exact' | 'per_thread'
 
 export type ChannelTrigger = 'direct_or_mention' | 'every_message'
+
+export type ConversationCounts = {
+  broadcast: number
+  direct: number
+  group: number
+}
+
+/** One externally visible conversation and the session it maps to. A conversation that has never received a message has no session yet; the session fields stay `None` rather than inventing a placeholder id. */
+export type ConversationEntry = {
+  kind: ConversationKind
+  actor?: string | null
+  created_at_ms?: number | null
+  resource: string
+  role?: ChannelRole
+  session_id?: number | null
+  thread?: string | null
+  title?: string | null
+}
+
+/** The shape of the conversation a message was sent in. This is a property of the message, not of the binding: one platform account serves direct chats, groups and channels at the same time. The shape of the conversation a message was sent in. This is a property of the message, not of the binding: one platform account serves direct chats, multi-party rooms and broadcast channels at the same time. Four mutually exclusive values cover every adapter surveyed: - `Direct` — a one-to-one conversation (Telegram private, WeCom single, Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM). - `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM, Discord group DM, QQ temporary C2C from a group) and interactive channels (Slack channel, Discord guild text, Feishu group) belong here because the assistant behaves identically: shared transcript, mention-gated trigger, several readers. - `Broadcast` — a one-to-many surface where posting is restricted to owners/admins (Telegram channel, WhatsApp newsletter, Discord announcement). The assistant may be unable to reply at all. Visibility (public vs private) is deliberately *not* a kind: only Slack and Discord private threads expose it, and no policy branches on it. Threads are a separate axis carried by the message's `thread` field, never folded into this enum. */
+export type ConversationKind = 'direct' | 'group' | 'broadcast'
 
 export type ExternalEvent = {
   actor: string
@@ -366,6 +389,7 @@ export type IntegrationBinding = {
   id: string
   last_error?: string | null
   next_poll_ms: number
+  owner_bot_id?: JsonValue
   permission_fingerprint?: string
   poll_failures: number
   provider_fingerprint: string
@@ -375,7 +399,7 @@ export type IntegrationBinding = {
   spec: IntegrationSpec
   state: BindingState
   updated_at_ms: number
-  workspace_id: number
+  workspace_id?: number | null
 }
 
 export type IntegrationControlAction = 'enable' | 'pause' | 'poll_now'
@@ -413,51 +437,6 @@ export type IntegrationProvider = {
   plugin_id: string
 }
 
-/** One conversation, an explicit allow-list, or every conversation the adapter reports. */
-export type ResourceSelector = string | { all: boolean } | string[]
-
-export type ConversationKind = 'direct' | 'group' | 'public_channel' | 'private_channel'
-
-export type ConversationCounts = {
-  direct: number
-  group: number
-  public_channel: number
-  private_channel: number
-}
-
-export type ConversationEntry = {
-  resource: string
-  kind: ConversationKind
-  thread?: string | null
-  session_id?: number | null
-  title?: string | null
-  actor?: string | null
-  role?: ChannelRole | null
-  created_at_ms?: number | null
-}
-
-export type PlatformAccount = {
-  binding_id: string
-  tenant: string
-  account: string
-  state: BindingState
-  selector: string
-  last_error?: string | null
-  conversations: ConversationEntry[]
-}
-
-export type PlatformEntry = {
-  platform: string
-  title?: string | null
-  accounts: PlatformAccount[]
-  conversation_count: number
-  conversation_counts: ConversationCounts
-}
-
-export type PlatformInventory = {
-  platforms: PlatformEntry[]
-}
-
 export type IntegrationSpec = {
   actors?: string[]
   channel_policy?: ChannelAccessPolicy
@@ -470,7 +449,7 @@ export type IntegrationSpec = {
   mode: IntegrationMode
   poll_seconds: number
   provider: string
-  resource: ResourceSelector
+  resource: string
   thread?: string | null
   title: string
   total_limit: number
@@ -520,6 +499,24 @@ export type MemorySource = {
 }
 
 export type MemoryStatus = 'active' | 'archived' | 'superseded'
+
+export type PlatformAccount = {
+  account: string
+  binding_id: string
+  conversations: ConversationEntry[]
+  last_error?: string | null
+  selector: string
+  state: BindingState
+  tenant: string
+}
+
+export type PlatformEntry = {
+  accounts: PlatformAccount[]
+  conversation_count: number
+  conversation_counts: ConversationCounts
+  platform: string
+  title?: string | null
+}
 
 export type Reminder = {
   created_at_ms: number
@@ -626,7 +623,6 @@ export type BotProfile = {
   name: string
   persona: BotPersona
   revision: number
-  session_id: number
   updated_at_ms: number
 }
 
@@ -663,7 +659,7 @@ export type IntegrationsSnapshot = {
   bindings: IntegrationBinding[]
   providers: IntegrationProvider[]
   source_session_id: number
-  workspace_id: number
+  workspace_id?: number | null
 }
 
 export type IntegrationDetail = {
@@ -672,6 +668,11 @@ export type IntegrationDetail = {
   channel_sessions: ChannelSessionRecord[]
   deliveries: IntegrationDelivery[]
   events: IntegrationEvent[]
+}
+
+/** Read-only inventory of every chat platform this instance serves. The shape mirrors how an operator thinks about the deployment: a platform (one adapter account), the conversations seen through it, and the sessions those conversations map to. Nothing here triggers work or sends a message. */
+export type PlatformInventory = {
+  platforms: PlatformEntry[]
 }
 
 export type CreateIntegration = {

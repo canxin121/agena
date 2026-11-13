@@ -123,11 +123,13 @@ class WebhookChat:
                     if type(event.get("occurred_at_ms")) is not int:
                         raise ValueError("message creation time is required")
                     channel=event.get("channel")
-                    if not isinstance(channel,dict) or set(channel)!={"identity","actor_verified","is_member","addressed_to_bot","verified_at_ms"}:
+                    if not isinstance(channel,dict) or set(channel)!={"identity","kind","actor_verified","is_member","addressed_to_bot","verified_at_ms"}:
                         raise ValueError("verified channel context is required")
                     identity=channel.get("identity")
-                    if not isinstance(identity,dict) or set(identity)!={"tenant","account","kind"} or identity["kind"] not in {"direct","group","public_channel","private_channel"}:
+                    if not isinstance(identity,dict) or set(identity)!={"tenant","account"}:
                         raise ValueError("invalid channel identity")
+                    if channel["kind"] not in {"direct","group","broadcast"}:
+                        raise ValueError("invalid conversation kind")
                     for field in ("tenant","account"):
                         value=identity[field]
                         if not isinstance(value,str) or not 0<len(value.encode())<=256 or any(c.isspace() or unicodedata.category(c)=="Cc" for c in value):
@@ -140,7 +142,7 @@ class WebhookChat:
                     digest = hashlib.sha256(normalized).hexdigest()
                     with owner.database() as db:
                         db.execute("BEGIN IMMEDIATE")
-                        prior = db.execute("SELECT digest FROM inbox_v2 WHERE tenant=? AND account=? AND kind=? AND resource=? AND event_id=?", (identity["tenant"],identity["account"],identity["kind"],event["resource"], event["id"])).fetchone()
+                        prior = db.execute("SELECT digest FROM inbox_v2 WHERE tenant=? AND account=? AND kind=? AND resource=? AND event_id=?", (identity["tenant"],identity["account"],channel["kind"],event["resource"], event["id"])).fetchone()
                         if prior:
                             if prior[0] != digest:
                                 self.respond(409, {"error": "message identity already has different content"})
@@ -150,7 +152,7 @@ class WebhookChat:
                         if db.execute("SELECT COUNT(*) FROM inbox_v2").fetchone()[0] >= 10000:
                             self.respond(429, {"accepted": False, "error": "inbox capacity reached; archive acknowledged history"})
                             return
-                        db.execute("INSERT INTO inbox_v2(tenant,account,kind,resource,event_id,digest,event_json) VALUES(?,?,?,?,?,?,?)", (identity["tenant"],identity["account"],identity["kind"],event["resource"], event["id"], digest, normalized.decode()))
+                        db.execute("INSERT INTO inbox_v2(tenant,account,kind,resource,event_id,digest,event_json) VALUES(?,?,?,?,?,?,?)", (identity["tenant"],identity["account"],channel["kind"],event["resource"], event["id"], digest, normalized.decode()))
                         db.commit()
                     self.respond(202, {"accepted": True})
                 except (ValueError, TypeError, KeyError):
@@ -191,15 +193,17 @@ class WebhookChat:
     def poll(self, request: dict[str, Any]) -> dict[str, Any]:
         conversation=request["config"]["conversation"]
         identity=request.get("channel_identity")
-        if not isinstance(identity,dict) or set(identity)!={"tenant","account","kind"}:
-            raise ValueError("host must pin tenant, account and conversation kind")
+        if not isinstance(identity,dict) or set(identity)!={"tenant","account"}:
+            raise ValueError("host must pin tenant and account")
         old=request.get("cursor") or {}
         if old and (old.get("conversation")!=conversation or old.get("identity")!=identity):
             raise ValueError("cursor belongs to another channel namespace")
         after=int(old.get("sequence",0));limit=min(max(int(request["limit"]),1),32)
         with self.database() as db:
             db.execute("BEGIN")
-            rows=db.execute("SELECT sequence,event_json FROM inbox_v2 WHERE tenant=? AND account=? AND kind=? AND resource=? AND sequence>? ORDER BY sequence LIMIT ?",(identity["tenant"],identity["account"],identity["kind"],conversation,after,limit)).fetchall()
+            kinds=request.get("channel_kinds") or ["direct","group","broadcast"]
+            marks=",".join("?" for _ in kinds)
+            rows=db.execute(f"SELECT sequence,event_json FROM inbox_v2 WHERE tenant=? AND account=? AND kind IN ({marks}) AND resource=? AND sequence>? ORDER BY sequence LIMIT ?",(identity["tenant"],identity["account"],*kinds,conversation,after,limit)).fetchall()
             head=db.execute("SELECT COALESCE(MAX(sequence),0) FROM inbox_v2").fetchone()[0]
         cursor={"identity":identity,"conversation":conversation,"sequence":rows[-1][0] if len(rows)==limit else max(after,head)}
         return {"events":[json.loads(row[1]) for row in rows],"cursor":cursor,"retry_after_seconds":1}
@@ -208,10 +212,10 @@ class WebhookChat:
         if request["resource"] != request["config"]["conversation"]:
             raise ValueError("outbound destination differs from the configured conversation")
         identity=request.get("channel")
-        if not isinstance(identity,dict) or set(identity)!={"tenant","account","kind"}:
+        if not isinstance(identity,dict) or set(identity)!={"tenant","account"}:
             raise ValueError("outbound channel identity is required")
         key = request["delivery_id"]
-        payload = {"channel":identity,"delivery_id": key, "conversation": request["resource"], "thread": request.get("thread"), "text": request["text"]}
+        payload = {"channel":identity,"kind": request.get("kind"), "delivery_id": key, "conversation": request["resource"], "thread": request.get("thread"), "text": request["text"]}
         body = compact(payload)
         if len(body) > MAX_EVENT:
             raise ValueError("outbound body too large")

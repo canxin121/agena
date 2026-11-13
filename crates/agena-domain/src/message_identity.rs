@@ -115,6 +115,27 @@ impl Platform {
 ///
 /// This is a property of the message, not of the binding: one platform account
 /// serves direct chats, groups and channels at the same time.
+/// The shape of the conversation a message was sent in.
+///
+/// This is a property of the message, not of the binding: one platform account
+/// serves direct chats, multi-party rooms and broadcast channels at the same
+/// time. Four mutually exclusive values cover every adapter surveyed:
+///
+/// - `Direct` — a one-to-one conversation (Telegram private, WeCom single,
+///   Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).
+/// - `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,
+///   Discord group DM, QQ temporary C2C from a group) and interactive channels
+///   (Slack channel, Discord guild text, Feishu group) belong here because the
+///   assistant behaves identically: shared transcript, mention-gated trigger,
+///   several readers.
+/// - `Broadcast` — a one-to-many surface where posting is restricted to
+///   owners/admins (Telegram channel, WhatsApp newsletter, Discord
+///   announcement). The assistant may be unable to reply at all.
+///
+/// Visibility (public vs private) is deliberately *not* a kind: only Slack and
+/// Discord private threads expose it, and no policy branches on it. Threads are
+/// a separate axis carried by the message's `thread` field, never folded into
+/// this enum.
 #[derive(
     Debug,
     Clone,
@@ -134,8 +155,7 @@ pub enum ConversationKind {
     #[default]
     Direct,
     Group,
-    PublicChannel,
-    PrivateChannel,
+    Broadcast,
 }
 
 impl ConversationKind {
@@ -143,8 +163,16 @@ impl ConversationKind {
         match self {
             Self::Direct => "direct",
             Self::Group => "group",
-            Self::PublicChannel => "public_channel",
-            Self::PrivateChannel => "private_channel",
+            Self::Broadcast => "broadcast",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "direct" => Some(Self::Direct),
+            "group" => Some(Self::Group),
+            "broadcast" => Some(Self::Broadcast),
+            _ => None,
         }
     }
 
@@ -316,7 +344,7 @@ mod tests {
     fn conversation_kind_gates_threads() {
         assert!(!ConversationKind::Direct.supports_threads());
         assert!(ConversationKind::Group.supports_threads());
-        assert!(ConversationKind::PrivateChannel.supports_threads());
+        assert!(ConversationKind::Broadcast.supports_threads());
     }
 
     #[test]

@@ -284,9 +284,16 @@ impl KernelPromptHydrator {
             raw.attachments.clear();
             let rendered = executor.render_tool_result(&invocation, &raw).await;
             if let Some(text) = rendered.model {
+                // Bound only what actually exceeds the budget: the marker is a
+                // statement about truncation, so appending it to a result that
+                // was kept whole would misreport the result and break a client
+                // that parses the text as JSON.
                 let marker = "[Tool result preview limited.]";
-                let text =
-                    crate::tool::bounded_model_output_preview(&text, marker, 2000, 50 * 1024);
+                let text = if crate::tool::model_output_exceeds_boundary(&text, 2000, 50 * 1024) {
+                    crate::tool::bounded_model_output_preview(&text, marker, 2000, 50 * 1024)
+                } else {
+                    text
+                };
                 let mut envelope: Value =
                     serde_json::from_str(output_json).map_err(|e| invalid(e.to_string()))?;
                 envelope["result"] = json!({"model":text});

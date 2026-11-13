@@ -255,6 +255,16 @@ fn user_messages(messages: &Value, field: &str, texts: &mut Vec<String>) {
 }
 
 fn output_text(output: &Value) -> String {
+    // A multimodal function output carries the protocol envelope first and any
+    // media/resource items after it. Concatenating every text item would make
+    // the envelope unparseable, so the leading envelope wins and the extra
+    // items are only reachable through `tool_output_items`.
+    if let Some(items) = output.as_array()
+        && let Some(first) = items.first().and_then(|item| item.get("text"))
+        && let Some(text) = first.as_str()
+    {
+        return text.to_owned();
+    }
     let mut texts = Vec::new();
     collect_text(output, &mut texts);
     if texts.is_empty() && !output.is_null() {

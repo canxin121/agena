@@ -246,14 +246,7 @@ pub mod method {
     /// Plugin discovery: every loaded plugin with its summary, tags and tools.
     pub const HOST_PLUGIN_LIST: &str = "host/plugin.list";
     pub const HOST_LSP_LIST_SERVERS: &str = "host/lsp.list_servers";
-    pub const HOST_LSP_LIST_DIAGNOSTICS: &str = "host/lsp.list_diagnostics";
-    pub const HOST_SCHEDULER_LIST: &str = "host/scheduler.list";
-    pub const HOST_SCHEDULER_CREATE: &str = "host/scheduler.create";
-    pub const HOST_SCHEDULER_DELETE: &str = "host/scheduler.delete";
     pub const HOST_HOOK_LIST: &str = "host/hook.list";
-    pub const HOST_MCP_LIST_SERVERS: &str = "host/mcp.list_servers";
-    pub const HOST_MCP_ADD_SERVER: &str = "host/mcp.add_server";
-    pub const HOST_MCP_REMOVE_SERVER: &str = "host/mcp.remove_server";
     pub const HOST_UI_DISPLAY_CONTRIBUTE: &str = "host/ui.display.contribute";
     pub const HOST_UI_DISPLAY_REMOVE: &str = "host/ui.display.remove";
     pub const HOST_NOTIFY: &str = "host/notify";

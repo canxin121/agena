@@ -48,6 +48,7 @@ type ProviderModel = {
   adapter_id?: string | null
   id: string
   catalog_model_id?: string | null
+  pinned_catalog_model_id?: string | null
   display_name?: string | null
   native_compaction?: boolean
   capabilities?: LooseRecord
@@ -127,6 +128,12 @@ const modelError = ref('')
 const modelConfigValues = ref<Record<string, LooseRecord>>({})
 const catalogMatches = ref<Record<string, CatalogPickerModel | null>>({})
 const manualCatalogSelections = ref<Record<string, CatalogPickerModel>>({})
+/**
+ * Routes on which this session chose "Use suggested match". Their stored pin is
+ * stale until the route is re-saved, so the saved-match map must not resurrect
+ * the selection the user just cleared.
+ */
+const clearedCatalogSelections = ref<Set<string>>(new Set())
 const catalogMatchesLoading = ref(false)
 const catalogMatchesLoaded = ref(false)
 const catalogMatchError = ref('')
@@ -283,12 +290,6 @@ const modelFields = computed<ModelField[]>(() => [
     label: st('Parallel tools'),
     kind: 'boolean',
   },
-  {
-    key: 'manual_overrides',
-    label: st('Manual overrides'),
-    kind: 'boolean',
-    help: st('Keep this route own values instead of the refreshed catalog values.'),
-  },
   { key: 'agena_tools.mode', label: st('Agena tool mode'), kind: 'select', options: modelToolModeOptions.value },
   {
     key: 'display_name',
@@ -343,7 +344,6 @@ const modelFieldGroups = computed(() =>
         'enabled',
         'native_compaction',
         'supports_parallel_tool_calls',
-        'manual_overrides',
         'agena_tools.mode',
         'features',
         'input',
@@ -548,17 +548,27 @@ async function refreshCatalogMatches() {
   }
   catalogMatchesLoading.value = true
   try {
+    const savedMatches = savedCatalogMatches()
+    const pinnedIds = [...new Set(Object.values(savedMatches).map((catalog) => catalog.model_id))]
+    const ids = [...new Set(models.map((model) => model.id))]
     const response = await apiJson<{ items?: Array<{ model_id: string; catalog?: CatalogPickerModel | null }> }>(
       '/api/v1/model-catalog/match',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model_ids: [...new Set(models.map((model) => model.id))] }),
+        body: JSON.stringify({ model_ids: [...ids, ...pinnedIds] }),
       },
     )
     if (request !== catalogMatchGeneration) return
     const byId = new Map((response.items || []).map((item) => [item.model_id, item.catalog || null]))
     catalogMatches.value = Object.fromEntries(models.map((model) => [model.key, byId.get(model.id) || null]))
+    // A route with a stored match keeps showing it as its own selection rather
+    // than the automatic suggestion, even though this session made no choice.
+    const selections = { ...manualCatalogSelections.value }
+    for (const [key, catalog] of Object.entries(savedMatches)) {
+      if (!clearedCatalogSelections.value.has(key)) selections[key] = catalog
+    }
+    manualCatalogSelections.value = selections
     catalogMatchesLoaded.value = true
   } catch (reason) {
     if (request !== catalogMatchGeneration) return
@@ -566,6 +576,22 @@ async function refreshCatalogMatches() {
   } finally {
     if (request === catalogMatchGeneration) catalogMatchesLoading.value = false
   }
+}
+
+/**
+ * Catalog matches stored on the routes themselves. These survive a reload, so
+ * a corrected match reads back as the route's selection instead of reverting
+ * to the catalog's id-derived suggestion.
+ */
+function savedCatalogMatches(): Record<string, CatalogPickerModel> {
+  const saved: Record<string, CatalogPickerModel> = {}
+  for (const adapter of adapterModels.value) {
+    for (const model of adapter.models) {
+      const pinned = String(model.pinned_catalog_model_id || '').trim()
+      if (pinned) saved[modelKey(adapter.adapter_id, model.id)] = { model_id: pinned }
+    }
+  }
+  return saved
 }
 
 type ProviderRow = {
@@ -770,6 +796,7 @@ function clearModelStudioState() {
   modelConfigValues.value = {}
   catalogMatches.value = {}
   manualCatalogSelections.value = {}
+  clearedCatalogSelections.value = new Set()
   catalogMatchesLoading.value = false
   catalogMatchesLoaded.value = false
   catalogMatchError.value = ''
@@ -1625,7 +1652,6 @@ function addManualModel() {
     adapter_id: adapterId,
     id: modelId,
     native_compaction: true,
-    manual_overrides: false,
     capabilities: {},
     metadata: {},
     thinking_modes: [],
@@ -1703,7 +1729,7 @@ function closeModelEditor(discardPending = false) {
   return true
 }
 
-async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) {
+async function applyCatalogTemplate(catalog: CatalogPickerModel) {
   const editing = editingModel.value
   if (!editing || !modelValue.value || catalogApplying.value) return
   const editorGeneration = modelEditorGeneration
@@ -1721,31 +1747,65 @@ async function applyCatalogTemplate(catalog: CatalogPickerModel, manual = true) 
     const response = await apiJson<{ value?: JsonValue }>('/api/v1/provider-studio/draft/model/catalog-template', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        catalog_model_id: catalog.model_id,
-        model_value: current,
-        manual_overrides: manual,
-      }),
+      body: JSON.stringify({ catalog_model_id: catalog.model_id, model_value: current }),
     })
     if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
     const next = canonicalizeModelConfig(response.value ?? {})
     modelValue.value = next
     setModelJsonText(JSON.stringify(next, null, 2))
     stageCurrentModelValue(next, true)
-    // Choosing a catalog entry changes this route's identity, so the route must
-    // keep its own values from now on. Without this the next open, listing or
-    // save silently replaces the choice with the catalog's automatic match.
+    // The route now names this entry, which becomes its base. Any field left
+    // unset keeps following that entry, including through catalog refreshes.
     const key = modelKey(editing.adapterId, editing.modelId)
-    if (manual) {
-      selectModelRoute(editing.adapterId, editing.modelId)
-      const selections = { ...manualCatalogSelections.value }
-      selections[key] = catalog
-      manualCatalogSelections.value = selections
-    } else {
-      const selections = { ...manualCatalogSelections.value }
-      delete selections[key]
-      manualCatalogSelections.value = selections
-    }
+    selectModelRoute(editing.adapterId, editing.modelId)
+    const cleared = new Set(clearedCatalogSelections.value)
+    cleared.delete(key)
+    clearedCatalogSelections.value = cleared
+    const selections = { ...manualCatalogSelections.value }
+    selections[key] = catalog
+    manualCatalogSelections.value = selections
+    catalogPickerOpen.value = false
+  } catch (reason) {
+    if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    if (applyGeneration === catalogApplyGeneration) catalogApplying.value = false
+  }
+}
+
+/** Drop the route's catalog match so it resolves the catalog automatically. */
+async function clearCatalogTemplate() {
+  const editing = editingModel.value
+  if (!editing || !modelValue.value || catalogApplying.value) return
+  const editorGeneration = modelEditorGeneration
+  const applyGeneration = ++catalogApplyGeneration
+  let current: LooseRecord
+  try {
+    current = modelJsonDirty.value ? syncModelValueFromJson() : modelValue.value
+  } catch (reason) {
+    modelError.value = reason instanceof Error ? reason.message : String(reason)
+    return
+  }
+  catalogApplying.value = true
+  modelError.value = ''
+  try {
+    const response = await apiJson<{ value?: JsonValue }>('/api/v1/provider-studio/draft/model/catalog-template', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model_value: current, clear: true }),
+    })
+    if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
+    const next = canonicalizeModelConfig(response.value ?? {})
+    modelValue.value = next
+    setModelJsonText(JSON.stringify(next, null, 2))
+    stageCurrentModelValue(next, true)
+    const key = modelKey(editing.adapterId, editing.modelId)
+    const cleared = new Set(clearedCatalogSelections.value)
+    cleared.add(key)
+    clearedCatalogSelections.value = cleared
+    const selections = { ...manualCatalogSelections.value }
+    delete selections[key]
+    manualCatalogSelections.value = selections
     catalogPickerOpen.value = false
   } catch (reason) {
     if (editorGeneration !== modelEditorGeneration || applyGeneration !== catalogApplyGeneration) return
@@ -1814,9 +1874,6 @@ function modelFieldValue(key: string): string {
 
 function modelFieldBooleanValue(key: string): boolean {
   const current = modelPathValue(key)
-  // A route follows the catalog unless it explicitly opts out, so the
-  // manual-overrides switch is off when the field is absent.
-  if (key === 'manual_overrides') return current === true
   return current !== false
 }
 
@@ -1931,7 +1988,7 @@ function setModelFieldValue(key: string, value: string | number | boolean) {
   // so saving the provider cannot drop the row the user is editing.
   const editing = editingModel.value
   if (editing) selectModelRoute(editing.adapterId, editing.modelId)
-  stageCurrentModelValue(next, key === 'display_name' || key === 'native_compaction' || key === 'manual_overrides')
+  stageCurrentModelValue(next, key === 'display_name' || key === 'native_compaction')
   modelError.value = ''
 }
 
@@ -1975,7 +2032,6 @@ function updateModelRowFromValue(adapterId: string, modelId: string, value: Loos
         if (typeof value.display_name === 'string') next.display_name = value.display_name
         else if (value.display_name === null) next.display_name = null
         if (typeof value.native_compaction === 'boolean') next.native_compaction = value.native_compaction
-        if (typeof value.manual_overrides === 'boolean') next.manual_overrides = value.manual_overrides
         return next
       }),
     }
@@ -2000,6 +2056,9 @@ async function deleteModel(adapterId: string, modelId: string) {
   const nextSelections = { ...manualCatalogSelections.value }
   delete nextSelections[key]
   manualCatalogSelections.value = nextSelections
+  const nextCleared = new Set(clearedCatalogSelections.value)
+  nextCleared.delete(key)
+  clearedCatalogSelections.value = nextCleared
   adapterModels.value = adapterModels.value.map((adapter) =>
     adapter.adapter_id === adapterId
       ? { ...adapter, models: adapter.models.filter((model) => model.id !== modelId) }
@@ -2030,6 +2089,9 @@ async function deleteAdapter(adapterId: string) {
   modelConfigValues.value = nextValues
   manualCatalogSelections.value = Object.fromEntries(
     Object.entries(manualCatalogSelections.value).filter(([key]) => !key.startsWith(`${adapterId}\u001f`)),
+  )
+  clearedCatalogSelections.value = new Set(
+    [...clearedCatalogSelections.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)),
   )
   selectedModelKeys.value = new Set([...selectedModelKeys.value].filter((key) => !key.startsWith(`${adapterId}\u001f`)))
   markEditorDirty()
@@ -2721,7 +2783,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                                 variant="ghost"
                                 size="sm"
                                 :disabled="catalogApplying"
-                                @click.stop="applyCatalogTemplate(editingAutomaticMatch()!, false)"
+                                @click.stop="clearCatalogTemplate()"
                                 >{{ $st('Use suggested match') }}</Button
                               >
                               <Button

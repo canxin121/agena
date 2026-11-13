@@ -713,19 +713,31 @@ Operator Bot access to ordinary project sessions and integration grants.
         },
         "allow_unlisted_chat": {
           "default": false,
-          "description": "Unlisted platform members can only get chat-only Member access. This\noption never confers Member's optional privileged grant.",
+          "description": "Unlisted platform members can only get chat-only Member access. This\noption never confers the binding capability grant.",
           "type": "boolean"
         },
-        "grants": {
-          "additionalProperties": {
-            "$ref": "#/$defs/ChannelGrant"
+        "grant": {
+          "$ref": "#/$defs/ChannelGrant",
+          "default": {
+            "mcp_tools": {},
+            "network_hosts": [],
+            "private_memory": false,
+            "source_workspace": false,
+            "tools": []
           },
-          "default": {},
-          "properties": {},
-          "type": "object"
+          "description": "Capabilities available to every admitted member of this binding.\n\nThis is deliberately one grant per binding rather than one per role.\nA conversation's transcript is shared by everyone speaking in it, so\nletting two roles hold different tools would let a low-privilege\nmessage drive a tool whose output the whole room then reads. One grant\nmakes that leak structurally impossible; roles continue to govern\nmembership management only."
         },
         "identity": {
           "$ref": "#/$defs/ChannelIdentity"
+        },
+        "kinds": {
+          "default": [],
+          "description": "Room shapes this binding may serve. Empty means every shape the adapter\nreports. The shape of any individual message is still decided per\nmessage, and `Direct` keeps its stricter session rules wherever it\nappears.",
+          "items": {
+            "$ref": "#/$defs/ConversationKind"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "members": {
           "description": "Explicit local assignments override the open-member option, including\na Blocked entry. Remote platform administrator claims are ignored.",
@@ -752,7 +764,7 @@ Operator Bot access to ordinary project sessions and integration grants.
         },
         "session_mode": {
           "$ref": "#/$defs/ChannelSessionMode",
-          "default": "per_user"
+          "default": "per_conversation"
         },
         "thread_mode": {
           "$ref": "#/$defs/ChannelThreadMode",
@@ -816,12 +828,10 @@ Operator Bot access to ordinary project sessions and integration grants.
     },
     "ChannelIdentity": {
       "additionalProperties": false,
+      "description": "The chat transport identity: tenant plus account. No room shape here.",
       "properties": {
         "account": {
           "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/ChannelKind"
         },
         "tenant": {
           "type": "string"
@@ -829,19 +839,9 @@ Operator Bot access to ordinary project sessions and integration grants.
       },
       "required": [
         "tenant",
-        "account",
-        "kind"
+        "account"
       ],
       "type": "object"
-    },
-    "ChannelKind": {
-      "enum": [
-        "direct",
-        "group",
-        "public_channel",
-        "private_channel"
-      ],
-      "type": "string"
     },
     "ChannelMember": {
       "additionalProperties": false,
@@ -878,9 +878,10 @@ Operator Bot access to ordinary project sessions and integration grants.
       "type": "string"
     },
     "ChannelSessionMode": {
+      "description": "How one conversation's sessions are partitioned.\n\n`PerConversation` is the default: a group is one session shared by all of\nits members, a direct chat is one session per participant, and a channel is\none session per channel. Context is never merged across conversations or\nacross platform accounts.\n\n`PerActor` additionally splits a single conversation by speaker. It is an\nexplicit opt-in for rooms whose members must not share a transcript.",
       "enum": [
-        "per_user",
-        "shared_chat"
+        "per_conversation",
+        "per_actor"
       ],
       "type": "string"
     },
@@ -895,6 +896,15 @@ Operator Bot access to ordinary project sessions and integration grants.
       "enum": [
         "direct_or_mention",
         "every_message"
+      ],
+      "type": "string"
+    },
+    "ConversationKind": {
+      "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
+      "enum": [
+        "direct",
+        "group",
+        "broadcast"
       ],
       "type": "string"
     },
@@ -977,6 +987,7 @@ Operator Bot access to ordinary project sessions and integration grants.
           "type": "string"
         },
         "resource": {
+          "description": "One conversation, an explicit set, or every conversation the adapter\nreports for this account.",
           "type": "string"
         },
         "thread": {
@@ -8951,6 +8962,7 @@ Structured code search and syntax inspection tools.
 | --- | --- | --- | --- | --- |
 | `apply` | `boolean` | — | `false` | False previews; true publishes after checking expected_sha256. |
 | `expected_sha256` | `string / null` | — | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `language` | `CodeLanguage / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
 | `pattern` | `string / null` | — | — |  |
@@ -9044,7 +9056,7 @@ Structured code search and syntax inspection tools.
       "default": false,
       "description": "False previews; true publishes after checking expected_sha256.",
       "type": "boolean",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "expected_sha256": {
       "minLength": 1,
@@ -9057,7 +9069,15 @@ Structured code search and syntax inspection tools.
         "null"
       ],
       "x-agena-non-empty": true,
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
+    },
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
     },
     "language": {
       "anyOf": [
@@ -9068,7 +9088,7 @@ Structured code search and syntax inspection tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "path": {
       "minLength": 1,
@@ -9102,7 +9122,7 @@ Structured code search and syntax inspection tools.
     },
     "rule": {
       "description": "Structured ast-grep rule; the same shape as search_ast.rule.",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     }
   },
   "required": [
@@ -9130,6 +9150,7 @@ Structured code search and syntax inspection tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `language` | `CodeLanguage / null` | — | — |  |
 | `limit` | `integer / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
@@ -9219,6 +9240,14 @@ Structured code search and syntax inspection tools.
     ]
   },
   "properties": {
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "language": {
       "anyOf": [
         {
@@ -9228,7 +9257,7 @@ Structured code search and syntax inspection tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "limit": {
       "format": "uint32",
@@ -9267,7 +9296,7 @@ Structured code search and syntax inspection tools.
     },
     "rule": {
       "description": "Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.).",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     }
   },
   "required": [
@@ -9294,6 +9323,7 @@ Structured code search and syntax inspection tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `language` | `CodeLanguage / null` | — | — |  |
 | `max_depth` | `integer / null` | — | — |  |
 | `path` | `string` | ✓ | — |  |
@@ -9381,6 +9411,14 @@ Structured code search and syntax inspection tools.
     ]
   },
   "properties": {
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "language": {
       "anyOf": [
         {
@@ -9390,7 +9428,7 @@ Structured code search and syntax inspection tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "max_depth": {
       "format": "uint8",
@@ -10715,6 +10753,7 @@ Filesystem command tools for read/search and explicit edits.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `folder` | `string / null` | — | — | Base folder for relative patch paths. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
 | `patch` | `string` | ✓ | — | Unified patch text to apply to the workspace. |
 
 **Input schema**:
@@ -10722,6 +10761,20 @@ Filesystem command tools for read/search and explicit edits.
 {
   "description": "Textual patch payload in the agena patch format. Must start with the exact\nmarker line `*** Begin Patch` and end with the exact marker line\n`*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`\ndirectives with `@@` or `@@ exact context line` hunks. Context lines start\nwith a space, removed lines with `-`, and added lines with `+`. Matching is\nexact and line-oriented; ambiguous targets are rejected. `*** End of File`\nrestricts the last hunk to EOF. `\\ No newline at end of file` after a content\nline specifies a missing final newline. Existing line endings are preserved.",
   "properties": {
+    "folder": {
+      "description": "Base folder for relative patch paths. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000000"
+    },
     "patch": {
       "description": "Unified patch text to apply to the workspace.",
       "maxLength": 16777216,
@@ -10752,6 +10805,7 @@ Filesystem command tools for read/search and explicit edits.
 | --- | --- | --- | --- | --- |
 | `backend` | `Backend` | — | `auto` |  |
 | `fixed_strings` | `boolean` | — | `true` |  |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `ignore_case` | `boolean` | — | `false` |  |
 | `max_lines` | `integer` | — | `100` |  |
 | `path` | `string` | ✓ | — |  |
@@ -10769,7 +10823,7 @@ Filesystem command tools for read/search and explicit edits.
         "markitdown"
       ],
       "type": "string",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     }
   },
   "additionalProperties": false,
@@ -10824,12 +10878,20 @@ Filesystem command tools for read/search and explicit edits.
     "fixed_strings": {
       "default": true,
       "type": "boolean",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
+    },
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
     },
     "ignore_case": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "max_lines": {
       "default": 100,
@@ -10893,6 +10955,7 @@ Filesystem command tools for read/search and explicit edits.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `exclude` | `array<string>` | — | — | Exclude matching base-path-relative globs. Exclusions win. |
+| `folder` | `string / null` | — | — | Base folder for a relative `path`. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `include_ignored` | `boolean` | — | `false` | Include dependency, VCS, and build-output directories that are skipped<br>by default (`.git`, `node_modules`, `target`, `dist`, and caches). |
 | `kind` | `GlobKind` | — | `all` | Filter by path kind; defaults to both files and directories. |
 | `limit` | `integer / null` | — | — | Maximum paths to return. Defaults to 200 and cannot exceed 1000. |
@@ -10912,7 +10975,7 @@ Filesystem command tools for read/search and explicit edits.
         "directory"
       ],
       "type": "string",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     }
   },
   "additionalProperties": false,
@@ -10970,13 +11033,27 @@ Filesystem command tools for read/search and explicit edits.
       },
       "maxItems": 32,
       "type": "array",
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
+    },
+    "folder": {
+      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000002"
     },
     "include_ignored": {
       "default": false,
       "description": "Include dependency, VCS, and build-output directories that are skipped\nby default (`.git`, `node_modules`, `target`, `dist`, and caches).",
       "type": "boolean",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "kind": {
       "$ref": "#/$defs/GlobKind",
@@ -10991,7 +11068,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "offset": {
       "description": "Number of matching paths to skip before returning results.",
@@ -11001,7 +11078,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "path": {
       "description": "Optional base path. Defaults to the workspace root.",
@@ -11055,6 +11132,7 @@ Filesystem command tools for read/search and explicit edits.
 | `case` | `GrepCase` | — | `sensitive` | Sensitive by default; smart ignores case for patterns without uppercase. |
 | `exclude` | `array<string>` | — | — | Exclude relative-path globs; exclusions override all includes. |
 | `fixed_strings` | `boolean` | — | `false` | Treat pattern literally instead of as a regex. |
+| `folder` | `string / null` | — | — | Base folder for a relative `path`. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `include` | `string / null` | — | — | Optional glob filter applied before matching lines. |
 | `include_ignored` | `boolean` | — | `false` | Include hidden and ignored files that are skipped by default according<br>to ripgrep-compatible ignore rules. |
 | `includes` | `array<string>` | — | — | Additional include globs, ORed with `include`. An empty set includes all. |
@@ -11083,7 +11161,7 @@ Filesystem command tools for read/search and explicit edits.
           "type": "string"
         }
       ],
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "GrepMode": {
       "description": "Content, matching file paths, or matching-line counts per file.",
@@ -11105,7 +11183,7 @@ Filesystem command tools for read/search and explicit edits.
           "type": "string"
         }
       ],
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
     }
   },
   "additionalProperties": false,
@@ -11118,7 +11196,7 @@ Filesystem command tools for read/search and explicit edits.
       "maximum": 20,
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000010"
+      "x-agena-order": "000011"
     },
     "before_context": {
       "default": 0,
@@ -11127,7 +11205,7 @@ Filesystem command tools for read/search and explicit edits.
       "maximum": 20,
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000009"
+      "x-agena-order": "000010"
     },
     "case": {
       "$ref": "#/$defs/GrepCase",
@@ -11143,13 +11221,27 @@ Filesystem command tools for read/search and explicit edits.
       },
       "maxItems": 32,
       "type": "array",
-      "x-agena-order": "000008"
+      "x-agena-order": "000009"
     },
     "fixed_strings": {
       "default": false,
       "description": "Treat pattern literally instead of as a regex.",
       "type": "boolean",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
+    },
+    "folder": {
+      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001"
     },
     "include": {
       "description": "Optional glob filter applied before matching lines.",
@@ -11164,13 +11256,13 @@ Filesystem command tools for read/search and explicit edits.
         "null"
       ],
       "x-agena-non-empty": true,
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "include_ignored": {
       "default": false,
       "description": "Include hidden and ignored files that are skipped by default according\nto ripgrep-compatible ignore rules.",
       "type": "boolean",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "includes": {
       "description": "Additional include globs, ORed with `include`. An empty set includes all.",
@@ -11181,7 +11273,7 @@ Filesystem command tools for read/search and explicit edits.
       },
       "maxItems": 32,
       "type": "array",
-      "x-agena-order": "000007"
+      "x-agena-order": "000008"
     },
     "max_results": {
       "description": "Global matching-line limit in content mode, matching-file limit otherwise.\nDefaults to 500; 1–500. Context lines do not consume this limit.",
@@ -11192,7 +11284,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000011"
+      "x-agena-order": "000012"
     },
     "mode": {
       "$ref": "#/$defs/GrepMode",
@@ -11245,6 +11337,7 @@ Filesystem command tools for read/search and explicit edits.
 | `byte_limit` | `integer / null` | — | — | Byte-range page size (4–16384; default 8192). May start at byte 0 when<br>byte_offset is omitted. UTF-8 boundaries are preserved. |
 | `byte_offset` | `integer / null` | — | — | Zero-based byte position for a text byte-range read. Cannot be combined<br>with line/entry offset or limit. Useful for very long single lines. |
 | `file_path` | `string` | ✓ | — | File or directory path to read. Relative paths are resolved from the<br>workspace root. |
+| `folder` | `string / null` | — | — | Base folder for a relative `file_path`. Only global (Bot) sessions,<br>which have no project folder of their own, use it; a project session<br>always resolves against its project root and ignores this field. |
 | `limit` | `integer / null` | — | — | Maximum number of lines or directory entries to return. |
 | `mode` | `ReadMode` | — | `auto` | How to render the target: `text`, `attachment`, or `auto`. |
 | `offset` | `integer / null` | — | — | 1-based offset for file lines or directory entries. |
@@ -11261,7 +11354,7 @@ Filesystem command tools for read/search and explicit edits.
         "auto"
       ],
       "type": "string",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     }
   },
   "description": "Input of the file read tool.",
@@ -11318,7 +11411,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "byte_offset": {
       "description": "Zero-based byte position for a text byte-range read. Cannot be combined\nwith line/entry offset or limit. Useful for very long single lines.",
@@ -11328,7 +11421,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "file_path": {
       "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
@@ -11341,6 +11434,20 @@ Filesystem command tools for read/search and explicit edits.
       "x-agena-non-empty": true,
       "x-agena-order": "000000"
     },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions,\nwhich have no project folder of their own, use it; a project session\nalways resolves against its project root and ignores this field.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001"
+    },
     "limit": {
       "description": "Maximum number of lines or directory entries to return.",
       "format": "uint32",
@@ -11349,7 +11456,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "mode": {
       "$ref": "#/$defs/ReadMode",
@@ -11364,7 +11471,7 @@ Filesystem command tools for read/search and explicit edits.
         "integer",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     }
   },
   "required": [
@@ -11385,6 +11492,7 @@ Filesystem command tools for read/search and explicit edits.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `max_total_bytes` | `integer` | — | `131072` |  |
 | `paths` | `array<string>` | ✓ | — |  |
 
@@ -11450,13 +11558,21 @@ Filesystem command tools for read/search and explicit edits.
     ]
   },
   "properties": {
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "max_total_bytes": {
       "default": 131072,
       "format": "uint32",
       "maximum": 1048576,
       "minimum": 1,
       "type": "integer",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "paths": {
       "items": {
@@ -11496,6 +11612,7 @@ Filesystem command tools for read/search and explicit edits.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `expected_sha256` | `string / null` | — | — | Optional revision guard from fs.stat or a previous read_media result. |
+| `folder` | `string / null` | — | — | Base folder for a relative `path`. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `path` | `string` | ✓ | — | Local image, PDF, audio, video or UTF-8 file. Relative paths resolve<br>against the active workspace, like the other filesystem tools. |
 
 **Input schema**:
@@ -11559,6 +11676,20 @@ Filesystem command tools for read/search and explicit edits.
         "null"
       ],
       "x-agena-non-empty": true,
+      "x-agena-order": "000002"
+    },
+    "folder": {
+      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
       "x-agena-order": "000001"
     },
     "path": {
@@ -11593,6 +11724,7 @@ Filesystem command tools for read/search and explicit edits.
 | --- | --- | --- | --- | --- |
 | `expected_occurrences` | `integer` | — | `1` |  |
 | `expected_sha256` | `string / null` | — | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `new` | `string` | ✓ | — |  |
 | `old` | `string` | ✓ | — |  |
 | `path` | `string` | ✓ | — |  |
@@ -11651,7 +11783,7 @@ Filesystem command tools for read/search and explicit edits.
       "format": "uint32",
       "minimum": 1,
       "type": "integer",
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "expected_sha256": {
       "minLength": 1,
@@ -11664,18 +11796,26 @@ Filesystem command tools for read/search and explicit edits.
         "null"
       ],
       "x-agena-non-empty": true,
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
+    },
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
     },
     "new": {
       "maxLength": 16777216,
       "type": "string",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "old": {
       "maxLength": 16777216,
       "minLength": 1,
       "type": "string",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "path": {
       "minLength": 1,
@@ -11690,7 +11830,7 @@ Filesystem command tools for read/search and explicit edits.
     "replace_all": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     }
   },
   "required": [
@@ -11713,6 +11853,7 @@ Filesystem command tools for read/search and explicit edits.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `hash` | `boolean` | — | `true` |  |
 | `path` | `string` | ✓ | — |  |
 
@@ -11764,10 +11905,18 @@ Filesystem command tools for read/search and explicit edits.
     ]
   },
   "properties": {
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "hash": {
       "default": true,
       "type": "boolean",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "path": {
       "minLength": 1,
@@ -11804,6 +11953,7 @@ Filesystem command tools for read/search and explicit edits.
 | `content` | `string` | ✓ | — |  |
 | `create_parents` | `boolean` | — | `false` |  |
 | `expected_sha256` | `string / null` | — | — | Required when replacing an existing file. Use the hash returned by<br>`fs.stat` or a prior mutating result. |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `path` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -11857,12 +12007,12 @@ Filesystem command tools for read/search and explicit edits.
     "content": {
       "maxLength": 16777216,
       "type": "string",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "create_parents": {
       "default": false,
       "type": "boolean",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "expected_sha256": {
       "description": "Required when replacing an existing file. Use the hash returned by\n`fs.stat` or a prior mutating result.",
@@ -11876,7 +12026,15 @@ Filesystem command tools for read/search and explicit edits.
         "null"
       ],
       "x-agena-non-empty": true,
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
+    },
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
     },
     "path": {
       "minLength": 1,
@@ -18321,6 +18479,7 @@ LSP read-only observability and navigation tools.
 | --- | --- | --- | --- | --- |
 | `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
 | `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
@@ -18376,7 +18535,7 @@ LSP read-only observability and navigation tools.
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000000.000002"
+      "x-agena-order": "000000.000003"
     },
     "file_path": {
       "minLength": 1,
@@ -18388,12 +18547,26 @@ LSP read-only observability and navigation tools.
       "x-agena-non-empty": true,
       "x-agena-order": "000000.000000"
     },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000000.000001"
+    },
     "line": {
       "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000000.000001"
+      "x-agena-order": "000000.000002"
     }
   },
   "required": [
@@ -18417,6 +18590,7 @@ LSP read-only observability and navigation tools.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `file_path` | `string` | ✓ | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
 
 **Input schema**:
 ```json
@@ -18475,6 +18649,20 @@ LSP read-only observability and navigation tools.
       "type": "string",
       "x-agena-non-empty": true,
       "x-agena-order": "000000"
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001"
     }
   },
   "required": [
@@ -18497,6 +18685,7 @@ LSP read-only observability and navigation tools.
 | --- | --- | --- | --- | --- |
 | `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
 | `line` | `integer` | ✓ | — | Zero-based source line. |
 
 **Input schema**:
@@ -18552,7 +18741,7 @@ LSP read-only observability and navigation tools.
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000000.000002"
+      "x-agena-order": "000000.000003"
     },
     "file_path": {
       "minLength": 1,
@@ -18564,12 +18753,26 @@ LSP read-only observability and navigation tools.
       "x-agena-non-empty": true,
       "x-agena-order": "000000.000000"
     },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000000.000001"
+    },
     "line": {
       "description": "Zero-based source line.",
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000000.000001"
+      "x-agena-order": "000000.000002"
     }
   },
   "required": [
@@ -18594,6 +18797,7 @@ LSP read-only observability and navigation tools.
 | --- | --- | --- | --- | --- |
 | `character` | `integer` | ✓ | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `file_path` | `string` | ✓ | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
 | `include_declaration` | `boolean` | — | `true` |  |
 | `line` | `integer` | ✓ | — | Zero-based source line. |
 
@@ -18650,7 +18854,7 @@ LSP read-only observability and navigation tools.
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000000.000002"
+      "x-agena-order": "000000.000003"
     },
     "file_path": {
       "minLength": 1,
@@ -18662,6 +18866,20 @@ LSP read-only observability and navigation tools.
       "x-agena-non-empty": true,
       "x-agena-order": "000000.000000"
     },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000000.000001"
+    },
     "include_declaration": {
       "default": true,
       "type": "boolean",
@@ -18672,7 +18890,7 @@ LSP read-only observability and navigation tools.
       "format": "uint32",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000000.000001"
+      "x-agena-order": "000000.000002"
     }
   },
   "required": [
@@ -20596,6 +20814,7 @@ Persistent memory with searchable retrieval and write tools.
     "MemoryWriteScope": {
       "enum": [
         "workspace",
+        "global",
         "session"
       ],
       "type": "string"
@@ -21037,6 +21256,7 @@ Revision-safe Jupyter notebook cell editing.
 | `cell_index` | `integer` | ✓ | — |  |
 | `cell_type` | `NotebookCellType / null` | — | — |  |
 | `expected_sha256` | `string` | ✓ | — |  |
+| `folder` | `string / null` | — | — | Base folder for a relative path. Only global (Bot) sessions use it;<br>a project session keeps resolving against its project root. |
 | `path` | `string` | ✓ | — |  |
 | `preserve_outputs` | `boolean` | — | `false` | Explicit opt-in to retaining code outputs; retained output may be stale. |
 | `source` | `string` | — | `` |  |
@@ -21061,7 +21281,7 @@ Revision-safe Jupyter notebook cell editing.
         "delete"
       ],
       "type": "string",
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     }
   },
   "additionalProperties": false,
@@ -21159,7 +21379,7 @@ Revision-safe Jupyter notebook cell editing.
       "format": "uint",
       "minimum": 0,
       "type": "integer",
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "cell_type": {
       "anyOf": [
@@ -21170,7 +21390,7 @@ Revision-safe Jupyter notebook cell editing.
           "type": "null"
         }
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "expected_sha256": {
       "minLength": 1,
@@ -21180,7 +21400,15 @@ Revision-safe Jupyter notebook cell editing.
       },
       "type": "string",
       "x-agena-non-empty": true,
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
+    },
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
     },
     "path": {
       "minLength": 1,
@@ -21196,13 +21424,13 @@ Revision-safe Jupyter notebook cell editing.
       "default": false,
       "description": "Explicit opt-in to retaining code outputs; retained output may be stale.",
       "type": "boolean",
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "source": {
       "default": "",
       "maxLength": 16777216,
       "type": "string",
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     }
   },
   "required": [
@@ -22802,6 +23030,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | --- | --- | --- | --- | --- |
 | `command` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
+| `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
 | `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
@@ -22885,6 +23114,20 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "type": "string",
       "x-agena-order": "000001.000001"
     },
+    "folder": {
+      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001.000001"
+    },
     "max_output_bytes": {
       "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
       "format": "uint32",
@@ -22908,7 +23151,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000007"
+      "x-agena-order": "000001.000008"
     },
     "reads": {
       "default": [],
@@ -22922,7 +23165,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000005"
+      "x-agena-order": "000001.000006"
     },
     "shell": {
       "$ref": "#/$defs/ProcessShell",
@@ -22963,7 +23206,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000006"
+      "x-agena-order": "000001.000007"
     }
   },
   "required": [
@@ -23137,6 +23380,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `cols` | `integer` | — | `80` |  |
 | `command` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
+| `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `include_screen` | `boolean` | — | `false` | Return the current rendered screen in addition to incremental output.<br>Enable for full-screen interfaces; ordinary prompts need only output. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
 | `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
@@ -23231,6 +23475,20 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "type": "string",
       "x-agena-order": "000001.000001"
     },
+    "folder": {
+      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001.000001"
+    },
     "include_screen": {
       "default": false,
       "description": "Return the current rendered screen in addition to incremental output.\nEnable for full-screen interfaces; ordinary prompts need only output.",
@@ -23260,7 +23518,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000007"
+      "x-agena-order": "000001.000008"
     },
     "reads": {
       "default": [],
@@ -23274,7 +23532,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000005"
+      "x-agena-order": "000001.000006"
     },
     "rows": {
       "default": 24,
@@ -23323,7 +23581,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000006"
+      "x-agena-order": "000001.000007"
     },
     "yield_time_ms": {
       "default": 1000,
@@ -23693,6 +23951,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | --- | --- | --- | --- | --- |
 | `command` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
+| `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
 | `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
@@ -23776,6 +24035,20 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "type": "string",
       "x-agena-order": "000001.000001"
     },
+    "folder": {
+      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+      "minLength": 1,
+      "not": {
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string"
+      },
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-non-empty": true,
+      "x-agena-order": "000001.000001"
+    },
     "max_output_bytes": {
       "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
       "format": "uint32",
@@ -23799,7 +24072,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000007"
+      "x-agena-order": "000001.000008"
     },
     "reads": {
       "default": [],
@@ -23813,7 +24086,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000005"
+      "x-agena-order": "000001.000006"
     },
     "shell": {
       "$ref": "#/$defs/ProcessShell",
@@ -23854,7 +24127,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
         "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000006"
+      "x-agena-order": "000001.000007"
     }
   },
   "required": [
@@ -24120,6 +24393,20 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
           "type": "string",
           "x-agena-order": "000001.000001"
         },
+        "folder": {
+          "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+          "minLength": 1,
+          "not": {
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+            "type": "string"
+          },
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-agena-non-empty": true,
+          "x-agena-order": "000001.000001"
+        },
         "max_output_bytes": {
           "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
           "format": "uint32",
@@ -24143,7 +24430,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
             "type": "string"
           },
           "type": "array",
-          "x-agena-order": "000001.000007"
+          "x-agena-order": "000001.000008"
         },
         "policy": {
           "$ref": "#/$defs/ShellWatchPolicy",
@@ -24240,7 +24527,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
             "type": "string"
           },
           "type": "array",
-          "x-agena-order": "000001.000005"
+          "x-agena-order": "000001.000006"
         },
         "shell": {
           "$ref": "#/$defs/ProcessShell",
@@ -24281,7 +24568,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
             "type": "string"
           },
           "type": "array",
-          "x-agena-order": "000001.000006"
+          "x-agena-order": "000001.000007"
         }
       },
       "required": [

@@ -30,6 +30,7 @@ mod plugins;
 mod queue;
 mod rewind;
 mod settings;
+mod telegram;
 mod terminal;
 mod tools;
 mod usage;

@@ -191,6 +191,48 @@ signature = "sha256=" + HMAC_SHA256(
 
 `spool_only: true` 仅把输出写入本地 SQLite，是开发演示模式，不能当作“已发到真实聊天应用”。参考桥的收件箱上限为一万条，超过后拒绝新接收，保留旧记录供运维处理；不能通过随意删除去重记录解决容量问题而忽略消息重放。
 
+## 内置 Telegram 渠道插件
+
+`agena.telegram` 是编入 Agena 的内置渠道插件，无需单独安装脚本。它通过官方 Bot API 的 `getUpdates` 长轮询接收私聊、群聊和频道消息，并用 `sendMessage` 把回复发回原会话；不需要公网 HTTPS 地址、反向代理或证书。
+
+```json
+{
+  "agena.telegram": {
+    "enabled": true,
+    "package": {"kind": "static"},
+    "settings": {
+      "bot_token_env": "AGENA_TELEGRAM_BOT_TOKEN",
+      "account": "my_agent_bot",
+      "api_base": "https://api.telegram.org",
+      "long_poll_seconds": 10,
+      "allow_loopback_http": false
+    }
+  }
+}
+```
+
+`account` 填 BotFather 里机器人自己的用户名（不带 `@`）。插件在首次轮询时用 `getMe` 核对令牌所属机器人：`account` 与实际不符会明确报错，而不会悄悄去服务另一个机器人的聊天。令牌只从 `bot_token_env` 指定的服务环境变量读取，不写进配置、日志或 URL 之外的位置；配置里放的是变量名，不是令牌本身。
+
+`api_base` 默认官方式样；只有在自建 Bot API 服务器时才改动。`allow_loopback_http` 仅带 `allow_loopback_http: true` 且主机是回环地址时才允许明文 HTTP，用于本地测试，生产应保持 `false`。
+
+连接信息（端点、令牌变量、机器人身份）属于插件设置，**不**放进渠道绑定。绑定只声明服务哪些房间：
+
+- `resource` 是精确的 `chat_id`，例如 `-1001234567890`；也可用显式集合或多房间选择器。
+- `channel_policy.identity` 应为 `{"tenant":"telegram","account":"<机器人用户名小写>"}`。
+- `kinds` 声明允许的房间形状；Telegram 频道是 `broadcast`，群组是 `group`，私聊是 `direct`。
+- 私聊必须使用 `exact` 线程模式和明确成员，不能开放给任意平台成员。
+
+适配器只上报证据，不授予权限：发送者 ID 由 Telegram 验证，收到消息即证明其当时在该会话中。群消息是否“点名机器人”取自服务端实体（`mention`、`text_mention`、`bot_command`、回复机器人消息），不扫描消息正文，因此链接预览里的 `@name` 不会被当成点名。频道帖没有作者，会以 `channel:<chat_id>` 归属并标记为 `broadcast`，从不视为点名。角色、工具能力、额度与会话隔离仍由宿主 `channel_policy` 在每条消息上重新检查，详见 [渠道权限说明](channel-access.md)。
+
+成员被移出或主动退出会产生 `membership.revoked`，宿主在普通消息之前处理并只做降级；若策略因此没有未过期的 owner，绑定会进入 `faulted` 等待人工复核。
+
+已知限制：
+
+- 目前只处理**文本**（含图注）；照片、语音、文件等以占位文本进入会话，不下载媒体。需要的会话内容仍可在 Agena 中查看。
+- 长回复按 UTF-16 单位分片发送，并按需闭合/重开代码围栏；Markdown 只映射到 Telegram 支持的标签子集，若平台拒绝解析会退回纯文本。
+- Telegram 不提供幂等键，因此超时或回执丢失一律标为结果不确定，宿主不会自动重放已可能送达的内容。
+- `getUpdates` 的偏移量就是持久检查点，重启后从原位置继续；启用绑定前积压的历史会被检查点推进而不是逐条回复。
+
 ## 组合：GitHub 事件的结果回到聊天渠道
 
 两个插件可以独立安装，也可以组合使用。先在渠道策略中明确开启 `allow_automated_reports`，取得宿主建立的独立服务主体会话；再由实例操作者把 GitHub 会话执行规则的来源会话设为该服务会话。不能借用普通成员的私有会话。新 Issue 会在该服务会话触发原生执行；生成的回复通过渠道发件箱送到原始聊天目标。
@@ -242,6 +284,9 @@ cargo test -p agena-storage-sqlite --test integrations --offline
 
 # 真实 Agena + 独立 stdio 插件 + 本地 HTTP GitHub/聊天网关
 cargo test -p agena --test system scenarios::integrations --offline -- --test-threads=1 --nocapture
+
+# 内置 Telegram 适配器 + 本地假 Bot API（不访问 Telegram）
+cargo test -p agena --test system scenarios::telegram --offline
 
 # 真实浏览器与终端授权界面
 cargo test -p agena --test system plugin_integrations_authorization_workflow \

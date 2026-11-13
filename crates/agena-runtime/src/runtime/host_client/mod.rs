@@ -664,8 +664,35 @@ impl RuntimeHostClient {
                     .await?;
                 data = serde_json::to_value(&session).ok();
             }
+            Command::MarkInteractiveRequestPresented(params) => {
+                self.use_session_manager(|manager| async move {
+                    manager
+                        .mark_interactive_request_presented(params.session_id, params.request_id)
+                        .await
+                })
+                .await?;
+            }
+            Command::ListSessionTree(params) => {
+                // The same `SessionResource` rows the REST tree route returns,
+                // projected from the summaries the manager already walked. The
+                // walk itself is scoped to the root session's workspace.
+                let summaries = self
+                    .use_session_manager(|manager| async move {
+                        manager.list_session_tree(params.root_id).await
+                    })
+                    .await?;
+                data = serde_json::to_value(
+                    summaries
+                        .iter()
+                        .map(super::host_client::mappers::session_resource_from_summary)
+                        .collect::<Vec<_>>(),
+                )
+                .ok();
+            }
             // Every remaining variant is refused before dispatch: either it is
-            // operator-only, or it targets a surface a plugin cannot own.
+            // operator-only, or it targets a surface a plugin cannot own. The
+            // policy itself lives on the shared enums, so a plugin here sees
+            // exactly what the REST dispatcher would enforce.
             other => {
                 other.plugin_allowed().map_err(|reason| {
                     PluginError::from_kind(

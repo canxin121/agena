@@ -372,10 +372,18 @@ impl Command {
             | Command::ClearFinishedActivities => {
                 Err("destructive and permission-policy operations are operator-only")
             }
+            // A plugin acts for one conversation: it works inside the session
+            // it was called for, but it does not mint the projects and sessions
+            // that scope one. The Bot plugin reaches the same work through its
+            // own operation contract, which takes the operator's quote and a
+            // request key first.
             Command::CreateWorkspace(_)
             | Command::ResolveWorkspace(_)
-            | Command::CreateSession(_)
-            | Command::UpdateSession(_)
+            | Command::CreateSession(_) => Err(
+                "creating projects and sessions is operator-only; a plugin acts for one \
+                 conversation",
+            ),
+            Command::UpdateSession(_)
             | Command::UpdateSessionSelection(_)
             | Command::SubmitMessage(_)
             | Command::ContinueRun(_)
@@ -426,5 +434,47 @@ mod permission_write_contract_tests {
         ] {
             assert!(serde_json::from_value::<UpsertPermissionRuleParams>(invalid).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_scope_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A plugin acts for one conversation. An operation that names no existing
+    /// conversation has no scope to authorize against, so the shared contract
+    /// refuses it rather than letting one transport invent a policy.
+    #[test]
+    fn operations_without_a_conversation_scope_are_operator_only() {
+        let unscoped = [
+            Command::CreateWorkspace(CreateWorkspaceParams {
+                path: "/work".into(),
+            }),
+            Command::ResolveWorkspace(ResolveWorkspaceParams {
+                path: "/work".into(),
+                create_if_missing: false,
+            }),
+            Command::CreateSession(
+                serde_json::from_value(json!({
+                    "workspace_id": 1, "title": "Root"
+                }))
+                .unwrap(),
+            ),
+        ];
+        for command in unscoped {
+            assert!(
+                command.plugin_allowed().is_err(),
+                "{command:?} names no conversation to authorize"
+            );
+        }
+        let scoped = Command::ReplyPermission(
+            serde_json::from_value(json!({
+                "session_id": 7,
+                "reply": {"request_id": "11", "kind": "allow_once"}
+            }))
+            .unwrap(),
+        );
+        assert!(scoped.plugin_allowed().is_ok());
     }
 }

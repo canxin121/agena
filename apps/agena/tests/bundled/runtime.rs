@@ -685,10 +685,15 @@ async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> T
                 .expect(RequestMatch::tool_output("call_monitor_start"))
                 .after(&first)
                 .reply(
+                    // The monitor's delivery is consumed at the provider
+                    // boundary that follows monitor.start, so the event is
+                    // already in the next request. A short wait keeps this a
+                    // wake observation instead of outlasting the scripted
+                    // model's own 30 s deadline when it does time out.
                     Reply::tool_call(
                         "call_monitor_wait_event",
                         "agent.wait",
-                        json!({"timeout_ms": 30000}),
+                        json!({"timeout_ms": 1000}),
                     )
                     .held(),
                 );

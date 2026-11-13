@@ -45,7 +45,28 @@ async fn bot_creates_a_real_visible_project_session() -> TestResult {
                 .await?
                 .require_success()?
                 .json()?;
-            let workspace = resource["workspace_id"].as_i64().context("Bot workspace")?;
+            // A Bot root is an operator conversation, not a project target, so
+            // it carries no workspace. The project the Bot writes into is the
+            // registered one the fixture started with.
+            ensure!(
+                resource["workspace_id"].is_null(),
+                "Bot root acquired a project: {resource}"
+            );
+            let projects: Value = http
+                .get("/api/v1/workspaces")
+                .await?
+                .require_success()?
+                .json()?;
+            let workspace = projects["items"]
+                .as_array()
+                .and_then(|items| {
+                    items.iter().find(|project| {
+                        project["path"].as_str()
+                            == Some(case.workspace().to_string_lossy().as_ref())
+                    })
+                })
+                .and_then(|project| project["id"].as_i64())
+                .context("registered project workspace")?;
             let model = case.model();
             let start = model.expect(RequestMatch::user_text("create a project conversation"))
             .reply(Reply::tool_call("bot-registration", "bot.sessions", json!({

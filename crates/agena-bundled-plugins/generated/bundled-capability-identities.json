@@ -92,7 +92,7 @@
   ],
   "counts": {
     "bundled_commands": 14,
-    "plugins": 26,
+    "plugins": 27,
     "tools": 210
   },
   "plugins": [
@@ -2650,6 +2650,13 @@
           ]
         }
       ],
+      "version": "0.1.0"
+    },
+    {
+      "conditional": null,
+      "hooks": [],
+      "id": "agena.telegram",
+      "tools": [],
       "version": "0.1.0"
     },
     {

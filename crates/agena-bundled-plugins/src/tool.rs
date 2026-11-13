@@ -6,7 +6,7 @@ pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
     agent, bot, code, commands, cron, fs, interaction, lsp, mcp, monitor, notebook, notifications,
-    planning, report, session, settings, shell, skills,
+    planning, report, session, settings, shell, skills, telegram,
 };
 
 pub fn commands_plugin_id() -> &'static str {
@@ -142,6 +142,14 @@ pub fn bot_plugin_id() -> &'static str {
 
 pub fn new_bot_plugin() -> impl agena_plugin_host::sdk::Plugin {
     bot::BotPlugin::new()
+}
+
+pub fn telegram_plugin_id() -> &'static str {
+    telegram::TELEGRAM_PLUGIN_ID
+}
+
+pub fn new_telegram_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    telegram::TelegramPlugin::new()
 }
 
 pub fn agent_plugin_id() -> &'static str {

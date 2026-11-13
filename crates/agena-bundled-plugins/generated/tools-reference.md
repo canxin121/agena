@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **26 plugins and 210 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 210 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -39,6 +39,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
 - [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
 - [`agena.skills`](#agenaskills) — Discover, install, author, and manage complete Agent Skills packages. (12 tools)
+- [`agena.telegram`](#agenatelegram) — Telegram channel adapter: direct chats, groups and channels over the official Bot API. (0 tools)
 - [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
 
 ## agena.agent
@@ -25765,6 +25766,14 @@ Discover, install, author, and manage complete Agent Skills packages.
   "type": "object"
 }
 ```
+
+## agena.telegram
+
+**Version** `0.1.0` · **Tools** 0
+
+Telegram channel adapter: direct chats, groups and channels over the official Bot API.
+
+> Exports the agena.integration v1 channel service. Long polling needs no public endpoint. Set the token in the named environment variable and make account match the bot's own username; roles, tool grants and quotas stay in the host's channel policy.
 
 ## agena.web
 

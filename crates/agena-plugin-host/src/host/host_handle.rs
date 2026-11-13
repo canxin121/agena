@@ -1076,6 +1076,16 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
                     }
+                    method::HOST_SESSION_STREAM => {
+                        let p: HostRequestParams<HostSessionStreamRequest> = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.session_stream(p.request),
+                        )
+                        .await?;
+                        serde_json::to_value(&out)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
                     method::HOST_WORKSPACE_QUERY => {
                         let p: HostRequestParams<HostWorkspaceQueryRequest> = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
@@ -1379,6 +1389,19 @@ impl HostHandle {
                         .await?;
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_HOOK_LIST => {
+                        let response = self.hook_list_response().await;
+                        serde_json::to_value(&response)
+                            .map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_UI_DISPLAY_CONTRIBUTE => {
+                        let plugin_id = plugin_id.ok_or_else(|| {
+                            host_unavailable("ui.display.contribute requires plugin id")
+                        })?;
+                        let p: HostRequestParams<HostDisplayContributeRequest> = parse(params)?;
+                        self.display_contribute(&plugin_id, p.request)?;
+                        Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_UI_DISPLAY_REMOVE => {
                         let plugin_id = plugin_id.ok_or_else(|| {
@@ -2004,17 +2027,18 @@ use super::{
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostRegisteredCommandListResponse, HostRegisteredToolDescriptor,
     HostRegisteredToolListResponse, HostRequestParams, HostSecretDeleteRequest,
-    HostSecretGetRequest, HostSecretListParams, HostSecretSetRequest, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageListParams, HostStorageSetRequest, HostSubscribeParams,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, HostUnsubscribeParams, HostWorkspaceQueryRequest,
-    Mutex, PluginEffectScope, PluginEffectScopeInspect, PluginError, PluginErrorKind, PluginKey,
-    PluginLogRecord, PluginLogStore, PluginNotifyRequest, PluginScopeKey, PluginServiceBinding,
-    PluginServiceBindingKey, PluginServiceInvokeInput, PluginServiceInvokeOutput,
-    PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient, ScopedRegistry,
-    ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
-    callback_context_from_params, command_registry_name, current_tool_scope, host_api,
-    host_status_from, host_unavailable, method, parse, scoped_context, sort_command_catalog,
-    tool_registry_event_visible_in_scope, transport_to_plugin_error, unix_timestamp_ms,
+    HostSecretGetRequest, HostSecretListParams, HostSecretSetRequest, HostSessionStreamRequest,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageListParams, HostStorageSetRequest,
+    HostSubscribeParams, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, HostUnsubscribeParams,
+    HostWorkspaceQueryRequest, Mutex, PluginEffectScope, PluginEffectScopeInspect, PluginError,
+    PluginErrorKind, PluginKey, PluginLogRecord, PluginLogStore, PluginNotifyRequest,
+    PluginScopeKey, PluginServiceBinding, PluginServiceBindingKey, PluginServiceInvokeInput,
+    PluginServiceInvokeOutput, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
+    ScopedHostClient, ScopedRegistry, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    ToolRegistryEventListener, VecDeque, callback_context_from_params, command_registry_name,
+    current_tool_scope, host_api, host_status_from, host_unavailable, method, parse,
+    scoped_context, sort_command_catalog, tool_registry_event_visible_in_scope,
+    transport_to_plugin_error, unix_timestamp_ms,
 };

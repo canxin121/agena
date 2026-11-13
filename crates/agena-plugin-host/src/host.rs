@@ -35,12 +35,13 @@ use crate::sdk::host_api::{
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredCommandListResponse,
     HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, HostWorkspaceQueryRequest, LogLevel, NoopHostClient,
-    PluginNotifyRequest, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    HostSessionStreamRequest, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, HostWorkspaceQueryRequest, LogLevel,
+    NoopHostClient, PluginNotifyRequest, ToolDescriptor, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -81,6 +82,8 @@ mod permission_tests;
 mod plugin_host_build;
 mod plugin_host_core;
 mod process_scope;
+#[cfg(test)]
+mod rpc_route_tests;
 
 /// One plugin's observed run of the `agent.stop` hook. Callers (for example
 /// the session runtime) use these to surface hook execution as transcript

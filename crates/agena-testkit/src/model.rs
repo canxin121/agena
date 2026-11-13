@@ -1003,8 +1003,11 @@ struct Registry {
     dropped_request_records: u64,
     /// A `tools_call` reply held back until the runtime has the tool's help.
     /// The next request that carries the synthetic `tools_help` output
-    /// receives exactly this prepared reply.
-    help_answer: Option<PendingHelpAnswer>,
+    /// receives exactly this prepared reply. Several steps can be waiting at
+    /// once: a parent and a spawned child agent each make their own calls, and
+    /// whichever context shows a step's contracts must receive that step's
+    /// reply.
+    help_answers: Vec<PendingHelpAnswer>,
 }
 
 /// A scripted `tools_call` reply waiting for its contract round trip.
@@ -1016,25 +1019,41 @@ struct PendingHelpAnswer {
 }
 
 impl PendingHelpAnswer {
-    /// A request carries the taught contracts when it shows their rendered
-    /// first line. Call IDs cannot identify this: a protocol such as Ollama
-    /// numbers calls by position, so the synthetic id never reaches the wire.
-    fn matches(&self, observed: &ModelRequest) -> bool {
-        let body = observed.body.to_string();
-        if self
-            .taught_tools
-            .iter()
-            .any(|tool| body.contains(&format!("Tool: {tool}")))
-        {
-            return true;
-        }
-        // A tool outside the session's catalog has no contract to teach; the
-        // help round returns `tool.help_required` instead. Release the held
-        // call only for the round that actually carries that help answer, so
-        // an unrelated session's request cannot consume it.
-        let help_call = format!("call_help_gate_{}_", self.step_id);
-        body.contains("tool.help_required") && body.contains(&help_call)
+    /// Whether this request carries the synthetic `tools_help` call this answer
+    /// was held for. The call id is the only reliable discriminator: a parent
+    /// and a child agent can both teach and call the same tool, so the rendered
+    /// contract text appears in both contexts and cannot say whose reply this
+    /// round is waiting for.
+    fn carries_call_id(&self, body: &str) -> bool {
+        body.contains(&format!("call_help_gate_{}_", self.step_id))
     }
+
+    /// Whether the taught contracts (or the taught `tool.help_required`
+    /// rejection) appear in this request. Used only for protocols that number
+    /// calls by position and never put the synthetic id on the wire, such as
+    /// Ollama.
+    fn shows_taught_contract(&self, body: &str) -> bool {
+        self.taught_tools
+            .iter()
+            .any(|tool| shows_contract(body, tool))
+            || (body.contains("tool.help_required")
+                && body.contains(&format!("call_help_gate_{}_", self.step_id)))
+    }
+}
+
+/// Whether a request body shows the rendered contract for exactly `tool`.
+///
+/// The contract opens with `Tool: {name}` and the body is JSON, so a plain
+/// substring test also matches a longer sibling whose name merely extends this
+/// one (`skills.remove` inside `skills.remove_resource`). The runtime compares
+/// names exactly; matching here must use the same boundary or this harness
+/// skips the synthetic help round and leaves the held reply uncollected.
+fn shows_contract(body: &str, tool: &str) -> bool {
+    let marker = format!("Tool: {tool}");
+    body.match_indices(&marker).any(|(start, _)| {
+        let rest = &body[start + marker.len()..];
+        !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '.' || c == '-')
+    })
 }
 
 struct ModelState {
@@ -1053,37 +1072,43 @@ struct ModelState {
 
 impl ModelState {
     fn hold_help_answer(&self, answer: PendingHelpAnswer) {
-        lock(&self.registry).help_answer = Some(answer);
+        lock(&self.registry).help_answers.push(answer);
     }
 
-    /// Whether this request is the one that shows the held help output.
-    fn help_answer_matches(&self, observed: &ModelRequest) -> bool {
+    /// The step whose held reply this request shows the contracts for.
+    fn held_step_id(&self, observed: &ModelRequest) -> Option<u64> {
+        let body = observed.body.to_string();
         let registry = lock(&self.registry);
+        // The synthetic id names exactly one held round. Rendered contracts are
+        // ambiguous: a parent and a spawned child can both teach the same tool.
+        if let Some(answer) = registry
+            .help_answers
+            .iter()
+            .find(|answer| answer.carries_call_id(&body))
+        {
+            return Some(answer.step_id);
+        }
+        // A protocol that numbers calls by position never puts the synthetic id
+        // on the wire; only there does the rendered contract identify the round.
+        if body.contains("call_help_gate_") {
+            return None;
+        }
         registry
-            .help_answer
-            .as_ref()
-            .is_some_and(|answer| answer.matches(observed))
-    }
-
-    fn held_step_id(&self) -> Option<u64> {
-        lock(&self.registry)
-            .help_answer
-            .as_ref()
+            .help_answers
+            .iter()
+            .find(|answer| answer.shows_taught_contract(&body))
             .map(|answer| answer.step_id)
     }
 
-    /// Take the held reply when this request is the one that shows the help
-    /// output. A different request leaves it waiting.
-    fn take_help_answer(&self, observed: &ModelRequest) -> Option<PendingHelpAnswer> {
+    /// Take the held reply when this request is the one that shows its help
+    /// output. Any other request leaves every held answer waiting.
+    fn take_help_answer(&self, step_id: u64) -> Option<PendingHelpAnswer> {
         let mut registry = lock(&self.registry);
-        if !registry
-            .help_answer
-            .as_ref()
-            .is_some_and(|answer| answer.matches(observed))
-        {
-            return None;
-        }
-        registry.help_answer.take()
+        let index = registry
+            .help_answers
+            .iter()
+            .position(|answer| answer.step_id == step_id)?;
+        Some(registry.help_answers.remove(index))
     }
 }
 
@@ -1367,14 +1392,14 @@ async fn handle_request(
     // The request that carries a taught help output receives the reply the
     // scripted step was holding; it must be answered before script matching,
     // because the scenario only registered the eventual tool output.
-    if state.help_answer_matches(&observed) {
-        observed.step_id = state.held_step_id();
+    if let Some(step_id) = state.held_step_id(&observed) {
+        observed.step_id = Some(step_id);
         state.record(Arc::new(
             observed.retained(&bytes, state.options.max_record_bytes),
         ));
         let answer = state
-            .take_help_answer(&observed)
-            .expect("held help answer must survive its match");
+            .take_help_answer(step_id)
+            .expect("a held help answer must survive its match");
         return Ok(prepared_response(answer.planned, &state));
     }
     let step = match state.claim(&observed) {
@@ -1440,7 +1465,7 @@ async fn handle_request(
             .reply
             .called_tools()
             .into_iter()
-            .filter(|tool| !body.contains(&format!("Tool: {tool}")))
+            .filter(|tool| !shows_contract(&body, tool))
             .collect::<Vec<_>>();
         let help_calls = tools
             .iter()

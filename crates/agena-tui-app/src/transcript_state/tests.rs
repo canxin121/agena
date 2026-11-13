@@ -569,3 +569,83 @@ fn delayed_presentation_details_cannot_replace_the_current_image_but_same_image_
     );
     assert_eq!(state.parts[0].sections[0].revision, 3);
 }
+
+#[test]
+fn a_write_acknowledgement_cannot_insert_unloaded_history_above_the_reader() {
+    // The initial page is two messages; the POST /messages acknowledgement
+    // carries a much wider recent window. Merging that window verbatim used to
+    // prepend unread turns, which moved the reader off the reply they just
+    // sent.
+    let recent = vec![
+        part(310, 310, "user", "text", "question two"),
+        part(311, 311, "assistant", "text", "answer two"),
+    ];
+    let mut older = (300..310)
+        .map(|id| part(id, id, "user", "text", "old turn"))
+        .collect::<Vec<_>>();
+    older.extend(recent.clone());
+
+    let mut pinned = TranscriptState {
+        session_id: Some(1),
+        ..TranscriptState::default()
+    };
+    pinned.merge_parts(recent.clone());
+    pinned.clamp_scroll(80, 8);
+    pinned.scroll_to_bottom(80, 8);
+    let lines_before = pinned.rendered(80).lines.len();
+    pinned.merge_execution_parts(older.clone());
+    assert_eq!(pinned.parts.len(), recent.len());
+    assert_eq!(pinned.rendered(80).lines.len(), lines_before);
+    pinned.clamp_scroll(80, 8);
+    assert!(pinned.viewport.follow_tail);
+    let max_scroll = pinned.max_scroll(80, 8);
+    assert_eq!(pinned.viewport.top, max_scroll);
+
+    let mut scrolled = TranscriptState {
+        session_id: Some(1),
+        ..TranscriptState::default()
+    };
+    scrolled.merge_parts(recent);
+    scrolled.clamp_scroll(80, 3);
+    scrolled.scroll_viewport_by_lines(80, 3, false, 1);
+    let top_before = scrolled.viewport.top;
+    let cursor_before = scrolled.interaction_line();
+    scrolled.merge_execution_parts(older);
+    scrolled.clamp_scroll(80, 3);
+    assert_eq!(scrolled.parts.len(), 2);
+    assert_eq!(scrolled.viewport.top, top_before);
+    assert_eq!(scrolled.interaction_line(), cursor_before);
+    assert!(!scrolled.viewport.follow_tail);
+}
+
+#[test]
+fn a_write_acknowledgement_still_updates_loaded_parts_and_appends_new_ones() {
+    let mut state = TranscriptState {
+        session_id: Some(1),
+        ..TranscriptState::default()
+    };
+    state.merge_parts(vec![
+        part(310, 310, "user", "text", "question two"),
+        part(311, 311, "assistant", "text", "answer two"),
+    ]);
+    let mut revised = part(311, 311, "assistant", "text", "answer two, longer");
+    revised.revision = 2;
+    revised.updated_at_ms = 2;
+    let mut newer = part(312, 312, "user", "text", "question three");
+    newer.created_at_ms = 312;
+    state.merge_execution_parts(vec![
+        part(300, 300, "user", "text", "old turn"),
+        revised,
+        newer,
+    ]);
+    assert_eq!(
+        state
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        vec![310, 311, 312]
+    );
+    assert_eq!(state.parts[1].content["text"], "answer two, longer");
+    assert_eq!(state.parts[2].content["text"], "question three");
+}

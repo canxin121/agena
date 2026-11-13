@@ -606,7 +606,9 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) model_id: String,
     pub(crate) enabled: bool,
     pub(crate) native_compaction: bool,
-    pub(crate) manual_overrides: bool,
+    /// Catalog entry this route is explicitly matched to. Preserved across an
+    /// edit so saving a model does not drop a corrected match.
+    pub(crate) catalog_model_id: Option<String>,
     pub(crate) agena_tool_mode: AgenaToolMode,
     pub(crate) agena_tool_mode_configured: bool,
     pub(crate) display_name: String,

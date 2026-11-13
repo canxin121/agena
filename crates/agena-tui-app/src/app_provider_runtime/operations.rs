@@ -347,13 +347,24 @@ impl App {
                         );
                         let catalog_key =
                             provider_studio_model_key(adapter_id.as_str(), model_id.as_str());
-                        let selected_catalog = dialog
+                        // A saved pin is the route's own match; otherwise a
+                        // session choice or the automatic suggestion applies.
+                        let selection = dialog
                             .catalog_selections
                             .get(&catalog_key)
+                            .or_else(|| {
+                                draft.catalog_model_id.as_deref().and_then(|pinned| {
+                                    dialog
+                                        .catalog_matches
+                                        .values()
+                                        .find(|catalog| catalog.model_id == pinned)
+                                })
+                            })
                             .or_else(|| dialog.catalog_matches.get(&catalog_key))
                             .cloned();
                         let catalog_selection_manual =
-                            dialog.catalog_selections.contains_key(&catalog_key);
+                            dialog.catalog_selections.contains_key(&catalog_key)
+                                || draft.catalog_model_id.is_some();
                         dialog.detail_page = None;
                         dialog.model_page = Some(ProviderStudioModelPage {
                             title: self.i18n.text_args(
@@ -367,7 +378,7 @@ impl App {
                             adapter_id,
                             original_model_id: model_id,
                             draft,
-                            selected_catalog,
+                            selected_catalog: selection,
                             catalog_selection_manual,
                             selection: SelectionCursor::default(),
                         });

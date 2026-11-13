@@ -433,6 +433,28 @@ impl ModelRuntime for MultiAdapterProvider {
             })
     }
 
+    fn catalog_model_id_pin(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<String> {
+        let adapter_id = self.selected_adapter(adapter_id, model);
+        self.routes
+            .get(&(adapter_id.to_string(), model.to_string()))
+            .and_then(|route| route.definition.catalog_model_id.clone())
+    }
+
+    fn catalog_route_display_name(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<String> {
+        let adapter_id = self.selected_adapter(adapter_id, model);
+        self.routes
+            .get(&(adapter_id.to_string(), model.to_string()))
+            .and_then(|route| route.definition.display_name.clone())
+    }
+
     fn stream_resume_policy(&self) -> StreamResumePolicy {
         (self.adapters.len() == 1)
             .then(|| self.adapters.values().next().cloned())

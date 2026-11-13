@@ -193,9 +193,9 @@ impl CatalogModelDefinition {
             thinking_modes: self.thinking_modes,
             speed_modes: self.speed_modes,
             capabilities: self.capabilities,
-            // A catalog entry never opts out of catalog tracking; only a
-            // configured route can set `manual_overrides`.
-            manual_overrides: false,
+            // A catalog entry never points at another catalog entry: it *is*
+            // the entry a configured route names.
+            catalog_model_id: None,
         }
     }
 }

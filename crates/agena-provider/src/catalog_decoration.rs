@@ -125,9 +125,9 @@ pub fn apply_configured_definition_as_baseline(
 /// Apply a route's saved display name.
 ///
 /// A display name has no capability or metadata slot, so the baseline merge
-/// cannot carry it. A route that owns its definition (`manual_overrides`) keeps
-/// the name the user saved; the catalog still supplies one only when the route
-/// has none.
+/// cannot carry it. A name the route saves overrides the catalog entry's, just
+/// as every other field the route sets does; the catalog supplies one only when
+/// the route has none.
 pub fn apply_configured_display_name(
     configured: &ConfiguredModelDefinition,
     model: &mut Model,

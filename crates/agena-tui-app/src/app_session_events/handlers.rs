@@ -522,16 +522,28 @@ impl App {
                         })
                     })
                     .collect();
-                if let Some(page) = dialog.model_page.as_mut()
-                    && !page.catalog_selection_manual
-                {
-                    page.selected_catalog = dialog
-                        .catalog_matches
-                        .get(&provider_studio_model_key(
-                            page.adapter_id.as_str(),
-                            page.original_model_id.as_str(),
-                        ))
-                        .cloned();
+                if let Some(page) = dialog.model_page.as_mut() {
+                    let key = provider_studio_model_key(
+                        page.adapter_id.as_str(),
+                        page.original_model_id.as_str(),
+                    );
+                    if page.catalog_selection_manual {
+                        // A saved pin outlives this session's choice set; the
+                        // page keeps showing the route's own match once the
+                        // result set includes it.
+                        if page.selected_catalog.is_none() {
+                            page.selected_catalog =
+                                page.draft.catalog_model_id.as_deref().and_then(|pinned| {
+                                    dialog
+                                        .catalog_matches
+                                        .values()
+                                        .find(|catalog| catalog.model_id == pinned)
+                                        .cloned()
+                                });
+                        }
+                    } else {
+                        page.selected_catalog = dialog.catalog_matches.get(&key).cloned();
+                    }
                 }
                 dialog.catalog_match_error = None;
             }

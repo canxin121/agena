@@ -129,10 +129,13 @@ pub struct ProviderStudioModelDraftRequest {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ProviderStudioCatalogTemplateRequest {
+    /// Entry to point the route at. Ignored when `clear` is set.
+    #[serde(default)]
     pub catalog_model_id: String,
     pub model_value: serde_json::Value,
+    /// Remove the route's catalog match so it resolves automatically again.
     #[serde(default)]
-    pub manual_overrides: bool,
+    pub clear: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -237,7 +240,7 @@ pub async fn apply_provider_studio_catalog_template(
         .provider_model_catalog_template_value(
             request.catalog_model_id.trim(),
             request.model_value,
-            request.manual_overrides,
+            request.clear,
         )
         .map_err(server_error_from_application)?;
     Ok(Json(serde_json::json!({ "value": value })))

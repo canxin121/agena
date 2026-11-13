@@ -521,6 +521,14 @@ impl ModelCapabilityPatch {
                 .is_none_or(CapabilitySelectionPatch::is_empty)
     }
 
+    /// Lay this route's capability selections over the catalog entry's.
+    pub fn over(&self, catalog: &Self) -> Self {
+        Self {
+            input: self.input.clone().or_else(|| catalog.input.clone()),
+            features: self.features.clone().or_else(|| catalog.features.clone()),
+        }
+    }
+
     pub fn input_support(&self, modality: ModelInputModality) -> Option<CapabilitySupport> {
         self.input.as_ref().and_then(|selection| {
             if selection.supported().contains(&modality) {
@@ -749,6 +757,26 @@ impl<T> ConfiguredModelModeMap<T> {
     pub fn is_empty(&self) -> bool {
         self.default.is_inherit() && self.modes.is_empty()
     }
+
+    /// Lay this route's mode map over the catalog entry's map, per selector.
+    /// A selector the route lists replaces the entry's; the rest come from it.
+    pub fn over(&self, catalog: &Self) -> Self
+    where
+        T: Clone,
+    {
+        let mut modes = catalog.modes.clone();
+        for (selector, mode) in &self.modes {
+            modes.insert(selector.clone(), mode.clone());
+        }
+        Self {
+            default: if self.default.is_inherit() {
+                catalog.default.clone()
+            } else {
+                self.default.clone()
+            },
+            modes,
+        }
+    }
 }
 
 impl<T> std::ops::Deref for ConfiguredModelModeMap<T> {
@@ -880,14 +908,82 @@ pub struct ConfiguredModelDefinition {
     pub speed_modes: ConfiguredModelModeMap<ConfiguredModelSpeedMode>,
     #[serde(flatten)]
     pub capabilities: ModelCapabilityPatch,
-    /// When true this route keeps its own definition values instead of taking
-    /// the refreshed model catalog values; absent (the default) means the model
-    /// follows the catalog, so a catalog refresh needs no manual re-apply.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub manual_overrides: bool,
+    /// Catalog entry that supplies this route's definition.
+    ///
+    /// It is the base of the merge: the entry's metadata, limits, capabilities
+    /// and modes apply first, then every other field set on this route overrides
+    /// it. Written on its own, the route simply mirrors the entry and keeps
+    /// following catalog refreshes; add fields next to it to override just those.
+    /// Unset, the route resolves the catalog entry automatically from its model
+    /// id, which is what a route with no configuration does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_model_id: Option<String>,
 }
 
 impl ConfiguredModelDefinition {
+    /// Lay this route's saved fields over a catalog entry's definition.
+    ///
+    /// The entry is the base and every field this route sets overrides it, so
+    /// writing only `catalog_model_id` mirrors the entry exactly while adding a
+    /// field next to it overrides just that field. Mode maps are merged per
+    /// selector; `manual_overrides` no longer exists because the precedence is
+    /// expressed by what the route writes, not by a switch.
+    pub fn over(self, catalog: &Self) -> Self {
+        Self {
+            lifecycle: self.lifecycle.or(catalog.lifecycle),
+            context_window_tokens: self.context_window_tokens.or(catalog.context_window_tokens),
+            max_input_tokens: self.max_input_tokens.or(catalog.max_input_tokens),
+            max_output_tokens: self.max_output_tokens.or(catalog.max_output_tokens),
+            display_name: self.display_name.or_else(|| catalog.display_name.clone()),
+            description: self.description.or_else(|| catalog.description.clone()),
+            knowledge_cutoff: self
+                .knowledge_cutoff
+                .or_else(|| catalog.knowledge_cutoff.clone()),
+            release_date: self.release_date.or_else(|| catalog.release_date.clone()),
+            last_updated: self.last_updated.or_else(|| catalog.last_updated.clone()),
+            open_weights: self.open_weights.or(catalog.open_weights),
+            supports_parallel_tool_calls: self
+                .supports_parallel_tool_calls
+                .or(catalog.supports_parallel_tool_calls),
+            supports_verbosity: self.supports_verbosity.or(catalog.supports_verbosity),
+            default_verbosity: self
+                .default_verbosity
+                .or_else(|| catalog.default_verbosity.clone()),
+            verbosity_levels: if self.verbosity_levels.is_empty() {
+                catalog.verbosity_levels.clone()
+            } else {
+                self.verbosity_levels
+            },
+            provider_default_verbosity: self
+                .provider_default_verbosity
+                .or_else(|| catalog.provider_default_verbosity.clone()),
+            default_temperature: self
+                .default_temperature
+                .or_else(|| catalog.default_temperature.clone()),
+            default_top_p: self.default_top_p.or_else(|| catalog.default_top_p.clone()),
+            default_top_k: self.default_top_k.or(catalog.default_top_k),
+            assistant_reasoning_interleaved: self
+                .assistant_reasoning_interleaved
+                .or(catalog.assistant_reasoning_interleaved),
+            assistant_reasoning_field: self
+                .assistant_reasoning_field
+                .or_else(|| catalog.assistant_reasoning_field.clone()),
+            output_modalities: if self.output_modalities.is_empty() {
+                catalog.output_modalities.clone()
+            } else {
+                self.output_modalities
+            },
+            pricing: self.pricing.or_else(|| catalog.pricing.clone()),
+            thinking_modes: self.thinking_modes.over(&catalog.thinking_modes),
+            speed_modes: self.speed_modes.over(&catalog.speed_modes),
+            capabilities: self.capabilities.over(&catalog.capabilities),
+            // The entry keeps its own key; the route keeps the id it matched.
+            catalog_model_id: self
+                .catalog_model_id
+                .or_else(|| catalog.catalog_model_id.clone()),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.lifecycle.is_none()
             && self.context_window_tokens.is_none()

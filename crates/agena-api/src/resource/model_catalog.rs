@@ -2,6 +2,7 @@
 //! configuration. There is no runtime access or persistence in this module.
 
 use super::CapabilitySupportResource;
+use super::CatalogModelResource;
 use agena_domain::ModelInputModality;
 use agena_provider::{
     CapabilitySelectionPatch, CatalogModelDefinition, ConfiguredModeDefault,
@@ -29,6 +30,35 @@ pub fn preferred_catalog_model_for_provider_model<'a>(
 ) -> Option<&'a super::CatalogModelResource> {
     let lookup_ids = provider_model_catalog_lookup_candidates(provider_model);
     preferred_catalog_model_for_lookup_ids(models, &lookup_ids)
+}
+
+/// Resolve the catalog entry a route is explicitly matched to.
+///
+/// A pinned id is an exact catalog key: it must not fall back to the route's
+/// model-id candidates, because the whole point of the pin is that the
+/// automatic match chose the wrong entry.
+pub fn pinned_catalog_model<'a>(
+    models: &'a [super::CatalogModelResource],
+    pinned_model_id: Option<&str>,
+) -> Option<&'a super::CatalogModelResource> {
+    let pinned_model_id = pinned_model_id?.trim();
+    if pinned_model_id.is_empty() {
+        return None;
+    }
+    models
+        .iter()
+        .find(|model| model.model_id == pinned_model_id)
+}
+
+/// Resolve the catalog entry for one route: an explicit match first, then the
+/// automatic candidates derived from the route's model id.
+pub fn catalog_model_for_route<'a>(
+    models: &'a [super::CatalogModelResource],
+    pinned_model_id: Option<&str>,
+    lookup_ids: &[String],
+) -> Option<&'a super::CatalogModelResource> {
+    pinned_catalog_model(models, pinned_model_id)
+        .or_else(|| preferred_catalog_model_for_lookup_ids(models, lookup_ids))
 }
 
 /// All catalog lookup candidates for a provider model, most specific first.
@@ -486,53 +516,127 @@ pub fn provider_model_draft_value_from_resource(
     provider_model_json_for_model_id(&[], model_id, provider_model)
 }
 
-/// Copy one selected catalog definition into an editable provider-model value.
-/// The selected catalog ID is UI state only; the returned value contains just
-/// ordinary model fields and keeps the route's operational settings. A manual
-/// selection opts the route out of automatic catalog refreshes so the values
-/// copied here survive a save and the next edit.
+/// Point an editable provider-model value at one catalog entry.
+///
+/// The route records only `catalog_model_id`: the entry then supplies the
+/// definition and any field the user adds next to it overrides that field. The
+/// route's operational settings (enablement, native compaction, tool mode) are
+/// carried through untouched, and so are unknown fields the editor round-trips.
 pub fn apply_catalog_template_to_model_value(
     model_value: serde_json::Value,
-    catalog_model: &super::CatalogModelResource,
-    manual_overrides: bool,
+    catalog_model: &CatalogModelResource,
 ) -> Result<serde_json::Value, serde_json::Error> {
-    let mut configured: agena_provider::ResolvedProviderModelConfig =
-        serde_json::from_value(model_value)?;
-    configured.definition =
-        catalog_model_to_catalog_definition(catalog_model).into_configured_definition();
-    configured.definition.manual_overrides = manual_overrides;
-    serde_json::to_value(configured)
+    let JsonValue::Object(mut value) = model_value else {
+        return serde_json::to_value(model_value);
+    };
+    // Selecting an entry starts from "this entry only": definition fields the
+    // route still carried from an earlier edit would otherwise freeze values
+    // the user meant to follow.
+    for key in ROUTE_DEFINITION_FIELDS {
+        value.remove(*key);
+    }
+    let catalog_model_id = catalog_model.model_id.trim();
+    if !catalog_model_id.is_empty() {
+        value.insert(
+            "catalog_model_id".to_owned(),
+            JsonValue::String(catalog_model_id.to_owned()),
+        );
+    }
+    Ok(JsonValue::Object(value))
 }
+
+/// Drop the route's catalog match so it follows the catalog's automatic
+/// resolution again. The route's own definition fields are left in place: they
+/// become plain overrides of whatever the automatic match resolves to.
+pub fn clear_catalog_template_from_model_value(
+    model_value: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Error> {
+    let JsonValue::Object(mut value) = model_value else {
+        return serde_json::to_value(model_value);
+    };
+    value.remove("catalog_model_id");
+    Ok(JsonValue::Object(value))
+}
+
+/// Definition fields a catalog selection owns. Operational policy (enablement,
+/// compaction, tool mode) is deliberately absent: choosing an entry must not
+/// reset how the route runs.
+pub const ROUTE_DEFINITION_FIELDS: &[&str] = &[
+    "lifecycle",
+    "context_window_tokens",
+    "max_input_tokens",
+    "max_output_tokens",
+    "display_name",
+    "description",
+    "knowledge_cutoff",
+    "release_date",
+    "last_updated",
+    "open_weights",
+    "supports_parallel_tool_calls",
+    "supports_verbosity",
+    "default_verbosity",
+    "verbosity_levels",
+    "provider_default_verbosity",
+    "default_temperature",
+    "default_top_p",
+    "default_top_k",
+    "assistant_reasoning_interleaved",
+    "assistant_reasoning_field",
+    "output_modalities",
+    "pricing",
+    "thinking_modes",
+    "speed_modes",
+    "input",
+    "features",
+];
 #[cfg(test)]
 mod tests {
-    use super::apply_catalog_template_to_model_value;
+    use super::{
+        CatalogModelResource, apply_catalog_template_to_model_value,
+        clear_catalog_template_from_model_value,
+    };
     use serde_json::json;
 
-    #[test]
-    fn manual_catalog_template_preserves_selection_and_route_fields() {
-        let catalog = serde_json::from_value(json!({
+    fn catalog_entry() -> CatalogModelResource {
+        serde_json::from_value(json!({
             "model_id": "selected-model",
             "source": "generated",
             "display_name": "Selected name",
             "context_window_tokens": 200000
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn selecting_a_catalog_entry_records_only_its_id() {
+        // Selecting an entry starts the route over on that entry: definition
+        // fields from an earlier edit are dropped so the entry stays the
+        // source and a catalog refresh still reaches the route.
+        let catalog = catalog_entry();
         let value = json!({
             "enabled": false,
             "native_compaction": false,
+            "agena_tools": { "mode": "disabled" },
             "display_name": "Previous name",
             "context_window_tokens": 1000
         });
 
-        let manual = apply_catalog_template_to_model_value(value.clone(), &catalog, true).unwrap();
-        assert_eq!(manual["manual_overrides"], json!(true));
-        assert_eq!(manual["display_name"], json!("Selected name"));
-        assert_eq!(manual["context_window_tokens"], json!(200000));
-        assert_eq!(manual["enabled"], json!(false));
-        assert_eq!(manual["native_compaction"], json!(false));
+        let selected = apply_catalog_template_to_model_value(value, &catalog).unwrap();
+        assert_eq!(selected["catalog_model_id"], json!("selected-model"));
+        assert!(selected.get("display_name").is_none());
+        assert!(selected.get("context_window_tokens").is_none());
+        // Operational policy is not a catalog field and must survive.
+        assert_eq!(selected["enabled"], json!(false));
+        assert_eq!(selected["native_compaction"], json!(false));
+        assert_eq!(selected["agena_tools"]["mode"], json!("disabled"));
+        assert!(selected.get("manual_overrides").is_none());
+    }
 
-        let automatic = apply_catalog_template_to_model_value(value, &catalog, false).unwrap();
-        assert!(automatic.get("manual_overrides").is_none());
-        assert_eq!(automatic["display_name"], json!("Selected name"));
+    #[test]
+    fn clearing_the_catalog_entry_removes_the_id() {
+        let catalog = catalog_entry();
+        let selected = apply_catalog_template_to_model_value(json!({}), &catalog).unwrap();
+        let cleared = clear_catalog_template_from_model_value(selected).unwrap();
+        assert!(cleared.get("catalog_model_id").is_none());
     }
 }

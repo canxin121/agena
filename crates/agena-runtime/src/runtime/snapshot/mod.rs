@@ -553,32 +553,12 @@ impl RuntimeSnapshot {
         self.state.services().lsp_registry.clone()
     }
 
-    /// Model ids whose configured route opted out of following the model
-    /// catalog (`manual_overrides`); those routes keep their own values.
-    fn manual_override_model_ids(
-        provider_config: Option<&ResolvedProviderConfig>,
-    ) -> std::collections::BTreeSet<String> {
-        let Some(configured) = provider_config else {
-            return std::collections::BTreeSet::new();
-        };
-        configured
-            .models
-            .iter()
-            .filter(|(_, model)| model.definition.manual_overrides)
-            .map(|(key, _)| {
-                key.split_once('/')
-                    .map_or_else(|| key.clone(), |(_, model_id)| model_id.to_owned())
-            })
-            .collect()
-    }
-
-    /// Re-apply each route's own saved definition after catalog decoration.
+    /// Fold each route's saved definition over the entry it resolves to.
     ///
-    /// Catalog decoration can only choose between catalog values and the
-    /// provider's live listing; it never sees the route the user saved. A route
-    /// that opted out of following the catalog (`manual_overrides`) must keep
-    /// its saved values, otherwise an edit is written to the configuration and
-    /// then replaced on the very next listing.
+    /// Catalog decoration only sees the live listing and the catalog entry; it
+    /// never sees the fields the user saved on the route. Re-applying the saved
+    /// definition here makes the route's own values win over both, which is the
+    /// same precedence the editor and the configured projections use.
     fn apply_saved_route_definitions(&self, provider_id: &str, models: &mut [agena_domain::Model]) {
         let Some(configured) = self.provider_configs().get(provider_id) else {
             return;
@@ -591,12 +571,9 @@ impl RuntimeSnapshot {
             let Some(saved) = configured.models.get(route.as_str()) else {
                 continue;
             };
-            if !saved.definition.manual_overrides {
-                continue;
-            }
             let capabilities = model.capabilities.clone();
             let metadata = model.metadata.clone();
-            let mut next = agena_provider::apply_configured_definition_as_baseline(
+            let mut next = agena_provider::apply_configured_definition_as_authority(
                 &saved.definition,
                 &capabilities,
                 &metadata,
@@ -636,7 +613,6 @@ impl RuntimeSnapshot {
         let mut models = decorate_provider_models(
             &catalog_decoration_source(provider.as_ref()),
             &local_provider_record,
-            &Self::manual_override_model_ids(Some(configured)),
             models,
         );
         self.apply_saved_route_definitions(provider_id, &mut models);
@@ -674,16 +650,19 @@ impl RuntimeSnapshot {
                 .get(provider_id)
                 .ok_or_else(|| AppError::Config(format!("provider not found: {provider_id}")))?;
             let source = catalog_decoration_source(provider.as_ref());
-            let overrides =
-                Self::manual_override_model_ids(self.provider_configs().get(provider_id));
             for entry in &mut discovery.models {
-                let mut models = decorate_provider_models(
-                    &source,
-                    &record,
-                    &overrides,
-                    vec![entry.model.clone()],
-                );
+                let mut models =
+                    decorate_provider_models(&source, &record, vec![entry.model.clone()]);
                 entry.model = models.remove(0);
+            }
+            let mut discovered = discovery
+                .models
+                .iter()
+                .map(|entry| entry.model.clone())
+                .collect::<Vec<_>>();
+            self.apply_saved_route_definitions(provider_id, &mut discovered);
+            for (entry, model) in discovery.models.iter_mut().zip(discovered) {
+                entry.model = model;
             }
         }
         Ok(discovery)
@@ -721,7 +700,6 @@ impl RuntimeSnapshot {
         let mut models = decorate_provider_models(
             &catalog_decoration_source(provider.as_ref()),
             &provider_record,
-            &Self::manual_override_model_ids(self.provider_configs().get(provider_id)),
             models,
         );
         self.apply_saved_route_definitions(provider_id, &mut models);

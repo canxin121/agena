@@ -32,6 +32,13 @@ impl agena_provider::CatalogModelDecorationSource for ModelRuntimeCatalogDecorat
     fn catalog_model_id_for_raw(&self, raw_model_id: &str) -> Option<String> {
         agena_provider::catalog_model_id_for_raw(raw_model_id)
     }
+    fn pinned_catalog_model_id(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<String> {
+        self.provider.catalog_model_id_pin(adapter_id, model)
+    }
     fn native_compaction_enabled_for_adapter(
         &self,
         adapter_id: Option<&AdapterId>,

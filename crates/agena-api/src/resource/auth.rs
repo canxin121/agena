@@ -209,6 +209,12 @@ pub struct ProviderModelResource {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog_model_id: Option<String>,
+    /// Catalog entry this route is explicitly matched to, if one was chosen.
+    /// Unlike `catalog_model_id`, which reports what the catalog resolved to
+    /// for this listing, this is stored configuration: the studio can show the
+    /// route's own match after a reload and tell it apart from a suggestion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_catalog_model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[serde(default = "default_true")]
@@ -235,6 +241,7 @@ impl ProviderModelResource {
             adapter_id: Some(adapter_id.into()),
             id: id.into(),
             catalog_model_id: None,
+            pinned_catalog_model_id: None,
             display_name: None,
             native_compaction: true,
             capabilities: ProviderModelCapabilitiesResource::default(),

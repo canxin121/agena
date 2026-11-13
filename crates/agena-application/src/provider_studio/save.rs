@@ -509,27 +509,10 @@ pub(crate) fn provider_model_draft_value(
             })?
             .value;
         if !configured.is_null() {
-            // A route that follows the catalog (the default) is edited against
-            // the refreshed catalog values; only the route's own policy fields
-            // come from the stored value.
-            if let Ok(parsed) = serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(
-                configured.clone(),
-            ) && !parsed.definition.manual_overrides
-                && let Some(catalog_model) =
-                    preferred_catalog_model_for_lookup_ids(&catalog_entries, &catalog_lookup_ids)
-            {
-                return agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
-                    configured,
-                    catalog_model,
-                    false,
-                )
-                .map_err(|error| {
-                    crate::ApplicationError::internal_error_with_context(
-                        "failed to refresh the model from the catalog",
-                        &error,
-                    )
-                });
-            }
+            // Return the route's stored fields verbatim. The entry it names is
+            // the base at read time, so copying the entry's values in here
+            // would turn "follow this entry" into a frozen snapshot on the next
+            // save. Unset fields deliberately stay unset and inherit.
             return Ok(configured);
         }
     }
@@ -721,18 +704,30 @@ pub(crate) async fn save_provider_model_value(
     let model_overlay =
         serde_json::from_value::<agena_provider::ResolvedProviderModelConfig>(model_value)
             .map_err(ProviderStudioSaveError::other)?;
+    let mut model_patch = provider_model_overlay_to_json(model_overlay).map_err(|error| {
+        ProviderStudioSaveError::other(agena_failure::diagnostic::format_error_chain_with_context(
+            "failed to serialize provider model settings before saving them",
+            &error,
+        ))
+    })?;
+    // Settings patches merge recursively, so an omitted field keeps its stored
+    // value. The editor sends only the fields the route actually carries, so
+    // every definition field it left out must be written as null: otherwise
+    // "follow this catalog entry" would silently keep the values a previous
+    // edit froze on the route.
+    if let JsonValue::Object(model) = &mut model_patch {
+        model
+            .entry("catalog_model_id".to_owned())
+            .or_insert(JsonValue::Null);
+        for field in agena_api::resource::model_catalog::ROUTE_DEFINITION_FIELDS {
+            model.entry((*field).to_owned()).or_insert(JsonValue::Null);
+        }
+    }
     let mut adapter_patch = merge_provider_model_adapter_patch_for_save(
         existing_adapter,
         adapter_id,
         model_id.as_str(),
-        provider_model_overlay_to_json(model_overlay).map_err(|error| {
-            ProviderStudioSaveError::other(
-                agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to serialize provider model settings before saving them",
-                    &error,
-                ),
-            )
-        })?,
+        model_patch,
     )?;
     apply_provider_auth_required_adapter_defaults_to_json_value(
         &draft,

@@ -47,11 +47,20 @@ impl CatalogedModelsProvider {
     }
 
     fn provider_definition(&self, model: &ModelId) -> Option<&ConfiguredModelDefinition> {
-        self.provider.models.get(model.as_ref()).or_else(|| {
-            catalog_model_id_for_raw(model.as_ref())
-                .as_deref()
-                .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
-        })
+        // A route pinned to a catalog entry is described by that entry; the
+        // pin lives on the saved route, so the route definition itself is
+        // resolved by the target. Fall back to the catalog's automatic match.
+        self.target
+            .catalog_model_id_pin(None, model)
+            .as_deref()
+            .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
+            .or_else(|| {
+                self.provider.models.get(model.as_ref()).or_else(|| {
+                    catalog_model_id_for_raw(model.as_ref())
+                        .as_deref()
+                        .and_then(|catalog_model_id| self.provider.models.get(catalog_model_id))
+                })
+            })
     }
 
     fn using_configured_definition<T>(
@@ -67,7 +76,10 @@ impl CatalogedModelsProvider {
     }
 
     fn apply_catalog_model_id(&self, model_id: &ModelId, model: &mut Model) -> Option<String> {
-        let catalog_model_id = catalog_model_id_for_raw(model_id.as_ref())?;
+        let catalog_model_id = self
+            .target
+            .catalog_model_id_pin(model.adapter_id.as_ref(), model_id)
+            .or_else(|| catalog_model_id_for_raw(model_id.as_ref()))?;
         model.catalog_model_id = Some(ModelId::new(catalog_model_id.clone()));
         Some(catalog_model_id)
     }
@@ -75,6 +87,9 @@ impl CatalogedModelsProvider {
     fn apply_to_model(&self, model_id: &ModelId, mut model: Model) -> Model {
         self.apply_catalog_model_id(model_id, &mut model);
         if let Some(definition) = self.provider_definition(model_id) {
+            // The catalog entry is the baseline; a display name the route saved
+            // is an override, so it wins over the entry's name just as every
+            // other route field does.
             if let Some(display_name) = &definition.display_name
                 && model
                     .display_name
@@ -89,15 +104,22 @@ impl CatalogedModelsProvider {
             let metadata_fallback = self
                 .target
                 .model_metadata_for_adapter(model.adapter_id.as_ref(), model_id);
-            apply_configured_definition_as_baseline(
+            model = apply_configured_definition_as_baseline(
                 definition,
                 &capability_fallback,
                 &metadata_fallback,
                 model,
-            )
-        } else {
-            model
+            );
         }
+        // Applied last so the route's own display name wins over the entry's,
+        // matching how every other route field overrides the catalog baseline.
+        if let Some(display_name) = self
+            .target
+            .catalog_route_display_name(model.adapter_id.as_ref(), model_id)
+        {
+            model.display_name = Some(display_name);
+        }
+        model
     }
 }
 
@@ -130,6 +152,22 @@ impl ModelRuntime for CatalogedModelsProvider {
     impl_model_runtime_target_methods! {
         fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
         fn agena_tool_mode_override / agena_tool_mode_override_for_adapter (&self, model: &ModelId) -> Option<AgenaToolMode>;
+    }
+
+    fn catalog_model_id_pin(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<String> {
+        self.target.catalog_model_id_pin(adapter_id, model)
+    }
+
+    fn catalog_route_display_name(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> Option<String> {
+        self.target.catalog_route_display_name(adapter_id, model)
     }
 
     fn agena_tool_mode_for_adapter(

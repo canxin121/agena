@@ -136,6 +136,27 @@ pub trait ModelRuntime: Send + Sync {
         None
     }
 
+    /// Catalog entry this route was explicitly matched to, if any. Catalog
+    /// decoration resolves this entry before the automatic match derived from
+    /// the route's model id.
+    fn catalog_model_id_pin(
+        &self,
+        _adapter_id: Option<&AdapterId>,
+        _model: &ModelId,
+    ) -> Option<String> {
+        None
+    }
+
+    /// Display name the saved route sets for itself, if any. It overrides the
+    /// catalog entry's name, like every other field the route writes.
+    fn catalog_route_display_name(
+        &self,
+        _adapter_id: Option<&AdapterId>,
+        _model: &ModelId,
+    ) -> Option<String> {
+        None
+    }
+
     fn agena_tool_mode_override_for_adapter(
         &self,
         _adapter_id: Option<&AdapterId>,

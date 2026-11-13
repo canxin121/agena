@@ -276,11 +276,10 @@ pub(crate) fn remove_provider_studio_adapter_from_dialog(
     );
 }
 
-const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 16] = [
+const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [
     ProviderModelConfigField::ModelId,
     ProviderModelConfigField::Enabled,
     ProviderModelConfigField::NativeCompaction,
-    ProviderModelConfigField::ManualOverrides,
     ProviderModelConfigField::AgenaToolMode,
     ProviderModelConfigField::DisplayName,
     ProviderModelConfigField::Lifecycle,
@@ -317,7 +316,7 @@ pub(crate) fn provider_model_config_draft_from_overlay(
         model_id: model_id.to_owned(),
         enabled: overlay.enabled,
         native_compaction: overlay.native_compaction,
-        manual_overrides: definition.manual_overrides,
+        catalog_model_id: definition.catalog_model_id.clone(),
         agena_tool_mode: overlay.agena_tools.mode,
         agena_tool_mode_configured: overlay.agena_tools.configured_mode().is_some(),
         display_name: definition.display_name.clone().unwrap_or_default(),
@@ -438,7 +437,7 @@ pub(crate) fn provider_model_config_draft_to_model_value(
     definition.display_name = trimmed_owned_local(draft.display_name.as_str());
     definition.description = trimmed_owned_local(draft.description.as_str());
     definition.output_modalities = split_csv_tokens(draft.output_modalities.as_str());
-    definition.manual_overrides = draft.manual_overrides;
+    definition.catalog_model_id = draft.catalog_model_id.clone();
     definition.capabilities.input =
         agena_provider::CapabilitySelectionPatch::optional_from_supported_unsupported(
             input_supported,
@@ -493,7 +492,6 @@ pub(crate) fn provider_model_config_field_value(
         ProviderModelConfigField::ModelId => draft.model_id.clone(),
         ProviderModelConfigField::Enabled => draft.enabled.to_string(),
         ProviderModelConfigField::NativeCompaction => draft.native_compaction.to_string(),
-        ProviderModelConfigField::ManualOverrides => draft.manual_overrides.to_string(),
         ProviderModelConfigField::AgenaToolMode => match draft.agena_tool_mode {
             AgenaToolMode::ProviderProtocol => "provider_protocol".to_owned(),
             AgenaToolMode::Disabled => "disabled".to_owned(),
@@ -598,9 +596,6 @@ pub(crate) fn commit_provider_model_config_field(
         }
         ProviderModelConfigField::NativeCompaction => {
             draft.native_compaction = parse_bool_token(value.as_str())?;
-        }
-        ProviderModelConfigField::ManualOverrides => {
-            draft.manual_overrides = parse_bool_token(value.as_str())?;
         }
         ProviderModelConfigField::AgenaToolMode => {
             draft.agena_tool_mode = match value.trim() {

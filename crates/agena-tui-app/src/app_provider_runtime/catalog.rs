@@ -367,13 +367,21 @@ impl App {
         }
         dialog.catalog_matches_loading = true;
         dialog.catalog_match_error = None;
-        let model_ids = dialog
+        // Pinned catalog ids travel with the request so a route's stored match
+        // is part of the result set even though it is not the automatic
+        // suggestion for that model id.
+        let mut model_ids = dialog
             .adapter_models
             .iter()
             .flat_map(|adapter| adapter.models.iter().map(|model| model.id.clone()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
+        model_ids.extend(
+            dialog
+                .model_page
+                .as_ref()
+                .and_then(|page| page.draft.catalog_model_id.clone()),
+        );
+        let model_ids = model_ids.into_iter().collect::<Vec<_>>();
         if model_ids.is_empty() {
             dialog.catalog_matches_loading = false;
             return;

@@ -113,19 +113,26 @@ impl Application {
         &self,
         catalog_model_id: &str,
         model_value: serde_json::Value,
-        manual_overrides: bool,
+        clear: bool,
     ) -> Result<serde_json::Value, ApplicationError> {
-        let catalog = self
-            .lookup_model_catalog_models(&[catalog_model_id.to_owned()])
-            .into_iter()
-            .find(|entry| entry.model_id == catalog_model_id)
-            .ok_or_else(|| ApplicationError::not_found("catalog model not found"))?;
-        agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
-            model_value,
-            &catalog,
-            manual_overrides,
-        )
-        .map_err(|error| {
+        // Selecting an entry records its id on the route; every other field the
+        // route sets overrides that entry. Clearing removes the id so the route
+        // resolves the catalog automatically again.
+        let result = if clear {
+            agena_api::resource::model_catalog::clear_catalog_template_from_model_value(model_value)
+        } else {
+            let catalog_model_id = catalog_model_id.trim();
+            let catalog = self
+                .lookup_model_catalog_models(&[catalog_model_id.to_owned()])
+                .into_iter()
+                .find(|entry| entry.model_id == catalog_model_id)
+                .ok_or_else(|| ApplicationError::not_found("catalog model not found"))?;
+            agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
+                model_value,
+                &catalog,
+            )
+        };
+        result.map_err(|error| {
             ApplicationError::bad_request_with_diagnostic(
                 "The model configuration is invalid.",
                 error,

@@ -19,8 +19,7 @@ use agena_provider::{
 };
 
 use crate::provider_studio::catalog::{
-    catalog_lookup_candidates, catalog_model_to_catalog_definition,
-    preferred_catalog_model_for_lookup_ids,
+    catalog_lookup_candidates, catalog_model_for_route, catalog_model_to_catalog_definition,
 };
 use crate::{Application, ApplicationError};
 
@@ -215,6 +214,7 @@ pub fn provider_model_resource_from_domain(value: Model) -> ProviderModelResourc
         adapter_id: value.adapter_id.map(|id| id.to_string()),
         id: value.id.to_string(),
         catalog_model_id: value.catalog_model_id.map(|id| id.to_string()),
+        pinned_catalog_model_id: None,
         display_name: value.display_name,
         native_compaction: value.native_compaction,
         capabilities: provider_model_capabilities_resource_from_domain(value.capabilities),
@@ -356,18 +356,76 @@ pub async fn list_saved_provider_adapter_models_response(
         .list_saved_adapter_models(&provider_id, params.adapter_ids)
         .await
         .map_err(map_provider_catalog_error)?;
-    Ok(provider_adapter_models_response(state, listing))
+    Ok(provider_adapter_models_response_with_pins(
+        state,
+        listing,
+        &saved_catalog_routes(state, provider_id.as_ref()),
+    ))
+}
+
+/// Saved route definitions keyed by adapter and model id, for the routes that
+/// carry any configuration. A saved listing applies the same
+/// "route overrides the entry" merge a configured read uses, so a route's own
+/// fields survive a live re-listing.
+type SavedCatalogRoutes = std::collections::BTreeMap<(String, String), SavedCatalogRoute>;
+
+#[derive(Clone, Default)]
+struct SavedCatalogRoute {
+    /// The entry the route names, if any. `None` means the route resolves the
+    /// catalog automatically and only carries field overrides.
+    catalog_model_id: Option<String>,
+    /// `None` when the route has no saved definition at all.
+    definition: Option<agena_provider::ConfiguredModelDefinition>,
+}
+
+fn saved_catalog_routes(app: &Application, provider_id: &str) -> SavedCatalogRoutes {
+    app.provider_catalog()
+        .configured_routing(&ProviderId::new(provider_id))
+        .map(|routing| {
+            routing
+                .adapters
+                .into_iter()
+                .flat_map(|adapter| {
+                    let adapter_id = adapter.adapter_id;
+                    adapter
+                        .models
+                        .into_iter()
+                        .map(move |(model_id, definition)| {
+                            let route = SavedCatalogRoute {
+                                catalog_model_id: definition.catalog_model_id.clone(),
+                                definition: Some(definition),
+                            };
+                            ((adapter_id.clone(), model_id), route)
+                        })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub(crate) fn provider_adapter_models_response(
     app: &Application,
     adapter_models: agena_provider::ProviderAdapterModelsListing,
 ) -> ProviderAdapterModelsResponse {
-    let lookup_ids = adapter_models
-        .adapters
-        .iter()
-        .flat_map(|adapter| adapter.models.iter())
-        .flat_map(|model| catalog_lookup_candidates(model.id.as_ref()))
+    provider_adapter_models_response_with_pins(app, adapter_models, &Default::default())
+}
+
+fn provider_adapter_models_response_with_pins(
+    app: &Application,
+    adapter_models: agena_provider::ProviderAdapterModelsListing,
+    pins: &SavedCatalogRoutes,
+) -> ProviderAdapterModelsResponse {
+    let pinned_ids = pins
+        .values()
+        .filter_map(|route| route.catalog_model_id.clone());
+    let lookup_ids = pinned_ids
+        .chain(
+            adapter_models
+                .adapters
+                .iter()
+                .flat_map(|adapter| adapter.models.iter())
+                .flat_map(|model| catalog_lookup_candidates(model.id.as_ref())),
+        )
         .collect::<Vec<_>>();
     let catalog_entries = app.lookup_model_catalog_models(&lookup_ids);
     ProviderAdapterModelsResponse {
@@ -375,7 +433,13 @@ pub(crate) fn provider_adapter_models_response(
         adapters: adapter_models
             .adapters
             .into_iter()
-            .map(|adapter| provider_adapter_models_resource(adapter, &catalog_entries))
+            .map(|adapter| {
+                let adapter_id = adapter.adapter_id.clone();
+                provider_adapter_models_resource(adapter, &catalog_entries, |model_id| {
+                    pins.get(&(adapter_id.clone(), model_id.to_owned()))
+                        .cloned()
+                })
+            })
             .collect(),
     }
 }
@@ -402,6 +466,15 @@ pub fn configured_provider_adapter_models_response(
         .iter()
         .flat_map(|adapter| adapter.model_ids.iter())
         .flat_map(|model_id| catalog_lookup_candidates(model_id))
+        // The entry a route names is not necessarily a candidate for its model
+        // id, so it has to be looked up explicitly too.
+        .chain(
+            routing
+                .adapters
+                .iter()
+                .flat_map(|adapter| adapter.models.values())
+                .filter_map(|definition| definition.catalog_model_id.clone()),
+        )
         .collect::<Vec<_>>();
     let catalog_entries = app.lookup_model_catalog_models(&lookup_ids);
     routing
@@ -415,11 +488,15 @@ pub fn configured_provider_adapter_models_response(
                 .map(|model_id| {
                     let mut model = agena_domain::Model::new(provider_id, model_id.as_str());
                     model.adapter_id = Some(agena_domain::AdapterId::new(adapter_id.as_str()));
-                    provider_model_resource_from_domain(enrich_configured_model_from_catalog(
-                        model,
-                        adapter.models.get(model_id.as_str()),
-                        &catalog_entries,
-                    ))
+                    let saved = adapter.models.get(model_id.as_str());
+                    let mut resource = provider_model_resource_from_domain(
+                        enrich_configured_model_from_catalog(model, saved, &catalog_entries),
+                    );
+                    // Report the route's stored match so the studio can show
+                    // it as the route's own choice after a reload.
+                    resource.pinned_catalog_model_id =
+                        saved.and_then(|definition| definition.catalog_model_id.clone());
+                    resource
                 })
                 .collect::<Vec<_>>();
             sort_models_alphabetically(&mut models);
@@ -434,96 +511,83 @@ pub fn configured_provider_adapter_models_response(
         .collect()
 }
 
-/// Enrich a saved route with its preferred catalog entry.
+/// Enrich a saved route with the catalog entry it resolves to.
 ///
-/// The saved definition is the route's own configuration, so it decides the
-/// result when the route opted out of following the catalog
-/// (`manual_overrides`). A route that follows the catalog takes the catalog
-/// values and uses its saved definition only for what the catalog leaves
-/// undefined — the same precedence the runtime uses, so the editor reads back
-/// exactly what execution will use.
+/// The catalog entry is the base and the route's saved fields override it, so
+/// writing only `catalog_model_id` mirrors the entry and adding fields next to
+/// it overrides just those. Resolution honours the route's explicit match
+/// first, so a corrected match is what the editor reads back rather than the
+/// id-derived suggestion.
 fn enrich_configured_model_from_catalog(
     model: agena_domain::Model,
     saved: Option<&agena_provider::ConfiguredModelDefinition>,
     catalog_entries: &[crate::dto::CatalogModelResource],
 ) -> agena_domain::Model {
     let lookup_ids = catalog_lookup_candidates(model.id.as_ref());
-    let catalog_model = preferred_catalog_model_for_lookup_ids(catalog_entries, &lookup_ids);
-    let route_follows_catalog = saved.is_none_or(|definition| !definition.manual_overrides);
-    if route_follows_catalog {
-        return match catalog_model {
-            Some(catalog_model) => {
-                let definition = catalog_model_to_catalog_definition(catalog_model);
-                let enriched = agena_provider::apply_catalog_definition_as_authority(
+    let catalog_model = catalog_model_for_route(
+        catalog_entries,
+        saved.and_then(|definition| definition.catalog_model_id.as_deref()),
+        &lookup_ids,
+    );
+    let catalog_definition = catalog_model.map(catalog_model_to_catalog_definition);
+
+    // The catalog entry supplies the baseline; the route supplies overrides.
+    let mut model = match &catalog_definition {
+        Some(definition) => {
+            let mut model = agena_provider::apply_catalog_definition_as_baseline(
+                definition,
+                &model.capabilities.clone(),
+                &model.metadata.clone(),
+                model,
+            );
+            // A display name has no capability or metadata slot, so the
+            // baseline merge cannot carry it. The entry supplies one unless the
+            // route names the model itself.
+            if let Some(display_name) = definition.display_name.as_deref() {
+                model.display_name = Some(display_name.to_owned());
+            }
+            model
+        }
+        None => model,
+    };
+    if let Some(saved) = saved {
+        model = agena_provider::apply_configured_definition_as_authority(
+            saved,
+            &model.capabilities.clone(),
+            &model.metadata.clone(),
+            model,
+        );
+        agena_provider::apply_configured_display_name(saved, &mut model, false);
+    }
+    model
+}
+
+/// Enrich a raw listing model with the catalog entry it resolves to. A saved
+/// route's explicit match wins over the automatic one derived from its id.
+/// Returns the model unchanged when no catalog entry matches. The
+/// adapter-merged listing model's own capabilities/metadata act as the
+/// fallback, so existing (non-unknown) values win and only gaps are filled from
+/// the catalog — matching the session path's `CatalogedModelsProvider` merge.
+fn enrich_listing_model_from_catalog(
+    model: agena_domain::Model,
+    catalog_entries: &[crate::dto::CatalogModelResource],
+    pinned_model_id: Option<&str>,
+) -> agena_domain::Model {
+    let lookup_ids = catalog_lookup_candidates(model.id.as_ref());
+    match catalog_model_for_route(catalog_entries, pinned_model_id, &lookup_ids) {
+        Some(catalog_model) => {
+            let definition = catalog_model_to_catalog_definition(catalog_model);
+            if pinned_model_id.is_some() {
+                // The listing model was already filled from the automatic
+                // match, so this correction has to win over those values. The
+                // provider's own listing still supplies what the entry omits.
+                return agena_provider::apply_catalog_definition_as_authority(
                     &definition,
                     &model.capabilities.clone(),
                     &model.metadata.clone(),
                     model,
                 );
-                // The route may still carry policy the catalog does not define
-                // (a tool mode). Let it fill the gaps, but keep the catalog's
-                // display name because this route follows the catalog.
-                match saved {
-                    Some(saved) => agena_provider::apply_configured_definition_as_baseline(
-                        saved,
-                        &enriched.capabilities.clone(),
-                        &enriched.metadata.clone(),
-                        enriched,
-                    ),
-                    None => enriched,
-                }
             }
-            None => match saved {
-                Some(saved) => {
-                    let mut filled = agena_provider::apply_configured_definition_as_baseline(
-                        saved,
-                        &model.capabilities.clone(),
-                        &model.metadata.clone(),
-                        model,
-                    );
-                    agena_provider::apply_configured_display_name(saved, &mut filled, false);
-                    filled
-                }
-                None => model,
-            },
-        };
-    }
-
-    // The route owns its definition; the catalog only fills what it omits.
-    let definition = catalog_model.map(catalog_model_to_catalog_definition);
-    let configured = saved.expect("manual override routes have a saved definition");
-    let mut model = model;
-    if let Some(definition) = definition {
-        model = agena_provider::apply_catalog_definition_as_baseline(
-            &definition,
-            &model.capabilities.clone(),
-            &model.metadata.clone(),
-            model,
-        );
-    }
-    model = agena_provider::apply_configured_definition_as_baseline(
-        configured,
-        &model.capabilities.clone(),
-        &model.metadata.clone(),
-        model,
-    );
-    agena_provider::apply_configured_display_name(configured, &mut model, false);
-    model
-}
-
-/// Enrich a raw listing model with its preferred catalog entry. Returns the
-/// model unchanged when no catalog entry matches. The adapter-merged listing
-/// model's own capabilities/metadata act as the fallback, so existing
-/// (non-unknown) values win and only gaps are filled from the catalog —
-/// matching the session path's `CatalogedModelsProvider` merge.
-fn enrich_listing_model_from_catalog(
-    model: agena_domain::Model,
-    catalog_entries: &[crate::dto::CatalogModelResource],
-) -> agena_domain::Model {
-    let lookup_ids = catalog_lookup_candidates(model.id.as_ref());
-    match preferred_catalog_model_for_lookup_ids(catalog_entries, &lookup_ids) {
-        Some(catalog_model) => {
-            let definition = catalog_model_to_catalog_definition(catalog_model);
             agena_provider::apply_catalog_definition_as_baseline(
                 &definition,
                 &model.capabilities.clone(),
@@ -538,15 +602,35 @@ fn enrich_listing_model_from_catalog(
 fn provider_adapter_models_resource(
     value: ProviderAdapterModelsEntry,
     catalog_entries: &[crate::dto::CatalogModelResource],
+    saved_route_for: impl Fn(&str) -> Option<SavedCatalogRoute>,
 ) -> ProviderAdapterModelsResource {
     let mut models = value
         .models
         .into_iter()
         .map(|model| {
-            provider_model_resource_from_domain(enrich_listing_model_from_catalog(
-                model,
-                catalog_entries,
-            ))
+            let saved = saved_route_for(model.id.as_ref());
+            let pinned = saved
+                .as_ref()
+                .and_then(|saved| saved.catalog_model_id.as_deref());
+            let mut model = enrich_listing_model_from_catalog(model, catalog_entries, pinned);
+            if let Some(saved) = &saved {
+                if let Some(catalog_model_id) = &saved.catalog_model_id {
+                    model.catalog_model_id =
+                        Some(agena_domain::ModelId::new(catalog_model_id.as_str()));
+                }
+                if let Some(definition) = &saved.definition {
+                    model = agena_provider::apply_configured_definition_as_authority(
+                        definition,
+                        &model.capabilities.clone(),
+                        &model.metadata.clone(),
+                        model,
+                    );
+                    agena_provider::apply_configured_display_name(definition, &mut model, false);
+                }
+            }
+            let mut resource = provider_model_resource_from_domain(model);
+            resource.pinned_catalog_model_id = saved.and_then(|saved| saved.catalog_model_id);
+            resource
         })
         .collect::<Vec<_>>();
     sort_models_alphabetically(&mut models);
@@ -578,5 +662,116 @@ fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
             ApplicationError::not_found_with_diagnostic("The provider was not found.", message)
         }
         ProviderCatalogError::Operation(message) => ApplicationError::internal(message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enrich_configured_model_from_catalog;
+    use agena_api::resource::{CatalogModelResource, ModelCatalogSourceKind};
+    use agena_provider::ConfiguredModelDefinition;
+
+    fn catalog_entry(
+        model_id: &str,
+        display_name: &str,
+        context_window: u32,
+    ) -> CatalogModelResource {
+        CatalogModelResource {
+            model_id: model_id.to_owned(),
+            source: ModelCatalogSourceKind::Generated,
+            provider_sources: Vec::new(),
+            verbosity_by_provider: Default::default(),
+            source_label: None,
+            display_name: Some(display_name.to_owned()),
+            origin: None,
+            lifecycle: None,
+            context_window_tokens: Some(context_window),
+            max_input_tokens: None,
+            max_output_tokens: None,
+            description: None,
+            knowledge_cutoff: None,
+            release_date: None,
+            last_updated: None,
+            open_weights: None,
+            supports_parallel_tool_calls: None,
+            supports_verbosity: None,
+            default_verbosity: None,
+            default_temperature: None,
+            default_top_p: None,
+            default_top_k: None,
+            assistant_reasoning_interleaved: None,
+            assistant_reasoning_field: None,
+            output_modalities: Vec::new(),
+            pricing: None,
+            thinking_modes: Default::default(),
+            speed_modes: Default::default(),
+            capabilities: Default::default(),
+        }
+    }
+
+    fn saved_route(pinned: Option<&str>) -> ConfiguredModelDefinition {
+        ConfiguredModelDefinition {
+            display_name: Some("Saved name".to_owned()),
+            context_window_tokens: Some(777_777),
+            catalog_model_id: pinned.map(ToOwned::to_owned),
+            ..Default::default()
+        }
+    }
+
+    fn enriched(
+        saved: &ConfiguredModelDefinition,
+        entries: &[CatalogModelResource],
+    ) -> agena_domain::Model {
+        let model = agena_domain::Model::new("fixture", "route-model");
+        enrich_configured_model_from_catalog(model, Some(saved), entries)
+    }
+
+    #[test]
+    fn a_route_without_its_own_fields_reads_the_catalog_entry() {
+        let entries = [catalog_entry("route-model", "Catalog name", 1_000_000)];
+        let model = enriched(&ConfiguredModelDefinition::default(), &entries);
+
+        assert_eq!(model.display_name.as_deref(), Some("Catalog name"));
+        assert_eq!(model.metadata.limits.context_window_tokens, Some(1_000_000));
+    }
+
+    #[test]
+    fn route_fields_override_the_catalog_entry() {
+        let entries = [catalog_entry("route-model", "Catalog name", 1_000_000)];
+        let model = enriched(&saved_route(None), &entries);
+
+        assert_eq!(model.display_name.as_deref(), Some("Saved name"));
+        assert_eq!(model.metadata.limits.context_window_tokens, Some(777_777));
+    }
+
+    #[test]
+    fn an_unset_route_field_falls_back_to_the_catalog_entry() {
+        // Only the name is overridden; the limit still tracks the entry, so a
+        // catalog refresh reaches an otherwise overridden route.
+        let entries = [catalog_entry("route-model", "Catalog name", 1_000_000)];
+        let saved = ConfiguredModelDefinition {
+            display_name: Some("Saved name".to_owned()),
+            ..Default::default()
+        };
+        let model = enriched(&saved, &entries);
+
+        assert_eq!(model.display_name.as_deref(), Some("Saved name"));
+        assert_eq!(model.metadata.limits.context_window_tokens, Some(1_000_000));
+    }
+
+    #[test]
+    fn naming_a_catalog_entry_replaces_the_automatic_match() {
+        let entries = [
+            catalog_entry("route-model", "Automatic name", 1_000_000),
+            catalog_entry("chosen-entry", "Chosen name", 2_000_000),
+        ];
+        let saved = ConfiguredModelDefinition {
+            catalog_model_id: Some("chosen-entry".to_owned()),
+            ..Default::default()
+        };
+        let model = enriched(&saved, &entries);
+
+        assert_eq!(model.display_name.as_deref(), Some("Chosen name"));
+        assert_eq!(model.metadata.limits.context_window_tokens, Some(2_000_000));
     }
 }

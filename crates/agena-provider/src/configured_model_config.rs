@@ -38,6 +38,11 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
         use serde::de::Error as _;
 
         let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        // `manual_overrides` was the old opt-out switch. The route's own fields
+        // now override the catalog entry unconditionally, so the switch carries
+        // no information; drop it instead of rejecting a config written by an
+        // older build.
+        fields.remove("manual_overrides");
         const CURRENT_MODEL_FIELDS: &[&str] = &[
             "enabled",
             "native_compaction",
@@ -68,7 +73,7 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
             "speed_modes",
             "input",
             "features",
-            "manual_overrides",
+            "catalog_model_id",
         ];
         if let Some(unknown) = fields
             .keys()

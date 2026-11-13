@@ -90,7 +90,6 @@ impl App {
                 field,
                 ProviderModelConfigField::Enabled
                     | ProviderModelConfigField::NativeCompaction
-                    | ProviderModelConfigField::ManualOverrides
                     | ProviderModelConfigField::AgenaToolMode
             );
             let current_value = if allow_clear && current.trim().is_empty() {
@@ -164,7 +163,6 @@ impl App {
         let value = agena_api::resource::model_catalog::apply_catalog_template_to_model_value(
             current_value,
             &catalog,
-            true,
         )
         .map_err(crate::UiFailure::internal)?;
         let updated = provider_model_config_draft_from_value(model_id.as_str(), value)?;

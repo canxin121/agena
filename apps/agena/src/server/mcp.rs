@@ -1683,21 +1683,14 @@ fn client_metadata_supports_none(singular: Option<&str>, plural: Option<&[String
 }
 
 fn client_metadata_supports_grants(grants: Option<&[String]>) -> bool {
-    grants.is_none_or(|values| {
-        !values.is_empty()
-            && values.iter().any(|value| value == "authorization_code")
-            && values
-                .iter()
-                .all(|value| matches!(value.as_str(), "authorization_code" | "refresh_token"))
-    })
+    // A CIMD describes everything the client can do with any server, so it
+    // may list grant types this server does not implement. The token endpoint
+    // independently rejects unsupported grant types.
+    grants.is_none_or(|values| values.iter().any(|value| value == "authorization_code"))
 }
 
 fn client_metadata_supports_code_response(response_types: Option<&[String]>) -> bool {
-    response_types.is_none_or(|values| {
-        !values.is_empty()
-            && values.iter().any(|value| value == "code")
-            && values.iter().all(|value| value == "code")
-    })
+    response_types.is_none_or(|values| values.iter().any(|value| value == "code"))
 }
 
 async fn fetch_cimd_document(client_id: &str) -> Result<CimdClientMetadata, String> {
@@ -4114,7 +4107,10 @@ mod tests {
             "redirect_uris": ["https://chatgpt.com/connector_platform_oauth_redirect"],
             "token_endpoint_auth_method": "private_key_jwt",
             "token_endpoint_auth_methods_supported": ["none", "private_key_jwt"],
-            "grant_types": ["authorization_code", "refresh_token"],
+            "grant_types": [
+                "authorization_code", "refresh_token",
+                "urn:ietf:params:oauth:grant-type:jwt-bearer"
+            ],
             "response_types": ["code"]
         }))
         .unwrap();
@@ -4128,6 +4124,17 @@ mod tests {
         assert!(validate_cimd_document(client_id, &metadata).is_err());
         metadata.token_endpoint_auth_method = Some("none".to_owned());
         assert!(validate_cimd_document(client_id, &metadata).is_ok());
+        metadata.response_types = Some(vec!["code".to_owned(), "token".to_owned()]);
+        assert!(validate_cimd_document(client_id, &metadata).is_ok());
+        metadata.response_types = Some(vec!["token".to_owned()]);
+        assert!(validate_cimd_document(client_id, &metadata).is_err());
+        metadata.response_types = Some(vec![]);
+        assert!(validate_cimd_document(client_id, &metadata).is_err());
+        metadata.response_types = Some(vec!["code".to_owned()]);
+        metadata.grant_types = Some(vec!["refresh_token".to_owned()]);
+        assert!(validate_cimd_document(client_id, &metadata).is_err());
+        metadata.grant_types = Some(vec![]);
+        assert!(validate_cimd_document(client_id, &metadata).is_err());
     }
 
     #[test]

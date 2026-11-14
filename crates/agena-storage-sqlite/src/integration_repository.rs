@@ -213,8 +213,7 @@ impl IntegrationRepository for SqliteIntegrationRepository {
             .map_err(error)?;
         let tx = self.database.begin().await.map_err(error)?;
         let mut b = read_binding(&tx, id).await?;
-        if b.revision != expected || b.state != BindingState::Enabled || now >= b.spec.expires_at_ms
-        {
+        if b.revision != expected || b.state != BindingState::Enabled || b.spec.expired_at(now) {
             return Err(Error::Conflict(
                 "integration authority changed during poll; cursor was not committed",
             ));
@@ -280,7 +279,7 @@ impl IntegrationRepository for SqliteIntegrationRepository {
             .map_err(error)?;
         let tx = self.database.begin().await.map_err(error)?;
         let mut b = read_binding(&tx, id).await?;
-        if b.state != BindingState::Enabled || now >= b.spec.expires_at_ms {
+        if b.state != BindingState::Enabled || b.spec.expired_at(now) {
             return Ok(None);
         }
         let rows=tx.query_all(statement("SELECT event_json FROM agena_integration_inbox WHERE binding_id=? AND state IN ('pending','processing') ORDER BY CASE WHEN state='processing' THEN 0 WHEN json_extract(event_json,'$.event.text')='/access' OR json_extract(event_json,'$.event.text') LIKE '/access %' THEN 1 ELSE 2 END,received_at_ms,event_id LIMIT 32",vec![id.to_string().into()])).await.map_err(error)?;
@@ -323,13 +322,13 @@ impl IntegrationRepository for SqliteIntegrationRepository {
                 b.day = day;
                 b.day_admitted = 0;
             }
-            if b.admitted >= b.spec.total_limit {
+            if b.spec.total_budget_exhausted(b.admitted) {
                 b.last_error=Some("total event budget exhausted; existing work retains its grant until pause or expiry".into());
                 put_binding(&tx, &b, b.revision).await?;
                 tx.commit().await.map_err(error)?;
                 return Ok(None);
             }
-            if b.day_admitted >= b.spec.daily_limit {
+            if b.spec.daily_budget_exhausted(b.day_admitted) {
                 put_binding(&tx, &b, b.revision).await?;
                 tx.commit().await.map_err(error)?;
                 return Ok(None);
@@ -340,8 +339,8 @@ impl IntegrationRepository for SqliteIntegrationRepository {
                 put_event(&tx, &e).await?;
                 continue;
             }
-            b.admitted += 1;
-            b.day_admitted += 1;
+            b.admitted = b.admitted.saturating_add(1);
+            b.day_admitted = b.day_admitted.saturating_add(1);
             e.state = "processing".into();
             put_event(&tx, &e).await?;
             put_binding(&tx, &b, b.revision).await?;
@@ -396,7 +395,7 @@ impl IntegrationRepository for SqliteIntegrationRepository {
             .map_err(error)?;
         let tx = self.database.begin().await.map_err(error)?;
         let b = read_binding(&tx, id).await?;
-        if b.state != BindingState::Enabled || now >= b.spec.expires_at_ms {
+        if b.state != BindingState::Enabled || b.spec.expired_at(now) {
             return Ok(None);
         }
         let rows=tx.query_all(statement("SELECT delivery_json FROM agena_integration_outbox WHERE binding_id=? AND state='queued' AND next_attempt_ms<=? ORDER BY created_at_ms,id LIMIT 32",vec![id.to_string().into(),now.into()])).await.map_err(error)?;

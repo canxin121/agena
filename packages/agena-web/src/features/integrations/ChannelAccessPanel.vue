@@ -57,9 +57,7 @@ function close() {
 function toggleKind(kind: ConversationKind) {
   if (!draft.value) return
   const current = draft.value.kinds || (draft.value.kinds = [])
-  draft.value.kinds = current.includes(kind)
-    ? current.filter((value) => value !== kind)
-    : [...current, kind]
+  draft.value.kinds = current.includes(kind) ? current.filter((value) => value !== kind) : [...current, kind]
 }
 function kindSummary(kinds: ConversationKind[] | undefined) {
   return !kinds || kinds.length === 0
@@ -220,8 +218,9 @@ onBeforeUnmount(() => {
               }}<input v-model="draft.identity.tenant" :disabled="!!detail.binding.spec.channel_policy" /></label
             ><label class="channel-field"
               >{{ t('channelAccess.account')
-              }}<input v-model="draft.identity.account" :disabled="!!detail.binding.spec.channel_policy" /></label
-            ><div class="channel-field">
+              }}<input v-model="draft.identity.account" :disabled="!!detail.binding.spec.channel_policy"
+            /></label>
+            <div class="channel-field">
               <span>{{ t('channelAccess.kinds') }}</span>
               <div class="flex flex-wrap gap-3 pt-1">
                 <label
@@ -261,7 +260,8 @@ onBeforeUnmount(() => {
               </select></label
             ><label class="channel-field"
               >{{ t('channelAccess.daily')
-              }}<input type="number" v-model.number="draft.per_user_daily_limit" min="1" max="1000" /></label
+              }}<input type="number" v-model.number="draft.per_user_daily_limit" min="0" max="1000" />
+              <span class="text-xs text-muted-foreground">{{ t('channelAccess.zeroLimitHint') }}</span></label
             ><label class="flex items-center gap-2 text-sm"
               ><input
                 type="checkbox"
@@ -342,7 +342,8 @@ onBeforeUnmount(() => {
                   rows="2"
                   :value="draft.grant!.network_hosts?.join('\n')"
                   @input="lines('network_hosts', $event)"
-                /></label>
+                />
+              </label>
             </div>
           </details>
           <label class="flex items-center gap-2 text-sm"

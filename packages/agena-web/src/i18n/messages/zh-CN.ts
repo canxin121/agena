@@ -85,6 +85,7 @@ export default {
     },
   },
   channelAccess: {
+    zeroLimitHint: '填 0 表示不设每日上限。',
     mcp: 'MCP 权限 JSON：服务器 → 具体工具名',
     title: '渠道权限',
     edit: '管理成员与能力',
@@ -155,6 +156,8 @@ export default {
     kind_broadcast: '广播',
   },
   integrations: {
+    unlimited: '不限',
+    noExpiry: '长期连接',
     retryHint: '服务器可能已接受请求。重试会保留相同的请求标识；新建之前请先刷新连接列表。',
     title: '聊天渠道与自动工作',
     description: '连接已安装的聊天渠道或事件源插件。确认一次有期限的授权后，符合条件的新事件会在授权范围内自动处理。',

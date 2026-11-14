@@ -237,6 +237,7 @@ export type ChannelMember = {
 }
 
 export type ChannelOutputRoute = {
+  kind?: ConversationKind
   actor: string
   epoch: number
   identity: ChannelIdentity
@@ -684,6 +685,7 @@ export type CreateIntegration = {
 export type IntegrationControl = {
   action: IntegrationControlAction
   expected_revision: number
+  not_before_ms?: number | null
 }
 
 export type AssistantSnapshot = {

@@ -59,15 +59,21 @@ const deliveries = computed(() =>
     <div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
       <div class="rounded-lg bg-muted/40 p-3">
         <span class="block text-muted-foreground">{{ tx('daily') }}</span
-        ><strong class="mt-1 block">{{ detail.binding.day_admitted }} / {{ detail.binding.spec.daily_limit }}</strong>
+        ><strong class="mt-1 block"
+          >{{ detail.binding.day_admitted }} / {{ detail.binding.spec.daily_limit || tx('unlimited') }}</strong
+        >
       </div>
       <div class="rounded-lg bg-muted/40 p-3">
         <span class="block text-muted-foreground">{{ tx('total') }}</span
-        ><strong class="mt-1 block">{{ detail.binding.admitted }} / {{ detail.binding.spec.total_limit }}</strong>
+        ><strong class="mt-1 block"
+          >{{ detail.binding.admitted }} / {{ detail.binding.spec.total_limit || tx('unlimited') }}</strong
+        >
       </div>
       <div class="col-span-2 rounded-lg bg-muted/40 p-3 sm:col-span-1">
-        <span class="block text-muted-foreground">{{ tx('expiry') }}</span
-        ><span class="mt-1 block">{{ date(detail.binding.spec.expires_at_ms) }}</span>
+        <span class="block text-muted-foreground">{{ tx('expiresAt') }}</span
+        ><span class="mt-1 block">{{
+          detail.binding.spec.expires_at_ms ? date(detail.binding.spec.expires_at_ms) : tx('noExpiry')
+        }}</span>
       </div>
     </div>
     <div class="flex flex-wrap gap-2">

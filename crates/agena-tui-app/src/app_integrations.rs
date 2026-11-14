@@ -275,6 +275,7 @@ impl App {
                 IntegrationControl {
                     expected_revision: binding.revision,
                     action: *action,
+                    not_before_ms: None,
                 },
             ))
         } else {

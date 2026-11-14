@@ -1,34 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import {
   connectionFromSettings,
-  telegramBindingRequest,
   validateTelegramConnection,
-  type TelegramRoomDraft,
+  copyTelegramChatAccess,
+  defaultTelegramChatAccess,
+  telegramChatAllowed,
 } from '../src/features/telegram/model'
-import type { IntegrationProvider } from '../src/generated/agenaState'
-
-const provider: IntegrationProvider = {
-  plugin_id: 'agena.telegram',
-  fingerprint: 'f1',
-  adapter: {
-    kind: 'channel',
-    title: 'Telegram',
-    description: '',
-    minimum_poll_seconds: 1,
-    channel_context_version: 1,
-    config_schema: { properties: {} },
-    idempotent_send: false,
-  },
-}
 const connection = connectionFromSettings({ account: 'My_Agent_Bot' })
-const room: TelegramRoomDraft = {
-  title: 'Test group',
-  chatId: '-1001234567890',
-  kind: 'group',
-  ownerId: '987654321',
-  members: '12345, 56789\n12345',
-  useSourcePermissions: true,
-}
 describe('Telegram connection and binding ownership', () => {
   test('never treats a raw token as a valid environment variable name', () => {
     expect(() => validateTelegramConnection({ ...connection, bot_token_env: '123:ABC-secret' })).toThrow()
@@ -37,50 +15,6 @@ describe('Telegram connection and binding ownership', () => {
       validateTelegramConnection({ ...connection, api_base: 'https://user:pass@api.telegram.org' }),
     ).toThrow()
     expect(validateTelegramConnection(connection).account).toBe('my_agent_bot')
-  })
-  test('channel creation requires affirmative permission-boundary consent', () => {
-    expect(() => telegramBindingRequest(provider, connection, { ...room, useSourcePermissions: false })).toThrow(
-      'Explicit consent',
-    )
-  })
-  test('a group always has explicitly authorized members and no inherited privileges', () => {
-    const binding = telegramBindingRequest(provider, connection, room, 1000, 'fixed-request')
-    expect(binding.request_key).toBe('fixed-request')
-    expect(binding.spec.provider).toBe('agena.telegram')
-    expect(binding.spec.mode).toBe('channel')
-    expect(binding.spec.resource).toBe('-1001234567890')
-    expect(binding.spec.actors).toEqual([])
-    expect(binding.spec.use_source_permissions).toBe(true)
-    expect(binding.spec.config).toEqual({})
-    expect(binding.spec.channel_policy?.identity).toEqual({ tenant: 'telegram', account: 'my_agent_bot' })
-    expect(binding.spec.channel_policy?.trigger).toBe('direct_or_mention')
-    expect(binding.spec.channel_policy?.thread_mode).toBe('per_thread')
-    expect(binding.spec.channel_policy?.members).toEqual([
-      { actor: '987654321', role: 'owner', expires_at_ms: null },
-      { actor: '12345', role: 'member', expires_at_ms: null },
-      { actor: '56789', role: 'member', expires_at_ms: null },
-    ])
-    expect(binding.spec.channel_policy?.grant?.tools).toEqual([])
-    expect(binding.spec.channel_policy?.grant?.private_memory).toBe(false)
-    expect(binding.spec.channel_policy?.allow_unlisted_chat).toBe(false)
-    expect(binding.spec.expires_at_ms).toBe(1000 + 7 * 86400000)
-  })
-  test('broadcast messages are attributed to the exact channel actor, not all channel members', () => {
-    const binding = telegramBindingRequest(provider, connection, { ...room, kind: 'broadcast', members: '' }, 1000, 'b')
-    expect(binding.spec.channel_policy?.members.map((member) => member.actor)).toEqual([
-      '987654321',
-      'channel:-1001234567890',
-    ])
-    expect(binding.spec.channel_policy?.trigger).toBe('every_message')
-    expect(binding.spec.channel_policy?.thread_mode).toBe('exact')
-  })
-  test('invalid chat identifiers, member IDs, and provider identities fail before API calls', () => {
-    for (const chatId of ['@group', '0', '1e9', ' -100 1 '])
-      expect(() => telegramBindingRequest(provider, connection, { ...room, chatId })).toThrow()
-    expect(() => telegramBindingRequest(provider, connection, { ...room, ownerId: '@boss' })).toThrow()
-    expect(() => telegramBindingRequest(provider, connection, { ...room, members: '1, hacker' })).toThrow()
-    expect(() => telegramBindingRequest(provider, connection, { ...room, kind: 'direct' })).toThrow()
-    expect(() => telegramBindingRequest({ ...provider, plugin_id: 'other' }, connection, room)).toThrow()
   })
 })
 
@@ -100,6 +34,11 @@ function botView(id: string, account: string): TelegramBot {
     enabled: true,
     credential_kind: 'vault',
     connection: connectionFromSettings({ account }),
+    ai_bot_id: 'ai-' + id,
+    ai_bot: { id: 'ai-' + id, name: 'AI ' + id },
+    source_session_id: id === 'work' ? 1 : 2,
+    chat_access: defaultTelegramChatAccess(),
+    routing_error: null,
     has_token: true,
     managed: true,
     updated_at_ms: 1,
@@ -111,10 +50,34 @@ function botView(id: string, account: string): TelegramBot {
   }
 }
 function bindingFor(bot: TelegramBot, chatId = '-1001234567890'): IntegrationBinding {
-  const request = telegramBindingRequest(provider, bot.connection, { ...room, chatId, botId: bot.id })
   return {
     id: 'binding-' + bot.id,
-    spec: request.spec,
+    owner_bot_id: bot.ai_bot_id,
+    spec: {
+      title: 'Test group',
+      provider: 'agena.telegram',
+      mode: 'channel',
+      resource: chatId,
+      config: { bot_id: bot.id },
+      actors: [],
+      event_types: ['message'],
+      instruction: '',
+      poll_seconds: 1,
+      daily_limit: 0,
+      total_limit: 0,
+      expires_at_ms: 0,
+      max_execution_seconds: 300,
+      use_source_permissions: true,
+      channel_policy: {
+        identity: { tenant: 'telegram', account: bot.connection.account },
+        kinds: ['group'],
+        members: [],
+        session_mode: 'per_conversation',
+        thread_mode: 'per_thread',
+        trigger: 'direct_or_mention',
+        per_user_daily_limit: 0,
+      },
+    },
     state: 'disabled',
     revision: 1,
     admitted: 0,
@@ -127,18 +90,54 @@ function bindingFor(bot: TelegramBot, chatId = '-1001234567890'): IntegrationBin
     next_poll_ms: 0,
     poll_failures: 0,
     provider_fingerprint: 'p',
-    request_key: request.request_key,
-    source_session_id: 1,
+    request_key: 'test-' + bot.id + '-' + chatId,
+    source_session_id: bot.source_session_id!,
     updated_at_ms: 1,
   }
 }
 describe('multiple Telegram bots and rich chat management', () => {
-  test('a room binding selects a stable bot ID and never imports its credential or endpoint', () => {
+  test('a BotFather token can discover a new bot identity without requiring a typed username', () => {
+    const pending = connectionFromSettings({})
+    expect(validateTelegramConnection(pending, true).account).toBe('')
+    expect(() => validateTelegramConnection(pending)).toThrow()
+    expect(() => validateTelegramConnection({ ...pending, account: 'invalid name' }, true)).toThrow()
+  })
+  test('allowlists enable selected rooms only within enabled chat types', () => {
+    const access = { ...defaultTelegramChatAccess(), chat_ids: ['42', '-10042', '-10043'] }
+    expect(telegramChatAllowed(access, '42', 'direct')).toBe(true)
+    expect(telegramChatAllowed(access, '-10042', 'group')).toBe(true)
+    expect(telegramChatAllowed(access, '-10043', 'broadcast')).toBe(false)
+    expect(telegramChatAllowed(access, '99', 'direct')).toBe(false)
+    expect(telegramChatAllowed({ ...access, private_enabled: false }, '42', 'direct')).toBe(false)
+  })
+  test('blocklists apply to new chats without maintaining an allowlist snapshot', () => {
+    const access = { ...defaultTelegramChatAccess(), mode: 'blacklist' as const, chat_ids: ['42', '-10042'] }
+    expect(telegramChatAllowed(access, '42', 'direct')).toBe(false)
+    expect(telegramChatAllowed(access, '-10042', 'group')).toBe(false)
+    expect(telegramChatAllowed(access, '-1009999999999999', 'group')).toBe(true)
+    expect(telegramChatAllowed(access, '999999999999999', 'private')).toBe(true)
+    expect(telegramChatAllowed(access, '-10043', 'channel')).toBe(false)
+    expect(telegramChatAllowed(access, '99', 'unknown')).toBe(false)
+  })
+  test('editing one bot keeps AI ownership, room selection and saved configuration isolated', () => {
+    const work = botView('work', 'work_bot'),
+      home = botView('home', 'home_bot')
+    work.chat_access.chat_ids = ['42']
+    const draft = botConfig(work)
+    draft.ai_bot_id = home.ai_bot_id
+    draft.chat_access.chat_ids.push('-10042')
+    expect(work.ai_bot_id).toBe('ai-work')
+    expect(work.chat_access.chat_ids).toEqual(['42'])
+    expect(home.chat_access.chat_ids).toEqual([])
+    expect(botConfig(work)).not.toHaveProperty('source_session_id')
+    expect(copyTelegramChatAccess(null)).toEqual(defaultTelegramChatAccess())
+  })
+  test('a room binding keeps its stable bot identity after credential or endpoint changes', () => {
     const target = botView('work', 'work_bot')
     const binding = bindingFor(target)
-    expect(binding.spec.config).toEqual({ bot_id: 'work' })
-    expect(JSON.stringify(binding.spec)).not.toContain('bot_token_env')
-    expect(JSON.stringify(binding.spec)).not.toContain('api.telegram.org')
+    target.connection.bot_token_env = 'ROTATED_TELEGRAM_TOKEN'
+    target.connection.api_base = 'https://telegram.example.test'
+    expect(matchesTelegramBot(binding, target)).toBe(true)
     expect(botConfig(target)).not.toHaveProperty('has_token')
   })
   test('the same numeric chat ID in two bots never merges authorization', () => {
@@ -155,6 +154,18 @@ describe('multiple Telegram bots and rich chat management', () => {
       matchesTelegramBot({ ...workBinding, spec: { ...workBinding.spec, config: { bot_id: 'home' } } }, work),
     ).toBe(false)
   })
+  test('recreated local sources show current chat routes without retired faults or controls', () => {
+    const target = botView('work', 'work_bot')
+    const previous = { ...bindingFor(target), id: 'old-route', state: 'faulted' as const }
+    target.source_session_id = 8
+    const current = { ...bindingFor(target), id: 'current-route', state: 'enabled' as const }
+    const rows = telegramChatRows(target, null, [previous, current])
+    expect(matchesTelegramBot(previous, target)).toBe(false)
+    expect(matchesTelegramBot(current, target)).toBe(true)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.state).toBe('enabled')
+    expect(rows[0]!.bindings.map((binding) => binding.id)).toEqual(['current-route'])
+  })
   test('legacy bindings are identified by verified account instead of leaking into other bot tabs', () => {
     const work = botView('work', 'work_bot'),
       home = botView('home', 'home_bot')
@@ -162,39 +173,6 @@ describe('multiple Telegram bots and rich chat management', () => {
     binding.spec.config = {}
     expect(matchesTelegramBot(binding, work)).toBe(true)
     expect(matchesTelegramBot(binding, home)).toBe(false)
-  })
-  test('advanced grants enforce quota, expiry and topic bounds before submission', () => {
-    const request = telegramBindingRequest(
-      provider,
-      connection,
-      {
-        ...room,
-        botId: 'work',
-        dailyLimit: 20,
-        totalLimit: 1000,
-        expiresDays: 30,
-        perUserLimit: 15,
-        threadMode: 'exact',
-        threadId: '77',
-        sessionMode: 'per_actor',
-      },
-      1000,
-      'r',
-    )
-    expect(request.spec.thread).toBe('77')
-    expect(request.spec.channel_policy?.session_mode).toBe('per_actor')
-    expect(request.spec.expires_at_ms).toBe(1000 + 30 * 86400000)
-    expect(request.spec.daily_limit).toBe(20)
-    expect(request.spec.channel_policy?.per_user_daily_limit).toBe(15)
-    for (const patch of [
-      { dailyLimit: 0 },
-      { totalLimit: 10001 },
-      { expiresDays: 91 },
-      { executionSeconds: 15 },
-      { pollSeconds: 0 },
-      { perUserLimit: 0 },
-    ])
-      expect(() => telegramBindingRequest(provider, connection, { ...room, ...patch })).toThrow()
   })
   test('discovery remains unbound until explicitly authorized and supports type/status/identity search', () => {
     const work = botView('work', 'work_bot')

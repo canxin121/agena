@@ -4,15 +4,17 @@ import Dialog from '@/components/ui/Dialog.vue'
 import Button from '@/components/ui/Button.vue'
 import { confirmAction } from '@/lib/appConfirm'
 import { useTelegramCopy } from './copy'
-import { validateTelegramConnection, type TelegramBotConfig } from './model'
+import { validateTelegramConnection, type TelegramAiBot, type TelegramBotConfig } from './model'
 const props = defineProps<{
   initial: TelegramBotConfig
   existing: boolean
   hasToken: boolean
   busy: boolean
   error: string
+  aiBots: TelegramAiBot[]
+  aiBotsLoading?: boolean
 }>()
-const emit = defineEmits<{ close: []; save: [bot: TelegramBotConfig, token: string] }>()
+const emit = defineEmits<{ close: []; save: [bot: TelegramBotConfig, token: string]; refreshAiBots: [] }>()
 const { tx } = useTelegramCopy()
 const draft = ref<TelegramBotConfig>(JSON.parse(JSON.stringify(props.initial)))
 const token = ref('')
@@ -41,12 +43,12 @@ function save() {
     const bot = {
       ...draft.value,
       name: draft.value.name.trim(),
-      connection: validateTelegramConnection(draft.value.connection),
+      connection: validateTelegramConnection(draft.value.connection, true),
     }
-    if (!bot.name || bot.name.length > 80) throw new Error('Display name: 1–80 characters')
-    if (bot.credential_kind === 'vault' && !props.hasToken && !token.value.trim())
-      throw new Error('Enter a BotFather token.')
-    emit('save', bot, token.value)
+    if (bot.name.length > 80) throw new Error(tx('displayNameTooLong'))
+    if (!bot.ai_bot_id) throw new Error(tx('aiBotRequired'))
+    if (bot.credential_kind === 'vault' && !props.hasToken && !token.value.trim()) throw new Error(tx('tokenRequired'))
+    emit('save', bot, token.value.trim())
   } catch (error) {
     localError.value = error instanceof Error ? error.message : String(error)
   }
@@ -65,37 +67,20 @@ onBeforeUnmount(() => {
   >
     <form class="space-y-5" data-testid="telegram-bot-editor" @submit.prevent="save">
       <fieldset :disabled="busy" class="space-y-5">
-        <div class="grid gap-4 sm:grid-cols-2">
+        <div>
           <label class="block text-sm font-medium"
             >{{ tx('botName')
             }}<input
               v-model="draft.name"
               :class="field"
               maxlength="80"
-              required
               data-testid="telegram-bot-name"
               :placeholder="tx('nameHint')"
           /></label>
-          <label class="block text-sm font-medium"
-            >{{ tx('account')
-            }}<input
-              v-model.trim="draft.connection.account"
-              :class="field"
-              :readonly="existing"
-              required
-              data-testid="telegram-account"
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="my_agent_bot"
-          /></label>
+          <p v-if="existing && draft.connection.account" class="mt-2 text-xs text-muted-foreground">
+            @{{ draft.connection.account }}
+          </p>
         </div>
-        <label class="block text-sm font-medium"
-          >{{ tx('credential') }}
-          <select v-model="draft.credential_kind" :class="field" data-testid="telegram-credential-kind">
-            <option value="vault">{{ tx('vault') }}</option>
-            <option value="environment">{{ tx('environment') }}</option>
-          </select>
-        </label>
         <label v-if="draft.credential_kind === 'vault'" class="block text-sm font-medium"
           >{{ tx('token') }}
           <input
@@ -105,7 +90,7 @@ onBeforeUnmount(() => {
             autocomplete="new-password"
             spellcheck="false"
             data-testid="telegram-token"
-            :placeholder="hasToken ? '•••••••• (saved)' : '123456789:…'"
+            :placeholder="hasToken ? tx('savedToken') : '123456789:…'"
             :required="!hasToken"
           />
           <span class="mt-2 block text-xs font-normal leading-relaxed text-muted-foreground">{{
@@ -124,9 +109,43 @@ onBeforeUnmount(() => {
           />
           <span class="mt-2 block text-xs font-normal text-muted-foreground">{{ tx('envHint') }}</span>
         </label>
+        <div>
+          <div class="flex items-center justify-between gap-3">
+            <label for="telegram-bot-ai" class="text-sm font-medium">{{ tx('aiBot') }}</label>
+            <button
+              type="button"
+              class="text-xs text-primary hover:underline disabled:opacity-50"
+              :disabled="aiBotsLoading"
+              @click="emit('refreshAiBots')"
+            >
+              {{ tx('refreshAiBots') }}
+            </button>
+          </div>
+          <select id="telegram-bot-ai" v-model="draft.ai_bot_id" :class="field" required data-testid="telegram-bot-ai">
+            <option :value="null" disabled>{{ tx('chooseAiBot') }}</option>
+            <option
+              v-if="draft.ai_bot_id && !aiBots.some((item) => item.id === draft.ai_bot_id)"
+              :value="draft.ai_bot_id"
+              disabled
+            >
+              {{ tx('unavailableAiBot') }}
+            </option>
+            <option v-for="item in aiBots" :key="item.id" :value="item.id">{{ item.name }}</option>
+          </select>
+          <p class="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {{ aiBotsLoading ? tx('aiBotsLoading') : aiBots.length ? tx('aiBotHint') : tx('noAiBots') }}
+          </p>
+        </div>
         <details class="rounded-xl border border-border/70 p-4">
           <summary class="cursor-pointer text-sm font-medium">{{ tx('advanced') }}</summary>
           <div class="mt-4 space-y-4">
+            <label class="block text-sm"
+              >{{ tx('credential') }}
+              <select v-model="draft.credential_kind" :class="field" data-testid="telegram-credential-kind">
+                <option value="vault">{{ tx('vault') }}</option>
+                <option value="environment">{{ tx('environment') }}</option>
+              </select>
+            </label>
             <label class="block text-sm"
               >{{ tx('apiBase')
               }}<input

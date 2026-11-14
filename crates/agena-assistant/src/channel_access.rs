@@ -122,7 +122,7 @@ impl IntegrationBinding {
             || self.state != BindingState::Enabled
             || self.epoch != a.epoch
             || self.id.to_string() != a.binding_id
-            || now >= self.spec.expires_at_ms
+            || self.spec.expired_at(now)
             || !a.active_at(now)
         {
             return false;
@@ -159,7 +159,7 @@ impl IntegrationBinding {
     pub fn authorizes_output(&self, route: &ChannelOutputRoute, now: i64) -> bool {
         if self.state != BindingState::Enabled
             || self.epoch != route.epoch
-            || now >= self.spec.expires_at_ms
+            || self.spec.expired_at(now)
         {
             return false;
         }

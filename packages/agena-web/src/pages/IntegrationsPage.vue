@@ -221,104 +221,113 @@ onBeforeUnmount(() => {
         </button>
       </aside>
       <div class="min-w-0 space-y-5">
-      <PlatformInventoryPanel />
-      <section v-if="detail" class="min-w-0 space-y-4" data-testid="integration-detail">
-        <div class="rounded-lg border border-border p-4">
-          <h2 class="font-semibold">{{ detail.binding.spec.title }}</h2>
-          <p class="mt-1 text-xs text-muted-foreground">
-            {{ detail.binding.spec.provider }} · {{ detail.binding.spec.mode }} ·
-            {{ t(`integrations.state_${detail.binding.state}`) }}
-          </p>
-          <p class="mt-3 break-all text-sm">
-            {{ detail.binding.spec.resource
-            }}<span v-if="detail.binding.spec.thread"> / {{ detail.binding.spec.thread }}</span>
-          </p>
-          <p class="mt-2 whitespace-pre-wrap text-sm">{{ detail.binding.spec.instruction }}</p>
-          <p class="mt-3 text-xs">
-            {{ t('integrations.budget') }} {{ detail.binding.day_admitted }}/{{ detail.binding.spec.daily_limit }} ·
-            {{ detail.binding.admitted }}/{{ detail.binding.spec.total_limit }} · {{ t('integrations.expires') }}
-            {{ new Date(detail.binding.spec.expires_at_ms).toLocaleString() }}
-          </p>
-          <p v-if="detail.binding.last_error" class="mt-3 text-sm text-destructive">{{ detail.binding.last_error }}</p>
-          <div class="mt-4 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              :disabled="busy || detail.binding.state === 'enabled'"
-              @click="confirm = { binding: copy(detail.binding), action: 'enable' }"
-              data-testid="integration-enable"
-              >{{ t('integrations.enable') }}</Button
-            ><Button
-              variant="outline"
-              size="sm"
-              :disabled="busy || detail.binding.state !== 'enabled'"
-              @click="confirm = { binding: copy(detail.binding), action: 'pause' }"
-              data-testid="integration-pause"
-              >{{ t('assistant.pause') }}</Button
-            ><Button
-              variant="outline"
-              size="sm"
-              :disabled="busy || detail.binding.state !== 'enabled'"
-              @click="confirm = { binding: copy(detail.binding), action: 'poll_now' }"
-              >{{ t('integrations.poll') }}</Button
-            ><Button
-              v-if="detail.binding.channel_session_id"
-              variant="ghost"
-              size="sm"
-              @click="openSession(detail.binding.channel_session_id)"
-              >{{ t('assistant.openChat') }}</Button
-            >
+        <PlatformInventoryPanel />
+        <section v-if="detail" class="min-w-0 space-y-4" data-testid="integration-detail">
+          <div class="rounded-lg border border-border p-4">
+            <h2 class="font-semibold">{{ detail.binding.spec.title }}</h2>
+            <p class="mt-1 text-xs text-muted-foreground">
+              {{ detail.binding.spec.provider }} · {{ detail.binding.spec.mode }} ·
+              {{ t(`integrations.state_${detail.binding.state}`) }}
+            </p>
+            <p class="mt-3 break-all text-sm">
+              {{ detail.binding.spec.resource
+              }}<span v-if="detail.binding.spec.thread"> / {{ detail.binding.spec.thread }}</span>
+            </p>
+            <p class="mt-2 whitespace-pre-wrap text-sm">{{ detail.binding.spec.instruction }}</p>
+            <p class="mt-3 text-xs">
+              {{ t('integrations.budget') }} {{ detail.binding.day_admitted }}/{{
+                detail.binding.spec.daily_limit || t('integrations.unlimited')
+              }}
+              · {{ detail.binding.admitted }}/{{ detail.binding.spec.total_limit || t('integrations.unlimited') }} ·
+              {{ t('integrations.expires') }}
+              {{
+                detail.binding.spec.expires_at_ms
+                  ? new Date(detail.binding.spec.expires_at_ms).toLocaleString()
+                  : t('integrations.noExpiry')
+              }}
+            </p>
+            <p v-if="detail.binding.last_error" class="mt-3 text-sm text-destructive">
+              {{ detail.binding.last_error }}
+            </p>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                :disabled="busy || detail.binding.state === 'enabled'"
+                @click="confirm = { binding: copy(detail.binding), action: 'enable' }"
+                data-testid="integration-enable"
+                >{{ t('integrations.enable') }}</Button
+              ><Button
+                variant="outline"
+                size="sm"
+                :disabled="busy || detail.binding.state !== 'enabled'"
+                @click="confirm = { binding: copy(detail.binding), action: 'pause' }"
+                data-testid="integration-pause"
+                >{{ t('assistant.pause') }}</Button
+              ><Button
+                variant="outline"
+                size="sm"
+                :disabled="busy || detail.binding.state !== 'enabled'"
+                @click="confirm = { binding: copy(detail.binding), action: 'poll_now' }"
+                >{{ t('integrations.poll') }}</Button
+              ><Button
+                v-if="detail.binding.channel_session_id"
+                variant="ghost"
+                size="sm"
+                @click="openSession(detail.binding.channel_session_id)"
+                >{{ t('assistant.openChat') }}</Button
+              >
+            </div>
           </div>
-        </div>
-        <ChannelAccessPanel
-          v-if="source"
-          :source="source"
-          :detail="detail"
-          :readonly="loading || busy"
-          @editing="
-            (value) => {
-              accessEditing = value
-              if (value) fence()
-            }
-          "
-          @changed="
-            (binding) => {
-              if (detail) detail.binding = binding
-              fence()
-              void load()
-            }
-          "
-        />
-        <details class="rounded border border-border p-3">
-          <summary class="cursor-pointer text-sm">{{ t('integrations.configuration') }}</summary>
-          <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{{
-            JSON.stringify(detail.binding.spec, null, 2)
-          }}</pre>
-        </details>
-        <h3 class="font-medium">{{ t('integrations.events') }}</h3>
-        <p v-if="!detail.events.length" class="text-sm text-muted-foreground">{{ t('integrations.noEvents') }}</p>
-        <article v-for="event in detail.events" :key="event.event.id" class="rounded border border-border p-3">
-          <p class="text-xs break-all">{{ event.event.id }} · {{ event.state }} · {{ event.event.actor }}</p>
-          <p class="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm">{{ event.event.text }}</p>
-          <p v-if="event.note" class="mt-2 text-xs text-muted-foreground">{{ event.note }}</p>
-          <RouterLink
-            v-if="event.session_id"
-            class="mt-2 text-xs underline"
-            :to="{ path: '/chat', query: { sessionId: String(event.session_id) } }"
-            data-testid="integration-event-session"
-          >
-            {{ t('assistant.openChat') }}
-          </RouterLink>
-        </article>
-        <h3 class="font-medium">{{ t('integrations.deliveries') }}</h3>
-        <article v-for="d in detail.deliveries" :key="d.id" class="rounded border border-border p-3">
-          <p class="text-xs">{{ d.state }} · {{ d.attempts }}</p>
-          <p class="mt-2 text-sm whitespace-pre-wrap break-words line-clamp-4">{{ d.text }}</p>
-          <p v-if="d.error" class="mt-2 text-xs text-destructive">{{ d.error }}</p>
-        </article>
-      </section>
-      <p v-else class="text-sm text-muted-foreground">
-        {{ loading ? t('assistant.loading') : t('integrations.select') }}
-      </p>
+          <ChannelAccessPanel
+            v-if="source"
+            :source="source"
+            :detail="detail"
+            :readonly="loading || busy"
+            @editing="
+              (value) => {
+                accessEditing = value
+                if (value) fence()
+              }
+            "
+            @changed="
+              (binding) => {
+                if (detail) detail.binding = binding
+                fence()
+                void load()
+              }
+            "
+          />
+          <details class="rounded border border-border p-3">
+            <summary class="cursor-pointer text-sm">{{ t('integrations.configuration') }}</summary>
+            <pre class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">{{
+              JSON.stringify(detail.binding.spec, null, 2)
+            }}</pre>
+          </details>
+          <h3 class="font-medium">{{ t('integrations.events') }}</h3>
+          <p v-if="!detail.events.length" class="text-sm text-muted-foreground">{{ t('integrations.noEvents') }}</p>
+          <article v-for="event in detail.events" :key="event.event.id" class="rounded border border-border p-3">
+            <p class="text-xs break-all">{{ event.event.id }} · {{ event.state }} · {{ event.event.actor }}</p>
+            <p class="mt-2 line-clamp-4 whitespace-pre-wrap break-words text-sm">{{ event.event.text }}</p>
+            <p v-if="event.note" class="mt-2 text-xs text-muted-foreground">{{ event.note }}</p>
+            <RouterLink
+              v-if="event.session_id"
+              class="mt-2 text-xs underline"
+              :to="{ path: '/chat', query: { sessionId: String(event.session_id) } }"
+              data-testid="integration-event-session"
+            >
+              {{ t('assistant.openChat') }}
+            </RouterLink>
+          </article>
+          <h3 class="font-medium">{{ t('integrations.deliveries') }}</h3>
+          <article v-for="d in detail.deliveries" :key="d.id" class="rounded border border-border p-3">
+            <p class="text-xs">{{ d.state }} · {{ d.attempts }}</p>
+            <p class="mt-2 text-sm whitespace-pre-wrap break-words line-clamp-4">{{ d.text }}</p>
+            <p v-if="d.error" class="mt-2 text-xs text-destructive">{{ d.error }}</p>
+          </article>
+        </section>
+        <p v-else class="text-sm text-muted-foreground">
+          {{ loading ? t('assistant.loading') : t('integrations.select') }}
+        </p>
       </div>
     </div>
     <Dialog

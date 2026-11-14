@@ -569,3 +569,133 @@ async fn committed_policy_receipt_replays_after_owner_expiry_without_restoring_a
     );
     assert_eq!(repo.channel_audit(b.id).await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn permanent_channel_admits_initial_and_future_events_and_delivers_without_quota_caps() {
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let mut unlimited = spec();
+    unlimited.expires_at_ms = 0;
+    unlimited.daily_limit = 0;
+    unlimited.total_limit = 0;
+    unlimited
+        .channel_policy
+        .as_mut()
+        .unwrap()
+        .per_user_daily_limit = 0;
+    let mut binding = repo
+        .create_binding(
+            IntegrationBinding::new(
+                Some(1),
+                None,
+                1,
+                "permanent".into(),
+                unlimited,
+                "fp".into(),
+                9000,
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let control = IntegrationControl {
+        expected_revision: 1,
+        action: IntegrationControlAction::Enable,
+        not_before_ms: Some(7000),
+    };
+    control.validate(9000).unwrap();
+    binding.state = BindingState::Enabled;
+    binding.epoch = 1;
+    binding.revision = 2;
+    binding.activated_at_ms = Some(control.activation_at(binding.activated_at_ms, 9000));
+    binding.admitted = 10_001;
+    binding.day = "1970-01-01".into();
+    binding.day_admitted = 101;
+    binding = repo.save_binding(binding, 1).await.unwrap();
+    let mut first = event("first", "alice");
+    first.occurred_at_ms = 8000;
+    first.channel.as_mut().unwrap().verified_at_ms = 9000;
+    let mut second = first.clone();
+    second.id = "second".into();
+    let mut old = first.clone();
+    old.id = "old".into();
+    old.occurred_at_ms = 6000;
+    repo.accept_batch(
+        binding.id,
+        2,
+        AdapterBatch {
+            events: vec![old, first, second],
+            cursor: json!(1),
+            retry_after_seconds: None,
+        },
+        10_000,
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        let mut admitted = repo.next_event(binding.id, 10_000).await.unwrap().unwrap();
+        assert_eq!(
+            admitted.event.occurred_at_ms, 8000,
+            "the adapter timestamp must remain unchanged"
+        );
+        admitted.state = "handled".into();
+        repo.finish_event(admitted).await.unwrap();
+    }
+    assert!(repo.next_event(binding.id, 10_000).await.unwrap().is_none());
+    assert_eq!(repo.binding(binding.id).await.unwrap().admitted, 10_003);
+    assert!(
+        repo.events(binding.id)
+            .await
+            .unwrap()
+            .iter()
+            .any(|event| event.event.id == "old"
+                && event.note.as_deref() == Some("event_outside_authorized_time"))
+    );
+
+    let future = 180 * 86_400_000;
+    let mut later = event("later", "alice");
+    later.occurred_at_ms = future;
+    later.channel.as_mut().unwrap().verified_at_ms = future;
+    repo.accept_batch(
+        binding.id,
+        2,
+        AdapterBatch {
+            events: vec![later],
+            cursor: json!(2),
+            retry_after_seconds: None,
+        },
+        future,
+    )
+    .await
+    .unwrap();
+    let mut admitted = repo.next_event(binding.id, future).await.unwrap().unwrap();
+    assert_eq!(admitted.event.id, "later");
+    admitted.state = "handled".into();
+    repo.finish_event(admitted).await.unwrap();
+    let authority = authority(&binding);
+    assert!(authority.active_at(future));
+    assert!(binding.authorizes_scope(&authority, future));
+    let mut limited_member = authority.clone();
+    limited_member.expires_at_ms = 12_000;
+    assert!(!limited_member.active_at(future));
+    repo.enqueue_delivery(IntegrationDelivery {
+        id: "permanent-reply".into(),
+        binding_id: binding.id,
+        text: "reply".into(),
+        state: "queued".into(),
+        attempts: 0,
+        next_attempt_ms: future,
+        remote_id: None,
+        created_at_ms: future,
+        error: None,
+        route: Some(ChannelOutputRoute::from_authority(&authority, 10)),
+    })
+    .await
+    .unwrap();
+    assert!(
+        repo.claim_delivery(binding.id, future)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}

@@ -89,6 +89,7 @@ export default {
     },
   },
   channelAccess: {
+    zeroLimitHint: 'Use 0 para não definir um limite diário.',
     mcp: 'Permissões MCP JSON: servidor → ferramentas exatas',
     title: 'Acesso ao canal',
     edit: 'Gerenciar membros e capacidades',
@@ -163,6 +164,8 @@ export default {
     kind_broadcast: 'Transmissão',
   },
   integrations: {
+    unlimited: 'Sem limite',
+    noExpiry: 'Sem expiração',
     retryHint:
       'O servidor pode ter aceitado a solicitação. Tentar novamente preserva sua identidade; atualize as conexões antes de criar outra.',
     title: 'Canais e automação',

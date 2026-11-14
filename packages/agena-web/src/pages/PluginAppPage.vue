@@ -54,7 +54,6 @@ const isTelegram = computed(
     catalog.plugins.some((plugin) => plugin.plugin_id === TELEGRAM_PLUGIN_ID),
 )
 const telegramStatus = computed(() => catalog.plugins.find((plugin) => plugin.plugin_id === TELEGRAM_PLUGIN_ID))
-const telegramSource = computed(() => pluginPageSession(location.value.query.source))
 const container = ref<HTMLElement>()
 const mountError = ref('')
 const mounting = ref(false)
@@ -134,28 +133,32 @@ async function managePlugins() {
 async function updateTelegramQuery(patch: Record<string, string>) {
   const query: Record<string, string> = {}
   for (const [key, value] of Object.entries(location.value.query))
-    if (typeof value === 'string' && !['windowId', 'ocEmbed'].includes(key)) query[key] = value
+    if (typeof value === 'string' && !['windowId', 'ocEmbed', 'source'].includes(key)) query[key] = value
   for (const [key, value] of Object.entries(patch)) {
     if (value) query[key] = value
     else delete query[key]
   }
   await navigate(pluginPagePath(TELEGRAM_PLUGIN_ID, TELEGRAM_PAGE_ID), query)
 }
-async function chooseTelegramSource(value: string) {
-  await updateTelegramQuery({ source: value })
-}
 async function openTelegramSession(id: number) {
-  await navigation.openWorkspaceLocation('chat', {
-    path: '/chat',
-    query: { sessionId: String(id) },
-    matchKeys: ['sessionId'],
-  })
-}
-async function openIntegrations() {
-  await router.push({
-    path: '/integrations',
-    query: telegramSource.value ? { source: String(telegramSource.value) } : {},
-  })
+  try {
+    const session = await apiJson<{ owner_bot_id?: string | null }>('/api/v1/sessions/' + id)
+    if (session.owner_bot_id) {
+      await navigation.openWorkspaceLocation('bot', {
+        path: '/bot',
+        query: { botId: session.owner_bot_id, sessionId: String(id) },
+        matchKeys: ['botId', 'sessionId'],
+      })
+    } else {
+      await navigation.openWorkspaceLocation('chat', {
+        path: '/chat',
+        query: { sessionId: String(id) },
+        matchKeys: ['sessionId'],
+      })
+    }
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  }
 }
 
 function updateEnvironment() {
@@ -358,16 +361,13 @@ onBeforeUnmount(() => {
     <div v-if="state === 'telegram'" class="min-h-0 flex-1 overflow-y-auto">
       <TelegramManager
         :status="telegramStatus"
-        :source="telegramSource"
         :bot-id="typeof location.query.bot === 'string' ? location.query.bot : undefined"
         :view="typeof location.query.view === 'string' ? location.query.view : undefined"
         @select-bot="updateTelegramQuery({ bot: $event })"
         @select-view="updateTelegramQuery({ view: $event })"
         @open-session="openTelegramSession"
-        @source-change="chooseTelegramSource"
         @refresh="catalog.refresh()"
         @manage="managePlugins"
-        @integrations="openIntegrations"
       />
     </div>
     <div v-show="state !== 'telegram'" class="relative min-h-0 flex-1">

@@ -95,14 +95,19 @@ impl Default for TelegramConfig {
 impl TelegramConfig {
     /// Validate everything that does not need the network.
     fn validate(&self) -> Result<()> {
-        if !is_env_name(&self.bot_token_env) {
-            return Err(PluginError::invalid_params(
-                "bot_token_env must be an environment variable name such as AGENA_TELEGRAM_BOT_TOKEN",
-            ));
-        }
+        self.validate_transport()?;
         if !is_bot_username(&self.account) {
             return Err(PluginError::invalid_params(
                 "account must be the bot's own username without '@', for example my_agent_bot",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_transport(&self) -> Result<()> {
+        if !is_env_name(&self.bot_token_env) {
+            return Err(PluginError::invalid_params(
+                "bot_token_env must be an environment variable name such as AGENA_TELEGRAM_BOT_TOKEN",
             ));
         }
         if self.long_poll_seconds > MAX_LONG_POLL_SECONDS {
@@ -181,7 +186,7 @@ static TELEGRAM_SETTINGS_METADATA: &[(&str, &str, &str)] = &[
     (
         "",
         "Telegram Plugin Config",
-        "One Telegram bot connection: where the token is read from, which bot it must belong to, and how the Bot API is reached.",
+        "Default environment-backed connection. The Telegram manager stores multiple BotFather credentials privately and binds each connection to a local AI Bot.",
     ),
     (
         "/bot_token_env",
@@ -210,18 +215,34 @@ static TELEGRAM_SETTINGS_METADATA: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Project and global hosts load distinct plugin instances, but managed bots
+/// and their inboxes use the same global storage namespace. Their read/modify/
+/// write transactions and upstream polling must therefore share process locks.
+#[derive(Default)]
+struct TelegramLocks {
+    registry: Arc<tokio::sync::Mutex<()>>,
+    accounts: Arc<Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+}
+
 pub(crate) struct TelegramPlugin {
     client: OnceLock<reqwest::Client>,
     host: OnceLock<Arc<dyn agena_plugin_sdk::host_api::HostClient>>,
-    registry_lock: tokio::sync::Mutex<()>,
-    account_locks: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    registry_lock: Arc<tokio::sync::Mutex<()>>,
+    account_locks: Arc<Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
     /// The legacy default connection. Additional bots live in private host
     /// storage with separate credential references. Bindings select a stable
     /// bot ID and room; they can never supply an endpoint or secret.
     settings: PluginSettings<TelegramConfig>,
     /// `getMe` answers per endpoint and token name, so a poll does not spend a
     /// round-trip re-proving the same identity on every tick.
-    identities: Mutex<BTreeMap<String, BotIdentity>>,
+    identities: Arc<Mutex<BTreeMap<String, BotIdentity>>>,
+    background: Mutex<Option<tokio::task::JoinHandle<()>>>,
+}
+
+impl Drop for TelegramPlugin {
+    fn drop(&mut self) {
+        self.stop_background();
+    }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -229,7 +250,7 @@ pub(crate) struct TelegramPlugin {
     name = "telegram",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Telegram channel adapter: direct chats, groups and channels over the official Bot API.",
-    help = "Exports the agena.integration v1 channel service. Long polling needs no public endpoint. Set the token in the named environment variable and make account match the bot's own username; roles, tool grants and quotas stay in the host's channel policy.",
+    help = "Connect multiple BotFather tokens to local AI Bots. The Telegram manager discovers chats through one durable collector per token and applies private/group/channel switches plus chat allow or deny lists. Per-room tool grants remain available in advanced channel settings.",
     settings = TelegramConfig,
     settings_default = TelegramConfig::default(),
     settings_metadata = TELEGRAM_SETTINGS_METADATA,
@@ -249,13 +270,16 @@ pub(crate) struct TelegramPlugin {
 )]
 impl TelegramPlugin {
     pub(crate) fn new() -> Self {
+        static LOCKS: OnceLock<TelegramLocks> = OnceLock::new();
+        let locks = LOCKS.get_or_init(TelegramLocks::default);
         Self {
             client: OnceLock::new(),
             host: OnceLock::new(),
-            registry_lock: tokio::sync::Mutex::new(()),
-            account_locks: Mutex::new(BTreeMap::new()),
+            registry_lock: locks.registry.clone(),
+            account_locks: locks.accounts.clone(),
             settings: PluginSettings::new(),
-            identities: Mutex::new(BTreeMap::new()),
+            identities: Arc::new(Mutex::new(BTreeMap::new())),
+            background: Mutex::new(None),
         }
     }
 
@@ -354,6 +378,37 @@ impl TelegramPlugin {
         ))
     }
 
+    #[hook(application.ready, summary = "Start Telegram discovery and routing", help = "Starts the shared per-bot collector after application queries and commands are available.")]
+    async fn application_ready(&self) -> Result<()> {
+        self.start_background()
+    }
+
+    #[hook(
+        shutdown,
+        summary = "Stop Telegram discovery",
+        help = "Stops background collection before the plugin is unloaded."
+    )]
+    async fn shutdown(&self) -> Result<()> {
+        self.stop_background();
+        Ok(())
+    }
+
+    #[command(id = "list_ai_bots", title = "List local AI Bots")]
+    async fn list_ai_bots(&self) -> Result<CommandResult> {
+        self.local_ai_bots().await
+    }
+
+    #[command(id = "add_chat", title = "Add a Telegram chat by ID")]
+    async fn add_chat(
+        &self,
+        bot_id: String,
+        chat_id: String,
+        kind: ConversationKind,
+        title: Option<String>,
+    ) -> Result<CommandResult> {
+        self.add_manual_chat(bot_id, chat_id, kind, title).await
+    }
+
     #[command(id = "check_connection", title = "Verify Telegram bot connection")]
     async fn check_connection(&self, input: BotSelection) -> Result<CommandResult> {
         self.verify_bot(input).await
@@ -436,6 +491,15 @@ impl TelegramPlugin {
             .resolve_bot(&selection, request.channel.as_ref())
             .await?;
         if !resolved.enabled {
+            return Ok(receipt(SendDisposition::Rejected, None));
+        }
+        self.require_binding_owner(&resolved, &request.binding_id)
+            .await?;
+        if self.host.get().is_some()
+            && !request
+                .kind
+                .is_some_and(|kind| resolved.chat_access.allows(&request.resource, kind))
+        {
             return Ok(receipt(SendDisposition::Rejected, None));
         }
         let config = resolved.connection;
@@ -566,6 +630,20 @@ impl TelegramPlugin {
             .credential(config)
             .await
             .map_err(ApiFailure::from_plugin)?;
+        self.call_with_token(config, &token, method, body).await
+    }
+
+    async fn call_with_token(
+        &self,
+        config: &TelegramConfig,
+        token: &str,
+        method: &str,
+        body: Value,
+    ) -> std::result::Result<Value, ApiFailure> {
+        config
+            .validate_transport()
+            .map_err(ApiFailure::from_plugin)?;
+        management::validate_secret_token(token).map_err(ApiFailure::from_plugin)?;
         // The token is part of the path, so this URL is never logged or echoed.
         let url = format!(
             "{}/bot{token}/{method}",
@@ -629,7 +707,7 @@ impl TelegramPlugin {
             description: value
                 .get("description")
                 .and_then(Value::as_str)
-                .map(|text| bounded_text(&text.replace(&token, "[redacted]")))
+                .map(|text| bounded_text(&text.replace(token, "[redacted]")))
                 .unwrap_or_else(|| format!("Telegram answered HTTP {status}")),
             retry_after: value
                 .get("parameters")

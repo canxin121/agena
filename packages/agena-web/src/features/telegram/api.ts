@@ -1,6 +1,13 @@
 import { apiJson } from '@/lib/api'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
-import type { TelegramBotConfig, TelegramCatalog, TelegramInbox, TelegramVerification, TelegramRoom } from './model'
+import type {
+  TelegramAiBot,
+  TelegramBotConfig,
+  TelegramCatalog,
+  TelegramInbox,
+  TelegramVerification,
+  TelegramRoom,
+} from './model'
 
 async function invoke<T>(command: string, input: unknown, signal?: AbortSignal): Promise<T> {
   const response = await apiJson<{ result: PluginCommandResult }>(
@@ -18,6 +25,7 @@ async function invoke<T>(command: string, input: unknown, signal?: AbortSignal):
 }
 export const telegramApi = {
   list: (signal?: AbortSignal) => invoke<TelegramCatalog>('list_bots', {}, signal),
+  aiBots: (signal?: AbortSignal) => invoke<{ bots: TelegramAiBot[] }>('list_ai_bots', {}, signal),
   save: (revision: number, bot: TelegramBotConfig, token?: string) =>
     invoke<{ revision: number; bot_id: string }>('save_bot', {
       expected_revision: revision,
@@ -32,4 +40,6 @@ export const telegramApi = {
   sync: (bot_id: string, signal?: AbortSignal) => invoke<TelegramInbox>('sync_chats', { bot_id }, signal),
   inspect: (bot_id: string, chat_id: string, signal?: AbortSignal) =>
     invoke<{ room: TelegramRoom }>('inspect_chat', { bot_id, chat_id }, signal),
+  addChat: (bot_id: string, chat_id: string, kind: 'direct' | 'group' | 'broadcast', title?: string) =>
+    invoke<{ bot_id: string; room: TelegramRoom }>('add_chat', { bot_id, chat_id, kind, title: title?.trim() || null }),
 }

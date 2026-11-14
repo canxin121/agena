@@ -11,6 +11,8 @@ use agena_plugin_sdk::host_api::{
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+mod routing;
+use routing::{ChatAccess, LocalAiBot};
 
 const NAMESPACE: &str = "telegram-management-v1";
 const MAX_BOTS: usize = 32;
@@ -37,6 +39,11 @@ pub(super) struct BotConfiguration {
     /// `environment` reads the named server variable. `vault` uses a write-only
     /// token stored separately through the host plugin secret store.
     pub credential_kind: String,
+    #[serde(default)]
+    #[schemars(with = "Option<String>")]
+    pub ai_bot_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub chat_access: ChatAccess,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +52,31 @@ struct StoredBot {
     config: BotConfiguration,
     secret_name: Option<String>,
     updated_at_ms: i64,
+    #[serde(default)]
+    source_session_id: Option<i64>,
+    #[serde(default)]
+    ai_bot: Option<LocalAiBot>,
+    #[serde(default)]
+    access_since_ms: i64,
+    #[serde(default)]
+    chat_since_ms: BTreeMap<String, i64>,
+}
+
+impl StoredBot {
+    fn resolved(&self) -> ResolvedBot {
+        let mut connection = self.config.connection.clone();
+        connection.credential_secret = self.secret_name.clone();
+        ResolvedBot {
+            id: self.config.id.clone(),
+            enabled: self.config.enabled,
+            connection,
+            ai_bot_id: self.config.ai_bot_id,
+            source_session_id: self.source_session_id,
+            chat_access: self.config.chat_access.clone(),
+            access_since_ms: self.access_since_ms,
+            chat_since_ms: self.chat_since_ms.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -61,6 +93,20 @@ pub(super) struct ResolvedBot {
     pub id: String,
     pub enabled: bool,
     pub connection: TelegramConfig,
+    pub ai_bot_id: Option<uuid::Uuid>,
+    pub source_session_id: Option<i64>,
+    pub chat_access: ChatAccess,
+    pub access_since_ms: i64,
+    pub chat_since_ms: BTreeMap<String, i64>,
+}
+
+impl ResolvedBot {
+    fn admission_since_ms(&self, chat_id: &str) -> i64 {
+        self.chat_since_ms
+            .get(chat_id)
+            .copied()
+            .unwrap_or(self.access_since_ms)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -154,7 +200,7 @@ impl Stream {
         self.updates.drain(..count);
     }
 
-    fn append(&mut self, updates: &[Value], now: i64) -> Result<()> {
+    fn append(&mut self, updates: &[Value], now: i64, access: Option<&ChatAccess>) -> Result<()> {
         for update in updates {
             let Some(id) = update.get("update_id").and_then(Value::as_i64) else {
                 return Err(PluginError::internal(
@@ -177,6 +223,28 @@ impl Stream {
                 ));
             }
             self.observe(update, now);
+            // Discovery is durable even for excluded chats. Only currently
+            // admitted rooms consume the replay inbox; discovering a busy,
+            // disabled room cannot fill another room's delivery queue.
+            let admitted = access.is_none_or(|access| {
+                let message = update
+                    .get("message")
+                    .or_else(|| update.get("channel_post"))
+                    .or_else(|| update.get("my_chat_member"))
+                    .or_else(|| update.get("chat_member"));
+                message
+                    .and_then(|message| message.get("chat"))
+                    .is_some_and(|chat| {
+                        chat.get("id")
+                            .and_then(Value::as_i64)
+                            .zip(conversation_kind(chat.get("type").and_then(Value::as_str)))
+                            .is_some_and(|(id, kind)| access.allows(&id.to_string(), kind))
+                    })
+            });
+            self.offset = Some(next);
+            if !admitted {
+                continue;
+            }
             self.updates.push(BufferedUpdate {
                 sequence: self.next_sequence,
                 received_at_ms: now,
@@ -351,6 +419,11 @@ impl TelegramPlugin {
         Ok(ResolvedBot {
             id: "default".into(),
             enabled: true,
+            ai_bot_id: None,
+            source_session_id: None,
+            chat_access: ChatAccess::default(),
+            access_since_ms: 0,
+            chat_since_ms: BTreeMap::new(),
             connection: self
                 .settings
                 .get()
@@ -374,15 +447,7 @@ impl TelegramPlugin {
         let mut bots = registry
             .bots
             .values()
-            .map(|entry| {
-                let mut connection = entry.config.connection.clone();
-                connection.credential_secret = entry.secret_name.clone();
-                ResolvedBot {
-                    id: entry.config.id.clone(),
-                    enabled: entry.config.enabled,
-                    connection,
-                }
-            })
+            .map(StoredBot::resolved)
             .collect::<Vec<_>>();
         if !registry.bots.contains_key("default") && !registry.retired.contains("default") {
             bots.push(self.legacy_bot()?);
@@ -428,16 +493,15 @@ impl TelegramPlugin {
         let registry: Registry = self.read_record("bots").await?;
         let mut bots = Vec::new();
         for bot in registry.bots.values() {
-            let resolved = ResolvedBot {
-                id: bot.config.id.clone(),
-                enabled: bot.config.enabled,
-                connection: bot.config.connection.clone(),
-            };
+            let resolved = bot.resolved();
             let stream: Stream = self.read_record(&stream_key(&resolved)).await?;
             bots.push(json!({ "id": bot.config.id, "name": bot.config.name, "enabled": bot.config.enabled,
                 "connection": bot.config.connection, "credential_kind": bot.config.credential_kind,
                 "has_token": bot.secret_name.is_some() || bot.config.connection.token().is_ok(),
                 "managed": true, "updated_at_ms": bot.updated_at_ms,
+                "ai_bot_id": bot.config.ai_bot_id, "source_session_id": bot.source_session_id,
+                "ai_bot": bot.ai_bot, "chat_access": bot.config.chat_access,
+                "routing_error": self.routing_error(&bot.config.id).await?,
                 "verification": stream.verification, "last_poll_ms": stream.last_poll_ms,
                 "last_error": stream.last_error, "room_count": stream.rooms.len(), "buffered_updates": stream.updates.len() }));
         }
@@ -450,6 +514,8 @@ impl TelegramPlugin {
             bots.insert(0, json!({ "id":"default", "name":"Default bot", "enabled":true,
                 "connection":legacy.connection, "credential_kind":"environment", "has_token":legacy.connection.token().is_ok(),
                 "managed":false, "updated_at_ms":0, "verification":stream.verification,
+                "ai_bot_id":null,"source_session_id":null,"ai_bot":null,
+                "chat_access":ChatAccess::default(),"routing_error":null,
                 "last_poll_ms":stream.last_poll_ms, "last_error":stream.last_error,
                 "room_count":stream.rooms.len(), "buffered_updates":stream.updates.len() }));
         }
@@ -476,9 +542,6 @@ impl TelegramPlugin {
             ));
         }
         bot.name = bot.name.trim().into();
-        if bot.name.is_empty() || bot.name.chars().count() > 80 {
-            return Err(invalid("Bot display name must contain 1–80 characters"));
-        }
         bot.connection.account = bot
             .connection
             .account
@@ -487,10 +550,17 @@ impl TelegramPlugin {
             .to_ascii_lowercase();
         bot.connection.api_base = bot.connection.api_base.trim().trim_end_matches('/').into();
         bot.connection.bot_token_env = bot.connection.bot_token_env.trim().into();
-        bot.connection.validate()?;
+        bot.connection.validate_transport()?;
+        bot.chat_access.normalize()?;
+        let ai_bot_id = bot
+            .ai_bot_id
+            .ok_or_else(|| invalid("Select a local AI Bot for this Telegram bot"))?;
         if !["vault", "environment"].contains(&bot.credential_kind.as_str()) {
             return Err(invalid("Unknown Telegram credential source"));
         }
+
+        let routing_gate = self.account_lock(&format!("routing:{}", bot.id));
+        let _routing = routing_gate.lock().await;
         let gate = self.account_lock(&bot.id);
         let _account = gate.lock().await;
         let _transaction = self.registry_lock.lock().await;
@@ -518,6 +588,70 @@ impl TelegramPlugin {
                 "At most 32 Telegram bots are supported, including the configured default bot",
             ));
         }
+        let old = registry.bots.get(&bot.id);
+        let old_secret = old.and_then(|old| old.secret_name.clone());
+        let supplied = token
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let verify = supplied.is_some()
+            || old.is_none()
+            || bot.connection.account.is_empty()
+            || old.is_some_and(|old| {
+                old.config.credential_kind != bot.credential_kind
+                    || old.config.connection.bot_token_env != bot.connection.bot_token_env
+                    || old.config.connection.api_base != bot.connection.api_base
+            });
+        if verify {
+            let credential = if bot.credential_kind == "vault" {
+                if let Some(value) = supplied.as_ref() {
+                    value.clone()
+                } else {
+                    let name = old_secret.clone().ok_or_else(|| {
+                        invalid("Enter the BotFather token for this Telegram bot")
+                    })?;
+                    self.host()?.secret_get(HostSecretGetRequest { name }).await?.value
+                        .filter(|value| !value.is_empty())
+                        .ok_or_else(|| invalid("The saved Telegram token is unavailable; enter a replacement token"))?
+                }
+            } else {
+                bot.connection.token()?
+            };
+            validate_secret_token(&credential)?;
+            let identity = self
+                .call_with_token(&bot.connection, &credential, "getMe", json!({}))
+                .await
+                .map_err(|failure| failure.into_error("getMe"))?;
+            if identity.get("is_bot").and_then(Value::as_bool) != Some(true) {
+                return Err(invalid(
+                    "The supplied token does not identify a Telegram bot",
+                ));
+            }
+            bot.connection.account = identity
+                .get("username")
+                .and_then(Value::as_str)
+                .filter(|value| is_bot_username(value))
+                .ok_or_else(|| invalid("Telegram returned no valid bot username"))?
+                .to_ascii_lowercase();
+            if bot.name.is_empty() {
+                bot.name = identity
+                    .get("first_name")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(&bot.connection.account)
+                    .chars()
+                    .take(80)
+                    .collect();
+            }
+        }
+        bot.connection.validate()?;
+        if bot.name.is_empty() {
+            bot.name = bot.connection.account.clone();
+        }
+        if bot.name.chars().count() > 80 || bot.name.chars().any(char::is_control) {
+            return Err(invalid(
+                "Bot display name must contain 1–80 characters without control characters",
+            ));
+        }
         if registry.bots.values().any(|entry| {
             entry.config.id != bot.id
                 && entry
@@ -530,9 +664,7 @@ impl TelegramPlugin {
                 "This Telegram username is already configured; edit the existing bot instead",
             ));
         }
-        if bot.id != "default"
-            && !registry.bots.contains_key("default")
-            && !registry.retired.contains("default")
+        if legacy_remains
             && legacy
                 .connection
                 .account
@@ -542,35 +674,62 @@ impl TelegramPlugin {
                 "This Telegram username already belongs to the default bot",
             ));
         }
-        if let Some(old) = registry.bots.get(&bot.id)
-            && (old.config.connection.account != bot.connection.account
-                || old.config.connection.api_base != bot.connection.api_base)
-        {
+        if old.is_some_and(|old| {
+            old.config.connection.account != bot.connection.account
+                || old.config.connection.api_base != bot.connection.api_base
+        }) {
             return Err(invalid(
-                "A saved bot's account and API endpoint are immutable; add a new bot to change identity",
+                "This token belongs to a different Telegram bot; add a new bot instead",
             ));
         }
-        let old_secret = registry
-            .bots
-            .get(&bot.id)
-            .and_then(|old| old.secret_name.clone());
-        let supplied = token.filter(|value| !value.trim().is_empty());
+        if bot.id == "default"
+            && old.is_none()
+            && !legacy.connection.account.is_empty()
+            && (!legacy
+                .connection
+                .account
+                .eq_ignore_ascii_case(&bot.connection.account)
+                || legacy.connection.api_base.trim_end_matches('/') != bot.connection.api_base)
+        {
+            return Err(invalid(
+                "The default Telegram bot already has another identity; add a new bot",
+            ));
+        }
+        let (ai_bot, source_session_id) = if !bot.enabled
+            && let Some(old) = old.filter(|old| old.config.ai_bot_id == Some(ai_bot_id))
+            && let (Some(ai_bot), Some(source)) = (&old.ai_bot, old.source_session_id)
+        {
+            (ai_bot.clone(), source)
+        } else {
+            self.resolve_local_ai_bot(ai_bot_id).await?
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        let previous_stream = if let Some(old) = old {
+            self.read_record::<Stream>(&stream_key(&old.resolved()))
+                .await?
+        } else {
+            Stream::default()
+        };
+        let (access_since_ms, chat_since_ms) =
+            if old.is_some_and(|old| old.source_session_id != Some(source_session_id)) {
+                (now, BTreeMap::new())
+            } else {
+                routing::admission_clock(old, &bot, &previous_stream.rooms, now)
+            };
         let secret_name = if bot.credential_kind == "vault" {
             if let Some(value) = supplied.as_ref() {
-                validate_secret_token(value)?;
                 let name = format!("telegram-{}-{}", bot.id, uuid::Uuid::new_v4());
                 self.host()?
                     .secret_set(HostSecretSetRequest {
                         name: name.clone(),
-                        value: value.trim().into(),
+                        value: value.clone(),
                     })
                     .await?;
                 Some(name)
             } else {
-                old_secret
-                    .clone()
-                    .ok_or_else(|| invalid("Enter a BotFather token for this new vault credential"))
-                    .map(Some)?
+                Some(old_secret.clone().ok_or_else(|| {
+                    invalid("Enter a BotFather token for this new vault credential")
+                })?)
             }
         } else {
             None
@@ -584,7 +743,11 @@ impl TelegramPlugin {
             StoredBot {
                 config: bot.clone(),
                 secret_name: secret_name.clone(),
-                updated_at_ms: chrono::Utc::now().timestamp_millis(),
+                updated_at_ms: now,
+                source_session_id: Some(source_session_id),
+                ai_bot: Some(ai_bot),
+                access_since_ms,
+                chat_since_ms,
             },
         );
         if let Err(error) = self.write_record("bots", &registry).await {
@@ -606,20 +769,19 @@ impl TelegramPlugin {
                 .secret_delete(HostSecretDeleteRequest { name })
                 .await;
         }
-        // Token changes invalidate cached verification, never return secrets.
-        {
-            let resolved = ResolvedBot {
-                id: bot.id.clone(),
-                enabled: bot.enabled,
-                connection: bot.connection.clone(),
-            };
+        if verify {
+            let resolved = registry.bots[&bot.id].resolved();
             let mut stream: Stream = self.read_record(&stream_key(&resolved)).await?;
             stream.verification = None;
+            stream.last_error = None;
             self.write_record(&stream_key(&resolved), &stream).await?;
         }
         Ok(result(
             "Telegram bot saved",
-            json!({"revision":registry.revision,"bot_id":bot.id}),
+            json!({
+                "revision": registry.revision, "bot_id": bot.id,
+                "source_session_id": source_session_id, "account": bot.connection.account
+            }),
         ))
     }
     pub(super) async fn retire_bot(
@@ -627,6 +789,8 @@ impl TelegramPlugin {
         expected_revision: u64,
         id: String,
     ) -> Result<CommandResult> {
+        let routing_gate = self.account_lock(&format!("routing:{id}"));
+        let _routing = routing_gate.lock().await;
         let gate = self.account_lock(&id);
         let _account = gate.lock().await;
         let _transaction = self.registry_lock.lock().await;
@@ -667,18 +831,17 @@ impl TelegramPlugin {
         synchronize: bool,
     ) -> Result<CommandResult> {
         let resolved = self.resolve_bot(&input, None).await?;
-        let gate = self.account_lock(&resolved.id);
-        let _account = gate.lock().await;
-        let resolved = self.resolve_bot(&input, None).await?;
-        let key = stream_key(&resolved);
-        let mut stream: Stream = self.read_record(&key).await?;
         if synchronize {
             if !resolved.enabled {
                 return Err(invalid("Enable this bot before synchronizing its inbox"));
             }
-            self.bot_identity(&resolved.connection, false).await?;
-            self.collect_updates(&resolved, &mut stream, true).await?;
+            self.synchronize_managed_bot(&resolved.id, true).await?;
         }
+        let gate = self.account_lock(&resolved.id);
+        let _account = gate.lock().await;
+        let resolved = self.resolve_bot(&input, None).await?;
+        let key = stream_key(&resolved);
+        let stream: Stream = self.read_record(&key).await?;
         let recent = stream.updates.iter().rev().take(100).map(|item| {
             let message = item.value.get("message").or_else(|| item.value.get("channel_post"));
             json!({"sequence":item.sequence,"received_at_ms":item.received_at_ms,
@@ -692,7 +855,9 @@ impl TelegramPlugin {
             json!({"bot_id":resolved.id,"rooms":stream.rooms.values().collect::<Vec<_>>(),
             "recent":recent,"buffered_updates":stream.updates.len(),"last_poll_ms":stream.last_poll_ms,
             "retry_at_ms":stream.retry_at_ms,"last_error":stream.last_error,"verification":stream.verification,
-            "retention_days":7,"room_limit":MAX_ROOMS,"stream_id":stream.id}),
+            "retention_days":7,"room_limit":MAX_ROOMS,"stream_id":stream.id,
+            "source_session_id":resolved.source_session_id,"chat_access":resolved.chat_access,
+            "routing_error":self.routing_error(&resolved.id).await?}),
         ))
     }
     pub(super) async fn verify_bot(&self, input: BotSelection) -> Result<CommandResult> {
@@ -830,7 +995,7 @@ impl TelegramPlugin {
                 let rows = value.as_array().ok_or_else(|| {
                     PluginError::internal("Telegram getUpdates returned an invalid batch")
                 })?;
-                stream.append(rows, now)?;
+                stream.append(rows, now, bot.ai_bot_id.map(|_| &bot.chat_access))?;
                 stream.last_error = None;
                 stream.retry_at_ms = 0;
                 stream.last_poll_ms = now;
@@ -872,6 +1037,8 @@ impl TelegramPlugin {
         if !resolved.enabled {
             return Err(invalid("This Telegram bot is disabled"));
         }
+        self.require_binding_owner(&resolved, &request.binding_id)
+            .await?;
         let bot = self.bot_identity(&resolved.connection, false).await?;
         let key = stream_key(&resolved);
         let mut stream: Stream = self.read_record(&key).await?;
@@ -923,7 +1090,16 @@ impl TelegramPlugin {
             if let Some(event) =
                 self.event_from_update(&row.value, &resolved.connection, &bot, request)
             {
-                events.push(event);
+                if self.host.get().is_none()
+                    || event.channel.as_ref().is_some_and(|channel| {
+                        let since = resolved.admission_since_ms(&event.resource);
+                        resolved.chat_access.allows(&event.resource, channel.kind)
+                            && row.received_at_ms >= since
+                            && event.occurred_at_ms >= since.div_euclid(1000) * 1000
+                    })
+                {
+                    events.push(event);
+                }
             }
             if events.len() >= request.limit.clamp(1, 100) as usize {
                 break;
@@ -941,7 +1117,7 @@ impl TelegramPlugin {
         })
     }
 }
-fn validate_secret_token(token: &str) -> Result<()> {
+pub(super) fn validate_secret_token(token: &str) -> Result<()> {
     if token.len() > 256
         || !token
             .trim()
@@ -964,7 +1140,7 @@ mod tests {
     #[test]
     fn replay_buffer_is_independent_for_two_chat_bindings() {
         let mut state = Stream::default();
-        state.append(&[json!({"update_id":1,"message":{"message_id":1,"date":1,"chat":{"id":11,"type":"private"},"from":{"id":11},"text":"one"}}), json!({"update_id":2,"message":{"message_id":1,"date":1,"chat":{"id":22,"type":"private"},"from":{"id":22},"text":"two"}})],1000).unwrap();
+        state.append(&[json!({"update_id":1,"message":{"message_id":1,"date":1,"chat":{"id":11,"type":"private"},"from":{"id":11},"text":"one"}}), json!({"update_id":2,"message":{"message_id":1,"date":1,"chat":{"id":22,"type":"private"},"from":{"id":22},"text":"two"}})],1000,None).unwrap();
         assert_eq!(state.offset, Some(3));
         assert_eq!(
             state.updates.iter().filter(|row| row.sequence > 0).count(),
@@ -996,7 +1172,7 @@ mod tests {
     #[test]
     fn backlog_expiry_advances_an_explicit_floor() {
         let mut state = Stream::default();
-        state.append(&[json!({"update_id":5})], 1).unwrap();
+        state.append(&[json!({"update_id":5})], 1, None).unwrap();
         state.prune(RETENTION_MS + 2);
         assert!(state.updates.is_empty());
         assert_eq!(state.floor, 1);

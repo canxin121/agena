@@ -1,13 +1,4 @@
-import { integrationTemplate } from '@/features/integrations/model'
-import type {
-  ConversationKind,
-  CreateIntegration,
-  IntegrationProvider,
-  IntegrationBinding,
-  ChannelSessionMode,
-  ChannelTrigger,
-  ChannelThreadMode,
-} from '@/generated/agenaState'
+import type { IntegrationBinding } from '@/generated/agenaState'
 
 export const TELEGRAM_ID = 'agena.telegram'
 
@@ -17,27 +8,6 @@ export type TelegramConnection = {
   api_base: string
   long_poll_seconds: number
   allow_loopback_http: boolean
-}
-
-export type TelegramRoomDraft = {
-  title: string
-  chatId: string
-  kind: ConversationKind
-  ownerId: string
-  members: string
-  useSourcePermissions: boolean
-  botId?: string
-  sessionMode?: ChannelSessionMode
-  trigger?: ChannelTrigger
-  threadMode?: ChannelThreadMode
-  threadId?: string
-  dailyLimit?: number
-  totalLimit?: number
-  perUserLimit?: number
-  expiresDays?: number
-  executionSeconds?: number
-  pollSeconds?: number
-  allowUnlisted?: boolean
 }
 
 export function connectionFromSettings(value: unknown): TelegramConnection {
@@ -51,9 +21,9 @@ export function connectionFromSettings(value: unknown): TelegramConnection {
   }
 }
 
-export function validateTelegramConnection(input: TelegramConnection): TelegramConnection {
+export function validateTelegramConnection(input: TelegramConnection, allowEmptyAccount = false): TelegramConnection {
   const account = input.account.trim().replace(/^@/, '').toLowerCase()
-  if (!/^[A-Za-z0-9_]{1,64}$/.test(account))
+  if (!(allowEmptyAccount && !account) && !/^[A-Za-z0-9_]{1,64}$/.test(account))
     throw new Error('Bot username must contain 1–64 letters, digits or underscores.')
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(input.bot_token_env.trim()))
     throw new Error('Provide an environment variable name, not the BotFather token.')
@@ -82,100 +52,44 @@ export function validateTelegramConnection(input: TelegramConnection): TelegramC
   return { ...input, account, bot_token_env: input.bot_token_env.trim(), api_base }
 }
 
-/** Build a denied-by-default draft; the host alone grants eventual access.
- * Telegram room and user identifiers are kept as strings to avoid loss of
- * precision when crossing the browser's JSON number representation.
- */
-export function telegramBindingRequest(
-  provider: IntegrationProvider,
-  connection: TelegramConnection,
-  draft: TelegramRoomDraft,
-  now = Date.now(),
-  requestKey = crypto.randomUUID(),
-): CreateIntegration {
-  if (provider.plugin_id !== TELEGRAM_ID || provider.adapter.kind !== 'channel')
-    throw new Error('The selected provider is not the Telegram channel adapter.')
-  const bot = validateTelegramConnection(connection)
-  if (draft.useSourcePermissions !== true)
-    throw new Error('Explicit consent to the source-session permission boundary is required.')
-  const chatId = draft.chatId.trim()
-  const ownerId = draft.ownerId.trim()
-  if (!/^-?[1-9]\d{0,18}$/.test(chatId)) throw new Error('Enter the exact numeric Telegram chat ID.')
-  if (!/^[1-9]\d{0,18}$/.test(ownerId)) throw new Error('Enter the Telegram numeric user ID of a channel owner.')
-  if (chatId.startsWith('-') && draft.kind === 'direct')
-    throw new Error('Direct chats require a positive Telegram chat ID.')
-  if (!chatId.startsWith('-') && draft.kind !== 'direct')
-    throw new Error('Telegram group and channel IDs must be negative.')
-  const title = draft.title.trim() || 'Telegram ' + chatId
-  if (title.length > 120) throw new Error('The chat title is too long.')
-  const others = draft.members
-    .split(/[\n,;]+/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-  if (others.length > 64 || others.some((item) => !/^[1-9]\d{0,18}$/.test(item)))
-    throw new Error('Enter at most 64 exact numeric member IDs.')
-  const members = [...new Set(others)]
-    .filter((id) => id !== ownerId)
-    .map((actor) => ({
-      actor,
-      role: 'member' as const,
-      expires_at_ms: null,
-    }))
-  if (draft.kind === 'broadcast') {
-    members.push({ actor: `channel:${chatId}`, role: 'member', expires_at_ms: null })
-  }
-  const spec = integrationTemplate(provider, now)
-  spec.title = title
-  spec.provider = TELEGRAM_ID
-  spec.mode = 'channel'
-  spec.resource = chatId
-  spec.config = draft.botId ? { bot_id: draft.botId } : {}
-  spec.actors = []
-  spec.event_types = ['message']
-  const bounded = (value: number | undefined, fallback: number, min: number, max: number, label: string) => {
-    const next = value ?? fallback
-    if (!Number.isSafeInteger(next) || next < min || next > max) throw new Error(`${label}: ${min}–${max}`)
-    return next
-  }
-  if (draft.kind === 'direct' && draft.threadId?.trim()) throw new Error('Private chat bindings cannot select a topic.')
-  if (draft.threadId?.trim() && !/^[1-9]\d{0,15}$/.test(draft.threadId.trim()))
-    throw new Error('Use a numeric topic ID.')
-  spec.thread = draft.kind !== 'direct' && draft.threadMode === 'exact' ? draft.threadId?.trim() || null : null
-  spec.poll_seconds = bounded(
-    draft.pollSeconds,
-    Math.max(1, provider.adapter.minimum_poll_seconds),
-    Math.max(1, provider.adapter.minimum_poll_seconds),
-    86400,
-    'Polling seconds',
-  )
-  spec.daily_limit = bounded(draft.dailyLimit, 5, 1, 100, 'Daily quota')
-  spec.total_limit = bounded(draft.totalLimit, 50, 1, 10000, 'Total quota')
-  spec.max_execution_seconds = bounded(draft.executionSeconds, 300, 30, 3600, 'Execution seconds')
-  spec.expires_at_ms = now + bounded(draft.expiresDays, 7, 1, 90, 'Expiry days') * 86400000
-  spec.use_source_permissions = true
-  spec.channel_policy = {
-    ...spec.channel_policy!,
-    identity: { tenant: 'telegram', account: bot.account },
-    kinds: [draft.kind],
-    session_mode: draft.sessionMode || 'per_conversation',
-    thread_mode:
-      draft.kind === 'direct' ? 'exact' : draft.threadMode || (draft.kind === 'group' ? 'per_thread' : 'exact'),
-    trigger: draft.trigger || (draft.kind === 'group' ? 'direct_or_mention' : 'every_message'),
-    members: [{ actor: ownerId, role: 'owner', expires_at_ms: null }, ...members],
-    allow_unlisted_chat: draft.kind === 'group' && draft.allowUnlisted === true,
-    per_user_daily_limit: bounded(draft.perUserLimit, 50, 1, 100, 'Per-member daily quota'),
-    allow_automated_reports: false,
-    grant: { tools: [], mcp_tools: {}, private_memory: false, source_workspace: false, network_hosts: [] },
-  }
-  return { request_key: requestKey, spec }
+export type TelegramAiBot = {
+  id: string
+  name: string
+  description?: string
+  archived?: boolean
 }
-
+export type TelegramChatAccess = {
+  mode: 'whitelist' | 'blacklist'
+  private_enabled: boolean
+  group_enabled: boolean
+  channel_enabled: boolean
+  chat_ids: string[]
+}
+export function defaultTelegramChatAccess(): TelegramChatAccess {
+  return { mode: 'whitelist', private_enabled: true, group_enabled: true, channel_enabled: false, chat_ids: [] }
+}
+export function copyTelegramChatAccess(access?: TelegramChatAccess | null): TelegramChatAccess {
+  return { ...defaultTelegramChatAccess(), ...access, chat_ids: [...new Set(access?.chat_ids || [])] }
+}
+export function telegramChatAllowed(access: TelegramChatAccess, id: string, kind: string): boolean {
+  const enabled =
+    kind === 'direct' || kind === 'private'
+      ? access.private_enabled
+      : kind === 'group' || kind === 'supergroup'
+        ? access.group_enabled
+        : kind === 'broadcast' || kind === 'channel'
+          ? access.channel_enabled
+          : false
+  return enabled && (access.mode === 'whitelist' ? access.chat_ids.includes(id) : !access.chat_ids.includes(id))
+}
 export type TelegramBotConfig = {
   id: string
   name: string
   enabled: boolean
   connection: TelegramConnection
   credential_kind: 'environment' | 'vault'
+  ai_bot_id: string | null
+  chat_access: TelegramChatAccess
 }
 export type TelegramVerification = {
   bot_id: string
@@ -186,6 +100,9 @@ export type TelegramVerification = {
   webhook_warning: string | null
 }
 export type TelegramBot = TelegramBotConfig & {
+  source_session_id: number | null
+  ai_bot: TelegramAiBot | null
+  routing_error: string | null
   has_token: boolean
   managed: boolean
   updated_at_ms: number
@@ -218,6 +135,9 @@ export type TelegramRoom = {
 }
 export type TelegramInbox = {
   bot_id: string
+  source_session_id: number | null
+  chat_access: TelegramChatAccess
+  routing_error: string | null
   rooms: TelegramRoom[]
   recent: Array<{
     sequence: number
@@ -254,6 +174,8 @@ export function botConfig(bot: TelegramBot): TelegramBotConfig {
     enabled: bot.enabled,
     connection: { ...bot.connection },
     credential_kind: bot.credential_kind,
+    ai_bot_id: bot.ai_bot_id || null,
+    chat_access: copyTelegramChatAccess(bot.chat_access),
   }
 }
 export function newBotConfig(): TelegramBotConfig {
@@ -263,10 +185,18 @@ export function newBotConfig(): TelegramBotConfig {
     enabled: true,
     credential_kind: 'vault',
     connection: connectionFromSettings({}),
+    ai_bot_id: null,
+    chat_access: defaultTelegramChatAccess(),
   }
 }
-export function matchesTelegramBot(binding: IntegrationBinding, bot: TelegramBotConfig): boolean {
+export function matchesTelegramBot(
+  binding: IntegrationBinding,
+  bot: TelegramBotConfig & { source_session_id?: number | null },
+): boolean {
   if (binding.spec.provider !== TELEGRAM_ID) return false
+  // Bot-owned integration listings also retain connections from a deleted
+  // local source. The manager presents the selected Bot's current routes.
+  if (bot.source_session_id != null && binding.source_session_id !== bot.source_session_id) return false
   const identity = binding.spec.channel_policy?.identity
   if (
     !identity ||

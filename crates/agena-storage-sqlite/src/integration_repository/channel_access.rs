@@ -190,6 +190,9 @@ pub(super) async fn charge_channel_user(
     else {
         return Ok(true);
     };
+    if policy.per_user_daily_limit == 0 {
+        return Ok(true);
+    }
     let count=db.query_one(statement("SELECT used FROM agena_channel_user_budget WHERE binding_id=? AND actor=? AND utc_day=?",vec![b.id.to_string().into(),event.actor.clone().into(),day.into()])).await.map_err(error)?.map(|r|r.try_get::<i64>("","used").map_err(error)).transpose()?.unwrap_or(0);
     if count >= i64::from(policy.per_user_daily_limit) {
         return Ok(false);

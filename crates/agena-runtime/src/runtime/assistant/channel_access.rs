@@ -180,9 +180,7 @@ impl AssistantRuntime {
             thread,
             session_mode: policy.session_mode,
             grant,
-            expires_at_ms: expiry
-                .unwrap_or(b.spec.expires_at_ms)
-                .min(b.spec.expires_at_ms),
+            expires_at_ms: b.spec.authority_expires_at(expiry),
             memory_workspace_root: speaker_root,
             private_paths,
             revoked: false,

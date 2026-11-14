@@ -5,8 +5,11 @@
 //! path — binding grant, long-poll checkpoint, host authorization, model turn,
 //! outbound delivery — runs against the real product process.
 use super::fixture;
-use agena_api::integrations::*;
-use agena_testkit::{Reply, RequestMatch, SettingsLayer, TestResult};
+use agena_api::{
+    bot::{BotCreate, BotSession},
+    integrations::*,
+};
+use agena_testkit::{Reply, RequestMatch, SettingsLayer, TestAgenaBuilder, TestCase, TestResult};
 use anyhow::{Context, Result, ensure};
 use axum::{Json, Router, extract::Path as RoutePath, extract::State, routing::post};
 use chrono::Utc;
@@ -155,15 +158,17 @@ where
     .with_context(|| format!("timed out: {description}"))?
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departure() -> TestResult {
-    let api = Arc::new(BotApi::default());
-    let requests = api.clone();
+fn telegram_fixture(api: Arc<BotApi>) -> TestAgenaBuilder {
+    let requests = api;
     fixture()
         .case_timeout(Duration::from_secs(180))
         .before_start(move |case| async move {
             let server = case
-                .serve_http(Router::new().route("/{*rest}", post(bot_api)).with_state(requests))
+                .serve_http(
+                    Router::new()
+                        .route("/{*rest}", post(bot_api))
+                        .with_state(requests),
+                )
                 .await?;
             let mut config: Value =
                 serde_json::from_slice(&tokio::fs::read(&case.paths().global_config).await?)?;
@@ -183,8 +188,79 @@ async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departu
             case.write_config(SettingsLayer::Global, config).await
         })
         .env("AGENA_TEST_TELEGRAM_TOKEN", TOKEN)
+}
+
+/// Configure the real plugin through its public command API, with the AI Bot
+/// owning a global local conversation rather than inheriting the test workspace.
+async fn managed_local_bot(case: &TestCase) -> Result<BotSession> {
+    let client = case.client().await;
+    let bot = client
+        .create_bot(&BotCreate {
+            request_key: "telegram-ai-bot".into(),
+            name: "Telegram AI".into(),
+            persona: None,
+        })
+        .await?;
+    let session = client.ensure_named_bot_session(bot.id).await?;
+    let resource: Value = case
+        .http()
+        .await
+        .get(&format!("/api/v1/sessions/{}", session.session_id))
+        .await?
+        .require_success()?
+        .json()?;
+    ensure!(
+        resource["workspace_id"].is_null(),
+        "Bot source must have no project: {resource}"
+    );
+    ensure!(resource["owner_bot_id"] == json!(bot.id));
+    let config: Value =
+        serde_json::from_slice(&tokio::fs::read(&case.paths().global_config).await?)?;
+    let saved = client
+        .invoke_plugin_command(
+            "agena.telegram",
+            "save_bot",
+            json!({
+                "expected_revision": 0,
+                "bot": {
+                    "id": "default",
+                    "name": "Telegram fixture",
+                    "enabled": true,
+                    "connection": config["plugins"]["list"]["agena.telegram"]["settings"],
+                    "credential_kind": "environment",
+                    "ai_bot_id": bot.id,
+                    "chat_access": {
+                        "mode": "whitelist",
+                        "private_enabled": false,
+                        "group_enabled": true,
+                        "channel_enabled": false,
+                        "chat_ids": [CHAT_ID.to_string()]
+                    }
+                },
+                "token": null
+            }),
+            None,
+            None,
+            "",
+        )
+        .await?
+        .result
+        .output
+        .context("saved Telegram bot output")?;
+    ensure!(
+        saved["source_session_id"] == json!(session.session_id),
+        "{saved}"
+    );
+    Ok(session)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departure() -> TestResult {
+    let api = Arc::new(BotApi::default());
+    telegram_fixture(api.clone())
         .run(move |case| async move {
-            let operator = case.user().new_session().await?;
+            let source = managed_local_bot(&case).await?;
+            let operator = case.user().attach_session(source.session_id).await?;
             let client = operator.client();
 
             let catalog = client.integrations(operator.id()).await?;
@@ -204,7 +280,7 @@ async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departu
                 .await?;
             ensure!(binding.state == BindingState::Disabled);
             let binding = client
-                .control_integration(operator.id(), binding.id, &IntegrationControl {
+                .control_integration(operator.id(), binding.id, &IntegrationControl { not_before_ms: None,
                     expected_revision: binding.revision,
                     action: IntegrationControlAction::Enable,
                 })
@@ -227,7 +303,7 @@ async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departu
                 .expect(RequestMatch::user_text("telegram-channel-proof"))
                 .reply(Reply::text("telegram-reply-proof: ship it"));
             client
-                .control_integration(operator.id(), binding.id, &IntegrationControl {
+                .control_integration(operator.id(), binding.id, &IntegrationControl { not_before_ms: None,
                     expected_revision: binding.revision,
                     action: IntegrationControlAction::PollNow,
                 })
@@ -303,7 +379,7 @@ async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departu
             }));
             let current = client.integration_detail(operator.id(), binding.id).await?;
             client
-                .control_integration(operator.id(), binding.id, &IntegrationControl {
+                .control_integration(operator.id(), binding.id, &IntegrationControl { not_before_ms: None,
                     expected_revision: current.binding.revision,
                     action: IntegrationControlAction::PollNow,
                 })
@@ -351,7 +427,7 @@ async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departu
             )));
             let before = after.binding.admitted;
             client
-                .control_integration(operator.id(), binding.id, &IntegrationControl {
+                .control_integration(operator.id(), binding.id, &IntegrationControl { not_before_ms: None,
                     expected_revision: after.binding.revision,
                     action: IntegrationControlAction::PollNow,
                 })
@@ -374,6 +450,212 @@ async fn bundled_adapter_polls_a_group_answers_it_and_reports_a_platform_departu
                 client.integration_detail(operator.id(), binding.id).await?.binding.admitted == before,
                 "a blocked sender must not consume the chat budget"
             );
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_owned_telegram_chat_is_created_enabled_and_answers_without_project_workspace()
+-> TestResult {
+    let api = Arc::new(BotApi::default());
+    telegram_fixture(api.clone())
+        .run(move |case| async move {
+            let source = managed_local_bot(&case).await?;
+            let client = case.client().await;
+            ensure!(
+                client
+                    .integrations(source.session_id)
+                    .await?
+                    .bindings
+                    .is_empty()
+            );
+            let answer = case
+                .model()
+                .expect(RequestMatch::user_text("bot-owned-telegram-proof"))
+                .reply(Reply::text("bot-owned-telegram-reply"));
+            let mention = format!("@{BOT_USERNAME}");
+            let mut message = group_message(
+                21,
+                &format!("{mention} bot-owned-telegram-proof"),
+                json!([{"type": "mention", "offset": 0, "length": mention.len()}]),
+            );
+            // A newly discovered room's first message keeps Telegram's actual
+            // second-resolution timestamp. Routing supplies the saved cutoff.
+            message["date"] = json!(Utc::now().timestamp());
+            api.updates.lock().unwrap().push(update(21, message));
+            let synced = client
+                .invoke_plugin_command(
+                    "agena.telegram",
+                    "sync_chats",
+                    json!({"bot_id": "default"}),
+                    None,
+                    None,
+                    "",
+                )
+                .await?
+                .result
+                .output
+                .context("synchronized Telegram inventory")?;
+            ensure!(synced["routing_error"].is_null(), "{synced}");
+            let binding = wait_for(
+                || async {
+                    let snapshot = client.integrations(source.session_id).await?;
+                    Ok(snapshot.bindings.into_iter().find(|binding| {
+                        binding.spec.provider == "agena.telegram"
+                            && binding.spec.resource.single() == Some(CHAT_ID.to_string().as_str())
+                            && binding.state == BindingState::Enabled
+                    }))
+                },
+                "automatic Bot-owned channel creation and enable",
+            )
+            .await?;
+            ensure!(binding.workspace_id.is_none());
+            ensure!(binding.owner_bot_id == Some(source.bot_id));
+            ensure!(binding.source_session_id == source.session_id);
+            ensure!(!binding.permission_fingerprint.is_empty());
+            ensure!(binding.spec.expires_at_ms == 0);
+            ensure!(binding.spec.daily_limit == 0 && binding.spec.total_limit == 0);
+            answer.finished().await?;
+            let sent = wait_for(
+                || async {
+                    Ok(api
+                        .sent
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .find(|body| {
+                            body["text"]
+                                .as_str()
+                                .is_some_and(|text| text.contains("bot-owned-telegram-reply"))
+                        })
+                        .cloned())
+                },
+                "Bot-owned channel response delivered to Telegram",
+            )
+            .await?;
+            ensure!(sent["chat_id"] == json!(CHAT_ID.to_string()), "{sent}");
+            let detail = wait_for(
+                || async {
+                    let detail = client
+                        .integration_detail(source.session_id, binding.id)
+                        .await?;
+                    Ok(detail
+                        .deliveries
+                        .iter()
+                        .any(|delivery| delivery.state == "sent")
+                        .then_some(detail))
+                },
+                "durable delivery for the Bot-owned channel",
+            )
+            .await?;
+            ensure!(detail.binding.admitted == 1, "{detail:?}");
+            ensure!(detail.binding.state == BindingState::Enabled, "{detail:?}");
+            let channel = detail
+                .channel_sessions
+                .first()
+                .context("the independent remote conversation")?;
+            ensure!(channel.session_id != source.session_id);
+            let remote: Value = case
+                .http()
+                .await
+                .get(&format!("/api/v1/sessions/{}", channel.session_id))
+                .await?
+                .require_success()?
+                .json()?;
+            // Channel execution has its own private workspace identity. A
+            // global Bot source must not make it inherit the user's project.
+            let workspace_id = remote["workspace_id"]
+                .as_i64()
+                .context("the channel's private workspace identity")?;
+            let workspace: Value = case
+                .http()
+                .await
+                .get(&format!("/api/v1/workspaces/{workspace_id}"))
+                .await?
+                .require_success()?
+                .json()?;
+            let private_root = std::path::Path::new(
+                workspace["path"]
+                    .as_str()
+                    .context("private workspace path")?,
+            );
+            ensure!(private_root == channel.authority.memory_workspace_root.as_path());
+            ensure!(
+                private_root.starts_with(
+                    case.data_dir()
+                        .join("channel-speakers")
+                        .join(binding.id.to_string())
+                ),
+                "the channel must use its own private scope: {workspace}"
+            );
+            ensure!(!private_root.starts_with(case.workspace()), "{workspace}");
+            ensure!(remote["owner_bot_id"] == json!(source.bot_id), "{remote}");
+            ensure!(remote["owner_surface"] == "group", "{remote}");
+
+            // A restart must retain the no-project permission identity and
+            // reauthorize the existing private conversation on its next turn.
+            case.restart().await?;
+            let client = case.client().await;
+            let resumed = client
+                .integration_detail(source.session_id, binding.id)
+                .await?;
+            ensure!(resumed.binding.state == BindingState::Enabled);
+            ensure!(
+                resumed.binding.permission_fingerprint == binding.permission_fingerprint,
+                "restarting must not change a global Bot's permission boundary"
+            );
+            let answer = case
+                .model()
+                .expect(RequestMatch::user_text("bot-owned-telegram-after-restart"))
+                .reply(Reply::text("bot-owned-telegram-restarted-reply"));
+            api.updates.lock().unwrap().push(update(
+                22,
+                group_message(
+                    22,
+                    &format!("{mention} bot-owned-telegram-after-restart"),
+                    json!([{"type": "mention", "offset": 0, "length": mention.len()}]),
+                ),
+            ));
+            let synced = client
+                .invoke_plugin_command(
+                    "agena.telegram",
+                    "sync_chats",
+                    json!({"bot_id": "default"}),
+                    None,
+                    None,
+                    "",
+                )
+                .await?
+                .result
+                .output
+                .context("Telegram inventory after restart")?;
+            ensure!(synced["routing_error"].is_null(), "{synced}");
+            answer.finished().await?;
+            wait_for(
+                || async {
+                    Ok(api
+                        .sent
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|body| {
+                            body["text"]
+                                .as_str()
+                                .is_some_and(|text| text.contains("bot-owned-telegram-restarted-reply"))
+                        })
+                        .then_some(()))
+                },
+                "Bot-owned Telegram reply after restart",
+            )
+            .await?;
+            let resumed = client
+                .integration_detail(source.session_id, binding.id)
+                .await?;
+            ensure!(resumed.binding.state == BindingState::Enabled);
+            ensure!(resumed.binding.admitted == 2, "{resumed:?}");
+            ensure!(resumed.channel_sessions.len() == 1, "{resumed:?}");
+            ensure!(resumed.channel_sessions[0].session_id == channel.session_id);
             Ok(())
         })
         .await

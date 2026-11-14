@@ -160,6 +160,7 @@ impl AssistantRuntime {
                                 .expected_revision
                                 .ok_or(Error::Invalid("use the current integration revision"))?,
                             action: IntegrationControlAction::Pause,
+                            not_before_ms: None,
                         },
                     )
                     .await?;
@@ -217,9 +218,19 @@ impl AssistantRuntime {
     pub(super) async fn source_permission_identity(&self, source: i64) -> Result<String> {
         let manager = self.manager()?;
         let session = manager.get_session(source).await.map_err(runtime_error)?;
-        digest(
-            &json!({"permissions":session.execution.effective_permission,"ceiling":session.execution.permission_ceiling,"capability_denials":session.execution.capability_denied_tool_names,"workspace":manager.session_workspace_root(source).await.map_err(runtime_error)?}),
-        )
+        // Local Bot conversations have no project. Hash that absence as null;
+        // resolving a required project root would reject channel activation and
+        // every later authorization check for an otherwise valid Bot source.
+        let workspace = manager
+            .session_workspace_root_optional(source)
+            .await
+            .map_err(runtime_error)?;
+        digest(&json!({
+            "permissions": session.execution.effective_permission,
+            "ceiling": session.execution.permission_ceiling,
+            "capability_denials": session.execution.capability_denied_tool_names,
+            "workspace": workspace,
+        }))
     }
 
     async fn adapter(&self, provider: &str) -> Result<IntegrationProvider> {
@@ -429,6 +440,7 @@ impl AssistantRuntime {
         id: Uuid,
         request: IntegrationControl,
     ) -> Result<IntegrationBinding> {
+        request.validate(Utc::now().timestamp_millis())?;
         // Provider I/O happens before the admission lock; pause is not blocked
         // behind another adapter's slow poll. Re-read under the lock below.
         let original = self.scoped_binding(source, id).await?;
@@ -463,7 +475,7 @@ impl AssistantRuntime {
                 if b.spec.mode == IntegrationMode::Session {
                     self.validate_automation_target(b.source_session_id).await?;
                 }
-                if now >= b.spec.expires_at_ms || b.admitted >= b.spec.total_limit {
+                if b.spec.expired_at(now) || b.spec.total_budget_exhausted(b.admitted) {
                     return Err(Error::Conflict(
                         "grant expired or exhausted; create a new explicit authorization",
                     ));
@@ -504,9 +516,7 @@ impl AssistantRuntime {
                 b.state = BindingState::Enabled;
                 b.epoch += 1;
                 b.channel_session_id = None;
-                if b.activated_at_ms.is_none() {
-                    b.activated_at_ms = Some(now);
-                }
+                b.activated_at_ms = Some(request.activation_at(b.activated_at_ms, now));
                 b.next_poll_ms = now;
                 b.last_error = None;
             }
@@ -602,7 +612,7 @@ impl AssistantRuntime {
             self.revoke_old_channel_runs(&b).await?;
         }
 
-        if Utc::now().timestamp_millis() >= b.spec.expires_at_ms {
+        if b.spec.expired_at(Utc::now().timestamp_millis()) {
             return self
                 .integration_fault(
                     b.id,
@@ -712,7 +722,7 @@ impl AssistantRuntime {
             self.integrations.save_binding(b, revision).await?;
             return Ok(());
         }
-        if b.state != BindingState::Enabled || now >= b.spec.expires_at_ms {
+        if b.state != BindingState::Enabled || b.spec.expired_at(now) {
             return Ok(());
         }
         let Some(mut event) = self.integrations.next_event(id, now).await? else {
@@ -825,7 +835,7 @@ impl AssistantRuntime {
         let manager = self.manager()?;
         let now = Utc::now().timestamp_millis();
         let authority_valid = b.state == BindingState::Enabled
-            && now < b.spec.expires_at_ms
+            && !b.spec.expired_at(now)
             && self.provider_identity(&b.spec.provider).ok().as_deref()
                 == Some(b.provider_fingerprint.as_str())
             && self

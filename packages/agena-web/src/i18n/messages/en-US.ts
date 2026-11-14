@@ -90,6 +90,7 @@ export default {
     },
   },
   channelAccess: {
+    zeroLimitHint: 'Use 0 for no daily limit.',
     mcp: 'MCP permissions JSON: server → exact tool names',
     title: 'Channel access',
     edit: 'Manage members and capabilities',
@@ -164,6 +165,8 @@ export default {
     kind_broadcast: 'Broadcast',
   },
   integrations: {
+    unlimited: 'Unlimited',
+    noExpiry: 'No expiry',
     retryHint:
       'The server may have accepted the request. Retry preserves the same request identity; refresh the connections before creating another.',
     title: 'Channels & automation',

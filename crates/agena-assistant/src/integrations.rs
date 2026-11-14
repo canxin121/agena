@@ -332,8 +332,11 @@ pub struct IntegrationSpec {
     pub actors: Vec<String>,
     pub instruction: String,
     pub poll_seconds: u32,
+    /// Expiry timestamp; 0 means no expiry for Channel mode only.
     pub expires_at_ms: i64,
+    /// 0 means no daily cap for Channel mode only.
     pub daily_limit: u32,
+    /// 0 means no lifetime cap for Channel mode only.
     pub total_limit: u32,
     pub max_execution_seconds: u32,
     /// Explicit operator consent to use (never expand) the source session's
@@ -344,6 +347,30 @@ pub struct IntegrationSpec {
     pub channel_policy: Option<ChannelAccessPolicy>,
 }
 impl IntegrationSpec {
+    /// Zero removes a lifetime or budget limit only for durable chat channels.
+    pub fn expired_at(&self, now: i64) -> bool {
+        !(self.mode == IntegrationMode::Channel && self.expires_at_ms == 0)
+            && now >= self.expires_at_ms
+    }
+    pub fn total_budget_exhausted(&self, admitted: u32) -> bool {
+        !(self.mode == IntegrationMode::Channel && self.total_limit == 0)
+            && admitted >= self.total_limit
+    }
+    pub fn daily_budget_exhausted(&self, admitted: u32) -> bool {
+        !(self.mode == IntegrationMode::Channel && self.daily_limit == 0)
+            && admitted >= self.daily_limit
+    }
+    /// A finite membership still expires when the channel itself is permanent.
+    pub fn authority_expires_at(&self, membership: Option<i64>) -> i64 {
+        match membership {
+            Some(expiry) if self.mode == IntegrationMode::Channel && self.expires_at_ms == 0 => {
+                expiry
+            }
+            Some(expiry) => expiry.min(self.expires_at_ms),
+            None => self.expires_at_ms,
+        }
+    }
+
     pub fn validate(&self, now: i64) -> Result<()> {
         for value in [&self.title, &self.provider] {
             if value.trim().is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
@@ -412,15 +439,22 @@ impl IntegrationSpec {
                 "explicit consent to the source-session permission boundary is required",
             ));
         }
+        let channel = self.mode == IntegrationMode::Channel;
+        let daily_valid =
+            (channel && self.daily_limit == 0) || (1..=100).contains(&self.daily_limit);
+        let total_valid =
+            (channel && self.total_limit == 0) || (1..=10000).contains(&self.total_limit);
+        let expiry_valid = (channel && self.expires_at_ms == 0)
+            || (self.expires_at_ms > now
+                && self.expires_at_ms <= now.saturating_add(90 * 86400000));
         if !(1..=86400).contains(&self.poll_seconds)
-            || !(1..=100).contains(&self.daily_limit)
-            || !(1..=10000).contains(&self.total_limit)
+            || !daily_valid
+            || !total_valid
+            || !expiry_valid
             || !(30..=3600).contains(&self.max_execution_seconds)
-            || self.expires_at_ms <= now
-            || self.expires_at_ms > now + 90 * 86400000
         {
             return Err(Error::Invalid(
-                "grant must expire within 90 days; polling 1–86400s, daily 1–100, total 1–10000, execution timeout 30–3600s",
+                "grant must expire within 90 days; polling 1–86400s, daily 1–100, total 1–10000, execution timeout 30–3600s; channel expiry and quotas may be 0 for no limit",
             ));
         }
         if !self.config.is_object()
@@ -541,7 +575,7 @@ impl IntegrationBinding {
         })
     }
     pub fn rejection(&self, event: &ExternalEvent, now: i64) -> Option<&'static str> {
-        if self.state != BindingState::Enabled || now >= self.spec.expires_at_ms {
+        if self.state != BindingState::Enabled || self.spec.expired_at(now) {
             return Some("grant_not_active");
         }
         if self.spec.mode == IntegrationMode::Channel {
@@ -586,6 +620,30 @@ pub enum IntegrationControlAction {
 pub struct IntegrationControl {
     pub expected_revision: i64,
     pub action: IntegrationControlAction,
+    /// Earliest authorized event timestamp for Enable. Omitted preserves an
+    /// existing activation or uses the current time for the first activation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before_ms: Option<i64>,
+}
+impl IntegrationControl {
+    pub fn validate(&self, now: i64) -> Result<()> {
+        if let Some(cutoff) = self.not_before_ms {
+            if !matches!(self.action, IntegrationControlAction::Enable) {
+                return Err(Error::Invalid(
+                    "not_before_ms is only valid when enabling an integration",
+                ));
+            }
+            if cutoff < 0 || cutoff > now {
+                return Err(Error::Invalid(
+                    "not_before_ms must be a nonnegative timestamp no later than now",
+                ));
+            }
+        }
+        Ok(())
+    }
+    pub fn activation_at(&self, previous: Option<i64>, now: i64) -> i64 {
+        self.not_before_ms.or(previous).unwrap_or(now)
+    }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IntegrationEvent {
@@ -891,6 +949,80 @@ mod tests {
             channel_policy: None,
         }
     }
+    #[test]
+    fn enable_cutoff_is_explicit_validated_and_preserves_original_event_times() {
+        let mut request: IntegrationControl = serde_json::from_value(serde_json::json!({
+            "expected_revision": 1, "action": "enable"
+        }))
+        .unwrap();
+        assert!(request.validate(9000).is_ok());
+        assert_eq!(request.activation_at(None, 9000), 9000);
+        assert_eq!(request.activation_at(Some(1000), 9000), 1000);
+        request.not_before_ms = Some(7000);
+        assert!(request.validate(9000).is_ok());
+        assert_eq!(request.activation_at(None, 9000), 7000);
+        for cutoff in [-1, 9001] {
+            request.not_before_ms = Some(cutoff);
+            assert!(request.validate(9000).is_err());
+        }
+        request.not_before_ms = Some(0);
+        assert!(request.validate(9000).is_ok());
+        for action in [
+            IntegrationControlAction::Pause,
+            IntegrationControlAction::PollNow,
+        ] {
+            request.action = action;
+            assert!(request.validate(9000).is_err());
+        }
+    }
+
+    #[test]
+    fn only_channels_can_remove_expiry_and_quota_limits() {
+        let mut channel = channel_spec("chat", "room");
+        channel.expires_at_ms = 0;
+        channel.daily_limit = 0;
+        channel.total_limit = 0;
+        channel
+            .channel_policy
+            .as_mut()
+            .unwrap()
+            .per_user_daily_limit = 0;
+        assert!(channel.validate(1000).is_ok());
+        assert!(!channel.expired_at(i64::MAX));
+        assert!(!channel.daily_budget_exhausted(u32::MAX));
+        assert!(!channel.total_budget_exhausted(u32::MAX));
+        assert_eq!(channel.authority_expires_at(None), 0);
+        assert_eq!(channel.authority_expires_at(Some(5000)), 5000);
+        channel.max_execution_seconds = 0;
+        assert!(channel.validate(1000).is_err());
+        channel.max_execution_seconds = 60;
+        channel.daily_limit = 101;
+        assert!(channel.validate(1000).is_err());
+        channel.daily_limit = 2;
+        assert!(!channel.daily_budget_exhausted(1));
+        assert!(channel.daily_budget_exhausted(2));
+        channel.total_limit = 10001;
+        assert!(channel.validate(1000).is_err());
+        channel.total_limit = 3;
+        assert!(!channel.total_budget_exhausted(2));
+        assert!(channel.total_budget_exhausted(3));
+        channel.expires_at_ms = -1;
+        assert!(channel.validate(1000).is_err());
+        channel.expires_at_ms = 2000;
+        assert!(!channel.expired_at(1999));
+        assert!(channel.expired_at(2000));
+        assert_eq!(channel.authority_expires_at(Some(5000)), 2000);
+        for field in ["expiry", "daily", "total"] {
+            let mut automation = spec();
+            match field {
+                "expiry" => automation.expires_at_ms = 0,
+                "daily" => automation.daily_limit = 0,
+                _ => automation.total_limit = 0,
+            }
+            assert!(automation.validate(1000).is_err(), "{field}");
+        }
+    }
+
     #[test]
     fn session_contract_rejects_retired_mode_and_timeout_inputs() {
         let encoded = serde_json::to_value(spec()).unwrap();

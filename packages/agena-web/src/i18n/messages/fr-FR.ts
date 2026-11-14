@@ -91,6 +91,7 @@ export default {
     },
   },
   channelAccess: {
+    zeroLimitHint: 'Indiquez 0 pour ne pas fixer de limite quotidienne.',
     mcp: 'Autorisations MCP JSON : serveur → outils exacts',
     title: 'Accès au canal',
     edit: 'Gérer les membres et capacités',
@@ -165,6 +166,8 @@ export default {
     kind_broadcast: 'Diffusion',
   },
   integrations: {
+    unlimited: 'Illimité',
+    noExpiry: 'Sans expiration',
     retryHint:
       'Le serveur a peut-être accepté la demande. Réessayer conserve son identité ; actualisez les connexions avant d’en créer une autre.',
     title: 'Canaux et automatisation',

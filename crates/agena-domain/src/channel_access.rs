@@ -279,6 +279,7 @@ pub struct ChannelAccessPolicy {
     #[serde(default)]
     pub grant: ChannelGrant,
     #[serde(default = "daily")]
+    /// 0 removes the per-member daily cap.
     pub per_user_daily_limit: u32,
     /// Explicit automated posts use a separate service session, never borrow
     /// a human owner's private chat or memories.
@@ -315,12 +316,9 @@ impl ChannelAccessPolicy {
         if !valid_channel_id(&self.identity.tenant) || !valid_channel_id(&self.identity.account) {
             return Err("channel tenant and account must be exact stable IDs".into());
         }
-        if self.members.is_empty()
-            || self.members.len() > 128
-            || !(1..=1000).contains(&self.per_user_daily_limit)
-        {
+        if self.members.is_empty() || self.members.len() > 128 || self.per_user_daily_limit > 1000 {
             return Err(
-                "channel policy needs 1–128 assignments and a daily user limit of 1–1000".into(),
+                "channel policy needs 1–128 assignments and a daily user limit of 0–1000 (0 means no limit)".into(),
             );
         }
         let mut seen = BTreeSet::new();
@@ -465,6 +463,7 @@ pub struct ChannelAuthority {
     pub thread: Option<String>,
     pub session_mode: ChannelSessionMode,
     pub grant: ChannelGrant,
+    /// 0 means no expiry. Finite membership expiries still bound the token.
     pub expires_at_ms: i64,
     pub memory_workspace_root: PathBuf,
     pub private_paths: BTreeSet<PathBuf>,
@@ -517,7 +516,7 @@ impl ChannelAuthority {
     }
 
     pub fn active_at(&self, now: i64) -> bool {
-        !self.revoked && now < self.expires_at_ms
+        !self.revoked && (self.expires_at_ms == 0 || now < self.expires_at_ms)
     }
     pub fn allows_tool(&self, canonical: &str, now: i64) -> bool {
         self.active_at(now) && self.grant.allowed_tools().contains(canonical)

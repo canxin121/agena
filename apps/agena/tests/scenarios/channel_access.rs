@@ -107,6 +107,7 @@ async fn bind(
             source.id(),
             b.id,
             &IntegrationControl {
+                not_before_ms: None,
                 expected_revision: b.revision,
                 action: IntegrationControlAction::Enable,
             },

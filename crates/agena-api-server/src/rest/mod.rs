@@ -674,6 +674,43 @@ fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {
     Ok(Some(version))
 }
 
+/// Keep live SSE frames unbuffered through reverse proxies so a completed
+/// response reaches both Web and TUI clients without a reload.
+pub(crate) fn unbuffered_sse_response(
+    mut response: axum::response::Response,
+) -> axum::response::Response {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("private, no-store, no-transform"),
+    );
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-accel-buffering"),
+        axum::http::HeaderValue::from_static("no"),
+    );
+    response
+}
+
+#[cfg(test)]
+mod sse_transport_tests {
+    use super::*;
+
+    #[test]
+    fn sse_frames_disable_proxy_buffering_without_losing_event_stream_type() {
+        let stream = futures_util::stream::empty::<Result<Event, std::convert::Infallible>>();
+        let response = unbuffered_sse_response(Sse::new(stream).into_response());
+
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            "text/event-stream"
+        );
+        assert_eq!(
+            response.headers()[axum::http::header::CACHE_CONTROL],
+            "private, no-store, no-transform"
+        );
+        assert_eq!(response.headers()["x-accel-buffering"], "no");
+    }
+}
+
 fn sse_error_event(diagnostic: impl std::fmt::Display) -> Event {
     let error = agena_api::ApiError::internal("SSE event serialization failed");
     tracing::error!(

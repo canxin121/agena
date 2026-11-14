@@ -7,9 +7,12 @@ use std::time::Duration;
 use agena_api::notifications::Notification;
 use axum::{
     extract::{Query, State},
-    response::sse::{Event, KeepAlive, Sse},
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
-use futures_util::{Stream, StreamExt as _};
+use futures_util::StreamExt as _;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -40,7 +43,7 @@ pub struct StreamQuery {
 pub async fn handler(
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
+) -> Result<Response, ServerError> {
     let locale = query.locale.clone();
     let scope = query.into_scope()?;
 
@@ -104,7 +107,11 @@ pub async fn handler(
         let _ = &owner;
         item
     });
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
+    Ok(crate::rest::unbuffered_sse_response(
+        Sse::new(stream)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(25)))
+            .into_response(),
+    ))
 }
 
 async fn notification_event(
@@ -219,7 +226,7 @@ impl NotificationStreamQuery {
 pub async fn notifications_stream(
     State(state): State<AppState>,
     Query(query): Query<NotificationStreamQuery>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
+) -> Result<Response, ServerError> {
     use crate::rest::notifications::notification_error;
     use agena_api::resource::NotificationStreamEvent;
     use agena_notification::NotificationService;
@@ -318,5 +325,9 @@ pub async fn notifications_stream(
         let _ = &owner;
         item
     });
-    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
+    Ok(crate::rest::unbuffered_sse_response(
+        Sse::new(stream)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(25)))
+            .into_response(),
+    ))
 }

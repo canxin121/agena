@@ -428,7 +428,9 @@ pub async fn stream_session_changes(
         }
     };
 
-    Ok(Sse::new(stream))
+    Ok(super::unbuffered_sse_response(
+        Sse::new(stream).into_response(),
+    ))
 }
 
 pub async fn submit_message(

@@ -106,7 +106,12 @@ pub async fn stream_content(
             }
         }
     };
-    Ok(Sse::new(output).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+    use axum::response::IntoResponse as _;
+    Ok(super::unbuffered_sse_response(
+        Sse::new(output)
+            .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+            .into_response(),
+    ))
 }
 
 /// Resolve only an immutable prepared result belonging to this session.

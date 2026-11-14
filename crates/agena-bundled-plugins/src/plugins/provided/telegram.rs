@@ -2,8 +2,9 @@
 //!
 //! Long polling (`getUpdates`) instead of a webhook: the host already consumes
 //! events by polling, and long polling needs no public HTTPS endpoint,
-//! certificate or reverse proxy. The update offset *is* the checkpoint, so a
-//! restarted host resumes exactly where it stopped.
+//! certificate or reverse proxy. Each bot owns a persisted upstream offset and
+//! replay inbox; bindings keep independent local cursors, so one chat cannot
+//! acknowledge another chat's messages before they have been persisted.
 //!
 //! This adapter reports evidence, never authority. The bot's own `@username`
 //! comes from `getMe` and must match the configured `account`, so a token
@@ -19,11 +20,11 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
-use agena_plugin_host::sdk::{PluginError, PluginSettings, Result};
+use agena_plugin_host::sdk::{CommandResult, PluginError, PluginSettings, Result};
 use agena_plugin_sdk::integration::{
     AdapterBatch, AdapterDescription, AdapterKind, AdapterPollRequest, ChannelDelivery,
     ChannelEnvelope, ChannelIdentity, ChannelReceipt, ConversationKind, ExternalEvent,
@@ -31,6 +32,8 @@ use agena_plugin_sdk::integration::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+mod management;
+use management::{BotConfiguration, BotSelection};
 
 pub(crate) const TELEGRAM_PLUGIN_ID: &str = "agena.telegram";
 
@@ -71,6 +74,9 @@ pub struct TelegramConfig {
     pub long_poll_seconds: u32,
     /// Permit plain-HTTP `api_base`. Only a loopback host qualifies.
     pub allow_loopback_http: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    credential_secret: Option<String>,
 }
 
 impl Default for TelegramConfig {
@@ -81,6 +87,7 @@ impl Default for TelegramConfig {
             api_base: "https://api.telegram.org".into(),
             long_poll_seconds: 0,
             allow_loopback_http: false,
+            credential_secret: None,
         }
     }
 }
@@ -105,7 +112,12 @@ impl TelegramConfig {
         }
         let url = url::Url::parse(self.api_base.trim())
             .map_err(|_| PluginError::invalid_params("api_base must be an absolute URL"))?;
-        if url.host_str().is_none() || !url.username().is_empty() || url.password().is_some() {
+        if url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
             return Err(PluginError::invalid_params(
                 "api_base must be a bare URL without embedded credentials",
             ));
@@ -200,9 +212,12 @@ static TELEGRAM_SETTINGS_METADATA: &[(&str, &str, &str)] = &[
 
 pub(crate) struct TelegramPlugin {
     client: OnceLock<reqwest::Client>,
-    /// The connection this plugin instance owns. A binding only chooses which
-    /// rooms to serve; the endpoint, token variable and verified bot identity
-    /// are instance configuration, so no grant can point the bot elsewhere.
+    host: OnceLock<Arc<dyn agena_plugin_sdk::host_api::HostClient>>,
+    registry_lock: tokio::sync::Mutex<()>,
+    account_locks: Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// The legacy default connection. Additional bots live in private host
+    /// storage with separate credential references. Bindings select a stable
+    /// bot ID and room; they can never supply an endpoint or secret.
     settings: PluginSettings<TelegramConfig>,
     /// `getMe` answers per endpoint and token name, so a poll does not spend a
     /// round-trip re-proving the same identity on every tick.
@@ -236,6 +251,9 @@ impl TelegramPlugin {
     pub(crate) fn new() -> Self {
         Self {
             client: OnceLock::new(),
+            host: OnceLock::new(),
+            registry_lock: tokio::sync::Mutex::new(()),
+            account_locks: Mutex::new(BTreeMap::new()),
             settings: PluginSettings::new(),
             identities: Mutex::new(BTreeMap::new()),
         }
@@ -244,6 +262,7 @@ impl TelegramPlugin {
     /// The configured connection, refusing to run before the host has
     /// initialized it. Settings are validated on every call, so a broken
     /// endpoint fails the poll instead of silently reaching somewhere else.
+    #[cfg(test)]
     fn config(&self) -> Result<TelegramConfig> {
         let config = self
             .settings
@@ -265,6 +284,113 @@ impl TelegramPlugin {
         })
     }
 
+    #[hook(
+        init,
+        summary = "Initialize Telegram bot storage",
+        help = "Connect private bot configuration, credential storage and the durable per-bot inbox.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "初始化 Telegram 存储",
+                help = "连接机器人私有配置、凭据存储和各机器人的持久收件队列。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "初始化 Telegram 儲存",
+                help = "連接機器人私有設定、憑證儲存和各機器人的持久收件佇列。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Initialiser le stockage Telegram",
+                help = "Connecte la configuration privée, les identifiants et la boîte de réception durable de chaque bot."
+            ),
+            locale(
+                "es-ES",
+                summary = "Inicializar el almacenamiento de Telegram",
+                help = "Conecta la configuración privada, las credenciales y la bandeja persistente de cada bot."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Inicializar o armazenamento do Telegram",
+                help = "Conecta a configuração privada, as credenciais e a caixa persistente de cada bot."
+            ),
+            locale(
+                "de-DE",
+                summary = "Telegram-Speicher initialisieren",
+                help = "Verbindet private Bot-Konfiguration, Zugangsdaten und den dauerhaften Posteingang jedes Bots."
+            ),
+            locale(
+                "ja-JP",
+                summary = "Telegram ストレージを初期化",
+                help = "各ボットの非公開設定、認証情報、永続的な受信キューを接続します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "Telegram 저장소 초기화",
+                help = "각 봇의 비공개 설정, 자격 증명 및 영구 수신 큐를 연결합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "Telegram संग्रहण प्रारंभ करें",
+                help = "निजी बॉट कॉन्फ़िगरेशन, क्रेडेंशियल संग्रहण और प्रत्येक बॉट की स्थायी इनबॉक्स जोड़ता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "تهيئة تخزين Telegram",
+                help = "يربط إعدادات البوت الخاصة وبيانات الاعتماد وصندوق الوارد الدائم لكل بوت."
+            )
+        )
+    )]
+    async fn init(
+        &self,
+        _ctx: agena_plugin_sdk::InitContext,
+        host: Arc<dyn agena_plugin_sdk::host_api::HostClient>,
+    ) -> Result<agena_plugin_sdk::InitOutcome> {
+        self.host
+            .set(host)
+            .map_err(|_| PluginError::internal("Telegram storage already initialized"))?;
+        Ok(agena_plugin_sdk::InitOutcome::ack(
+            agena_plugin_sdk::Plugin::manifest(self),
+        ))
+    }
+
+    #[command(id = "check_connection", title = "Verify Telegram bot connection")]
+    async fn check_connection(&self, input: BotSelection) -> Result<CommandResult> {
+        self.verify_bot(input).await
+    }
+    #[command(id = "list_bots", title = "List configured Telegram bots")]
+    async fn list_bots(&self) -> Result<CommandResult> {
+        self.bot_catalog().await
+    }
+    #[command(id = "save_bot", title = "Save Telegram bot configuration")]
+    async fn save_bot(
+        &self,
+        expected_revision: u64,
+        bot: BotConfiguration,
+        #[arg(secret, optional)] token: Option<String>,
+    ) -> Result<CommandResult> {
+        self.save_managed_bot(expected_revision, bot, token).await
+    }
+    #[command(id = "remove_bot", title = "Remove a disabled Telegram bot")]
+    async fn remove_bot(&self, expected_revision: u64, bot_id: String) -> Result<CommandResult> {
+        self.retire_bot(expected_revision, bot_id).await
+    }
+    #[command(id = "bot_inventory", title = "Inspect Telegram bot chats and inbox")]
+    async fn bot_inventory(&self, input: BotSelection) -> Result<CommandResult> {
+        self.inspect_bot(input, false).await
+    }
+    #[command(id = "sync_chats", title = "Synchronize Telegram received chats")]
+    async fn sync_chats(&self, input: BotSelection) -> Result<CommandResult> {
+        self.inspect_bot(input, true).await
+    }
+    #[command(
+        id = "inspect_chat",
+        title = "Inspect Telegram chat and bot membership"
+    )]
+    async fn inspect_chat(&self, bot_id: Option<String>, chat_id: String) -> Result<CommandResult> {
+        self.inspect_room(BotSelection { bot_id }, chat_id).await
+    }
+
     #[service("agena.integration", version = 1, method = "describe")]
     async fn describe(&self) -> Result<AdapterDescription> {
         Ok(AdapterDescription {
@@ -278,7 +404,7 @@ impl TelegramPlugin {
             config_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {}
+                "properties": {"bot_id":{"type":"string","minLength":1,"maxLength":64}}
             }),
             // Cheap to allow: the adapter long-polls and the host's own tick
             // already bounds how often `poll` runs.
@@ -292,61 +418,28 @@ impl TelegramPlugin {
 
     #[service("agena.integration", version = 1, method = "poll")]
     async fn poll(&self, request: &AdapterPollRequest) -> Result<AdapterBatch> {
-        let config = self.config()?;
-        let bot = self.bot_identity(&config).await?;
-        let mut body = json!({
-            "limit": request.limit.clamp(1, 100),
-            "allowed_updates": ["message", "channel_post", "chat_member"],
-            "timeout": config.long_poll_seconds,
-        });
-        let offset = request
-            .cursor
-            .get("offset")
-            .and_then(Value::as_i64)
-            .filter(|offset| *offset > 0);
-        if let Some(offset) = offset {
-            body["offset"] = json!(offset);
-        }
-        let updates = match self.call(&config, "getUpdates", body).await {
-            Ok(value) => value.as_array().cloned().unwrap_or_default(),
-            // A rate limit or a transient outage is ordinary traffic. Hand the
-            // provider's own backoff to the host and keep the checkpoint
-            // untouched, instead of faulting a healthy grant.
-            Err(failure) if failure.transient() => {
-                return Ok(AdapterBatch {
-                    events: Vec::new(),
-                    cursor: request.cursor.clone(),
-                    retry_after_seconds: failure.retry_after.or(Some(30)),
-                });
-            }
-            Err(failure) => return Err(failure.into_error("getUpdates")),
-        };
-        let mut events = Vec::new();
-        // Advance past every delivered update, including the ones this adapter
-        // deliberately drops: otherwise a dropped update is re-delivered
-        // forever and the queue never drains.
-        let mut next = offset;
-        for update in &updates {
-            if let Some(id) = update.get("update_id").and_then(Value::as_i64) {
-                next = Some(next.map_or(id + 1, |current: i64| current.max(id + 1)));
-            }
-            if let Some(event) = self.event_from_update(update, &config, &bot, request) {
-                events.push(event);
-            }
-        }
-        Ok(AdapterBatch {
-            events,
-            cursor: next.map_or(
-                Value::Object(Default::default()),
-                |offset| json!({"offset": offset}),
-            ),
-            retry_after_seconds: None,
-        })
+        self.poll_shared(request).await
     }
 
     #[service("agena.integration", version = 1, method = "send")]
     async fn send(&self, request: &ChannelDelivery) -> Result<ChannelReceipt> {
-        let config = self.config()?;
+        let selection: BotSelection =
+            serde_json::from_value(request.config.clone()).map_err(|_| {
+                PluginError::invalid_params("Telegram binding config may only select bot_id")
+            })?;
+        let resolved = self
+            .resolve_bot(&selection, request.channel.as_ref())
+            .await?;
+        let gate = self.account_lock(&resolved.id);
+        let _account = gate.lock().await;
+        let resolved = self
+            .resolve_bot(&selection, request.channel.as_ref())
+            .await?;
+        if !resolved.enabled {
+            return Ok(receipt(SendDisposition::Rejected, None));
+        }
+        let config = resolved.connection;
+        self.bot_identity(&config, false).await?;
         let chunks = split_markdown(&request.text, SEND_CHUNK_UNITS);
         if chunks.is_empty() {
             return Ok(receipt(SendDisposition::Rejected, None));
@@ -417,16 +510,28 @@ impl TelegramPlugin {
     }
 
     /// The bot behind this token, verified against the configured account.
-    async fn bot_identity(&self, config: &TelegramConfig) -> Result<BotIdentity> {
-        let key = format!("{}|{}", config.api_base.trim(), config.bot_token_env);
-        let cached = self
-            .identities
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&key)
-            .cloned();
-        if let Some(bot) = cached {
-            return verify_account(config, bot);
+    async fn bot_identity(
+        &self,
+        config: &TelegramConfig,
+        force_refresh: bool,
+    ) -> Result<BotIdentity> {
+        use sha2::{Digest, Sha256};
+        let credential = self.credential(config).await?;
+        let key = format!(
+            "{}|{}",
+            config.api_base.trim(),
+            hex::encode(Sha256::digest(credential.as_bytes()))
+        );
+        if !force_refresh {
+            let cached = self
+                .identities
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(&key)
+                .cloned();
+            if let Some(bot) = cached {
+                return verify_account(config, bot);
+            }
         }
         let value = self
             .call(config, "getMe", json!({}))
@@ -457,15 +562,23 @@ impl TelegramPlugin {
         body: Value,
     ) -> std::result::Result<Value, ApiFailure> {
         config.validate().map_err(ApiFailure::from_plugin)?;
-        let token = config.token().map_err(ApiFailure::from_plugin)?;
+        let token = self
+            .credential(config)
+            .await
+            .map_err(ApiFailure::from_plugin)?;
         // The token is part of the path, so this URL is never logged or echoed.
         let url = format!(
             "{}/bot{token}/{method}",
             config.api_base.trim().trim_end_matches('/')
         );
-        let response = self
+        let mut response = self
             .client()
             .post(url)
+            .timeout(if method == "getMe" {
+                Duration::from_secs(3)
+            } else {
+                HTTP_TIMEOUT
+            })
             .json(&body)
             .send()
             .await
@@ -481,13 +594,27 @@ impl TelegramPlugin {
                 retry_after: None,
             })?;
         let status = response.status().as_u16();
-        let bytes = response.bytes().await.map_err(|_| ApiFailure {
+        // Bound untrusted/self-hosted API bodies without buffering an entire
+        // oversized response. A failed read does not confirm any new offset.
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| ApiFailure {
             transport: true,
             status: Some(status),
             code: None,
             description: "the Telegram response body was truncated".into(),
             retry_after: None,
-        })?;
+        })? {
+            if bytes.len().saturating_add(chunk.len()) > 8 * 1024 * 1024 {
+                return Err(ApiFailure {
+                    transport: true,
+                    status: Some(status),
+                    code: None,
+                    description: "Telegram response exceeds the 8 MiB limit".into(),
+                    retry_after: None,
+                });
+            }
+            bytes.extend_from_slice(&chunk);
+        }
         let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
         if (200..300).contains(&status) && value.get("ok").and_then(Value::as_bool) == Some(true) {
             return Ok(value.get("result").cloned().unwrap_or(Value::Null));
@@ -502,7 +629,7 @@ impl TelegramPlugin {
             description: value
                 .get("description")
                 .and_then(Value::as_str)
-                .map(bounded_text)
+                .map(|text| bounded_text(&text.replace(&token, "[redacted]")))
                 .unwrap_or_else(|| format!("Telegram answered HTTP {status}")),
             retry_after: value
                 .get("parameters")

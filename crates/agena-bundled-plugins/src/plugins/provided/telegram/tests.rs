@@ -63,6 +63,13 @@ async fn manifest_export_publishes_the_integration_service_and_its_settings() {
         ["describe", "poll", "send"].into_iter().collect(),
         "a channel advertises all three methods"
     );
+    assert!(
+        manifest
+            .commands
+            .iter()
+            .any(|command| command.id == "check_connection"),
+        "Telegram must provide a live connection check for the plugin workbench"
+    );
     let contract = manifest
         .settings
         .as_ref()
@@ -162,8 +169,8 @@ async fn the_connection_comes_from_plugin_settings_so_no_grant_can_retarget_it()
     // poll fails on the connection it was actually configured with.
     let error = plugin.poll(&request).await.unwrap_err();
     assert!(
-        error.to_string().contains("AGENA_TELEGRAM_BOT_TOKEN"),
-        "the poll must use plugin settings, not the binding config: {error}"
+        error.to_string().contains("bot_id"),
+        "the binding must not override Telegram connection configuration: {error}"
     );
 }
 

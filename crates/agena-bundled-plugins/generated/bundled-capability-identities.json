@@ -2654,7 +2654,9 @@
     },
     {
       "conditional": null,
-      "hooks": [],
+      "hooks": [
+        "init"
+      ],
       "id": "agena.telegram",
       "tools": [],
       "version": "0.1.0"

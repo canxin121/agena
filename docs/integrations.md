@@ -195,6 +195,75 @@ signature = "sha256=" + HMAC_SHA256(
 
 `agena.telegram` 是编入 Agena 的内置渠道插件，无需单独安装脚本。它通过官方 Bot API 的 `getUpdates` 长轮询接收私聊、群聊和频道消息，并用 `sendMessage` 把回复发回原会话；不需要公网 HTTPS 地址、反向代理或证书。
 
+### 多 Bot 工作台
+
+登录 Agena Web 后打开 **插件 → Telegram**，或访问 `/plugins/agena.telegram/manage`。左侧可以添加、切换、重命名、停用和移除多个 Telegram Bot；每个 Bot 独立保存连接身份、凭据、同步位置、聊天目录和诊断信息，单实例最多配置 32 个 Bot。
+
+每个 Bot 的界面分成四个区域：
+
+| 区域 | 操作与查看 |
+| --- | --- |
+| 概览 | 私聊／群组／频道数量、已授权连接数量、Bot 身份验证、Webhook 状态、收件缓冲及最近同步时间 |
+| 聊天与频道 | 同步已收到的聊天、按 Chat ID 或公开用户名查询、按类型／授权状态／名称／ID／发送者筛选、分页、查看话题和 Bot 成员身份 |
+| 消息记录 | 最近收到的消息与发送者；选中授权连接后查看宿主处理状态、执行会话、回复投递与错误 |
+| 连接配置 | 名称、凭据来源、Token 更换、环境变量、API 地址、轮询参数、启用状态与移除 |
+
+Bot、管理会话和当前区域保存在页面 URL 中，例如：
+
+```text
+/plugins/agena.telegram/manage?bot=<local-bot-id>&view=chats&source=<session-id>
+```
+
+刷新和重新打开该链接会恢复指定对象；切换另一聊天会话不会悄悄改变这个面板的管理范围。
+
+### 添加机器人与凭据
+
+先通过 BotFather 创建 Telegram 机器人，在工作台点击 **添加 Bot**，填写显示名称和机器人用户名。凭据支持两种方式：
+
+- **宿主凭据存储**：在密码输入框粘贴 BotFather Token。值通过已认证的服务端接口写入插件的凭据存储，不写入普通配置或浏览器本地存储，也不会在列表和查询响应中回显。编辑时留空保留已有值，填写新值则更换 Token。
+- **服务器环境变量**：填写变量名，例如 `AGENA_TELEGRAM_BOT_TOKEN`。变量必须存在于运行 Agena 服务端的进程环境中，页面不将变量名当成 Token。
+
+保存后的本地 Bot ID、Telegram 账号和 API 端点共同确定连接身份。名称、Token、轮询参数与启用状态可修改；更换账号或端点应新增 Bot，以免已有授权被重新指向另一个连接。并发保存使用注册表版本检查，陈旧页面不能覆盖新配置。
+
+**验证连接**每次重新调用 `getMe`，核对配置的用户名，并读取 `getWebhookInfo`。验证失败会撤销旧的“已验证”显示。存在 Webhook 时显示明确的长轮询冲突提示，不会替用户删除其他服务的 Webhook。
+
+### 发现聊天与授权响应
+
+给机器人发一条消息，或把它加入群组／频道后，点击 **同步聊天**；已知精确 Chat ID 或公开 `@username` 也可以通过 **查询聊天**读取资料与机器人成员身份。目录只包含该 Bot 已收到或主动查询过的聊天，不枚举无关 Telegram 会话。
+
+发现聊天不会自动授权模型执行或回复。在 **聊天与频道** 选择一个有绑定管理权限的 Agena 管理会话，然后点击 **添加聊天授权**，或在已发现聊天详情中点击 **授权响应**。表单支持：
+
+| 配置 | 选项 |
+| --- | --- |
+| 房间 | 私聊、群组、频道；精确 Chat ID；数字 Owner ID 和其他成员 ID |
+| 响应 | 私聊／提及机器人，或每条允许的消息 |
+| 上下文 | 同一聊天共享，或按发送者隔离 |
+| 话题 | 每话题独立，或固定话题 ID／主聊天；私聊不能指定话题 |
+| 额度 | 每日执行、总执行、每成员每日额度、单次执行时限、轮询间隔 |
+| 有效期 | 1–90 天；新建表单默认 30 天 |
+| 群聊开放性 | 明确选择是否允许未列出的群成员聊天；不自动增加工具权限 |
+
+必须主动同意使用选定管理会话的权限边界。创建后绑定为 **disabled**，成员初始没有工具或私人记忆访问。核对 **成员与权限** 后再手动启用；同页可暂停、立即轮询、查看消息处理与投递记录，并打开对应的 Agena 执行会话。
+
+多个 Bot 可以拥有相同的数字 Chat ID；目录、授权与收发均按本地 Bot ID 和经过验证的账号身份区分。渠道绑定的 `config` 只选择 Bot，不携带端点或凭据：
+
+```json
+{
+  "provider": "agena.telegram",
+  "config": { "bot_id": "<local-bot-id>" },
+  "resource": "-1001234567890",
+  "channel_policy": {
+    "identity": { "tenant": "telegram", "account": "my_agent_bot" }
+  }
+}
+```
+
+以上仅展示关联字段，完整创建请求还包含成员、有限额度、有效期和权限同意。权限在每条消息与工具调用上继续由宿主重新检查，详见 [渠道权限说明](channel-access.md)。
+
+### 单 Bot 配置兼容
+
+旧 `plugins.list.agena.telegram.settings` 仍然可用，以 `default` Bot 显示；旧绑定的空 `config` 根据已声明账号匹配。默认 Bot 经工作台保存后由专用管理记录接管。未配置账号的空默认项在添加其他 Bot 后隐藏。
+
 ```json
 {
   "agena.telegram": {
@@ -204,34 +273,36 @@ signature = "sha256=" + HMAC_SHA256(
       "bot_token_env": "AGENA_TELEGRAM_BOT_TOKEN",
       "account": "my_agent_bot",
       "api_base": "https://api.telegram.org",
-      "long_poll_seconds": 10,
+      "long_poll_seconds": 0,
       "allow_loopback_http": false
     }
   }
 }
 ```
 
-`account` 填 BotFather 里机器人自己的用户名（不带 `@`）。插件在首次轮询时用 `getMe` 核对令牌所属机器人：`account` 与实际不符会明确报错，而不会悄悄去服务另一个机器人的聊天。令牌只从 `bot_token_env` 指定的服务环境变量读取，不写进配置、日志或 URL 之外的位置；配置里放的是变量名，不是令牌本身。
+多 Bot 注册信息放在插件私有持久存储中，Token 放在独立凭据存储中；不要把多 Bot 注册表手工写进上述单 Bot settings。生产连接使用 HTTPS；只有显式允许且目标为回环地址时才接受 HTTP 测试服务。
 
-`api_base` 默认官方式样；只有在自建 Bot API 服务器时才改动。`allow_loopback_http` 仅带 `allow_loopback_http: true` 且主机是回环地址时才允许明文 HTTP，用于本地测试，生产应保持 `false`。
+### 多聊天可靠性与停用
 
-连接信息（端点、令牌变量、机器人身份）属于插件设置，**不**放进渠道绑定。绑定只声明服务哪些房间：
+Telegram 的更新确认位置属于整个 Bot。适配器因此按 Bot 统一读取 `getUpdates`，**先持久化收到的更新，再推进下一次网络请求的确认位置**；每个授权绑定从持久队列按自己的序号独立消费。不同私聊、群组、频道不再分别推进同一个远端 offset。重启后恢复收件队列和各绑定位置，发送回复也重新核对 Bot 与绑定的账号身份。
 
-- `resource` 是精确的 `chat_id`，例如 `-1001234567890`；也可用显式集合或多房间选择器。
-- `channel_policy.identity` 应为 `{"tenant":"telegram","account":"<机器人用户名小写>"}`。
-- `kinds` 声明允许的房间形状；Telegram 频道是 `broadcast`，群组是 `group`，私聊是 `direct`。
-- 私聊必须使用 `exact` 线程模式和明确成员，不能开放给任意平台成员。
+收件缓冲保留 7 天，最多 2048 条、8 MiB；每个 Bot 的发现目录最多 1000 个聊天。缓冲满时停止拉取并报错，不通过静默丢弃未消费消息继续确认。绑定落后于已保留历史时明确失败，需要操作者审查和重新建立授权。概览会显示缓冲数量与最近同步错误；消息记录展示最近 100 条接收记录，预览文本截取至 2000 字符。
 
-适配器只上报证据，不授予权限：发送者 ID 由 Telegram 验证，收到消息即证明其当时在该会话中。群消息是否“点名机器人”取自服务端实体（`mention`、`text_mention`、`bot_command`、回复机器人消息），不扫描消息正文，因此链接预览里的 `@name` 不会被当成点名。频道帖没有作者，会以 `channel:<chat_id>` 归属并标记为 `broadcast`，从不视为点名。角色、工具能力、额度与会话隔离仍由宿主 `channel_policy` 在每条消息上重新检查，详见 [渠道权限说明](channel-access.md)。
+**停用 Bot** 会停止其收发，不删除授权和历史。移除前必须先停用；移除后删除关联 Token，旧 Bot ID 保留退役标记且不能复用，旧授权不会自动转向新 Bot。既有聊天与处理记录保留供审查。
 
-成员被移出或主动退出会产生 `membership.revoked`，宿主在普通消息之前处理并只做降级；若策略因此没有未过期的 owner，绑定会进入 `faulted` 等待人工复核。
+当前聊天内容仍以文本（含图注）处理，照片、语音和文件以占位文本进入事件，不下载媒体。长回复按 UTF-16 长度分片并转换支持的格式；无法解析时退回纯文本。发送超时或回执丢失标为结果不确定，不自动重放可能已经发送成功的内容。同步发现和启用前的历史消息不会被当成新授权后的用户请求自动回复。
 
-已知限制：
+### 开发与验收
 
-- 目前只处理**文本**（含图注）；照片、语音、文件等以占位文本进入会话，不下载媒体。需要的会话内容仍可在 Agena 中查看。
-- 长回复按 UTF-16 单位分片发送，并按需闭合/重开代码围栏；Markdown 只映射到 Telegram 支持的标签子集，若平台拒绝解析会退回纯文本。
-- Telegram 不提供幂等键，因此超时或回执丢失一律标为结果不确定，宿主不会自动重放已可能送达的内容。
-- `getUpdates` 的偏移量就是持久检查点，重启后从原位置继续；启用绑定前积压的历史会被检查点推进而不是逐条回复。
+```sh
+cargo test -p agena-bundled-plugins --lib plugins::provided::telegram --locked --offline
+cargo test -p agena --test system scenarios::telegram --locked --offline
+cd packages/agena-web
+bun run test:telegram
+bun run test:telegram:browser
+```
+
+浏览器验收脚本 `scripts/probe-telegram.cjs` 启动独立数据目录、真实 Agena 服务和两个本地 Bot API 模拟账号，覆盖凭据保存、多 Bot 身份校验、私聊／群组／频道发现与授权、页面刷新、服务重启和停用／移除。脚本使用 Playwright 和本地 Chrome，可通过 `PLAYWRIGHT_MODULE`、`CHROME_BIN` 指定环境；不读取生产 Bot Token，不连接真实 Telegram。
 
 ## 组合：GitHub 事件的结果回到聊天渠道
 

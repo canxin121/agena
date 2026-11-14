@@ -12,6 +12,7 @@ function onOpenChange(open: boolean) {
     v-if="appConfirmRequest"
     :open="true"
     force-dialog
+    show-default-actions
     :title="appConfirmRequest.title"
     :description="appConfirmRequest.description"
     :confirm-text="appConfirmRequest.confirmText"

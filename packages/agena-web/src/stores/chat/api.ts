@@ -974,9 +974,12 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
 }
 
 /** GET /api/v1/sessions/{id} — single session read-back. */
-export async function getSession(sessionId: string): Promise<Session> {
+export async function getSession(sessionId: string, signal?: AbortSignal): Promise<Session> {
   const scope = sessionRoutingScope()
-  const session = toSession(await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`), scope)
+  const session = toSession(
+    await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { signal }),
+    scope,
+  )
   if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
   return session
 }

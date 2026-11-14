@@ -1,13 +1,12 @@
 //! Bot identities in their own table, and ownership projected onto sessions.
 //!
-//! A Bot has no single bound conversation. Its Web/TUI conversation and its
-//! chat conversations are ordinary sessions whose configuration carries
-//! `owner.bot`; the kernel projects that into indexed `owner_*` columns. This
-//! module owns the Bot identity table, the ownership-based admission checks and
-//! the lookup that every conversation shares.
+//! Each Bot has one pinned local Web/TUI conversation and independently scoped
+//! remote conversations. Legacy local roots keep their ownership and history.
+//! The kernel owns the atomic local mapping; this module shares its lookup and
+//! admission rules across HTTP, HostClient and the native clients.
 use super::*;
 use agena_assistant::bot::*;
-use agena_domain::{SessionOwner, SessionSurface};
+use agena_domain::SessionOwner;
 use agena_storage::{BotRecord, BotRepositoryError};
 use caseless::Caseless;
 use uuid::Uuid;
@@ -72,6 +71,7 @@ fn profile(record: BotRecord) -> BotProfile {
         },
         revision: record.revision,
         archived: record.archived,
+        local_session_id: None,
         created_at_ms: record.created_at_ms,
         updated_at_ms: record.updated_at_ms,
     }
@@ -97,11 +97,8 @@ impl SessionManager {
 
     /// Short instance-wide gate for Bot creation and first-open.
     ///
-    /// The identity row is protected by its own unique index, but "does this
-    /// Bot already have a local conversation?" and "create one" must be one
-    /// step: without the gate, concurrent first opens would each create a
-    /// conversation. The gate covers only that sequence — reads, admission and
-    /// every message path stay lock-free.
+    /// Serializes Bot identity request receipts. Local conversation uniqueness
+    /// is enforced by the kernel transaction and does not depend on this gate.
     fn bot_creation_gate(&self) -> Arc<tokio::sync::Mutex<()>> {
         card_lock(format!(
             "bot-creation:{}",
@@ -121,63 +118,52 @@ impl SessionManager {
             .clone())
     }
 
-    /// Create a conversation owned by `bot` and return its id.
-    ///
-    /// `Local` conversations run in the instance scope with no working
-    /// directory; chat conversations are created by the channel path, which
-    /// already knows its isolated workspace and authority.
-    async fn create_bot_conversation(
-        &self,
-        bot: Uuid,
-        surface: SessionSurface,
-        title: &str,
-    ) -> Result<i64, AppError> {
-        let owner = SessionOwner {
-            bot,
-            surface,
-            scope_key: None,
-        };
-        // A fresh key per creation. The caller always looks for an existing
-        // local root first, so a retry after a lost reply reuses that root
-        // instead of reaching this path again; a deleted root must produce a
-        // genuinely new conversation, not replay the deleted one's receipt.
-        let command = request_key(
-            "bot-conversation",
-            &format!("{bot}:{}:{}", surface.as_str(), Uuid::new_v4()),
-        );
-        let configuration = SessionConfiguration {
-            owner: Some(owner),
-            ..Default::default()
-        };
+    /// Resolve/create the canonical local root in one kernel transaction.
+    async fn ensure_local_bot_conversation(&self, bot: Uuid, title: &str) -> Result<i64, AppError> {
+        let current = self
+            .kernel()
+            .reader
+            .local_bot_session(bot)
+            .await
+            .map_err(kernel_error)?;
+        if current.established
+            && let Some(session) = current.session
+        {
+            return Ok(session.get());
+        }
+        // Retrying an uncertain commit uses this key; a later open gets a
+        // fresh key so deleting the canonical root can create its replacement.
+        let command = request_key("bot-conversation", &format!("{bot}:{}", Uuid::new_v4()));
         persist(|| {
             self.kernel()
                 .sessions
-                .create_global(command, title.to_owned(), configuration.clone())
+                .ensure_local_bot_session(command, bot, title.to_owned())
         })
         .await
         .map(|receipt| receipt.value.id.get())
         .map_err(kernel_error)
     }
 
-    /// The Bot's most recently used local root, if it still exists.
+    /// Read the pinned root (or the same legacy candidate first-open adopts).
     pub(super) async fn default_bot_conversation(
         &self,
         bot: Uuid,
     ) -> Result<Option<i64>, AppError> {
-        let page = self
+        let local = self
             .kernel()
             .reader
-            .query_summaries(SummaryQuery {
-                owner_bot_id: Some(bot.to_string()),
-                owner_surface: Some(SessionSurface::Local.as_str().to_owned()),
-                roots_only: true,
-                include_global: true,
-                limit: 1,
-                ..Default::default()
-            })
+            .local_bot_session(bot)
             .await
             .map_err(kernel_error)?;
-        Ok(page.sessions.first().map(|summary| summary.id.get()))
+        Ok(local.session.map(|session| session.get()))
+    }
+
+    async fn profile_with_local_session(
+        &self,
+        mut profile: BotProfile,
+    ) -> Result<BotProfile, AppError> {
+        profile.local_session_id = self.default_bot_conversation(profile.id).await?;
+        Ok(profile)
     }
 
     /// Replay a receipt for `key`, or refuse a reused key with new input.
@@ -191,9 +177,12 @@ impl SessionManager {
             Some((stored, _)) if stored != input => {
                 Err(repository_error(BotRepositoryError::ReplayedInput))
             }
-            Some((_, result)) => Ok(Some(profile(
-                serde_json::from_str(&result).map_err(AppError::from)?,
-            ))),
+            Some((_, result)) => Ok(Some(
+                self.profile_with_local_session(profile(
+                    serde_json::from_str(&result).map_err(AppError::from)?,
+                ))
+                .await?,
+            )),
             None => Ok(None),
         }
     }
@@ -214,22 +203,28 @@ impl SessionManager {
 
     /// The first active Bot, or `None` when every Bot is archived.
     async fn default_bot(&self) -> Result<Option<BotProfile>, AppError> {
-        Ok(self
+        let bot = self
             .bots()
             .list(false)
             .await
             .map_err(repository_error)?
             .into_iter()
             .next()
-            .map(profile))
+            .map(profile);
+        match bot {
+            Some(bot) => self.profile_with_local_session(bot).await.map(Some),
+            None => Ok(None),
+        }
     }
 
     async fn bot_or_not_found(&self, id: Uuid) -> Result<BotProfile, AppError> {
-        self.bots()
+        let bot = self
+            .bots()
             .get(id)
             .await
             .map(profile)
-            .map_err(repository_error)
+            .map_err(repository_error)?;
+        self.profile_with_local_session(bot).await
     }
 
     /// Archive-state check shared by every write into a Bot conversation.
@@ -251,7 +246,10 @@ impl SessionManager {
             .list(include_archived)
             .await
             .map_err(repository_error)?;
-        let items = records.into_iter().map(profile).collect::<Vec<_>>();
+        let mut items = Vec::with_capacity(records.len());
+        for record in records {
+            items.push(self.profile_with_local_session(profile(record)).await?);
+        }
         let default_bot_id = self.default_bot().await?.map(|bot| bot.id);
         Ok(BotList {
             items,
@@ -287,6 +285,7 @@ impl SessionManager {
             persona,
             revision: 1,
             archived: false,
+            local_session_id: None,
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -295,12 +294,14 @@ impl SessionManager {
             .create(&record(&candidate))
             .await
             .map_err(repository_error)?;
-        let created = profile(created);
+        let mut created = profile(created);
         // The Bot's first conversation is an ordinary local root owned by it.
         // Created after the identity row so a crash leaves an identity with no
         // conversation, which `ensure_named_bot_session` repairs on open.
-        self.create_bot_conversation(created.id, SessionSurface::Local, &created.name)
-            .await?;
+        created.local_session_id = Some(
+            self.ensure_local_bot_conversation(created.id, &created.name)
+                .await?,
+        );
         self.remember(&key, &create, &created).await?;
         Ok(created)
     }
@@ -336,7 +337,7 @@ impl SessionManager {
             .update(&record(&next), update.expected_revision)
             .await
             .map_err(repository_error)?;
-        let updated = profile(updated);
+        let updated = self.profile_with_local_session(profile(updated)).await?;
         self.remember(&key, &update, &updated).await?;
         Ok(updated)
     }
@@ -365,7 +366,7 @@ impl SessionManager {
             .archive(id, archive.expected_revision, now)
             .await
             .map_err(repository_error)?;
-        let archived = profile(archived);
+        let archived = self.profile_with_local_session(profile(archived)).await?;
         self.remember(&key, &archive, &archived).await?;
         Ok(archived)
     }
@@ -438,10 +439,8 @@ impl SessionManager {
 
     /// Resolve the conversation a client should open for this Bot.
     ///
-    /// The most recently used local root wins; when the Bot has none (first
-    /// open, or its conversation was deleted through ordinary session
-    /// management) a fresh local root is created. Retired conversations stay
-    /// read-only because their rows keep `owner.bot`.
+    /// The first legacy root is adopted once. A deleted canonical root is
+    /// replaced with a fresh conversation; older local histories stay retired.
     pub async fn ensure_named_bot_session(&self, id: Uuid) -> Result<BotSession, AppError> {
         let _gate = self.bot_creation_gate().lock_owned().await;
         let bot = self.bot_or_not_found(id).await?;
@@ -450,13 +449,7 @@ impl SessionManager {
                 "Bot is archived; inspect its history or select an active Bot".into(),
             ));
         }
-        let session = match self.default_bot_conversation(id).await? {
-            Some(session) => session,
-            None => {
-                self.create_bot_conversation(id, SessionSurface::Local, &bot.name)
-                    .await?
-            }
-        };
+        let session = self.ensure_local_bot_conversation(id, &bot.name).await?;
         Ok(BotSession::new(session, &bot))
     }
 
@@ -485,6 +478,7 @@ impl SessionManager {
             persona: BotPersona::default(),
             revision: 1,
             archived: false,
+            local_session_id: None,
             created_at_ms: now,
             updated_at_ms: now,
         };
@@ -492,34 +486,24 @@ impl SessionManager {
         // index decides the winner; the loser reads back the stored Bot.
         match self.bots().create(&record(&candidate)).await {
             Ok(created) => {
-                let created = profile(created);
-                self.create_bot_conversation(created.id, SessionSurface::Local, &created.name)
-                    .await?;
+                let mut created = profile(created);
+                created.local_session_id = Some(
+                    self.ensure_local_bot_conversation(created.id, &created.name)
+                        .await?,
+                );
                 Ok(created)
             }
-            Err(BotRepositoryError::NameTaken) => self
-                .bots()
-                .list(false)
-                .await
-                .map_err(repository_error)?
-                .into_iter()
-                .next()
-                .map(profile)
-                .ok_or_else(|| {
-                    AppError::BotNotFound(
-                        "No active Bots; create a named Bot to start a conversation".into(),
-                    )
-                }),
+            Err(BotRepositoryError::NameTaken) => self.default_bot().await?.ok_or_else(|| {
+                AppError::BotNotFound(
+                    "No active Bots; create a named Bot to start a conversation".into(),
+                )
+            }),
             Err(error) => Err(repository_error(error)),
         }
     }
 
-    /// Create a new local conversation for this Bot and return it.
-    ///
-    /// This is the explicit "new conversation" action: unlike
-    /// [`Self::ensure_named_bot_session`] it never reuses an existing one. The
-    /// Bot must be active, and the conversation starts empty with a title the
-    /// user can rename afterwards.
+    /// Open the one local conversation, creating it when absent. A supplied
+    /// title applies only to creation, so retries preserve an existing title.
     pub async fn create_bot_conversation_for(
         &self,
         id: Uuid,
@@ -542,9 +526,7 @@ impl SessionManager {
             }
             None => bot.name.clone(),
         };
-        let session = self
-            .create_bot_conversation(id, SessionSurface::Local, &title)
-            .await?;
+        let session = self.ensure_local_bot_conversation(id, &title).await?;
         Ok(BotSession::new(session, &bot))
     }
 
@@ -574,11 +556,66 @@ impl SessionManager {
         &self,
         source: i64,
     ) -> Result<(), AppError> {
-        if let Some((profile, _)) = self.bot_owner_of(source).await?
-            && profile.archived
-        {
+        let Some((profile, owner)) = self.bot_owner_of(source).await? else {
+            return Ok(());
+        };
+        if profile.archived {
             return Err(conflict(
                 "Archived Bot history is read-only; select an active Bot or create one",
+            ));
+        }
+        if owner.surface.is_local() {
+            let canonical = self
+                .ensure_local_bot_conversation(profile.id, &profile.name)
+                .await?;
+            let mut current = source;
+            // Internal workers may run beneath the canonical root. Every
+            // intermediate edge must be a Subagent edge: an old user branch
+            // must not become writable through one of its retained workers.
+            for _ in 0..128 {
+                if current == canonical {
+                    return Ok(());
+                }
+                let configuration = self
+                    .kernel()
+                    .reader
+                    .configuration(session_id(current)?)
+                    .await
+                    .map_err(kernel_error)?;
+                if !configuration.relation_kind.is_subagent()
+                    || !configuration
+                        .owner
+                        .as_ref()
+                        .is_some_and(|owner| owner.bot == profile.id && owner.surface.is_local())
+                {
+                    break;
+                }
+                let Some(parent) = configuration.parent_session_id else {
+                    break;
+                };
+                current = parent.get();
+            }
+            return Err(AppError::BotLocalHistory {
+                canonical_session_id: canonical,
+            });
+        }
+        Ok(())
+    }
+
+    /// A local Bot uses one entrance. Rewind-in-place and clear preserve it;
+    /// branching would create a second local conversation.
+    pub(in crate::session::manager) async fn require_bot_branch_allowed(
+        &self,
+        source: i64,
+    ) -> Result<(), AppError> {
+        self.require_writable_bot_history(source).await?;
+        if self
+            .session_owner(source)
+            .await?
+            .is_some_and(|owner| owner.surface.is_local())
+        {
+            return Err(conflict(
+                "A Bot has one local conversation; rewind in place or clear its context to continue",
             ));
         }
         Ok(())

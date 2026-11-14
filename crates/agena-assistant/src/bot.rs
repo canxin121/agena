@@ -44,6 +44,10 @@ pub struct BotProfile {
     pub persona: BotPersona,
     pub revision: i64,
     pub archived: bool,
+    /// The one current local conversation. Other local roots are preserved
+    /// history. Reading a profile never creates this conversation.
+    #[serde(default)]
+    pub local_session_id: Option<i64>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
 }

@@ -4,6 +4,11 @@ export default {
   pluginWeb: pluginWebMessages['ar-SA'],
   bot: {
     conversations: {
+      openLocal: 'فتح المحادثة المحلية',
+      history: 'السجل',
+      archivedHistory: 'سجل مؤرشف · للقراءة فقط',
+      historyReadOnlyHint: 'هذه محادثة محلية محفوظة. افتح المحادثة المحلية الحالية للمتابعة.',
+      openCurrent: 'المتابعة في المحادثة المحلية الحالية',
       title: 'محادثات {name}',
       toggle: 'إظهار أو إخفاء {group}',
       actions: 'إجراءات {name}',
@@ -24,7 +29,7 @@ export default {
         broadcast: 'القنوات',
       },
       surfaceHints: {
-        local: 'المحادثات التي تفتحها في Web أو TUI.',
+        local: 'محادثة محلية واحدة مشتركة بين Web وTUI.',
         direct: 'محادثات فردية أُضيف إليها Bot.',
         group: 'محادثات جماعية وغرف.',
         broadcast: 'قنوات بث قد لا يستطيع Bot الرد فيها.',

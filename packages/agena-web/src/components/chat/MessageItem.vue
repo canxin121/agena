@@ -38,6 +38,7 @@ import { transcriptFoldKey } from '@/stores/chat/transcriptFolds'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useNearViewport } from '@/composables/useNearViewport'
 import { afterPaint } from '@/lib/afterPaint'
+import { useConversationReadOnly } from '@/pages/chat/conversationReadOnly'
 
 const props = defineProps<{
   message: MessageLike
@@ -72,6 +73,7 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const pane = useWorkspacePaneContext()
+const readOnly = useConversationReadOnly()
 const articleRef = ref<HTMLElement | null>(null)
 const nearViewport = useNearViewport(articleRef)
 // Closed action popovers contain several components each. Mount them when
@@ -112,6 +114,7 @@ const requestedFoldKey = ref('')
 const revertOpen = ref(false)
 
 function chooseRevert(mode: 'fork' | 'in_place') {
+  if (readOnly.value) return
   revertOpen.value = false
   emit('revert', messageId.value, mode)
 }
@@ -398,7 +401,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
       >
         <template v-if="actionsMounted">
           <ConfirmPopover
-            v-if="role === 'user'"
+            v-if="role === 'user' && !readOnly"
             :title="t('chat.messageItem.fork.confirmTitle')"
             :description="t('chat.messageItem.fork.confirmDescription')"
             :confirm-text="t('chat.messageItem.fork.confirmAction')"
@@ -417,7 +420,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
           </ConfirmPopover>
 
           <ConfirmPopover
-            v-if="role === 'user'"
+            v-if="role === 'user' && !readOnly"
             :open="revertOpen"
             :title="t('chat.messageItem.revert.confirmTitle')"
             :description="t('chat.messageItem.revert.confirmDescription')"

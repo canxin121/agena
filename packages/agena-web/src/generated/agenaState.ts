@@ -620,6 +620,7 @@ export type BotProfile = {
   archived: boolean
   created_at_ms: number
   id: string
+  local_session_id?: number | null
   name: string
   persona: BotPersona
   revision: number

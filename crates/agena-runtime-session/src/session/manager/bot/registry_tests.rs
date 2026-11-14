@@ -6,6 +6,7 @@
 //! recorded on conversations, and an archived Bot that can never write again.
 use super::super::tests::fixture;
 use super::*;
+use agena_domain::SessionSurface;
 
 fn create(key: &str, name: &str) -> BotCreate {
     BotCreate {
@@ -87,8 +88,7 @@ async fn ownership_survives_a_restart_and_is_never_recreated_twice() {
             .title,
         "User operator title"
     );
-    // A Bot may own more than one local conversation; opening it twice does not
-    // create a second one.
+    // Reopening keeps the one pinned local conversation.
     assert_eq!(restarted.ensure_bot_session().await.unwrap(), session);
 }
 
@@ -386,10 +386,10 @@ async fn owner_filtered_listing_returns_only_that_bots_conversations() {
 }
 
 #[tokio::test]
-async fn a_bot_can_start_several_independent_local_conversations() {
+async fn create_and_ensure_share_one_local_conversation_and_keep_its_title() {
     let (manager, _ordinary) = fixture().await;
     let bot = manager
-        .create_bot_profile(create("multi", "Multi"))
+        .create_bot_profile(create("single", "Single"))
         .await
         .unwrap();
     let first = manager
@@ -397,22 +397,15 @@ async fn a_bot_can_start_several_independent_local_conversations() {
         .await
         .unwrap();
     let second = manager
-        .create_bot_conversation_for(bot.id, Some("Second topic".into()))
+        .create_bot_conversation_for(bot.id, Some("Another title".into()))
         .await
         .unwrap();
-    assert_ne!(first.session_id, second.session_id);
-    assert_eq!(second.name, "Multi");
-
-    // Both belong to the same Bot and are local roots.
-    for session in [first.session_id, second.session_id] {
-        let owner = manager.session_owner(session).await.unwrap().unwrap();
-        assert_eq!(owner.bot, bot.id);
-        assert!(owner.surface.is_local());
-        assert!(manager.require_operator_bot(session).await.is_ok());
-    }
-
-    // Creating a Bot already starts one local conversation; the two above are
-    // additions, so the Bot now owns three.
+    assert_eq!(first.session_id, second.session_id);
+    assert_eq!(bot.local_session_id, Some(first.session_id));
+    assert_eq!(
+        manager.get_session(first.session_id).await.unwrap().title,
+        "Single"
+    );
     let owned = manager
         .kernel()
         .reader
@@ -423,24 +416,211 @@ async fn a_bot_can_start_several_independent_local_conversations() {
             ..Default::default()
         })
         .await
-        .unwrap()
-        .sessions
-        .to_vec();
-    assert_eq!(owned.len(), 3);
-    let ids = owned.iter().map(|s| s.id.get()).collect::<Vec<_>>();
-    assert!(ids.contains(&first.session_id) && ids.contains(&second.session_id));
-
-    // Reopening the Bot reuses one of them instead of adding a fourth.
-    let reopened = manager.ensure_named_bot_session(bot.id).await.unwrap();
-    assert_eq!(reopened.session_id, ids[0]);
-
-    // A title is user-supplied and validated.
+        .unwrap();
+    assert_eq!(owned.sessions.len(), 1);
     assert!(
         manager
             .create_bot_conversation_for(bot.id, Some("   ".into()))
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn concurrent_kernel_and_client_opens_after_deletion_create_only_one_new_local_root() {
+    let (manager, _ordinary) = fixture().await;
+    let bot = manager
+        .create_bot_profile(create("concurrent", "Concurrent"))
+        .await
+        .unwrap();
+    let old = bot.local_session_id.unwrap();
+    manager.delete_session(old).await.unwrap();
+    assert_eq!(
+        manager
+            .get_bot_profile(bot.id)
+            .await
+            .unwrap()
+            .local_session_id,
+        None
+    );
+    let mut calls = Vec::new();
+    for n in 0..12 {
+        let manager = manager.clone();
+        let bot_id = bot.id;
+        calls.push(tokio::spawn(async move {
+            if n % 2 == 0 {
+                // Bypass the registry mutex to exercise the database guarantee.
+                persist(|| {
+                    manager.kernel().sessions.ensure_local_bot_session(
+                        RequestId::new(),
+                        bot_id,
+                        "Concurrent".into(),
+                    )
+                })
+                .await
+                .unwrap()
+                .value
+                .id
+                .get()
+            } else {
+                manager
+                    .create_bot_conversation_for(bot_id, None)
+                    .await
+                    .unwrap()
+                    .session_id
+            }
+        }));
+    }
+    let mut ids = Vec::new();
+    for call in calls {
+        ids.push(call.await.unwrap());
+    }
+    assert!(ids.iter().all(|id| *id == ids[0]), "{ids:?}");
+    assert_ne!(ids[0], old);
+    assert_eq!(
+        restart(&manager)
+            .ensure_named_bot_session(bot.id)
+            .await
+            .unwrap()
+            .session_id,
+        ids[0]
+    );
+    let owned = manager
+        .kernel()
+        .reader
+        .query_summaries(SummaryQuery {
+            owner_bot_id: Some(bot.id.to_string()),
+            owner_surface: Some("local".into()),
+            roots_only: true,
+            include_global: true,
+            limit: 32,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(owned.sessions.len(), 1);
+}
+
+#[tokio::test]
+async fn legacy_local_history_stays_readable_and_remote_rooms_remain_independent() {
+    let (manager, _ordinary) = fixture().await;
+    let bot = manager
+        .create_bot_profile(create("history", "History"))
+        .await
+        .unwrap();
+    let canonical = bot.local_session_id.unwrap();
+    // Fixture for an older installation with several owned local roots.
+    let legacy = manager
+        .kernel()
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Old history".into(),
+            SessionConfiguration {
+                owner: Some(SessionOwner {
+                    bot: bot.id,
+                    surface: SessionSurface::Local,
+                    scope_key: None,
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    manager
+        .rename_session(legacy.get(), "Preserved history".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        manager.get_session(legacy.get()).await.unwrap().title,
+        "Preserved history"
+    );
+    assert_eq!(
+        manager
+            .get_bot_profile(bot.id)
+            .await
+            .unwrap()
+            .local_session_id,
+        Some(canonical)
+    );
+    let error = manager
+        .require_writable_bot_history(legacy.get())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, AppError::BotLocalHistory { canonical_session_id } if canonical_session_id == canonical)
+    );
+    assert_eq!(error.failure().code.as_str(), "bot.local_history_read_only");
+    assert!(
+        error
+            .failure()
+            .user
+            .fallback
+            .contains(&canonical.to_string())
+    );
+    assert!(manager.require_bot_branch_allowed(canonical).await.is_err());
+
+    let mut rooms = Vec::new();
+    for key in ["telegram:room-a", "telegram:room-b"] {
+        let room = manager
+            .kernel()
+            .sessions
+            .create_global(
+                RequestId::new(),
+                key.into(),
+                SessionConfiguration {
+                    owner: Some(SessionOwner {
+                        bot: bot.id,
+                        surface: SessionSurface::Group,
+                        scope_key: Some(key.into()),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id
+            .get();
+        manager.require_writable_bot_history(room).await.unwrap();
+        rooms.push(room);
+    }
+    assert_ne!(rooms[0], rooms[1]);
+    manager.delete_session(canonical).await.unwrap();
+    assert_eq!(
+        manager
+            .get_bot_profile(bot.id)
+            .await
+            .unwrap()
+            .local_session_id,
+        None
+    );
+    let replacement = manager
+        .ensure_named_bot_session(bot.id)
+        .await
+        .unwrap()
+        .session_id;
+    assert_ne!(replacement, canonical);
+    assert_ne!(
+        replacement,
+        legacy.get(),
+        "deleting the current local must not revive old history"
+    );
+    assert_eq!(
+        manager.get_session(legacy.get()).await.unwrap().title,
+        "Preserved history"
+    );
+    assert!(
+        manager
+            .require_writable_bot_history(legacy.get())
+            .await
+            .is_err()
+    );
+    for room in rooms {
+        manager.require_writable_bot_history(room).await.unwrap();
+    }
 }
 
 #[tokio::test]
@@ -461,4 +641,108 @@ async fn archived_bot_cannot_start_a_conversation() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn canonical_local_subagents_remain_writable_but_historical_branches_do_not() {
+    async fn child(
+        manager: &SessionManager,
+        bot: Uuid,
+        parent: i64,
+        kind: agena_domain::SessionRelationKind,
+        name: &str,
+    ) -> i64 {
+        manager
+            .kernel()
+            .sessions
+            .create_global(
+                RequestId::new(),
+                name.into(),
+                SessionConfiguration {
+                    owner: Some(SessionOwner {
+                        bot,
+                        surface: SessionSurface::Local,
+                        scope_key: None,
+                    }),
+                    parent_session_id: Some(session_id(parent).unwrap()),
+                    relation_kind: kind,
+                    agent: kind.is_subagent().then(|| SessionAgentConfiguration {
+                        name: name.into(),
+                        status: agena_domain::AgentStatus::Created,
+                        started_at_ms: None,
+                        finished_at_ms: None,
+                        failure: None,
+                        limits: Default::default(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id
+            .get()
+    }
+    let (manager, ordinary) = fixture().await;
+    let bot = manager
+        .create_bot_profile(create("worker-tree", "Worker tree"))
+        .await
+        .unwrap();
+    let canonical = bot.local_session_id.unwrap();
+    manager
+        .require_writable_bot_history(canonical)
+        .await
+        .unwrap();
+    manager
+        .require_writable_bot_history(ordinary.get())
+        .await
+        .unwrap();
+    manager
+        .require_bot_branch_allowed(ordinary.get())
+        .await
+        .unwrap();
+    let worker = child(
+        &manager,
+        bot.id,
+        canonical,
+        agena_domain::SessionRelationKind::Subagent,
+        "worker",
+    )
+    .await;
+    let nested = child(
+        &manager,
+        bot.id,
+        worker,
+        agena_domain::SessionRelationKind::Subagent,
+        "nested",
+    )
+    .await;
+    manager.require_writable_bot_history(worker).await.unwrap();
+    manager.require_writable_bot_history(nested).await.unwrap();
+    for kind in [
+        agena_domain::SessionRelationKind::Child,
+        agena_domain::SessionRelationKind::Fork,
+        agena_domain::SessionRelationKind::Rewind,
+    ] {
+        let history = child(&manager, bot.id, canonical, kind, "history").await;
+        assert!(
+            matches!(manager.require_writable_bot_history(history).await,
+            Err(AppError::BotLocalHistory { canonical_session_id }) if canonical_session_id == canonical)
+        );
+        assert_eq!(manager.get_session(history).await.unwrap().title, "history");
+        let retained_worker = child(
+            &manager,
+            bot.id,
+            history,
+            agena_domain::SessionRelationKind::Subagent,
+            "retained_worker",
+        )
+        .await;
+        assert!(
+            manager
+                .require_writable_bot_history(retained_worker)
+                .await
+                .is_err()
+        );
+    }
 }

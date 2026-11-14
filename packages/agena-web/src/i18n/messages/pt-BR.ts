@@ -4,6 +4,11 @@ export default {
   pluginWeb: pluginWebMessages['pt-BR'],
   bot: {
     conversations: {
+      openLocal: 'Abrir conversa local',
+      history: 'Histórico',
+      archivedHistory: 'Histórico arquivado · somente leitura',
+      historyReadOnlyHint: 'Esta é uma conversa local salva. Abra a conversa local atual para continuar.',
+      openCurrent: 'Continuar na conversa local atual',
       title: 'Conversas de {name}',
       toggle: 'Mostrar ou ocultar {group}',
       actions: 'Ações para {name}',
@@ -24,7 +29,7 @@ export default {
         broadcast: 'Canais',
       },
       surfaceHints: {
-        local: 'Conversas abertas no Web ou TUI.',
+        local: 'Uma conversa local compartilhada entre Web e TUI.',
         direct: 'Conversas individuais às quais o Bot foi adicionado.',
         group: 'Conversas em grupo e salas.',
         broadcast: 'Canais de transmissão onde o Bot pode não conseguir responder.',
@@ -1369,7 +1374,8 @@ export default {
           label: 'Parar e excluir sessão',
           description: 'O trabalho em andamento será interrompido primeiro',
           confirmTitle: 'Parar esta sessão e excluí-la?',
-          confirmDescription: 'O trabalho em andamento será interrompido, a fila será descartada e a conversa removida. Não pode ser desfeito.',
+          confirmDescription:
+            'O trabalho em andamento será interrompido, a fila será descartada e a conversa removida. Não pode ser desfeito.',
           confirmText: 'Parar e excluir',
         },
       },

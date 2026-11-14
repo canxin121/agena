@@ -4,6 +4,11 @@ export default {
   pluginWeb: pluginWebMessages['en-US'],
   bot: {
     conversations: {
+      openLocal: 'Open local conversation',
+      history: 'History',
+      archivedHistory: 'Archived history · read only',
+      historyReadOnlyHint: 'This is a saved local conversation. Open the current local conversation to continue.',
+      openCurrent: 'Continue in current local conversation',
       title: '{name} conversations',
       toggle: 'Toggle {group}',
       actions: 'Actions for {name}',
@@ -13,7 +18,8 @@ export default {
       empty: 'No messages yet',
       create: 'New conversation',
       deleteBusy: 'Stop and delete conversation',
-      deleteBusyHint: 'Its running work is stopped first, then the conversation is deleted. Other conversations and the Bot itself are kept.',
+      deleteBusyHint:
+        'Its running work is stopped first, then the conversation is deleted. Other conversations and the Bot itself are kept.',
       deleteHint: 'Delete this conversation only. Other conversations and the Bot itself are kept.',
       delete: 'Delete conversation',
       renamePrompt: 'Conversation title',
@@ -24,7 +30,7 @@ export default {
         broadcast: 'Channels',
       },
       surfaceHints: {
-        local: 'Conversations you open in Web or TUI.',
+        local: 'One local conversation shared by Web and TUI.',
         direct: 'One-to-one chats the Bot was added to.',
         group: 'Group chats and rooms.',
         broadcast: 'Broadcast channels where the Bot may be unable to reply.',
@@ -2366,7 +2372,8 @@ export default {
           label: 'Stop and delete session',
           description: 'Running work will be stopped first',
           confirmTitle: 'Stop this session and delete it?',
-          confirmDescription: 'Its running work will be stopped, queued work is discarded, and the conversation is removed. This cannot be undone.',
+          confirmDescription:
+            'Its running work will be stopped, queued work is discarded, and the conversation is removed. This cannot be undone.',
           confirmText: 'Stop and delete',
         },
       },

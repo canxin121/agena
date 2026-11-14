@@ -63,6 +63,7 @@ pub enum BusinessCommand {
     EnsureBotSession {
         bot_id: Uuid,
     },
+    /// Open or ensure the one local conversation; title applies only on creation.
     CreateBotConversation {
         bot_id: Uuid,
         #[serde(flatten)]
@@ -153,7 +154,8 @@ pub struct BotListQuery {
     pub include_archived: bool,
 }
 
-/// Start a new conversation owned by the selected Bot.
+/// Open or ensure the selected Bot's one local conversation.
+/// A title only applies when the conversation is first created.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BotConversationCreate {

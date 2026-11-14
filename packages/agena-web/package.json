@@ -6,7 +6,7 @@
   "scripts": {
     "test:plugin-web": "bun test ./tests/pluginWeb.test.ts ./tests/pluginHub.test.ts ./tests/pluginWorkspaceIdentity.test.ts ./tests/pluginSettingsEntry.test.ts",
     "test:plugin-web:browser": "node ./scripts/probe-plugin-web.cjs",
-    "test:bot": "bun test ./tests/botConversation.test.ts ./tests/namedBots.test.ts ./tests/chatConsistency.test.ts ./tests/conversationRouting.test.ts ./tests/taskRetirement.test.ts",
+    "test:bot": "bun test ./tests/botConversation.test.ts ./tests/botConversations.test.ts ./tests/botSidebarState.test.ts ./tests/namedBots.test.ts ./tests/chatConsistency.test.ts ./tests/conversationRouting.test.ts ./tests/taskRetirement.test.ts",
     "test:bot:browser": "node ./scripts/probe-bot.cjs",
     "test:mcp:browser": "node ./scripts/probe-mcp.cjs",
     "test:attachments:browser": "node ./scripts/probe-attachments.cjs",

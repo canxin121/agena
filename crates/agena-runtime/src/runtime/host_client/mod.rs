@@ -78,6 +78,7 @@ fn bot_plugin_error(error: crate::AppError) -> PluginError {
         crate::AppError::Config(_)
         | crate::AppError::PersistenceConflict(_)
         | crate::AppError::BotConflict(_)
+        | crate::AppError::BotLocalHistory { .. }
         | crate::AppError::Conflict { .. } => PluginError::invalid_params_error(&error),
         _ => plugin_error_from_app(error),
     }

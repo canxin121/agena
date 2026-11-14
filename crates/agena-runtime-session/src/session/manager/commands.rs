@@ -42,6 +42,7 @@ impl SessionManager {
             ..Default::default()
         };
         if let Some(parent) = parent {
+            self.require_writable_bot_history(parent.get()).await?;
             let inherited = self
                 .kernel()
                 .reader
@@ -294,6 +295,7 @@ impl SessionManager {
         &self,
         request: crate::SessionForkRequest,
     ) -> Result<Session, AppError> {
+        self.require_bot_branch_allowed(request.session_id).await?;
         let session = session_id(request.session_id)?;
         self.check_version(session, request.expected_version)
             .await?;
@@ -342,6 +344,11 @@ impl SessionManager {
         &self,
         request: crate::SessionRewindRequest,
     ) -> Result<(Session, ComposerDocument), AppError> {
+        self.require_writable_bot_history(request.session_id)
+            .await?;
+        if request.mode == crate::RewindMode::Fork {
+            self.require_bot_branch_allowed(request.session_id).await?;
+        }
         let session = session_id(request.session_id)?;
         self.check_version(session, request.expected_version)
             .await?;
@@ -402,6 +409,7 @@ impl SessionManager {
         id: i64,
         mode: crate::SessionClearMode,
     ) -> Result<Session, AppError> {
+        self.require_writable_bot_history(id).await?;
         let session = session_id(id)?;
         self.cancel_active_execution_with_outcome(id).await?;
         let command = RequestId::new();
@@ -428,6 +436,7 @@ impl SessionManager {
         Ok(())
     }
     pub async fn withdraw_user_message(&self, id: i64, message: i64) -> Result<Session, AppError> {
+        self.require_writable_bot_history(id).await?;
         self.kernel()
             .sessions
             .withdraw(RequestId::new(), session_id(id)?, entry_id(message)?)
@@ -477,6 +486,9 @@ impl SessionManager {
     }
 
     pub async fn set_message_queue_paused(&self, id: i64, paused: bool) -> Result<(), AppError> {
+        if !paused {
+            self.require_writable_bot_history(id).await?;
+        }
         let session = session_id(id)?;
         let dispatch = self.session_dispatch(session);
         let _submission = dispatch.submission.lock().await;
@@ -782,6 +794,7 @@ impl SessionManager {
         request: crate::SessionPermissionReplyRequest,
     ) -> Result<(), AppError> {
         let id = request.request.session_id;
+        self.require_writable_bot_history(id).await?;
         let session = session_id(id)?;
         let reply = request.request.reply;
         let interaction = InteractionId::try_from(
@@ -893,6 +906,8 @@ impl SessionManager {
         &self,
         request: crate::SessionExecutionReplyRequest<agena_domain::UserInputReply>,
     ) -> Result<(), AppError> {
+        self.require_writable_bot_history(request.session_id)
+            .await?;
         let session = session_id(request.session_id)?;
         let reply = request.reply;
         let interaction = InteractionId::try_from(
@@ -1040,6 +1055,9 @@ impl SessionExecutionCommandService for SessionManager {
         &self,
         request: crate::SessionQueuedMessageEditRequest,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
+        self.require_writable_bot_history(request.session_id)
+            .await
+            .map_err(command_error)?;
         let session = session_id(request.session_id).map_err(command_error)?;
         let revision = agena_storage::kernel::EntryRevision::try_from(request.expected_revision)
             .map_err(|error| command_error(AppError::Config(error.to_string())))?;

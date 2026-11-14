@@ -45,6 +45,8 @@ type SessionUsageLike = {
 export type ChatPageViewContext = {
   isBot: ComputedRef<boolean>
   botName: Ref<string>
+  botReadOnly: ComputedRef<boolean>
+  openCurrentBotConversation: () => Promise<void>
   openBotEditor: () => void
   openBotProjects: () => void
   fillBotSuggestion: (text: string) => void

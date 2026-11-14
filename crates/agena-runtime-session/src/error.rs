@@ -104,6 +104,10 @@ pub enum AppError {
     /// Controlled registry reasons are safe to show directly; never raw DB diagnostics.
     #[error("{0}")]
     BotConflict(&'static str),
+    #[error(
+        "This local Bot conversation is preserved history. Continue in local session {canonical_session_id}."
+    )]
+    BotLocalHistory { canonical_session_id: i64 },
     #[error("{request_kind} request is no longer pending in this session: {request_id}")]
     InteractiveRequestNotPending {
         request_kind: String,
@@ -209,6 +213,9 @@ impl AppError {
             Self::NoActiveExecution(_) => "This session has no active response.",
             Self::BotNotFound(_) => "No active Bot; select a Bot or create one.",
             Self::BotConflict(reason) => reason,
+            Self::BotLocalHistory { .. } => {
+                "This local Bot conversation is preserved history. Open the Bot's current local conversation to continue."
+            }
             Self::InteractiveRequestNotPending { .. } => {
                 "This request is no longer pending. Refresh to see its current status."
             }
@@ -540,6 +547,13 @@ impl AppError {
                 Retry::AfterRefresh,
                 Recovery::Refresh,
             ),
+            Self::BotLocalHistory { .. } => (
+                "bot.local_history_read_only",
+                Category::Conflict,
+                Responsibility::Caller,
+                Retry::Never,
+                Recovery::Refresh,
+            ),
             Self::NoActiveExecution(_) => (
                 "execution.not_active",
                 Category::NotFound,
@@ -659,6 +673,9 @@ impl AppError {
                 UserPresentation::validated_with_context(code, detail)
             }
             Self::BotConflict(reason) => UserPresentation::validated_with_context(code, *reason),
+            Self::BotLocalHistory { .. } => {
+                UserPresentation::validated_with_context(code, self.to_string())
+            }
             Self::ConfigErr(error) => UserPresentation::validated_with_context(
                 code,
                 agena_failure::diagnostic::format_error_chain(error.as_ref()),

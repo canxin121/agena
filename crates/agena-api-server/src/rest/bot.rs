@@ -86,10 +86,8 @@ pub async fn ensure_named_bot_session(
         .map(Json)
         .map_err(Into::into)
 }
-/// Start a new conversation for this Bot.
-///
-/// Distinct from `/session`, which reopens the latest one: this always creates
-/// an empty conversation, so a Bot can hold several without deleting the old.
+/// Open this Bot's one local conversation, creating it when absent.
+/// The optional title applies only to that first creation; reopening is idempotent.
 pub async fn create_bot_conversation(
     State(state): State<AppState>,
     Path(id): Path<String>,

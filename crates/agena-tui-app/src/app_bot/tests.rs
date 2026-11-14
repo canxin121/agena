@@ -554,6 +554,7 @@ fn profile(id: u128, name: &str) -> BotProfile {
         persona: BotPersona::default(),
         revision: 1,
         archived: false,
+        local_session_id: None,
         created_at_ms: 0,
         updated_at_ms: 0,
     }

@@ -147,8 +147,12 @@ impl SessionManager {
             };
             match self.require_writable_bot_history(summary.id.get()).await {
                 Ok(()) => {}
-                Err(AppError::PersistenceConflict(reason)) => {
-                    tracing::debug!(session_id = summary.id.get(), %reason, "archived Bot delivery recovery deferred");
+                Err(
+                    reason @ (AppError::PersistenceConflict(_)
+                    | AppError::BotConflict(_)
+                    | AppError::BotLocalHistory { .. }),
+                ) => {
+                    tracing::debug!(session_id = summary.id.get(), %reason, "read-only Bot history delivery recovery deferred");
                     continue;
                 }
                 Err(error) => return Err(error),

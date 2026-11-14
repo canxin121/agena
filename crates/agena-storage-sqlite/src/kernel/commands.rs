@@ -20,6 +20,7 @@ pub(super) async fn apply(
         | Command::PresentInteraction { .. }
         | Command::CreateConfigured { .. }
         | Command::CreateGlobal { .. }
+        | Command::EnsureLocalBotSession { .. }
         | Command::DetachGlobal { .. }
         | Command::Configure { .. }
         | Command::FinishAgent { .. }

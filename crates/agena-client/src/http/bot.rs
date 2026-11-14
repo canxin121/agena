@@ -81,7 +81,7 @@ impl AgenaClient {
             .await?;
         self.parse_json(response).await
     }
-    /// Start a new conversation for this Bot instead of reopening the latest.
+    /// Open the Bot's one local conversation. A title only applies when it is created.
     pub async fn create_bot_conversation(
         &self,
         id: Uuid,

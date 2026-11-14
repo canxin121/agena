@@ -32,6 +32,7 @@ export const localStorageKeys = {
     workspacePreviewTouchSimulation: namespacedKey('ui.workspace-preview.touch-simulation'),
     locale: namespacedKey('ui.locale'),
     botSidebarPage: namespacedKey('ui.bot-sidebar.page'),
+    botSidebarTree: namespacedKey('ui.bot-sidebar.tree'),
   },
   directory: {
     currentDirectoryByWindow: namespacedKey('directory.current-directory-by-window'),

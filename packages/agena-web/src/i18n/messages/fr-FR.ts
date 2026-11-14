@@ -4,6 +4,12 @@ export default {
   pluginWeb: pluginWebMessages['fr-FR'],
   bot: {
     conversations: {
+      openLocal: 'Ouvrir la conversation locale',
+      history: 'Historique',
+      archivedHistory: 'Historique archivé · lecture seule',
+      historyReadOnlyHint:
+        'Cette conversation locale est conservée. Ouvrez la conversation locale actuelle pour continuer.',
+      openCurrent: 'Continuer dans la conversation locale actuelle',
       title: 'Conversations de {name}',
       toggle: 'Afficher ou masquer {group}',
       actions: 'Actions pour {name}',
@@ -13,7 +19,8 @@ export default {
       empty: 'Pas encore de message',
       create: 'Nouvelle conversation',
       deleteBusy: 'Arrêter et supprimer la conversation',
-      deleteBusyHint: 'Le travail en cours est arrêté, puis la conversation est supprimée. Les autres et le Bot restent.',
+      deleteBusyHint:
+        'Le travail en cours est arrêté, puis la conversation est supprimée. Les autres et le Bot restent.',
       deleteHint: 'Supprime cette conversation uniquement ; les autres et le Bot restent.',
       delete: 'Supprimer la conversation',
       renamePrompt: 'Titre de la conversation',
@@ -24,7 +31,7 @@ export default {
         broadcast: 'Canaux',
       },
       surfaceHints: {
-        local: 'Conversations ouvertes dans Web ou TUI.',
+        local: 'Une conversation locale commune à Web et TUI.',
         direct: 'Discussions individuelles où le Bot a été ajouté.',
         group: 'Discussions de groupe et salons.',
         broadcast: 'Canaux de diffusion où le Bot peut ne pas pouvoir répondre.',
@@ -1858,7 +1865,8 @@ export default {
           label: 'Arrêter et supprimer la session',
           description: 'Le travail en cours sera arrêté',
           confirmTitle: 'Arrêter cette session et la supprimer ?',
-          confirmDescription: 'Le travail en cours sera arrêté, la file sera abandonnée et la conversation supprimée. Action irréversible.',
+          confirmDescription:
+            'Le travail en cours sera arrêté, la file sera abandonnée et la conversation supprimée. Action irréversible.',
           confirmText: 'Arrêter et supprimer',
         },
       },

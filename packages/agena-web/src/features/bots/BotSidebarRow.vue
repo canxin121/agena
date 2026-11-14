@@ -1,11 +1,7 @@
 <script setup lang="ts">
-// A Bot row renders through the same sidebar primitives as a project session
-// row: the shared action-item builder, the shared anchored menu component and
-// the shared menu state machine in `useSessionActionMenu`. Only the handler for
-// the conversation-level actions differs, because a Bot's conversation is
-// already the pane the row opens.
+// Bot roots share the project tree's disclosure and anchored menu primitives.
 import { computed, type ComponentPublicInstance } from 'vue'
-import { RiRobot2Line } from '@remixicon/vue'
+import { RiArrowDownSLine, RiArrowRightSLine, RiRobot2Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
@@ -19,6 +15,7 @@ import type { MenuRefEl } from '@/layout/chatSidebar/sessionMenu.types'
 const props = withDefaults(
   defineProps<{
     profile: BotProfile
+    collapsed?: boolean
     selected?: boolean
     uiIsCompactLayout: boolean
     busy?: boolean
@@ -31,6 +28,7 @@ const props = withDefaults(
   }>(),
   {
     selected: false,
+    collapsed: true,
     busy: false,
     menuOpen: false,
     menuQuery: '',
@@ -42,6 +40,7 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   (e: 'open'): void
+  (e: 'toggle-collapse'): void
   (e: 'open-action-menu', event: MouseEvent | PointerEvent): void
   (e: 'update:menuQuery', v: string): void
   (e: 'select', item: SessionActionItem): void
@@ -84,7 +83,8 @@ function handleClick() {
     <SidebarListItem
       :data-keyboard-item="`bot:${profile.id}`"
       :data-keyboard-label="profile.name"
-      data-keyboard-level="2"
+      data-keyboard-level="1"
+      :data-keyboard-expanded="String(!collapsed)"
       :data-keyboard-selected="String(selected)"
       :active="selected"
       :actions-always-visible="actionsAlwaysVisible"
@@ -92,6 +92,17 @@ function handleClick() {
       @click="handleClick"
     >
       <template #icon>
+        <button
+          type="button"
+          data-keyboard-toggle
+          :data-testid="`sidebar-bot-toggle-${profile.id}`"
+          class="h-3.5 w-3.5 shrink-0 inline-flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6 cursor-pointer active:scale-95 transition"
+          :aria-expanded="!collapsed"
+          :aria-label="String(t('bot.conversations.toggle', { group: profile.name }))"
+          @click.stop="emit('toggle-collapse')"
+        >
+          <component :is="collapsed ? RiArrowRightSLine : RiArrowDownSLine" class="h-3 w-3" />
+        </button>
         <span
           v-if="initials"
           aria-hidden="true"

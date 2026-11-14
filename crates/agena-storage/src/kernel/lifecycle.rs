@@ -279,7 +279,30 @@ pub enum StopDecision {
     Ready,
 }
 
+/// Read-only local Bot mapping. An established mapping with no live target
+/// represents an explicitly deleted conversation and must not adopt old history.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBotSession {
+    pub session: Option<SessionId>,
+    pub established: bool,
+}
+
 impl SessionCommands {
+    /// Return the pinned local conversation, adopting legacy history once.
+    /// A deleted pinned conversation is replaced with a fresh empty root.
+    pub async fn ensure_local_bot_session(
+        &self,
+        request: RequestId,
+        bot: uuid::Uuid,
+        title: String,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(request, Command::EnsureLocalBotSession { bot, title })
+                .await?,
+        )
+    }
+
     pub async fn create_global(
         &self,
         request: RequestId,
@@ -698,6 +721,10 @@ impl KernelReader {
         session: SessionId,
     ) -> Result<ReadView<SessionConfiguration>> {
         self.0.backend.configuration(session).await
+    }
+    /// Read the current local root without creating a conversation.
+    pub async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>> {
+        self.0.backend.local_bot_session(bot).await
     }
     pub async fn query_summaries(
         &self,

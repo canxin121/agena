@@ -4,6 +4,11 @@ export default {
   pluginWeb: pluginWebMessages['es-ES'],
   bot: {
     conversations: {
+      openLocal: 'Abrir conversación local',
+      history: 'Historial',
+      archivedHistory: 'Historial archivado · solo lectura',
+      historyReadOnlyHint: 'Esta es una conversación local guardada. Abre la conversación local actual para continuar.',
+      openCurrent: 'Continuar en la conversación local actual',
       title: 'Conversaciones de {name}',
       toggle: 'Mostrar u ocultar {group}',
       actions: 'Acciones para {name}',
@@ -13,7 +18,8 @@ export default {
       empty: 'Aún sin mensajes',
       create: 'Nueva conversación',
       deleteBusy: 'Detener y eliminar conversación',
-      deleteBusyHint: 'Se detiene primero el trabajo en curso y luego se elimina la conversación. Las demás y el Bot se conservan.',
+      deleteBusyHint:
+        'Se detiene primero el trabajo en curso y luego se elimina la conversación. Las demás y el Bot se conservan.',
       deleteHint: 'Elimina solo esta conversación; las demás y el Bot se conservan.',
       delete: 'Eliminar conversación',
       renamePrompt: 'Título de la conversación',
@@ -24,7 +30,7 @@ export default {
         broadcast: 'Canales',
       },
       surfaceHints: {
-        local: 'Conversaciones que abres en Web o TUI.',
+        local: 'Una conversación local compartida entre Web y TUI.',
         direct: 'Chats uno a uno a los que se añadió el Bot.',
         group: 'Chats de grupo y salas.',
         broadcast: 'Canales de difusión donde el Bot puede no poder responder.',
@@ -2558,7 +2564,8 @@ export default {
           label: 'Detener y eliminar sesión',
           description: 'Se detendrá primero el trabajo en curso',
           confirmTitle: '¿Detener esta sesión y eliminarla?',
-          confirmDescription: 'Se detendrá el trabajo en curso, se descartará la cola y se eliminará la conversación. No se puede deshacer.',
+          confirmDescription:
+            'Se detendrá el trabajo en curso, se descartará la cola y se eliminará la conversación. No se puede deshacer.',
           confirmText: 'Detener y eliminar',
         },
       },

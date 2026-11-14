@@ -337,6 +337,41 @@ async fn http_and_host_backend_share_bot_state_revisions_and_owned_conversations
     assert_eq!(status, StatusCode::OK);
     let (status, surface_before_create, _) = fixture.conditional_get(surface_path, None).await;
     assert_eq!(status, StatusCode::OK);
+    let original_local = created["data"]["local_session_id"].as_i64().unwrap();
+    let reused = fixture
+        .command(business(
+            "create_bot_conversation",
+            json!({
+                "bot_id": id, "title": "A retry must not rename the local conversation"
+            }),
+        ))
+        .await;
+    assert_eq!(reused["data"]["session_id"], original_local);
+    let (status, legacy_reused) = fixture
+        .http(
+            Method::POST,
+            &format!("/api/v1/bots/{id}/sessions"),
+            Some(json!({"title": "Another ignored retry title"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{legacy_reused}");
+    assert_eq!(legacy_reused, reused["data"]);
+    let (status, unchanged_owner, _) = fixture
+        .conditional_get(&owner_path, Some(&before_create))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_MODIFIED,
+        "reopening must not rename or duplicate the local session"
+    );
+    assert_eq!(unchanged_owner, before_create);
+    fixture
+        .command(json!({"method":"delete_session","params":{"session_id":original_local}}))
+        .await;
+    let without_local = fixture
+        .query(business("get_bot", json!({"bot_id": id})))
+        .await;
+    assert!(without_local["data"]["local_session_id"].is_null());
     let (status, conversation) = fixture
         .http(
             Method::POST,
@@ -350,6 +385,10 @@ async fn http_and_host_backend_share_bot_state_revisions_and_owned_conversations
     assert_eq!(status, StatusCode::OK, "{conversation}");
     assert_eq!(conversation["data"]["bot_id"], id);
     let session_id = conversation["data"]["session_id"].as_i64().unwrap();
+    assert_ne!(
+        session_id, original_local,
+        "deletion must create a fresh local conversation"
+    );
     let owned = fixture
         .query(json!({
             "method": "list_sessions", "params": {"owner_bot_id": id}

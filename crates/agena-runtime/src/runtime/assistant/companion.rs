@@ -789,6 +789,7 @@ mod persona_tests {
             },
             revision: 3,
             archived: false,
+            local_session_id: Some(_session),
             created_at_ms: 100,
             updated_at_ms: 200,
         }

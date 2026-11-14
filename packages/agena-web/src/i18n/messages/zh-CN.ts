@@ -4,6 +4,11 @@ export default {
   pluginWeb: pluginWebMessages['zh-CN'],
   bot: {
     conversations: {
+      openLocal: '打开本机会话',
+      history: '历史会话',
+      archivedHistory: '历史记录 · 只读',
+      historyReadOnlyHint: '这是保留的本机会话历史。要继续对话，请打开当前本机会话。',
+      openCurrent: '继续当前本机会话',
       title: '{name} 的会话',
       toggle: '展开或收起{group}',
       actions: '{name} 的操作',
@@ -24,7 +29,7 @@ export default {
         broadcast: '频道',
       },
       surfaceHints: {
-        local: '你在 Web 或 TUI 里打开的会话。',
+        local: 'Web 与 TUI 共用的一条本机会话。',
         direct: 'Bot 被加入的一对一私聊。',
         group: '群聊和多人群。',
         broadcast: 'Bot 可能无法发言的广播频道。',

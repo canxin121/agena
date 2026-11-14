@@ -968,11 +968,93 @@ async fn notice(
     commands::append_history(connection, session, &[id]).await?;
     EntryId::try_from(id).map_err(storage)
 }
+/// The mapping is authoritative even after its target is deleted. Falling back
+/// to another legacy root in that case would turn read-only history into a new
+/// local entrance. Before the first mapping, the latest legacy root is adopted.
+pub(super) async fn local_bot_session(
+    connection: &mut SqliteConnection,
+    bot: uuid::Uuid,
+) -> Result<LocalBotSession> {
+    let row = sqlx::query(
+        "SELECT EXISTS(SELECT 1 FROM agena_bot_local_sessions WHERE bot_id=?1) AS established, CASE WHEN EXISTS(SELECT 1 FROM agena_bot_local_sessions WHERE bot_id=?1) THEN (SELECT s.id FROM agena_bot_local_sessions m JOIN agena_sessions s ON s.id=m.session_id WHERE m.bot_id=?1 AND s.deleted_at_ms IS NULL AND s.owner_bot_id=?1 AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL) ELSE (SELECT s.id FROM agena_sessions s WHERE s.owner_bot_id=?1 AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT 1) END AS session_id",
+    )
+    .bind(bot.to_string())
+    .fetch_one(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(LocalBotSession {
+        session: row
+            .try_get::<Option<i64>, _>("session_id")
+            .map_err(storage)?
+            .map(SessionId::try_from)
+            .transpose()
+            .map_err(storage)?,
+        established: row.try_get("established").map_err(storage)?,
+    })
+}
+
+async fn ensure_local_bot_session(
+    connection: &mut SqliteConnection,
+    bot: uuid::Uuid,
+    title: &str,
+) -> Result<Mutation> {
+    let archived: Option<bool> = sqlx::query_scalar("SELECT archived FROM agena_bots WHERE id=?")
+        .bind(bot.to_string())
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    match archived {
+        None => return Err(KernelError::NotFound("Bot".into())),
+        Some(true) => {
+            return Err(KernelError::Conflict(
+                "archived Bot history is read-only".into(),
+            ));
+        }
+        Some(false) => {}
+    }
+    let session = match local_bot_session(connection, bot).await?.session {
+        Some(session) => session,
+        None => {
+            let Mutation::Session(created) =
+                commands::create_session(connection, None, title, now_ms()).await?
+            else {
+                return Err(storage("invalid local Bot session result"));
+            };
+            configure(
+                connection,
+                created.id,
+                &SessionConfigurationChange {
+                    owner: Some(Some(agena_domain::SessionOwner {
+                        bot,
+                        surface: agena_domain::SessionSurface::Local,
+                        scope_key: None,
+                    })),
+                    ..Default::default()
+                },
+            )
+            .await?;
+            created.id
+        }
+    };
+    sqlx::query("INSERT INTO agena_bot_local_sessions (bot_id,session_id) VALUES (?,?) ON CONFLICT(bot_id) DO UPDATE SET session_id=excluded.session_id WHERE session_id IS NOT excluded.session_id")
+        .bind(bot.to_string())
+        .bind(session.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(Mutation::Session(Box::new(
+        reads::metadata(connection, session).await?,
+    )))
+}
+
 pub(super) async fn apply(
     connection: &mut SqliteConnection,
     command: &Command,
 ) -> Result<Option<Mutation>> {
     let value = match command {
+        Command::EnsureLocalBotSession { bot, title } => {
+            ensure_local_bot_session(connection, *bot, title).await?
+        }
         Command::RecordCompaction {
             scope,
             policy_key,

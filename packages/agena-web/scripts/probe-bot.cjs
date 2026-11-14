@@ -81,16 +81,21 @@ class Cdp {
     }
   }
   async clickText(selector, label) {
-    const point = await wait(() => this.evaluate(`(() => {
+    const point = await wait(
+      () =>
+        this.evaluate(`(() => {
       const n=[...document.querySelectorAll(${JSON.stringify(selector)})].find(el=>el.getClientRects().length && !el.disabled && el.textContent.includes(${JSON.stringify(label)}));
       if(!n) return null; n.scrollIntoView({block:'center'}); const r=n.getBoundingClientRect();
       const x=r.x+r.width/2,y=r.y+r.height/2; return n.contains(document.elementFromPoint(x,y)) ? {x,y,touch:matchMedia('(pointer:coarse)').matches} : null;
-    })()`), `visible ${selector} containing ${label}`)
-    if(point.touch) {
-      await this.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:point.x,y:point.y}]})
-      await this.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]})
+    })()`),
+      `visible ${selector} containing ${label}`,
+    )
+    if (point.touch) {
+      await this.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: point.x, y: point.y }] })
+      await this.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
     } else {
-      for(const type of ['mousePressed','mouseReleased']) await this.send('Input.dispatchMouseEvent',{type,x:point.x,y:point.y,button:'left',clickCount:1})
+      for (const type of ['mousePressed', 'mouseReleased'])
+        await this.send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 })
     }
   }
   async fill(selector, text) {
@@ -158,6 +163,7 @@ async function main() {
   const profileFor = (id, session_id, name) => ({
     id,
     session_id,
+    local_session_id: session_id,
     name,
     persona: persona(),
     revision: 1,
@@ -169,12 +175,41 @@ async function main() {
   const profileRequests = [],
     sent = []
   const histories = new Map()
-  let archiveConflict = false, sidebarWriteFailure = false, releaseLateCreate = null, holdAuthList = false, releaseAuthList = null
+  if (process.env.BOT_SIDEBAR_PROBE_ONLY === '1') {
+    histories.set(41, [
+      {
+        part_id: 4100,
+        run_id: 4100,
+        revision: 1,
+        message_boundary: true,
+        role: 'user',
+        kind: 'text',
+        state: 'completed',
+        sections: [],
+        content: { text: 'Preserved local history from the previous conversation.' },
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      },
+    ])
+  }
+  let archiveConflict = false,
+    sidebarWriteFailure = false,
+    releaseLateCreate = null,
+    holdAuthList = false,
+    releaseAuthList = null
   const sidebarId = '44444444-4444-4444-8444-444444444444'
+  const extraConversations = new Map([
+    [41, { bot: botA, surface: 'local', title: 'Archived local conversation' }],
+    [71, { bot: botA, surface: 'direct', title: 'Telegram · direct message' }],
+    [72, { bot: botA, surface: 'group', title: 'Telegram · team room' }],
+    [73, { bot: botA, surface: 'broadcast', title: 'Telegram · announcements' }],
+    [74, { bot: botB, surface: 'group', title: 'Telegram · design room' }],
+  ])
   const session = (id) => ({
     id,
     title:
-      id === 42
+      extraConversations.get(id)?.title ||
+      (id === 42
         ? 'Server operator'
         : id === 43
           ? 'Muse conversation'
@@ -182,8 +217,18 @@ async function main() {
             ? 'New Bot conversation'
             : id === 8
               ? 'Created project conversation'
-              : 'Existing project conversation',
-    workspace_id: id >= 42 ? null : 7,
+              : 'Existing project conversation'),
+    workspace_id: id >= 42 || extraConversations.has(id) ? null : 7,
+    owner_bot_id: extraConversations.get(id)?.bot || profiles.find((bot) => bot.session_id === id)?.id || null,
+    owner_surface:
+      extraConversations.get(id)?.surface || (profiles.some((bot) => bot.session_id === id) ? 'local' : null),
+    depth: 0,
+    root_id: id,
+    relation_kind: 'root',
+    lifecycle_state: 'ready',
+    message_count: histories.get(id)?.length || 0,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-02T00:00:00Z',
     version: 1,
     state: { kind: 'ready', data: {} },
   })
@@ -462,7 +507,10 @@ window.__botProbe = {activeComposerSession: () => {
                     reminders: [],
                   })
                 if (p === '/api/v1/bots' && req.method === 'GET') {
-                  if (holdAuthList) await new Promise(resolve => { releaseAuthList = resolve })
+                  if (holdAuthList)
+                    await new Promise((resolve) => {
+                      releaseAuthList = resolve
+                    })
                   return json({
                     items: profiles.filter((bot) => !bot.archived),
                     default_bot_id: profiles.find((bot) => !bot.archived)?.id || null,
@@ -478,11 +526,28 @@ window.__botProbe = {activeComposerSession: () => {
                     for await (const chunk of req) raw += chunk
                     const body = JSON.parse(raw || '{}')
                     profileRequests.push({ path: p, method: req.method, body })
-                    if (sidebarWriteFailure) { sidebarWriteFailure = false; return json({ error: 'Fixture network failure' }, 503) }
+                    if (sidebarWriteFailure) {
+                      sidebarWriteFailure = false
+                      return json({ error: 'Fixture network failure' }, 503)
+                    }
                     if (!body.request_key) return json({ error: 'request_key required' }, 400)
                     if (!id) {
-                      if (body.name === 'Late Sidebar Bot') await new Promise(resolve => { releaseLateCreate = resolve })
-                      const created = { ...profileFor(body.name === 'Sidebar Orbit' ? sidebarId : body.name === 'Late Sidebar Bot' ? '66666666-6666-4666-8666-666666666666' : botC, body.name === 'Sidebar Orbit' ? 45 : body.name === 'Late Sidebar Bot' ? 46 : 44, body.name), persona: body.persona || persona() }
+                      if (body.name === 'Late Sidebar Bot')
+                        await new Promise((resolve) => {
+                          releaseLateCreate = resolve
+                        })
+                      const created = {
+                        ...profileFor(
+                          body.name === 'Sidebar Orbit'
+                            ? sidebarId
+                            : body.name === 'Late Sidebar Bot'
+                              ? '66666666-6666-4666-8666-666666666666'
+                              : botC,
+                          body.name === 'Sidebar Orbit' ? 45 : body.name === 'Late Sidebar Bot' ? 46 : 44,
+                          body.name,
+                        ),
+                        persona: body.persona || persona(),
+                      }
                       profiles.push(created)
                       return json(created)
                     }
@@ -562,6 +627,15 @@ window.__botProbe = {activeComposerSession: () => {
                     },
                   })
                 if (p === '/api/v1/settings') return json({ value: {} })
+                if (p === '/api/v1/sessions' && url.searchParams.has('owner_bot_id')) {
+                  const owner = url.searchParams.get('owner_bot_id')
+                  const surface = url.searchParams.get('owner_surface')
+                  const ids = [...profiles.map((bot) => bot.session_id), ...extraConversations.keys()]
+                  const items = ids
+                    .map(session)
+                    .filter((item) => item.owner_bot_id === owner && (!surface || item.owner_surface === surface))
+                  return json({ items, total: items.length, page: { has_more: false } })
+                }
                 if (p === '/api/v1/sessions')
                   return json({
                     items: [session(7), ...(createdProject ? [session(8)] : [])],
@@ -648,6 +722,138 @@ window.__botProbe = {activeComposerSession: () => {
       deviceScaleFactor: 1,
       mobile: false,
     })
+    if (process.env.BOT_SIDEBAR_PROBE_ONLY === '1') {
+      const row = (id) => `[data-sidebar-bot-id="${id}"]`
+      const toggle = (id) => `[data-testid="sidebar-bot-toggle-${id}"]`
+      const group = (id, surface) => `[data-keyboard-item="bot-group:${id}:${surface}"]`
+      const conversation = (id) => `[data-sidebar-bot-conversation-id="${id}"]`
+      const history = (id) => `[data-keyboard-item="bot-history:${id}"]`
+      const expanded = (selector) =>
+        cdp.evaluate(
+          `document.querySelector(${JSON.stringify(selector)})?.getAttribute('data-keyboard-expanded') === 'true'`,
+        )
+      const noOverflow = () =>
+        cdp.evaluate(
+          `document.documentElement.scrollWidth <= innerWidth + 1 && [...document.querySelectorAll('[data-testid="bot-sidebar"]')].filter(n => n.getClientRects().length).every(n => n.scrollWidth <= n.clientWidth + 1)`,
+        )
+      await cdp.send('Page.navigate', { url: base + '/bot?botId=' + botA })
+      await wait(
+        () => cdp.evaluate(`window.__botProbe?.activeComposerSession() === '42'`),
+        'canonical Bot composer',
+        90000,
+      )
+      await wait(() => visible(conversation(42)), 'canonical local sidebar row')
+      await cdp.click(toggle(botB))
+      await wait(() => visible(conversation(43)), 'second Bot local row')
+      await wait(() => visible(conversation(74)), 'second Bot room')
+      check(
+        (await visible(conversation(42))) && (await visible(conversation(43))),
+        'multiple Bots expand independently',
+      )
+      check(
+        await cdp.evaluate(
+          `document.querySelector(${JSON.stringify(row(botA) + ' [data-testid="bot-surface-local"]')}).querySelectorAll('[data-keyboard-item^="bot-conversation:"][data-keyboard-level="3"]').length === 1`,
+        ),
+        'each Bot has exactly one current local conversation',
+      )
+      check(
+        (await visible(conversation(71))) && (await visible(conversation(72))) && (await visible(conversation(73))),
+        'remote conversations are grouped by direct, group and channel entrances',
+      )
+      check(!(await visible(conversation(41))), 'local history starts folded separately')
+
+      const beforeDisclosure = botRequests
+      await cdp.click(toggle(botA))
+      await wait(async () => !(await visible(conversation(42))), 'first Bot folds')
+      check(
+        (await visible(conversation(43))) && (await visible(conversation(74))),
+        'folding one Bot preserves the other Bot tree',
+      )
+      await cdp.click(toggle(botA))
+      await cdp.click(group(botA, 'direct'))
+      await wait(async () => !(await visible(conversation(71))), 'direct group folds')
+      check(await visible(conversation(72)), 'surface groups fold independently')
+      await cdp.click(history(botA))
+      await wait(() => visible(conversation(41)), 'local history disclosure')
+      await cdp.click(toggle(botB))
+      check(botRequests === beforeDisclosure, 'disclosures read lists without creating local sessions')
+      await cdp.send('Page.reload', { ignoreCache: true })
+      await wait(() => visible(conversation(41)), 'history disclosure restores on reload', 90000)
+      check(
+        !(await visible(conversation(43))) &&
+          !(await expanded(group(botA, 'direct'))) &&
+          (await visible(conversation(72))),
+        'Bot and group disclosure preferences survive reload',
+      )
+      check(await noOverflow(), 'desktop Bot tree has no horizontal overflow')
+      await cdp.screenshot(path.join(evidence, 'web-bot-tree-desktop.png'))
+
+      const beforeRemote = botRequests
+      await cdp.click(conversation(72) + ' [data-oc-list-item-primary]')
+      await wait(
+        () =>
+          cdp.evaluate(
+            `new URLSearchParams(location.search).get('sessionId') === '72' && window.__botProbe.activeComposerSession() === '72'`,
+          ),
+        'explicit remote room opens',
+      )
+      check(botRequests === beforeRemote, 'opening a remote room never resolves or substitutes a local session')
+      await cdp.click(conversation(41) + ' [data-oc-list-item-primary]')
+      await wait(() => visible('[data-testid="bot-local-history-read-only"]'), 'history read-only banner')
+      check(
+        await cdp.evaluate(`new URLSearchParams(location.search).get('sessionId') === '41'`),
+        'history browsing keeps its original session ID',
+      )
+      check(!(await visible(input)), 'history hides the composer and sending controls')
+      await wait(
+        () =>
+          cdp.evaluate(`document.body.innerText.includes('Preserved local history from the previous conversation.')`),
+        'preserved historical transcript',
+      )
+      await cdp.screenshot(path.join(evidence, 'web-bot-local-history.png'))
+      await cdp.click('[data-testid="bot-local-history-read-only"] button')
+      await wait(
+        () => cdp.evaluate(`window.__botProbe.activeComposerSession() === '42'`),
+        'continue in canonical local conversation',
+      )
+      check(
+        await cdp.evaluate(`new URLSearchParams(location.search).get('sessionId') === '42'`),
+        'continue history reopens the one canonical local conversation',
+      )
+
+      await cdp.send('Emulation.setDeviceMetricsOverride', {
+        width: 375,
+        height: 812,
+        deviceScaleFactor: 1,
+        mobile: true,
+      })
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
+      await cdp.evaluate(`window.__botProbe.ui.setSessionSwitcherOpen(true)`)
+      await wait(() => visible('[data-testid="bot-sidebar"]'), 'mobile Bot drawer')
+      await wait(() => visible(conversation(42)), 'mobile canonical row')
+      check(await noOverflow(), '375px Bot tree and disclosure groups fit the viewport')
+      await cdp.screenshot(path.join(evidence, 'web-bot-tree-mobile.png'))
+      await cdp.click(conversation(41) + ' [data-oc-list-item-primary]')
+      await wait(() => visible('[data-testid="bot-local-history-read-only"]'), 'mobile history read-only banner')
+      check(
+        !(await visible(input)) && (await noOverflow()),
+        '375px historical conversation stays read only without overflow',
+      )
+      await cdp.screenshot(path.join(evidence, 'web-bot-local-history-mobile.png'))
+      await cdp.click('[data-testid="bot-local-history-read-only"] button')
+      await wait(() => cdp.evaluate(`window.__botProbe.activeComposerSession() === '42'`), 'mobile continue canonical')
+      check(
+        sent.length === 0 && profileRequests.length === 0,
+        'tree navigation does not send messages or mutate Bot profiles',
+      )
+      check(errors.length === 0, `no browser exceptions (${errors.length})`)
+      await fs.writeFile(
+        path.join(evidence, 'web-browser-report.json'),
+        JSON.stringify({ checks, requests, profileRequests, sent, errors }, null, 2),
+      )
+      return
+    }
+
     // Exercise registry management before entering a Bot conversation. All clicks
     // use hit-tested CDP input; hidden kept-alive panes are never selected.
     await cdp.send('Page.navigate', { url: base + '/chat?sessionId=7' })
@@ -657,108 +863,203 @@ window.__botProbe = {activeComposerSession: () => {
     await wait(() => visible(`${row(botB)} [data-oc-list-item-primary]`), 'Muse sidebar row')
     const registryOnly = requests.length
     const route = await cdp.evaluate('location.pathname+location.search')
-    check(await cdp.evaluate(`(() => {const s=[...document.querySelectorAll('[data-testid="sidebar-bots"]')].find(n=>n.getClientRects().length);return s.innerText.includes('Atlas') && s.innerText.includes('Muse') && s.innerText.includes('2')})()`), 'project sidebar displays named rows and registry count')
-    for (const [query, expected, absent] of [['atlas',botA,botB], [' MUSE ',botB,botA], ['not a bot',null,botA], ['',botA,null]]) {
+    check(
+      await cdp.evaluate(
+        `(() => {const s=[...document.querySelectorAll('[data-testid="sidebar-bots"]')].find(n=>n.getClientRects().length);return s.innerText.includes('Atlas') && s.innerText.includes('Muse') && s.innerText.includes('2')})()`,
+      ),
+      'project sidebar displays named rows and registry count',
+    )
+    for (const [query, expected, absent] of [
+      ['atlas', botA, botB],
+      [' MUSE ', botB, botA],
+      ['not a bot', null, botA],
+      ['', botA, null],
+    ]) {
       await cdp.fill('[data-testid="sidebar-bot-search"]', query)
-      await wait(async()=> expected ? (await visible(row(expected))) && (!absent || !(await visible(row(absent)))) : !(await visible(row(absent))), `sidebar search ${query}`)
+      await wait(
+        async () =>
+          expected
+            ? (await visible(row(expected))) && (!absent || !(await visible(row(absent))))
+            : !(await visible(row(absent))),
+        `sidebar search ${query}`,
+      )
     }
     check(await visible(row(botB)), 'sidebar search filters case and spaces, handles no matches and clears')
     await cdp.click('[data-testid="sidebar-bot-create"]')
     await wait(() => visible('[data-testid="bot-persona-form"]'), 'sidebar create dialog')
     await cdp.fill('[data-testid="bot-edit-name"]', '   ')
-    const disabled=await cdp.evaluate(`([...document.querySelectorAll('[data-testid="bot-save"]')].find(n=>n.getClientRects().length))?.disabled`)
+    const disabled = await cdp.evaluate(
+      `([...document.querySelectorAll('[data-testid="bot-save"]')].find(n=>n.getClientRects().length))?.disabled`,
+    )
     if (!disabled) await cdp.click('[data-testid="bot-save"]')
-    check(profileRequests.length===0, 'empty or whitespace Bot name cannot be submitted')
-    await cdp.key('Escape','Escape',27)
-    await wait(async()=>!(await visible('[data-testid="bot-persona-form"]')), 'cancel create')
-    check(profileRequests.length===0 && await cdp.evaluate('location.pathname+location.search')===route, 'cancel create makes no profile mutation or navigation')
+    check(profileRequests.length === 0, 'empty or whitespace Bot name cannot be submitted')
+    await cdp.key('Escape', 'Escape', 27)
+    await wait(async () => !(await visible('[data-testid="bot-persona-form"]')), 'cancel create')
+    check(
+      profileRequests.length === 0 && (await cdp.evaluate('location.pathname+location.search')) === route,
+      'cancel create makes no profile mutation or navigation',
+    )
     await cdp.click(`${row(botB)} [data-testid="sidebar-bot-actions"]`)
-    await cdp.key('Escape','Escape',27)
-    await wait(()=>cdp.evaluate(`document.activeElement?.matches(${JSON.stringify(`${row(botB)} [data-testid="sidebar-bot-actions"]`)})`), 'row menu Escape focus return')
+    await cdp.key('Escape', 'Escape', 27)
+    await wait(
+      () =>
+        cdp.evaluate(
+          `document.activeElement?.matches(${JSON.stringify(`${row(botB)} [data-testid="sidebar-bot-actions"]`)})`,
+        ),
+      'row menu Escape focus return',
+    )
     check(true, 'keyboard Escape closes row menu and restores focus')
     await cdp.click(`${row(botB)} [data-testid="sidebar-bot-actions"]`)
     await cdp.clickText('[data-option-menu-item]', 'Edit Bot')
-    await wait(()=>visible('[data-testid="bot-edit-name"]'), 'sidebar edit ready')
+    await wait(() => visible('[data-testid="bot-edit-name"]'), 'sidebar edit ready')
     profiles[1].revision++
-    profiles[1].persona.instructions='Remote update'
+    profiles[1].persona.instructions = 'Remote update'
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Local unsaved draft')
     await cdp.click('[data-testid="bot-save"]')
-    await wait(()=>visible('[role="dialog"] [role="alert"]'), 'stale sidebar edit conflict')
-    check(await cdp.evaluate(`([...document.querySelectorAll('[data-testid="bot-edit-instructions"]')].find(n=>n.getClientRects().length))?.value==='Local unsaved draft'`), 'revision conflict preserves local persona draft')
-    const reloadLabel=await cdp.evaluate(`import('/src/i18n/index.ts').then(({i18n})=>i18n.global.t('bot.profiles.reload'))`)
-    await cdp.clickText('[role="dialog"] button',reloadLabel)
-    await wait(()=>cdp.evaluate(`([...document.querySelectorAll('[data-testid="bot-edit-instructions"]')].find(n=>n.getClientRects().length))?.value==='Remote update'`), 'explicitly reload remote persona')
+    await wait(() => visible('[role="dialog"] [role="alert"]'), 'stale sidebar edit conflict')
+    check(
+      await cdp.evaluate(
+        `([...document.querySelectorAll('[data-testid="bot-edit-instructions"]')].find(n=>n.getClientRects().length))?.value==='Local unsaved draft'`,
+      ),
+      'revision conflict preserves local persona draft',
+    )
+    const reloadLabel = await cdp.evaluate(
+      `import('/src/i18n/index.ts').then(({i18n})=>i18n.global.t('bot.profiles.reload'))`,
+    )
+    await cdp.clickText('[role="dialog"] button', reloadLabel)
+    await wait(
+      () =>
+        cdp.evaluate(
+          `([...document.querySelectorAll('[data-testid="bot-edit-instructions"]')].find(n=>n.getClientRects().length))?.value==='Remote update'`,
+        ),
+      'explicitly reload remote persona',
+    )
     check(true, 'explicit reload reconciles stale profile')
     await cdp.fill('[data-testid="bot-edit-name"]', 'Muse Sidebar')
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Sidebar persona')
     await cdp.click('[data-testid="bot-save"]')
-    await wait(()=>profiles[1].name==='Muse Sidebar', 'unselected row edit saved')
-    await wait(()=>visible(`${row(botB)} [data-oc-list-item-primary]`), 'edited row')
-    await wait(async()=>!(await visible('[data-testid="bot-persona-form"]')), 'saved editor closes')
-    check(await cdp.evaluate(`location.pathname+location.search===${JSON.stringify(route)} && [...document.querySelectorAll('[role="dialog"]')].filter(n=>n.getClientRects().length).length===0`), 'row edit updates unselected profile without navigation or duplicate dialogs')
-    check(profiles[0].name==='Atlas' && profiles[1].persona.instructions==='Sidebar persona', 'sidebar edit preserves other profile and saves persona')
-    check(!requests.slice(registryOnly).some(r => /\/sessions\/\d+\/(messages|model)|\/bots\/[^/]+\/session|\/bot\/session/.test(r.path)), 'list, search, cancel and edit do not create sessions or send model messages')
-    const crowded = Array.from({length:24}, (_,i)=>profileFor(`55555555-5555-4555-8555-${String(i).padStart(12,'0')}`, 100+i, i===23 ? 'مستكشف طويل للغاية Sidebar RTL Name' : `Crowded Bot ${i}`))
+    await wait(() => profiles[1].name === 'Muse Sidebar', 'unselected row edit saved')
+    await wait(() => visible(`${row(botB)} [data-oc-list-item-primary]`), 'edited row')
+    await wait(async () => !(await visible('[data-testid="bot-persona-form"]')), 'saved editor closes')
+    check(
+      await cdp.evaluate(
+        `location.pathname+location.search===${JSON.stringify(route)} && [...document.querySelectorAll('[role="dialog"]')].filter(n=>n.getClientRects().length).length===0`,
+      ),
+      'row edit updates unselected profile without navigation or duplicate dialogs',
+    )
+    check(
+      profiles[0].name === 'Atlas' && profiles[1].persona.instructions === 'Sidebar persona',
+      'sidebar edit preserves other profile and saves persona',
+    )
+    check(
+      !requests
+        .slice(registryOnly)
+        .some((r) => /\/sessions\/\d+\/(messages|model)|\/bots\/[^/]+\/session|\/bot\/session/.test(r.path)),
+      'list, search, cancel and edit do not create sessions or send model messages',
+    )
+    const crowded = Array.from({ length: 24 }, (_, i) =>
+      profileFor(
+        `55555555-5555-4555-8555-${String(i).padStart(12, '0')}`,
+        100 + i,
+        i === 23 ? 'مستكشف طويل للغاية Sidebar RTL Name' : `Crowded Bot ${i}`,
+      ),
+    )
     profiles.push(...crowded)
     await cdp.click('[data-testid="sidebar-bot-refresh"]')
-    await wait(()=>cdp.evaluate(`(() => {const s=[...document.querySelectorAll('[data-testid="sidebar-bots"]')].find(n=>n.getClientRects().length);const l=s?.querySelector('ul');return l && l.scrollHeight>l.clientHeight && l.clientHeight<=220})()`), 'bounded many Bot list')
+    await wait(
+      () =>
+        cdp.evaluate(
+          `(() => {const s=[...document.querySelectorAll('[data-testid="sidebar-bots"]')].find(n=>n.getClientRects().length);const l=s?.querySelector('ul');return l && l.scrollHeight>l.clientHeight && l.clientHeight<=220})()`,
+        ),
+      'bounded many Bot list',
+    )
     await cdp.fill('[data-testid="sidebar-bot-search"]', 'مستكشف طويل')
-    await wait(()=>visible(row(crowded[23].id)), 'long RTL search')
-    check(await cdp.evaluate('document.documentElement.scrollWidth<=innerWidth+1'), 'many Bots have bounded scroll and long RTL name is searchable without overflow')
+    await wait(() => visible(row(crowded[23].id)), 'long RTL search')
+    check(
+      await cdp.evaluate('document.documentElement.scrollWidth<=innerWidth+1'),
+      'many Bots have bounded scroll and long RTL name is searchable without overflow',
+    )
     await cdp.fill('[data-testid="sidebar-bot-search"]', '')
-    profiles.splice(profiles.indexOf(crowded[0]),crowded.length)
+    profiles.splice(profiles.indexOf(crowded[0]), crowded.length)
     await cdp.click('[data-testid="sidebar-bot-refresh"]')
-    await wait(async()=>!(await visible(row(crowded[0].id))), 'crowded fixture removed')
+    await wait(async () => !(await visible(row(crowded[0].id))), 'crowded fixture removed')
     await cdp.click('[data-testid="sidebar-bot-create"]')
     await cdp.fill('[data-testid="bot-edit-name"]', 'Sidebar Orbit')
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Independent sidebar persona')
     sidebarWriteFailure = true
     await cdp.click('[data-testid="bot-save"]')
-    await wait(()=>visible('[role="dialog"] [role="alert"]'), 'sidebar create failure')
+    await wait(() => visible('[role="dialog"] [role="alert"]'), 'sidebar create failure')
     await cdp.click('[data-testid="bot-save"]')
-    await wait(()=>profiles.some(p=>p.id===sidebarId), 'sidebar create retry')
-    await wait(()=>cdp.evaluate(`new URLSearchParams(location.search).get('botId')==='${sidebarId}'`), 'created Bot selected')
-    const attempts=profileRequests.filter(r=>r.body.name==='Sidebar Orbit')
-    check(attempts.length===2 && attempts[0].body.request_key===attempts[1].body.request_key && profiles.filter(p=>p.id===sidebarId).length===1, 'failed create retries with stable key and creates exactly one Bot')
+    await wait(() => profiles.some((p) => p.id === sidebarId), 'sidebar create retry')
+    await wait(
+      () => cdp.evaluate(`new URLSearchParams(location.search).get('botId')==='${sidebarId}'`),
+      'created Bot selected',
+    )
+    const attempts = profileRequests.filter((r) => r.body.name === 'Sidebar Orbit')
+    check(
+      attempts.length === 2 &&
+        attempts[0].body.request_key === attempts[1].body.request_key &&
+        profiles.filter((p) => p.id === sidebarId).length === 1,
+      'failed create retries with stable key and creates exactly one Bot',
+    )
     await cdp.click(`${row(sidebarId)} [data-testid="sidebar-bot-actions"]`)
     await cdp.clickText('[data-option-menu-item]', 'Archive Bot')
-    await cdp.key('Escape','Escape',27)
-    await wait(async()=>!(await visible('[data-testid="bot-archive-confirm"]')), 'cancel archive')
-    check(!profiles.find(p=>p.id===sidebarId).archived, 'archive cancel retains row')
+    await cdp.key('Escape', 'Escape', 27)
+    await wait(async () => !(await visible('[data-testid="bot-archive-confirm"]')), 'cancel archive')
+    check(!profiles.find((p) => p.id === sidebarId).archived, 'archive cancel retains row')
     await cdp.click(`${row(sidebarId)} [data-testid="sidebar-bot-actions"]`)
     await cdp.clickText('[data-option-menu-item]', 'Archive Bot')
-    archiveConflict=true
+    archiveConflict = true
     await cdp.click('[data-testid="bot-archive-confirm"]')
-    await wait(()=>visible('[role="dialog"] [role="alert"]'), 'sidebar busy conflict')
-    check(!profiles.find(p=>p.id===sidebarId).archived && await visible(row(sidebarId)), 'busy archive leaves Bot in sidebar')
+    await wait(() => visible('[role="dialog"] [role="alert"]'), 'sidebar busy conflict')
+    check(
+      !profiles.find((p) => p.id === sidebarId).archived && (await visible(row(sidebarId))),
+      'busy archive leaves Bot in sidebar',
+    )
     await cdp.click('[data-testid="bot-archive-confirm"]')
-    await wait(()=>profiles.find(p=>p.id===sidebarId).archived, 'sidebar archive')
-    await wait(async()=>!(await visible(row(sidebarId))), 'archived row removed')
-    const sidebarArchives=profileRequests.filter(r=>r.path===`/api/v1/bots/${sidebarId}/archive`)
-    check(sidebarArchives.length===2 && sidebarArchives[0].body.request_key===sidebarArchives[1].body.request_key && sidebarArchives[0].body.expected_revision===sidebarArchives[1].body.expected_revision, 'sidebar archive retries preserve revision and request key')
+    await wait(() => profiles.find((p) => p.id === sidebarId).archived, 'sidebar archive')
+    await wait(async () => !(await visible(row(sidebarId))), 'archived row removed')
+    const sidebarArchives = profileRequests.filter((r) => r.path === `/api/v1/bots/${sidebarId}/archive`)
+    check(
+      sidebarArchives.length === 2 &&
+        sidebarArchives[0].body.request_key === sidebarArchives[1].body.request_key &&
+        sidebarArchives[0].body.expected_revision === sidebarArchives[1].body.expected_revision,
+      'sidebar archive retries preserve revision and request key',
+    )
     await navigate('/chat?sessionId=7')
-    await wait(()=>cdp.evaluate(`location.pathname==='/chat'`), 'project before delayed creation')
+    await wait(() => cdp.evaluate(`location.pathname==='/chat'`), 'project before delayed creation')
     await cdp.click('[data-testid="sidebar-bot-create"]')
-    await cdp.fill('[data-testid="bot-edit-name"]','Late Sidebar Bot')
+    await cdp.fill('[data-testid="bot-edit-name"]', 'Late Sidebar Bot')
     await cdp.click('[data-testid="bot-save"]')
-    await wait(()=>releaseLateCreate, 'delayed create request received')
+    await wait(() => releaseLateCreate, 'delayed create request received')
     await navigate('/integrations?source=7')
-    await wait(()=>cdp.evaluate(`location.pathname==='/integrations'`), 'navigate away during create')
+    await wait(() => cdp.evaluate(`location.pathname==='/integrations'`), 'navigate away during create')
     releaseLateCreate()
-    await wait(()=>profiles.some(p=>p.name==='Late Sidebar Bot'), 'late create server response')
-    await wait(()=>visible('[data-sidebar-bot-id="66666666-6666-4666-8666-666666666666"]'), 'late-created sidebar row')
+    await wait(() => profiles.some((p) => p.name === 'Late Sidebar Bot'), 'late create server response')
+    await wait(
+      () => visible('[data-sidebar-bot-id="66666666-6666-4666-8666-666666666666"]'),
+      'late-created sidebar row',
+    )
     check(await cdp.evaluate(`location.pathname==='/integrations'`), 'late create response does not steal navigation')
-    profiles.splice(profiles.findIndex(p=>p.name==='Late Sidebar Bot'),1)
-    holdAuthList=true
-    const cleared=await cdp.evaluate(`Promise.all([import('/src/lib/serverAuthToken.ts'),import('/src/stores/bots.ts')]).then(([auth,store])=>{auth.writeServerAuthTokenForBaseUrl(location.origin,'fixture-new-account'); return store.useBotsStore().profiles.length===0})`)
-    await wait(()=>releaseAuthList, 'new auth list request')
+    profiles.splice(
+      profiles.findIndex((p) => p.name === 'Late Sidebar Bot'),
+      1,
+    )
+    holdAuthList = true
+    const cleared = await cdp.evaluate(
+      `Promise.all([import('/src/lib/serverAuthToken.ts'),import('/src/stores/bots.ts')]).then(([auth,store])=>{auth.writeServerAuthTokenForBaseUrl(location.origin,'fixture-new-account'); return store.useBotsStore().profiles.length===0})`,
+    )
+    await wait(() => releaseAuthList, 'new auth list request')
     check(cleared, 'auth change clears old Bot registry before new list returns')
-    holdAuthList=false
+    holdAuthList = false
     releaseAuthList()
-    await wait(()=>visible(row(botA)), 'new auth registry loaded')
+    await wait(() => visible(row(botA)), 'new auth registry loaded')
     // Restore independent baseline for the original 85 acceptance checks.
-    profiles.splice(profiles.findIndex(p=>p.id===sidebarId),1)
-    Object.assign(profiles[1],profileFor(botB,43,'Muse'))
+    profiles.splice(
+      profiles.findIndex((p) => p.id === sidebarId),
+      1,
+    )
+    Object.assign(profiles[1], profileFor(botB, 43, 'Muse'))
     await cdp.evaluate('localStorage.clear(); sessionStorage.clear()')
     await cdp.send('Page.navigate', { url: base + '/bot?sessionId=7' })
     await wait(() => visible('[data-testid="bot-welcome"]'), 'canonical Bot chat', 90000)
@@ -771,8 +1072,18 @@ window.__botProbe = {activeComposerSession: () => {
       'desktop rail and focused sidebar both prominently expose Bot',
     )
     check(await visible('[data-testid="bot-sidebar"]'), 'desktop Bot uses the standalone sidebar')
-    check(await cdp.evaluate(`!document.querySelector('[data-keyboard-item^="directory:"], [data-keyboard-item^="session:"]')`), 'focused Bot mounts no project or session rows')
-    check(await cdp.evaluate(`![...document.querySelectorAll('[data-workspace-pane-window]')].some(n=>n.getClientRects().length && n.innerText.includes('/fixture/project'))`), 'Bot conversation does not display the prior project directory')
+    check(
+      await cdp.evaluate(
+        `!document.querySelector('[data-keyboard-item^="directory:"], [data-keyboard-item^="session:"]')`,
+      ),
+      'focused Bot mounts no project or session rows',
+    )
+    check(
+      await cdp.evaluate(
+        `![...document.querySelectorAll('[data-workspace-pane-window]')].some(n=>n.getClientRects().length && n.innerText.includes('/fixture/project'))`,
+      ),
+      'Bot conversation does not display the prior project directory',
+    )
     check(await visible(input), 'Bot uses the full existing chat composer')
     await cdp.evaluate(`document.querySelector('[data-testid="bot-selector"]').focus()`)
     await cdp.key('Enter', 'Enter', 13)
@@ -927,11 +1238,15 @@ window.__botProbe = {activeComposerSession: () => {
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Use concise writing examples for this Bot only.')
     await cdp.click('[data-testid="bot-save"]')
     await wait(
-      () => cdp.evaluate(`document.querySelector('[data-workspace-pane-window="'+window.__botProbe.ui.activeWorkspaceWindowId+'"] [data-testid="bot-name"]')?.innerText==='Orbit Studio'`),
+      () =>
+        cdp.evaluate(
+          `document.querySelector('[data-workspace-pane-window="'+window.__botProbe.ui.activeWorkspaceWindowId+'"] [data-testid="bot-name"]')?.innerText==='Orbit Studio'`,
+        ),
       'renamed header',
     )
     check(
-      JSON.stringify(profiles[2].persona) === JSON.stringify({ instructions: 'Use concise writing examples for this Bot only.' }) &&
+      JSON.stringify(profiles[2].persona) ===
+        JSON.stringify({ instructions: 'Use concise writing examples for this Bot only.' }) &&
         profiles[0].persona.instructions === '',
       'persona edits are explicit and scoped to Orbit',
     )
@@ -1231,7 +1546,9 @@ window.__botProbe = {activeComposerSession: () => {
       'Atlas outgoing request retains its own Alternate Model after reload and switching',
     )
     check(
-      await cdp.evaluate(`document.querySelector('[data-workspace-pane-window="'+window.__botProbe.ui.activeWorkspaceWindowId+'"] [data-testid="bot-name"]')?.innerText==='Atlas'`),
+      await cdp.evaluate(
+        `document.querySelector('[data-workspace-pane-window="'+window.__botProbe.ui.activeWorkspaceWindowId+'"] [data-testid="bot-name"]')?.innerText==='Atlas'`,
+      ),
       'late Muse response cannot relabel Atlas',
     )
     const split = await cdp.evaluate(
@@ -1254,7 +1571,9 @@ window.__botProbe = {activeComposerSession: () => {
     const choosePaneModel = async (windowId, label) => {
       await cdp.evaluate(`window.__botProbe.navigation.navigateToWorkspaceWindow('${windowId}')`)
       const pane = `[data-workspace-pane-window="${windowId}"]`
-      const currentLabel = await cdp.evaluate(`(() => {const p=document.querySelector(${JSON.stringify(pane)});return [...p.querySelectorAll('button')].find(n=>n.getClientRects().length && (n.innerText.includes('Fixture Model') || n.innerText.includes('Alternate Model')))?.innerText})()`)
+      const currentLabel = await cdp.evaluate(
+        `(() => {const p=document.querySelector(${JSON.stringify(pane)});return [...p.querySelectorAll('button')].find(n=>n.getClientRects().length && (n.innerText.includes('Fixture Model') || n.innerText.includes('Alternate Model')))?.innerText})()`,
+      )
       await cdp.clickText(`${pane} button`, currentLabel)
       await wait(() => visible('[data-option-menu-item]'), 'split model picker')
       await cdp.clickText('[data-option-menu-item]', label)
@@ -1351,20 +1670,38 @@ window.__botProbe = {activeComposerSession: () => {
     await cdp.screenshot(path.join(evidence, 'web-bot-mobile.png'))
     await cdp.evaluate(`window.__botProbe.ui.setSessionSwitcherOpen(true)`)
     await wait(() => visible('[data-testid="sidebar-bot"]'), 'mobile session switcher')
-    check(await visible('[data-testid="sidebar-bot"]') && await visible('[data-testid="bot-sidebar"]'), 'mobile Bot drawer uses the standalone sidebar')
-    await wait(()=>visible(`${row(botB)} [data-testid="sidebar-bot-actions"]`), 'mobile sidebar row menu')
-    const mobileRoute=await cdp.evaluate('location.pathname+location.search')
+    check(
+      (await visible('[data-testid="sidebar-bot"]')) && (await visible('[data-testid="bot-sidebar"]')),
+      'mobile Bot drawer uses the standalone sidebar',
+    )
+    await wait(() => visible(`${row(botB)} [data-testid="sidebar-bot-actions"]`), 'mobile sidebar row menu')
+    const mobileRoute = await cdp.evaluate('location.pathname+location.search')
     await cdp.click(`${row(botB)} [data-testid="sidebar-bot-actions"]`)
     await cdp.clickText('[data-option-menu-item]', 'Edit Bot')
-    await wait(()=>visible('[data-testid="bot-edit-name"]'), 'mobile touch opens row editor')
-    check(await cdp.evaluate(`document.documentElement.scrollWidth<=innerWidth+1 && [...document.querySelectorAll('[role="dialog"]')].filter(n=>n.getClientRects().length).every(n=>n.getBoundingClientRect().right<=innerWidth+1)`), '375px touch row menu opens a fitting shared editor')
-    check(await cdp.evaluate('location.pathname+location.search')===mobileRoute, 'mobile row action does not open the unselected Bot')
-    await cdp.key('Escape','Escape',27)
-    await wait(async()=>!(await visible('[data-testid="bot-persona-form"]')), 'close mobile editor')
+    await wait(() => visible('[data-testid="bot-edit-name"]'), 'mobile touch opens row editor')
+    check(
+      await cdp.evaluate(
+        `document.documentElement.scrollWidth<=innerWidth+1 && [...document.querySelectorAll('[role="dialog"]')].filter(n=>n.getClientRects().length).every(n=>n.getBoundingClientRect().right<=innerWidth+1)`,
+      ),
+      '375px touch row menu opens a fitting shared editor',
+    )
+    check(
+      (await cdp.evaluate('location.pathname+location.search')) === mobileRoute,
+      'mobile row action does not open the unselected Bot',
+    )
+    await cdp.key('Escape', 'Escape', 27)
+    await wait(async () => !(await visible('[data-testid="bot-persona-form"]')), 'close mobile editor')
     await cdp.evaluate(`window.__botProbe.ui.setSessionSwitcherOpen(true)`)
-    await wait(()=>visible('[data-testid="sidebar-bots"]'), 'mobile project drawer returns')
-    const directoriesTitle = await cdp.evaluate(`import('/src/i18n/index.ts').then(({i18n})=>i18n.global.t('chat.sidebar.header.directoriesTitle'))`)
-    check(await cdp.evaluate(`![...document.querySelectorAll('p')].some(n=>n.getClientRects().length && n.textContent.trim()===${JSON.stringify(directoriesTitle)})`), 'mobile Bot drawer excludes project navigation')
+    await wait(() => visible('[data-testid="sidebar-bots"]'), 'mobile project drawer returns')
+    const directoriesTitle = await cdp.evaluate(
+      `import('/src/i18n/index.ts').then(({i18n})=>i18n.global.t('chat.sidebar.header.directoriesTitle'))`,
+    )
+    check(
+      await cdp.evaluate(
+        `![...document.querySelectorAll('p')].some(n=>n.getClientRects().length && n.textContent.trim()===${JSON.stringify(directoriesTitle)})`,
+      ),
+      'mobile Bot drawer excludes project navigation',
+    )
     await cdp.screenshot(path.join(evidence, 'web-bot-mobile-projects.png'))
     await cdp.click('[data-testid="sidebar-bot"]')
     await wait(() => cdp.evaluate(`!window.__botProbe.ui.isSessionSwitcherOpen`), 'switcher closes on Bot entry')

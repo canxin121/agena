@@ -1,17 +1,10 @@
-import { computed, ref, shallowRef } from 'vue'
+import { shallowRef } from 'vue'
 
-import { listSessions, type AgenaSession } from '@/stores/chat/api'
-import type { SessionOwnerSurface } from '@/types/chat'
+import { getSession, listSessions } from '@/stores/chat/api'
+import type { Session, SessionOwnerSurface } from '@/types/chat'
 
-/**
- * Surface groups a Bot's conversations are listed under, in the order the
- * sidebar shows them.
- *
- * These are the four entrance shapes the server records on
- * `owner_surface`; they are not user-defined folders, because the shape is a
- * property of the room a message arrived in.
- */
 export const BOT_SURFACE_ORDER: SessionOwnerSurface[] = ['local', 'direct', 'group', 'broadcast']
+const PAGE_SIZE = 50
 
 export type BotConversation = {
   id: string
@@ -20,6 +13,8 @@ export type BotConversation = {
   favorite: boolean
   pinned: boolean
   state?: string
+  running: boolean
+  localHistory: boolean
   updatedAtMs: number
   lastMessageAtMs: number
   messageCount: number
@@ -28,12 +23,27 @@ export type BotConversation = {
 export type BotConversationGroup = {
   surface: SessionOwnerSurface
   conversations: BotConversation[]
+  history: BotConversation[]
+  total: number
+  loaded: boolean
+  loading: boolean
+  error: string
+  hasMore: boolean
+  nextCursor: string | null
 }
 
-function surfaceOf(value: unknown): SessionOwnerSurface | null {
-  return value === 'local' || value === 'direct' || value === 'group' || value === 'broadcast'
-    ? value
-    : null
+function emptyGroup(surface: SessionOwnerSurface): BotConversationGroup {
+  return {
+    surface,
+    conversations: [],
+    history: [],
+    total: 0,
+    loaded: false,
+    loading: false,
+    error: '',
+    hasMore: false,
+    nextCursor: null,
+  }
 }
 
 function updatedMs(value: unknown): number {
@@ -42,99 +52,146 @@ function updatedMs(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function toConversation(raw: AgenaSession, fallback: SessionOwnerSurface): BotConversation | null {
-  const id = typeof raw.id === 'number' ? String(raw.id) : ''
-  if (!id) return null
-  const surface = surfaceOf(raw.owner_surface) ?? fallback
+export function botConversationFromSession(
+  session: Session,
+  botId: string,
+  surface: SessionOwnerSurface,
+  localSessionId: number | null,
+): BotConversation | null {
+  if (!session.id || session.owner_bot_id?.toLowerCase() !== botId.toLowerCase() || session.owner_surface !== surface)
+    return null
+  const state = session.state?.kind
   return {
-    id,
-    title: typeof raw.title === 'string' && raw.title.trim() ? raw.title : `#${id}`,
+    id: session.id,
+    title: session.title?.trim() || `#${session.id}`,
     surface,
-    favorite: raw.favorite === true,
-    pinned: raw.pinned === true,
-    state: typeof raw.state === 'string' ? raw.state : undefined,
-    updatedAtMs: updatedMs(raw.updated_at),
-    lastMessageAtMs: updatedMs(raw.last_message_at),
-    messageCount: typeof raw.message_count === 'number' ? raw.message_count : 0,
+    favorite: session.favorite === true,
+    pinned: session.pinned === true,
+    state,
+    running: state === 'running' || state === 'awaiting_interaction',
+    localHistory: surface === 'local' && session.id !== String(localSessionId),
+    updatedAtMs: updatedMs(session.updated_at),
+    lastMessageAtMs: updatedMs(session.last_message_at),
+    messageCount: typeof session.message_count === 'number' ? session.message_count : 0,
   }
 }
 
-/**
- * One Bot's conversations, fetched from the owner-filtered session list.
- *
- * The project sidebar keeps its own store because its lists are workspace
- * scoped. A Bot's conversations are not: they live in the instance scope and
- * are identified by `owner_bot_id`, so they get their own small cache keyed by
- * Bot. A request is abandoned when the Bot changes, matching the sidebar's
- * "never show another identity's rows" rule.
- */
+/** Independent, paged lists let several expanded Bots stay visible together. */
 export function useBotConversations() {
-  const groups = shallowRef<BotConversationGroup[]>([])
-  const loading = ref(false)
-  const error = ref('')
-  let current = ''
-  let sequence = 0
-  let controller: AbortController | null = null
+  const lists = shallowRef<Record<string, BotConversationGroup[]>>({})
+  const localSessionIds = new Map<string, number | null>()
+  const requests = new Map<string, AbortController>()
 
-  const total = computed(() => groups.value.reduce((sum, group) => sum + group.conversations.length, 0))
-
-  function reset() {
-    sequence++
-    controller?.abort()
-    controller = null
-    groups.value = []
-    loading.value = false
-    error.value = ''
-    current = ''
+  function groups(botId: string): BotConversationGroup[] {
+    return lists.value[botId] ?? BOT_SURFACE_ORDER.map(emptyGroup)
   }
 
-  async function load(botId: string, force = false) {
-    const id = (botId || '').trim()
-    if (!id) {
-      reset()
-      return
+  function update(botId: string, surface: SessionOwnerSurface, patch: Partial<BotConversationGroup>) {
+    lists.value = {
+      ...lists.value,
+      [botId]: groups(botId).map((group) => (group.surface === surface ? { ...group, ...patch } : group)),
     }
-    if (!force && id === current && (loading.value || groups.value.length)) return
-    sequence++
-    controller?.abort()
-    const abort = new AbortController()
-    controller = abort
-    const mine = sequence
-    current = id
-    loading.value = true
-    error.value = ''
+  }
+
+  function reset(botId?: string) {
+    for (const [key, request] of requests) {
+      if (!botId || key.startsWith(`${botId}:`)) {
+        request.abort()
+        requests.delete(key)
+      }
+    }
+    if (!botId) {
+      localSessionIds.clear()
+      lists.value = {}
+    } else {
+      localSessionIds.delete(botId)
+      const next = { ...lists.value }
+      delete next[botId]
+      lists.value = next
+    }
+  }
+
+  async function loadGroup(botId: string, surface: SessionOwnerSurface, force = false, more = false) {
+    const id = botId.trim()
+    if (!id) return
+    const key = `${id}:${surface}`
+    const previous = groups(id).find((group) => group.surface === surface)!
+    if (more ? previous.loading || !previous.hasMore : !force && (previous.loaded || previous.loading)) return
+    const cursor = more ? previous.nextCursor : null
+    if (more && !cursor) return
+
+    requests.get(key)?.abort()
+    const request = new AbortController()
+    requests.set(key, request)
+    update(id, surface, { loading: true, error: '' })
+    const localSessionId = localSessionIds.get(id) ?? null
     try {
       const page = await listSessions({
         ownerBotId: id,
-        // A Bot has one conversation per room; the page bound keeps a busy
-        // account from turning the sidebar request into an unbounded read.
-        limit: 200,
+        ownerSurface: surface,
+        limit: PAGE_SIZE,
+        cursor: cursor || undefined,
         excludeSubagents: true,
+        includeTotal: true,
         force,
-        signal: abort.signal,
+        signal: request.signal,
       })
-      if (mine !== sequence) return
-      const buckets = new Map<SessionOwnerSurface, BotConversation[]>(
-        BOT_SURFACE_ORDER.map((surface) => [surface, [] as BotConversation[]]),
-      )
-      for (const raw of page.sessions as unknown as AgenaSession[]) {
-        const conversation = toConversation(raw, 'local')
-        if (!conversation) continue
-        buckets.get(conversation.surface)?.push(conversation)
+      if (requests.get(key) !== request) return
+      const rows = new Map<string, BotConversation>()
+      if (more) {
+        for (const conversation of [...previous.conversations, ...previous.history])
+          rows.set(conversation.id, conversation)
       }
-      groups.value = BOT_SURFACE_ORDER.map((surface) => ({
-        surface,
-        conversations: (buckets.get(surface) ?? []).sort(
-          (a, b) => b.lastMessageAtMs - a.lastMessageAtMs || b.updatedAtMs - a.updatedAtMs,
-        ),
-      }))
+      for (const session of page.sessions) {
+        const conversation = botConversationFromSession(session, id, surface, localSessionId)
+        if (conversation) rows.set(conversation.id, conversation)
+      }
+      // The canonical local conversation can be older than the first history
+      // page. Read it directly instead of choosing a recent historical session.
+      if (surface === 'local' && localSessionId && !rows.has(String(localSessionId))) {
+        const session = await getSession(String(localSessionId), request.signal)
+        if (requests.get(key) !== request) return
+        const conversation = botConversationFromSession(session, id, surface, localSessionId)
+        if (conversation) rows.set(conversation.id, conversation)
+      }
+      const sorted = [...rows.values()].sort(
+        (a, b) => b.lastMessageAtMs - a.lastMessageAtMs || b.updatedAtMs - a.updatedAtMs || a.id.localeCompare(b.id),
+      )
+      update(id, surface, {
+        conversations: sorted.filter((conversation) => !conversation.localHistory),
+        history: sorted.filter((conversation) => conversation.localHistory),
+        total: Math.max(sorted.length, page.total ?? 0),
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor ?? null,
+        loaded: true,
+      })
     } catch (cause) {
-      if (mine !== sequence || abort.signal.aborted) return
-      error.value = cause instanceof Error ? cause.message : String(cause)
+      if (requests.get(key) !== request || request.signal.aborted) return
+      update(id, surface, { error: cause instanceof Error ? cause.message : String(cause) })
     } finally {
-      if (mine === sequence) loading.value = false
+      if (requests.get(key) === request) {
+        requests.delete(key)
+        update(id, surface, { loading: false })
+      }
     }
   }
 
-  return { groups, loading, error, total, load, reset }
+  async function load(botId: string, localSessionId?: number | null, force = false) {
+    const id = botId.trim()
+    if (!id) return
+    const canonical = Number.isSafeInteger(localSessionId) && Number(localSessionId) > 0 ? Number(localSessionId) : null
+    const changed = localSessionIds.has(id) && localSessionIds.get(id) !== canonical
+    localSessionIds.set(id, canonical)
+    await Promise.all(
+      BOT_SURFACE_ORDER.map((surface) => loadGroup(id, surface, force || (surface === 'local' && changed))),
+    )
+  }
+
+  return {
+    groups,
+    load,
+    reloadGroup: (botId: string, surface: SessionOwnerSurface) => loadGroup(botId, surface, true),
+    loadMore: (botId: string, surface: SessionOwnerSurface) => loadGroup(botId, surface, false, true),
+    reset,
+  }
 }

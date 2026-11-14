@@ -525,6 +525,26 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<Vec<ManagementAncestor>>> {
         lifecycle::management_ancestry(self, session).await
     }
+    async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>> {
+        self.cache.ensure_open()?;
+        let _read = self
+            .control_reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::Busy)?;
+        let mut connection = self
+            .reader
+            .get_sqlite_connection_pool()
+            .acquire()
+            .await
+            .map_err(storage)?;
+        let value = lifecycle::local_bot_session(&mut connection, bot).await?;
+        Ok(ReadView::from_lease(
+            value,
+            self.views
+                .reserve_owned(ReadOwner::Shared, std::mem::size_of::<LocalBotSession>())?,
+        ))
+    }
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>> {
         lifecycle::query_summaries(self, query).await
     }
@@ -2051,6 +2071,9 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Fork { .. } => {
             return None;
         }
+        Command::EnsureLocalBotSession { .. } => {
+            return None;
+        }
         Command::PresentInteraction { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::Configure { session, .. }
@@ -2162,6 +2185,10 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         | Command::CreateSession { .. } => match mutation {
             Mutation::Session(metadata) => (metadata.id, ChangeKind::Metadata),
             _ => unreachable!("validated create-session result"),
+        },
+        Command::EnsureLocalBotSession { .. } => match mutation {
+            Mutation::Session(metadata) => (metadata.id, ChangeKind::Metadata),
+            _ => unreachable!("validated local Bot session result"),
         },
         Command::PresentInteraction { session, .. } => (*session, ChangeKind::Interaction),
         Command::Fork { session, .. } => match mutation {

@@ -77,6 +77,11 @@ pub enum Command {
         title: String,
         configuration: SessionConfiguration,
     },
+    /// Resolve or create the one local root of this Bot in one transaction.
+    EnsureLocalBotSession {
+        bot: uuid::Uuid,
+        title: String,
+    },
     DetachGlobal {
         session: SessionId,
         guard: DetachGlobalGuard,
@@ -552,6 +557,7 @@ pub trait KernelBackend: Send + Sync {
         generation: AttemptGeneration,
     ) -> Result<ReadView<Option<ProviderRoundView>>>;
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>>;
+    async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>>;
     async fn management_ancestry(
         &self,
         session: SessionId,

@@ -2,7 +2,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
-import { botIdQuery, resolveBotSession, type BotProfile } from '@/lib/bots'
+import { botIdQuery, botSessionIdQuery, resolveBotConversation, type BotProfile } from '@/lib/bots'
+import type { SessionOwnerSurface } from '@/types/chat'
 import { useBotsStore } from '@/stores/bots'
 import { useChatStore } from '@/stores/chat'
 import { useUiStore } from '@/stores/ui'
@@ -19,9 +20,13 @@ export function useBotConversation() {
   const bots = useBotsStore()
   const isBot = computed(() => route.path === '/bot')
   const requestedId = computed(() => botIdQuery(route.query))
+  const requestedSessionId = computed(() => botSessionIdQuery(route.query))
   const target = computed(() => (pane ? ui.getWorkspaceWindowById(pane.windowId.value) : null))
   const targetPath = computed(() => (pane ? target.value?.routePath || '' : route.path))
   const targetId = computed(() => (pane ? botIdQuery(target.value?.routeQuery || {}) : requestedId.value))
+  const targetSessionId = computed(() =>
+    pane ? botSessionIdQuery(target.value?.routeQuery || {}) : requestedSessionId.value,
+  )
   const documentActive = ref(true)
   const leavingDocument = () => {
     documentActive.value = false
@@ -44,7 +49,10 @@ export function useBotConversation() {
   const name = ref('')
   const loading = ref(false)
   const error = ref('')
-  let binding: { initialId: string; id: string; generation: number } | null = null
+  const surface = ref<SessionOwnerSurface>('local')
+  const localHistory = ref(false)
+  const readOnly = computed(() => isBot.value && localHistory.value)
+  let binding: { initialId: string; initialSessionId: string; id: string; generation: number } | null = null
   let generation = 0
   let request: AbortController | null = null
   function cancel() {
@@ -61,7 +69,9 @@ export function useBotConversation() {
       isBot.value &&
       targetPath.value === '/bot' &&
       [binding.initialId, binding.id].includes(requestedId.value) &&
-      [binding.initialId, binding.id].includes(targetId.value)
+      [binding.initialId, binding.id].includes(targetId.value) &&
+      [binding.initialSessionId, sessionId.value].includes(requestedSessionId.value) &&
+      [binding.initialSessionId, sessionId.value].includes(targetSessionId.value)
     ) {
       // The scoped pane may commit its route after router.replace resolves.
       // Retain ownership until both route authorities have adopted the binding.
@@ -82,6 +92,7 @@ export function useBotConversation() {
       requestedId.value === botId.value &&
       targetId.value === botId.value &&
       sessionId.value &&
+      requestedSessionId.value === sessionId.value &&
       chat.selectedSessionId === sessionId.value &&
       (!pane || target.value?.routeQuery.sessionId === sessionId.value) &&
       !error.value
@@ -92,10 +103,18 @@ export function useBotConversation() {
     botId.value = null
     name.value = ''
     error.value = ''
+    localHistory.value = false
     loading.value = isBot.value
-    if (!isBot.value || targetPath.value !== '/bot' || targetId.value !== requestedId.value) return
+    if (
+      !isBot.value ||
+      targetPath.value !== '/bot' ||
+      targetId.value !== requestedId.value ||
+      targetSessionId.value !== requestedSessionId.value
+    )
+      return
     const sequence = generation
     const selectedId = requestedId.value
+    const selectedSessionId = requestedSessionId.value
     const windowId = pane?.windowId.value
     const abort = new AbortController()
     request = abort
@@ -106,20 +125,41 @@ export function useBotConversation() {
       targetPath.value === '/bot' &&
       requestedId.value === selectedId &&
       targetId.value === selectedId &&
+      requestedSessionId.value === selectedSessionId &&
+      targetSessionId.value === selectedSessionId &&
       pane?.windowId.value === windowId
     try {
-      const resolved = await resolveBotSession(selectedId || undefined, abort.signal)
+      const resolved = await resolveBotConversation(
+        selectedId || undefined,
+        selectedSessionId || undefined,
+        abort.signal,
+      )
       if (!isCurrent()) return
       const id = String(resolved.session_id)
       await chat.hydrateSession(id, { windowId, isCurrent })
       if (!isCurrent()) return
       if (!pane) await chat.selectSession(id)
       if (!isCurrent()) return
-      const ownBinding = { initialId: selectedId, id: resolved.bot_id, generation: sequence }
+      const ownBinding = {
+        initialId: selectedId,
+        initialSessionId: selectedSessionId,
+        id: resolved.bot_id,
+        generation: sequence,
+      }
       binding = ownBinding
       sessionId.value = id
       botId.value = resolved.bot_id
       name.value = resolved.name
+      surface.value = resolved.surface
+      localHistory.value = resolved.localHistory
+      const known = bots.profiles.find((profile) => profile.id === resolved.profile.id)
+      if (
+        !known ||
+        known.local_session_id !== resolved.profile.local_session_id ||
+        known.revision < resolved.profile.revision
+      ) {
+        void bots.refresh(true)
+      }
       loading.value = false
       await router.replace({
         path: '/bot',
@@ -145,19 +185,19 @@ export function useBotConversation() {
         error.value =
           message === 'Invalid Bot ID'
             ? t('bot.profiles.invalidId')
-            : message === 'Invalid Bot session response'
+            : message === 'Invalid Bot session response' || message === 'Invalid Bot session ID'
               ? t('bot.profiles.invalidResponse')
-              : message
+              : message === 'Bot is archived'
+                ? t('bot.profiles.archived')
+                : message
       }
     } finally {
       if (sequence === generation) loading.value = false
     }
   }
-  watch(
-    [isBot, requestedId, targetPath, targetId, () => route.query.sessionId, () => target.value?.routeQuery.sessionId],
-    () => void load(),
-    { immediate: true },
-  )
+  watch([isBot, requestedId, targetPath, targetId, requestedSessionId, targetSessionId], () => void load(), {
+    immediate: true,
+  })
   onBeforeUnmount(cancel)
   const ready = computed(
     () =>
@@ -169,6 +209,8 @@ export function useBotConversation() {
         requestedId.value === botId.value &&
         targetId.value === botId.value &&
         !!sessionId.value &&
+        requestedSessionId.value === sessionId.value &&
+        targetSessionId.value === sessionId.value &&
         chat.selectedSessionId === sessionId.value),
   )
   const ownsConversation = () => {
@@ -177,7 +219,7 @@ export function useBotConversation() {
     return !!target.value && (target.value.routeQuery.sessionId || null) === chat.selectedSessionId
   }
   const canSendConversation = () => {
-    if (!documentActive.value || !ownsConversation()) return false
+    if (readOnly.value || !documentActive.value || !ownsConversation()) return false
     if (pane && (!pane.isVisible.value || !pane.isFocused.value)) return false
     const id = pane?.windowId.value
     const sid = chat.selectedSessionId
@@ -198,6 +240,7 @@ export function useBotConversation() {
       return
     }
     name.value = profile.name
+    localHistory.value = surface.value === 'local' && Number(sessionId.value) !== profile.local_session_id
   }
   watch(
     () => bots.profiles,
@@ -245,6 +288,8 @@ export function useBotConversation() {
     isBot,
     botId,
     name,
+    readOnly,
+    openCurrent: () => (botId.value ? select(botId.value) : Promise.resolve()),
     ready,
     loading,
     error,

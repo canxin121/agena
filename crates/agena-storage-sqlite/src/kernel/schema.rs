@@ -227,7 +227,17 @@ fn declarations() -> impl Iterator<Item = String> {
         .chain(std::iter::once(crate::schema::instance_table()))
         .chain(summary_triggers())
         .chain(GLOBAL_TABLES.iter().map(|s| (*s).to_owned()))
+        .chain(BOT_LOCAL_SESSION_EXTENSION.iter().map(|s| (*s).to_owned()))
 }
+
+/// Compatible additive migration 2026-11-14. The mapping is deliberately
+/// independent of external channel scope keys. Deleted targets stay recorded
+/// so opening a Bot creates a fresh root instead of reviving legacy history.
+const BOT_LOCAL_SESSION_EXTENSION: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS agena_bot_local_sessions (bot_id TEXT PRIMARY KEY REFERENCES agena_bots(id), session_id INTEGER UNIQUE REFERENCES agena_sessions(id) ON DELETE SET NULL) WITHOUT ROWID",
+];
+
+const ADOPT_LOCAL_BOT_SESSIONS: &str = "INSERT INTO agena_bot_local_sessions (bot_id,session_id) SELECT b.id,(SELECT s.id FROM agena_sessions s WHERE s.owner_bot_id=b.id AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT 1) FROM agena_bots b WHERE EXISTS(SELECT 1 FROM agena_sessions s WHERE s.owner_bot_id=b.id AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL)";
 
 const GLOBAL_TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_assistant_global_profile (singleton INTEGER NOT NULL PRIMARY KEY CHECK(singleton=1), revision INTEGER NOT NULL CHECK(revision>0), profile_json TEXT NOT NULL CHECK(json_valid(profile_json)))",
@@ -274,9 +284,15 @@ async fn validate_objects(
     normalize_renamed(&mut actual);
     let expected = object_map(declarations())?;
     if expected != actual {
-        return Err(incompatible_database(
-            "database schema does not match the current Agena baseline",
-        ));
+        let mut predecessor = expected;
+        predecessor.remove(&("table".into(), "agena_bot_local_sessions".into()));
+        if predecessor != actual {
+            return Err(incompatible_database(
+                "database schema does not match the current Agena baseline",
+            ));
+        }
+        instance_id(database).await?;
+        return Ok(false);
     }
     instance_id(database).await?;
     Ok(true)
@@ -295,7 +311,23 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     // Repositories never initialize their own tables after composition.
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
-        validate_objects(database, actual).await?;
+        if !validate_objects(database, actual).await? {
+            // Only the exact preceding schema reaches this path. Install and
+            // seed the additive mapping atomically before runtime recovery;
+            // no session, message, attachment or Bot profile row is changed.
+            let transaction = database.begin().await?;
+            for sql in BOT_LOCAL_SESSION_EXTENSION
+                .iter()
+                .copied()
+                .chain([ADOPT_LOCAL_BOT_SESSIONS])
+            {
+                transaction
+                    .execute(Statement::from_string(database.get_database_backend(), sql))
+                    .await?;
+            }
+            transaction.commit().await?;
+            validate_objects(database, schema_objects(database).await?).await?;
+        }
         return Ok(());
     }
     // The full schema and baseline identity reach the main database together,
@@ -387,6 +419,85 @@ mod nullable_tests {
         assert_eq!(schema_objects(&db).await.unwrap(), before);
         assert!(validate_existing(&db).await.is_err());
     }
+    #[tokio::test]
+    async fn previous_database_is_upgraded_on_open_and_pins_legacy_local_history_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("instance.sqlite").display()
+        );
+        let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+        let bot = uuid::Uuid::new_v4();
+        let old_config = serde_json::json!({"owner":{"bot":bot,"surface":"local"}}).to_string();
+        exec(&*database.writer, "DROP TABLE agena_bot_local_sessions").await;
+        exec(&*database.writer, &format!("INSERT INTO agena_bots(id,name,name_folded,revision,created_at_ms,updated_at_ms) VALUES('{bot}','Legacy','legacy',1,1,1)")).await;
+        for (id, updated, deleted) in [(1, 10, "NULL"), (2, 20, "NULL"), (3, 30, "30")] {
+            exec(&*database.writer, &format!("INSERT INTO agena_sessions(id,title,configuration_json,created_at_ms,updated_at_ms,deleted_at_ms) VALUES({id},'history-{id}','{old_config}',1,{updated},{deleted})")).await;
+        }
+        let identity = instance_id(&database.writer).await.unwrap();
+        validate_existing(&database.writer).await.unwrap();
+        database.close().await.unwrap();
+
+        // The production open path performs the compatible migration itself.
+        let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+        assert_eq!(instance_id(&database.writer).await.unwrap(), identity);
+        assert_eq!(
+            scalar(
+                &*database.writer,
+                "SELECT session_id AS n FROM agena_bot_local_sessions"
+            )
+            .await,
+            2
+        );
+        assert_eq!(
+            scalar(
+                &*database.writer,
+                "SELECT count(*) AS n FROM agena_sessions"
+            )
+            .await,
+            3
+        );
+        assert_eq!(
+            scalar(
+                &*database.writer,
+                "SELECT updated_at_ms AS n FROM agena_sessions WHERE id=1"
+            )
+            .await,
+            10
+        );
+        let stored: String = database
+            .writer
+            .query_one(Statement::from_string(
+                database.writer.get_database_backend(),
+                "SELECT configuration_json FROM agena_sessions WHERE id=1",
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "configuration_json")
+            .unwrap();
+        assert_eq!(
+            stored, old_config,
+            "migration must not rewrite history configuration"
+        );
+        exec(
+            &*database.writer,
+            "UPDATE agena_sessions SET updated_at_ms=100 WHERE id=1",
+        )
+        .await;
+        database.close().await.unwrap();
+        let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+        assert_eq!(
+            scalar(
+                &*database.writer,
+                "SELECT session_id AS n FROM agena_bot_local_sessions"
+            )
+            .await,
+            2
+        );
+        database.close().await.unwrap();
+    }
+
     #[tokio::test]
     async fn fresh_schema_requires_no_workspace() {
         let db = Database::connect("sqlite::memory:").await.unwrap();

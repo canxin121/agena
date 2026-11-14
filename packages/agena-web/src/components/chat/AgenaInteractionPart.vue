@@ -37,6 +37,7 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import { useChatStore } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
+import { useConversationReadOnly } from '@/pages/chat/conversationReadOnly'
 
 const props = defineProps<{
   sessionId?: string | null
@@ -46,6 +47,7 @@ const props = defineProps<{
 
 const chat = useChatStore()
 const toasts = useToastsStore()
+const readOnly = useConversationReadOnly()
 const { t } = useI18n()
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -56,7 +58,13 @@ const displayText = (value: string) => interactionText(interaction.value?.kind |
 
 const requestId = computed(() => props.interaction?.requestId || props.permission?.requestId || '')
 const pendingRequest = computed(() =>
-  chat.getPendingInteraction(props.sessionId || '', requestId.value, props.permission ? 'permission' : 'user_input'),
+  readOnly.value
+    ? null
+    : chat.getPendingInteraction(
+        props.sessionId || '',
+        requestId.value,
+        props.permission ? 'permission' : 'user_input',
+      ),
 )
 const interaction = computed(() =>
   props.interaction
@@ -67,11 +75,13 @@ const permission = computed(() =>
   props.permission ? { ...props.permission, pending: props.permission.pending && Boolean(pendingRequest.value) } : null,
 )
 const unavailableStatus = computed(() =>
-  t(
-    chat.hasInteractionSnapshot(props.sessionId || '')
-      ? 'chat.attention.ui.requestNoLongerPending'
-      : 'chat.attention.ui.checkingRequestStatus',
-  ),
+  readOnly.value
+    ? t('bot.conversations.archivedHistory')
+    : t(
+        chat.hasInteractionSnapshot(props.sessionId || '')
+          ? 'chat.attention.ui.requestNoLongerPending'
+          : 'chat.attention.ui.checkingRequestStatus',
+      ),
 )
 // Attention can precede the durable owner's page. Keep the user's work by
 // request identity when that owner arrives or the view remounts.

@@ -51,7 +51,7 @@ stdio、HTTP callback 和 cdylib 的驱动已经传输完整请求枚举。新�
 
 | 领域 | 读取 | 写入与控制 |
 |---|---|---|
-| Bot | Bot 列表、详情 | 创建、更新、归档；确保默认或指定 Bot 会话；`CreateBotConversation` 创建新的 Bot 对话 |
+| Bot | Bot 列表、详情 | 创建、更新、归档；确保默认或指定 Bot 会话；`CreateBotConversation` 打开或确保唯一本机会话，`title` 仅首次创建时生效 |
 | Assistant | 会话助手配置 | 更新助手、控制 reminder、修改助手记忆 |
 | Integration | 会话集成列表、指定 binding | 创建集成、控制集成、更新渠道访问策略 |
 | Memory | 列表、按名称读取、overview | 保存、删除、批量删除、确保索引 |

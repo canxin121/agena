@@ -502,10 +502,22 @@ impl crate::SessionPluginCommandService for SessionManager {
             .get_session(request.session_id)
             .await
             .map_err(|e| crate::SessionPluginCommandError::Execution(e.to_string()))?;
-        if session.workspace_id.is_none() {
-            return Err(crate::SessionPluginCommandError::Execution(
-                "This command requires a project session; select a project conversation".into(),
-            ));
+        // Applicability is the declaration's own statement, so the session
+        // kind — not the presence of a workspace — decides whether this
+        // command belongs here. A Bot-only command is legitimate in a Bot and
+        // a project command is not, which the host also enforces per
+        // declaration; this check keeps the error honest before dispatch.
+        let kind = agena_domain::SessionKind::from_workspace(session.workspace_id);
+        let applies = self
+            .tool_executor()
+            .plugin_manager()
+            .resolve_command(&request.plugin_id, &request.command_id)
+            .is_none_or(|definition| definition.applies_to.contains(kind));
+        if !applies {
+            return Err(crate::SessionPluginCommandError::Execution(format!(
+                "This command is not available in a {} conversation",
+                kind.as_str()
+            )));
         }
         self.tool_executor()
             .plugin_manager()

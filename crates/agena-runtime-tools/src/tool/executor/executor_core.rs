@@ -9,6 +9,7 @@ impl ToolExecutor {
         Self {
             read_path_authorizer: None,
             session_relation_kind: agena_domain::SessionRelationKind::Root,
+            session_kind: agena_domain::SessionKind::default(),
             conversation: None,
             workspace_root: workspace_root.into(),
             global: false,
@@ -65,6 +66,7 @@ impl ToolExecutor {
     ) -> Self {
         let mut scoped = self.clone();
         scoped.session_relation_kind = session_context.relation_kind();
+        scoped.session_kind = session_context.session_kind();
         scoped.conversation = session_context.conversation().cloned();
         scoped.plugin_scope = session_context
             .session_id()
@@ -374,7 +376,20 @@ impl ToolExecutor {
             .collect()
     }
 
+    /// Whether this tool may be offered to the executor's conversation kind.
+    ///
+    /// Applicability is the declaration's own statement about which
+    /// conversations it serves, so it is checked before the grant, profile and
+    /// read-only filters: a project-only tool is not "denied" in a Bot
+    /// session, it simply does not belong there.
+    pub(crate) fn tool_applies_to_session(&self, entry: &RegisteredTool) -> bool {
+        entry.definition().applies_to.contains(self.session_kind)
+    }
+
     pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
+        if !self.tool_applies_to_session(entry) {
+            return false;
+        }
         if self
             .channel_authority
             .as_ref()

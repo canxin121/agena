@@ -45,6 +45,20 @@ impl ToolExecutor {
         let definition = self
             .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(tool_name.as_str()))?;
+        if !self.tool_applies_to_session(&definition) {
+            return Err(ToolError::CapabilityUnavailable(Box::new(
+                agena_domain::CapabilityUnavailableResult {
+                    capability: "tool_execution".to_string(),
+                    tool_name: Some(tool_name.clone()),
+                    reason: format!(
+                        "tool '{tool_name}' is not available in a {} session",
+                        self.session_kind.as_str()
+                    ),
+                    source: agena_domain::CapabilitySourceKind::AgentProfile,
+                    retryable: false,
+                },
+            )));
+        }
         if !self.tool_is_within_capability(&definition) {
             return Err(ToolError::CapabilityUnavailable(Box::new(
                 agena_domain::CapabilityUnavailableResult {
@@ -463,6 +477,7 @@ mod snapshot_contract_tests {
                 docs: Default::default(),
                 runtime: Default::default(),
                 tags: vec![ToolTag::ReadOnly],
+                applies_to: Default::default(),
             },
         )
         .unwrap();
@@ -559,6 +574,26 @@ mod session_role_tests {
                 docs: Default::default(),
                 runtime: Default::default(),
                 tags,
+                applies_to: Default::default(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn tool_for(
+        plugin: &str,
+        name: &str,
+        applies_to: agena_domain::ApplicableSessions,
+    ) -> RegisteredTool {
+        RegisteredTool::new(
+            plugin.parse().unwrap(),
+            ToolDefinition {
+                name: name.into(),
+                contract: Default::default(),
+                docs: Default::default(),
+                runtime: Default::default(),
+                tags: vec![ToolTag::ReadOnly],
+                applies_to,
             },
         )
         .unwrap()
@@ -661,6 +696,56 @@ mod session_role_tests {
                 "{name} must remain usable by subagents"
             );
         }
+    }
+
+    /// Applicability is the declaration's own statement about which
+    /// conversations it serves, so the catalog and the invocation path must
+    /// agree: a Bot-only tool is invisible and refused in a project session
+    /// and the reverse. Otherwise the model would list a tool it cannot call.
+    #[test]
+    fn session_kind_decides_the_catalog_and_the_invocation_path_alike() {
+        use agena_domain::{ApplicableSessions, SessionKind};
+
+        let mut executor = executor(vec![
+            tool_for("agena.bot", "sessions", ApplicableSessions::bot()),
+            tool_for("agena.fs", "read", ApplicableSessions::project()),
+            tool_for("agena.plan", "get", ApplicableSessions::all()),
+        ]);
+        executor.session_kind = SessionKind::Project;
+
+        let names = available_names(&executor);
+        assert_eq!(
+            names,
+            BTreeSet::from(["agena.fs.read".into(), "agena.plan.get".into()])
+        );
+        // Present in the registry but not offered: the error must say the
+        // capability is unavailable here, not that the tool does not exist.
+        let unavailable =
+            executor.authorize_invocation(&ToolInvocation::new("bot.sessions", Default::default()));
+        assert!(
+            matches!(unavailable, Err(ToolError::CapabilityUnavailable(_))),
+            "a registered Bot-only tool must be excluded by capability, got {unavailable:?}"
+        );
+        assert!(
+            executor
+                .authorize_invocation(&ToolInvocation::new("plan.get", Default::default()))
+                .is_ok()
+        );
+
+        executor.session_kind = SessionKind::Bot;
+        assert_eq!(
+            available_names(&executor),
+            BTreeSet::from(["agena.bot.sessions".into(), "agena.plan.get".into()])
+        );
+        assert!(matches!(
+            executor.authorize_invocation(&ToolInvocation::new("fs.read", Default::default())),
+            Err(ToolError::CapabilityUnavailable(_))
+        ));
+        assert!(
+            executor
+                .authorize_invocation(&ToolInvocation::new("bot.sessions", Default::default()))
+                .is_ok()
+        );
     }
 
     #[test]

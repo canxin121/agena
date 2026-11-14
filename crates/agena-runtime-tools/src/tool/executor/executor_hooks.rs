@@ -460,6 +460,7 @@ mod output_contract_tests {
                 docs: Default::default(),
                 runtime: Default::default(),
                 tags: vec![],
+                applies_to: Default::default(),
             },
         )
         .unwrap();

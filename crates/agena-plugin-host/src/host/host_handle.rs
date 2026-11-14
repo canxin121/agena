@@ -145,6 +145,7 @@ impl HostHandle {
             &mut recover_write(&self.tool_registry, "plugin tool registry"),
         )?;
         for command in &manifest.commands {
+            self.ensure_command_name_available(plugin_id, None, command)?;
             let registry_name = command_registry_name(plugin_id, command.id.as_str());
             let item = CommandCatalogItem {
                 plugin_id: plugin_id.clone(),
@@ -1489,6 +1490,35 @@ impl HostHandle {
         Ok(())
     }
 
+    /// Refuse a command whose spellings would make one name ambiguous.
+    ///
+    /// Two declarations may share `/name` only when the session kinds they
+    /// serve do not overlap: `/new` may exist once for projects and once for
+    /// Bots, but not twice for projects. Registration answers this, so a
+    /// client never has to pick between two candidates in one conversation.
+    fn ensure_command_name_available(
+        &self,
+        plugin_id: &PluginKey,
+        scope: Option<&PluginScopeKey>,
+        definition: &crate::sdk::CommandDefinition,
+    ) -> Result<(), PluginError> {
+        let own_key = command_registry_name(plugin_id, definition.id.as_str());
+        for (key, entry) in self.command_registry.visible(scope) {
+            if key == own_key {
+                continue;
+            }
+            let other = &entry.value;
+            let Some(name) = definition.conflicting_name(&other.command) else {
+                continue;
+            };
+            return Err(PluginError::invalid_params(format!(
+                "command `/{name}` is already declared by `{}/{}` for an overlapping session kind",
+                other.plugin_id, other.command.id
+            )));
+        }
+        Ok(())
+    }
+
     pub(super) fn command_upsert_for_plugin(
         &self,
         plugin_id: &str,
@@ -1503,6 +1533,8 @@ impl HostHandle {
             )));
         }
         definition.validate().map_err(PluginError::invalid_params)?;
+        let scope = current_tool_scope();
+        self.ensure_command_name_available(&plugin_key, scope.as_ref(), &definition)?;
         let owner = self.ensure_effect_scope(&plugin_key);
         let _lease = owner
             .lease()
@@ -1517,7 +1549,6 @@ impl HostHandle {
                 .unwrap_or(serde_json::Value::Null),
             command: definition.clone(),
         };
-        let scope = current_tool_scope();
         self.command_registry
             .register_with_effect_kind(
                 &owner,

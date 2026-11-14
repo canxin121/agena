@@ -264,6 +264,22 @@ impl Application {
                 )
             })?;
 
+        // A command declares the conversation kinds it serves. A client hides
+        // the others from the palette, but the server is the authority: a
+        // project-only command dispatched from a Bot session is refused here,
+        // before any input is parsed or any handler runs.
+        if let Some(kind) = self.plugin_command_session_kind(session_id).await?
+            && !entry.command.applies_to.contains(kind)
+        {
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "This operation is not available in this conversation.",
+                format!(
+                    "plugin operation `{plugin_id}/{command_id}` does not apply to a {} session",
+                    kind.as_str()
+                ),
+            ));
+        }
+
         let input_is_empty =
             input.is_null() || input.as_object().is_some_and(serde_json::Map::is_empty);
         let input = if input_is_empty && !raw.trim().is_empty() {
@@ -320,6 +336,25 @@ impl Application {
             ))
         })?;
         Ok(result)
+    }
+
+    /// The conversation kind a plugin command is being dispatched from.
+    ///
+    /// A command that arrives without a session id has no conversation to be
+    /// shaped by, so it is classified as a project request — the default kind
+    /// everywhere else in Application. A session id that names no session
+    /// yields `None`: the request is about to fail on its own (the command
+    /// lookup or the tool invocation cannot resolve that session), and
+    /// guessing a kind here would turn a stale id into a misleading refusal.
+    async fn plugin_command_session_kind(
+        &self,
+        session_id: Option<i64>,
+    ) -> Result<Option<agena_domain::SessionKind>, ApplicationError> {
+        let Some(session_id) = session_id else {
+            return Ok(Some(agena_domain::SessionKind::default()));
+        };
+        let session = self.service().get_session(session_id).await?;
+        Ok(session.map(|session| agena_domain::SessionKind::from_workspace(session.workspace_id)))
     }
 }
 

@@ -27,6 +27,7 @@ impl agena_plugin_host::sdk::Plugin for MemoryProbe {
             docs: Default::default(),
             runtime: Default::default(),
             tags: vec![sdk::ToolTag::Mutate, sdk::ToolTag::Filesystem],
+            applies_to: Default::default(),
         }];
         manifest
     }

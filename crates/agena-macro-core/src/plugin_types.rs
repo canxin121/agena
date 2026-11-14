@@ -96,6 +96,8 @@ pub struct PluginCommandPlan {
     pub slash: Option<LitStr>,
     pub aliases: Vec<LitStr>,
     pub usage: Option<LitStr>,
+    /// Conversation kinds the command names, or `None` for every kind.
+    pub applies_to: Option<Expr>,
     pub handler: CommandHandlerPlan,
 }
 
@@ -178,6 +180,9 @@ pub struct PluginToolCommandConfig {
     pub aliases: Vec<LitStr>,
     pub usage: Option<LitStr>,
     pub group: Option<LitStr>,
+    /// Conversation kinds a tool-backed command names, or `None` to inherit
+    /// the tool's own `applies_to`.
+    pub applies_to: Option<Expr>,
 }
 
 /// Attributes of a plugin inherent method.

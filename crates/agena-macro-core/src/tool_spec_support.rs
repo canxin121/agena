@@ -45,6 +45,10 @@ pub struct ToolSpecConfig {
     pub choices: Vec<PathValuesConstraint>,
     pub input_field_metadata: Vec<PluginInputFieldMetadata>,
     pub tags: Vec<Expr>,
+    /// Conversation kinds the declaration names, or `None` for every kind.
+    /// `applies_to(project)` / `applies_to(bot)` keep a capability out of the
+    /// other conversation shape.
+    pub applies_to: Option<Expr>,
     pub streaming: bool,
     pub input_shape: Option<Type>,
     pub output_ty: Option<Type>,
@@ -87,6 +91,7 @@ pub fn empty_tool_spec_config() -> ToolSpecConfig {
         choices: Vec::new(),
         input_field_metadata: Vec::new(),
         tags: Vec::new(),
+        applies_to: None,
         streaming: false,
         input_shape: None,
         output_ty: None,

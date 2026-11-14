@@ -9,9 +9,10 @@ use std::{
 
 use agena_domain::PathKind;
 use agena_plugin_host::sdk::{
-    HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError, PluginManifest,
-    Result as SdkResult, ToolContract, ToolDefinition, ToolDocs, ToolInvokeInput, ToolInvokeOutput,
-    ToolRuntimePolicy, ToolStreamingMode, ToolTag, macro_support,
+    ApplicableSessions, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
+    PluginError, PluginManifest, Result as SdkResult, ToolContract, ToolDefinition, ToolDocs,
+    ToolInvokeInput, ToolInvokeOutput, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
+    macro_support,
 };
 use agena_skills::source::{
     SkillCreateRequest, SkillDeleteResult, SkillInstallRequest, SkillResourceWriteRequest,
@@ -116,6 +117,7 @@ fn definition<T: JsonSchema>(
             streaming: ToolStreamingMode::Buffered,
         },
         tags: tags.to_vec(),
+        applies_to: ApplicableSessions::all(),
     }
 }
 

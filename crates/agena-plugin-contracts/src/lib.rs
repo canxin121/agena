@@ -159,6 +159,23 @@ pub struct SettingsContract {
     pub root: SettingsNode,
 }
 
+/// Every spelling a user may type to reach a command, in the order the
+/// declaration lists them: the slash without its `/`, then each alias.
+///
+/// A composer matches `/name`, so the leading slash is not part of a name and
+/// is never compared. Case is folded because both clients match case
+/// insensitively.
+fn command_invocation_names<'a>(
+    slash: Option<&'a str>,
+    aliases: &'a [String],
+) -> impl Iterator<Item = String> + 'a {
+    slash
+        .into_iter()
+        .map(|slash| slash.trim_start_matches('/'))
+        .chain(aliases.iter().map(String::as_str))
+        .map(str::to_lowercase)
+}
+
 fn validate_command_slash(value: &str) -> Result<(), CommandDefinitionError> {
     let Some(name) = value.strip_prefix('/') else {
         return Err(CommandDefinitionError::new(
@@ -1245,6 +1262,18 @@ pub struct CommandDefinition {
     pub slash: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Which conversation kinds this command is offered to.
+    ///
+    /// Absent means every kind, which is what an undeclared command means. A
+    /// declaration that names only `project` never reaches a Bot palette, and
+    /// the server refuses it when a Bot asks anyway. Several declarations may
+    /// share one slash spelling only when their sets do not overlap, so a
+    /// single name never resolves to two commands in one conversation.
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::ApplicableSessions::is_all"
+    )]
+    pub applies_to: agena_domain::ApplicableSessions,
     #[serde(default)]
     pub docs: CommandDocs,
     pub input: SettingsContract,
@@ -1252,6 +1281,30 @@ pub struct CommandDefinition {
 }
 
 impl CommandDefinition {
+    /// Every spelling a user may type to reach this command, lowercased and
+    /// without the leading `/` of the slash spelling.
+    pub fn invocation_names(&self) -> impl Iterator<Item = String> + '_ {
+        command_invocation_names(self.slash.as_deref(), &self.aliases)
+    }
+
+    /// The name that makes this declaration and `other` ambiguous, if any.
+    ///
+    /// A user asks for one command by name, so two declarations may share a
+    /// spelling only when the conversation kinds they serve do not overlap:
+    /// `/new` may exist once for projects and once for Bots, but not twice for
+    /// projects. Registration refuses the second declaration rather than
+    /// letting catalog order decide which implementation runs.
+    pub fn conflicting_name(&self, other: &Self) -> Option<String> {
+        if !self.applies_to.overlaps(other.applies_to) {
+            return None;
+        }
+        let other_names = other
+            .invocation_names()
+            .collect::<std::collections::BTreeSet<_>>();
+        self.invocation_names()
+            .find(|name| other_names.contains(name))
+    }
+
     /// Validate the server-owned command definition before it is published
     /// in a manifest or catalog.
     pub fn validate(&self) -> Result<(), CommandDefinitionError> {
@@ -1288,6 +1341,14 @@ impl CommandDefinition {
         if let Some(slash) = &self.slash {
             validate_command_slash(slash)?;
         }
+        // An empty set is not "applies nowhere": it is a declaration that can
+        // never be offered anywhere, which is always a mistake rather than an
+        // intent. Refusing it keeps a typo from producing an invisible command.
+        if self.applies_to.is_empty() {
+            return Err(CommandDefinitionError::new(
+                "a command must declare at least one applicable session kind",
+            ));
+        }
         for (label, key) in [
             ("command summary key", self.docs.summary_key.as_ref()),
             ("command help key", self.docs.help_key.as_ref()),
@@ -1318,6 +1379,18 @@ impl CommandDefinition {
                 return Err(CommandDefinitionError::new(
                     "command aliases must be unique and must not equal the command id",
                 ));
+            }
+        }
+        // One declaration must not answer to two spellings it also lists
+        // under another form: `/save` with alias `save`, or `Save` beside
+        // `save`, would make the palette's own name ambiguous.
+        let mut invocation_names = std::collections::BTreeSet::new();
+        let spellings = self.invocation_names().collect::<Vec<_>>();
+        for name in &spellings {
+            if !invocation_names.insert(name.clone()) {
+                return Err(CommandDefinitionError::new(format!(
+                    "command slash and aliases must name each distinct spelling once; `{name}` is repeated"
+                )));
             }
         }
         self.input.validate().map_err(|error| {
@@ -2281,5 +2354,82 @@ mod entry_limit_contract_tests {
         let empty: SettingsConstraints = serde_json::from_value(json!({})).unwrap();
         assert_eq!(empty, SettingsConstraints::default());
         assert_eq!(serde_json::to_value(empty).unwrap(), json!({}));
+    }
+}
+
+#[cfg(test)]
+mod command_session_scope_tests {
+    use super::*;
+    use agena_domain::ApplicableSessions;
+
+    fn command(
+        id: &str,
+        slash: Option<&str>,
+        aliases: &[&str],
+        applies_to: ApplicableSessions,
+    ) -> CommandDefinition {
+        CommandDefinition {
+            id: id.to_string(),
+            title: id.to_string(),
+            group: "Built-in".to_string(),
+            category: None,
+            slash: slash.map(str::to_string),
+            aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+            applies_to,
+            docs: CommandDocs::default(),
+            input: SettingsContract::empty_object("No input", ""),
+            target: CommandTarget::Client {
+                action: "help".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn an_empty_applicability_set_is_refused() {
+        let error = command("new", Some("/new"), &[], ApplicableSessions::none())
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("at least one applicable"));
+    }
+
+    #[test]
+    fn one_declaration_must_not_repeat_its_own_spelling() {
+        let error = command("new", Some("/new"), &["New"], ApplicableSessions::all())
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("`new` is repeated"), "{error}");
+    }
+
+    #[test]
+    fn two_declarations_may_share_a_name_only_without_overlap() {
+        let project = command("new", Some("/new"), &[], ApplicableSessions::project());
+        let bot = command("new-bot", Some("/new"), &[], ApplicableSessions::bot());
+        assert_eq!(project.conflicting_name(&bot), None);
+        assert_eq!(bot.conflicting_name(&project), None);
+
+        let also_project = command("new-2", Some("/new"), &[], ApplicableSessions::project());
+        assert_eq!(project.conflicting_name(&also_project), Some("new".into()));
+
+        // An undeclared command serves both kinds, so it cannot share a name
+        // with anything that also serves either of them.
+        let everywhere = command(
+            "new-everywhere",
+            Some("/new"),
+            &[],
+            ApplicableSessions::all(),
+        );
+        assert_eq!(everywhere.conflicting_name(&bot), Some("new".into()));
+        assert_eq!(project.conflicting_name(&everywhere), Some("new".into()));
+    }
+
+    #[test]
+    fn aliases_participate_in_the_conflict() {
+        let project = command("new", Some("/new"), &[], ApplicableSessions::project());
+        let bot = command("start", Some("/start"), &["new"], ApplicableSessions::bot());
+        // Different kinds: an alias and a slash may share one spelling.
+        assert_eq!(bot.conflicting_name(&project), None);
+
+        let also_bot = command("other", Some("/other"), &["new"], ApplicableSessions::bot());
+        assert_eq!(bot.conflicting_name(&also_bot), Some("new".into()));
     }
 }

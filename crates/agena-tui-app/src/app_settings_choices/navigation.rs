@@ -87,12 +87,19 @@ impl App {
     /// surface snapshot arrives the list is empty rather than a hand-written
     /// fallback.
     pub(crate) fn client_commands(&self) -> Vec<commands::ClientCommand> {
-        commands::client_commands(self.application.plugin_catalog().as_ref())
+        commands::client_commands(
+            self.application.plugin_catalog().as_ref(),
+            self.is_bot_session(),
+        )
     }
 
     /// Resolve `/name` to a built-in command this client can run.
     pub(crate) fn find_client_command(&self, name: &str) -> Option<commands::ClientCommand> {
-        commands::find_client_command(self.application.plugin_catalog().as_ref(), name)
+        commands::find_client_command(
+            self.application.plugin_catalog().as_ref(),
+            name,
+            self.is_bot_session(),
+        )
     }
 
     /// The commands a server-owned target resolves, i.e. everything that is not
@@ -100,7 +107,10 @@ impl App {
     pub(crate) fn plugin_slash_commands(
         &self,
     ) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
-        crate::app_backend::plugin_effects::plugin_slash_commands(&self.application)
+        crate::app_backend::plugin_effects::plugin_slash_commands(
+            &self.application,
+            self.is_bot_session(),
+        )
     }
 
     pub(crate) fn open_resume_session_picker(&mut self) {

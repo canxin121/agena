@@ -13,6 +13,17 @@ fn bot_manifest_exposes_only_native_session_and_integration_tools() {
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(tools, ["connections", "sessions"].into_iter().collect());
     assert!(!tools.contains("manage"));
+    // Both tools act on projects and conversations through the instance, so
+    // they are declared for the operator Bot only: a project session must not
+    // see or reach them.
+    for tool in &manifest.tools {
+        assert_eq!(
+            tool.applies_to,
+            agena_plugin_host::sdk::ApplicableSessions::bot(),
+            "{} must be Bot-only",
+            tool.name
+        );
+    }
     let prompt = include_str!("../../../../assets/prompts/operator-bot.md");
     assert!(prompt.contains("bot.sessions"));
     for removed in [

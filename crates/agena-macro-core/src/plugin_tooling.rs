@@ -75,6 +75,12 @@ pub fn expand_plugin_command_definition(
             }
         },
     };
+    // A command with no declared scope inherits the same default as a tool:
+    // every conversation kind. Declaring `applies_to(...)` narrows it.
+    let applies_to_expr = match &command.applies_to {
+        Some(kinds) => quote! { #kinds },
+        None => quote! { ::agena_plugin_sdk::ApplicableSessions::all() },
+    };
     Ok(quote! {
         manifest.commands.push(::agena_plugin_sdk::CommandDefinition {
             id: #id.to_string(),
@@ -83,6 +89,7 @@ pub fn expand_plugin_command_definition(
             category: Some(#category.to_string()),
             slash: #slash,
             aliases: vec![#(#aliases.to_string()),*],
+            applies_to: #applies_to_expr,
             docs: ::agena_plugin_sdk::CommandDocs {
                 summary: ::core::option::Option::Some(#description.to_string()),
                 summary_key: ::core::option::Option::None,
@@ -221,6 +228,12 @@ pub fn expand_plugin_tool_definition(
     } else {
         quote! { ::agena_plugin_sdk::ToolStreamingMode::default() }
     };
+    // An undeclared scope means every conversation kind: a tool keeps working
+    // in both shapes until its author says otherwise.
+    let applies_to_expr = match &spec.applies_to {
+        Some(kinds) => quote! { #kinds },
+        None => quote! { ::agena_plugin_sdk::ApplicableSessions::all() },
+    };
     Ok(quote! {{
         let input_schema = #input_schema_expr;
         let mut __agena_translations = ::std::collections::BTreeMap::new();
@@ -242,6 +255,7 @@ pub fn expand_plugin_tool_definition(
                 streaming: #streaming_expr,
             },
             tags: #tags_expr,
+            applies_to: #applies_to_expr,
         }
     }})
 }

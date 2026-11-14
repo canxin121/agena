@@ -82,6 +82,7 @@ impl sdk::Plugin for ObserverPlugin {
                 } else {
                     sdk::ToolTag::Mutate
                 }],
+                applies_to: Default::default(),
             })
             .collect();
         manifest

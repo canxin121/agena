@@ -613,6 +613,11 @@ pub(super) struct CloudToolAdapterGate {
 pub struct ToolExecutor {
     pub(super) read_path_authorizer: Option<Arc<ReadPathAuthorizer>>,
     pub(super) session_relation_kind: agena_domain::SessionRelationKind,
+    /// The conversation kind this executor serves, derived once from the
+    /// session context. It gates tool applicability: a tool declared for one
+    /// kind never enters the other kind's catalog, and the authorization path
+    /// refuses it if it is reached anyway.
+    pub(super) session_kind: agena_domain::SessionKind,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
     pub(super) global: bool,
@@ -686,6 +691,7 @@ mod execution_namespace_tests {
                 docs: Default::default(),
                 runtime: Default::default(),
                 tags: vec![],
+                applies_to: Default::default(),
             },
         )
         .unwrap()

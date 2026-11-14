@@ -371,6 +371,7 @@ pub fn build_plugin_command_plan(
     let mut slash = None;
     let mut aliases = Vec::new();
     let mut usage = None;
+    let mut applies_to = None;
     let mut group = LitStr::new("command_palette", method_ident.span());
 
     if plugin_attr_has_explicit_args(attr) {
@@ -413,6 +414,16 @@ pub fn build_plugin_command_plan(
                     };
                     match ident.to_string().as_str() {
                         "aliases" => aliases.extend(parse_lit_str_list(list.tokens)?),
+                        "applies_to" => {
+                            if applies_to.is_some() {
+                                return Err(syn::Error::new_spanned(
+                                    ident,
+                                    "declare `applies_to(...)` once",
+                                ));
+                            }
+                            applies_to =
+                                Some(crate::plugin_tool_config::parse_applies_to(list.tokens)?);
+                        }
                         other => {
                             return Err(syn::Error::new_spanned(
                                 ident,
@@ -453,6 +464,7 @@ pub fn build_plugin_command_plan(
         slash,
         aliases,
         usage,
+        applies_to,
         handler: CommandHandlerPlan::Method {
             method: method_ident.clone(),
             input: method_shape.input,
@@ -496,6 +508,13 @@ pub fn build_tool_command_plan(tool: &PluginToolPlan) -> Option<Result<PluginCom
         slash,
         aliases: config.aliases.clone(),
         usage: config.usage.clone(),
+        // A tool-backed command serves the places its tool serves unless the
+        // command says otherwise, so the two declarations of one capability
+        // cannot disagree about where it exists.
+        applies_to: config
+            .applies_to
+            .clone()
+            .or_else(|| tool.input_model.spec.applies_to.clone()),
         group: config
             .group
             .clone()
@@ -589,4 +608,63 @@ fn build_plugin_tool_stream_handler(
         context: shape.context,
         input: shape.call_input.clone(),
     }))
+}
+
+#[cfg(test)]
+mod command_scope_tests {
+    use super::*;
+
+    /// `#[command]` and `#[tool]` share one spelling for applicability, so a
+    /// plugin author cannot write a scope that one accepts and the other
+    /// rejects. These tests pin the accepted vocabulary and the rejections.
+    fn plan(attr: Attribute) -> Result<PluginCommandPlan> {
+        let mut method: ImplItemFn = syn::parse_quote! {
+            fn sample(&self) -> Result<(), ()> { Ok(()) }
+        };
+        build_plugin_command_plan(
+            &mut method,
+            &Ident::new("sample", proc_macro2::Span::call_site()),
+            "Plugin",
+            false,
+            None,
+            &attr,
+        )
+    }
+
+    #[test]
+    fn a_command_may_declare_its_conversation_kinds() {
+        let attr: Attribute = syn::parse_quote! { #[command("/new", applies_to(project))] };
+        let command = plan(attr).unwrap();
+        assert!(command.applies_to.is_some());
+
+        let attr: Attribute = syn::parse_quote! { #[command("/new", applies_to(project, bot))] };
+        let command = plan(attr).unwrap();
+        assert!(command.applies_to.is_some());
+
+        // An undeclared scope stays undeclared: the expansion turns it into
+        // "every kind", so a plugin author opts into narrowing.
+        let attr: Attribute = syn::parse_quote! { #[command("/new")] };
+        assert!(plan(attr).unwrap().applies_to.is_none());
+    }
+
+    #[test]
+    fn an_unknown_or_repeated_scope_is_refused() {
+        fn rejection(attr: Attribute) -> String {
+            match plan(attr) {
+                Ok(_) => panic!("the declaration must be refused"),
+                Err(error) => error.to_string(),
+            }
+        }
+
+        let error = rejection(syn::parse_quote! { #[command("/new", applies_to(channel))] });
+        assert!(error.contains("unknown session kind"), "{error}");
+
+        let error = rejection(
+            syn::parse_quote! { #[command("/new", applies_to(bot), applies_to(project))] },
+        );
+        assert!(error.contains("once"), "{error}");
+
+        let error = rejection(syn::parse_quote! { #[command("/new", applies_to())] });
+        assert!(error.contains("at least one"), "{error}");
+    }
 }

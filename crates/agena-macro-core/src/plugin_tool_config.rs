@@ -38,6 +38,7 @@ fn parse_plugin_inline_tool_config(
     ));
     let mut stream_method = None;
     let mut command = None;
+    let mut applies_to_set = false;
 
     for meta in metas {
         match meta {
@@ -263,6 +264,16 @@ fn parse_plugin_inline_tool_config(
                         }
                         spec.translations.append(&mut translated);
                     }
+                    "applies_to" => {
+                        if applies_to_set {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "declare `applies_to(...)` once",
+                            ));
+                        }
+                        applies_to_set = true;
+                        spec.applies_to = Some(parse_applies_to(list.tokens)?);
+                    }
                     "output" => spec.output_ty = Some(parse_type_list(list.tokens, "output")?),
                     "command" => {
                         if command
@@ -365,6 +376,15 @@ fn parse_inline_tool_command_config(
                 };
                 match ident.to_string().as_str() {
                     "aliases" => config.aliases.extend(parse_lit_str_list(list.tokens)?),
+                    "applies_to" => {
+                        if config.applies_to.is_some() {
+                            return Err(syn::Error::new_spanned(
+                                ident,
+                                "declare `applies_to(...)` once",
+                            ));
+                        }
+                        config.applies_to = Some(parse_applies_to(list.tokens)?);
+                    }
                     other => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -421,4 +441,49 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
         _ => return None,
     };
     Some(parse_quote!(#variant))
+}
+
+/// Parse `applies_to(bot)` / `applies_to(project, bot)`.
+///
+/// Each argument is a bare conversation-kind name. The names are checked here
+/// so a misspelling fails the build rather than producing a declaration that
+/// silently applies nowhere. Shared by `#[tool]` and `#[command]` so the two
+/// vocabularies cannot drift apart.
+pub(crate) fn parse_applies_to(tokens: proc_macro2::TokenStream) -> Result<Expr> {
+    let kinds = parse_expr_list(tokens)?;
+    if kinds.is_empty() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "applies_to(...) must name at least one of `project` or `bot`",
+        ));
+    }
+    let mut names = Vec::new();
+    for kind in kinds {
+        let Expr::Path(path) = &kind else {
+            return Err(syn::Error::new_spanned(
+                kind,
+                "applies_to(...) takes conversation-kind names, such as `applies_to(bot)`",
+            ));
+        };
+        let Some(ident) = path.path.get_ident() else {
+            return Err(syn::Error::new_spanned(
+                kind,
+                "applies_to(...) takes bare kind names, not paths",
+            ));
+        };
+        let variant = match ident.to_string().as_str() {
+            "project" => quote! { ::agena_plugin_sdk::SessionKind::Project },
+            "bot" => quote! { ::agena_plugin_sdk::SessionKind::Bot },
+            other => {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    format!("unknown session kind `{other}`; expected `project` or `bot`"),
+                ));
+            }
+        };
+        names.push(variant);
+    }
+    Ok(parse_quote! {
+        ::agena_plugin_sdk::ApplicableSessions::from_kinds(&[#(#names),*])
+    })
 }

@@ -971,6 +971,7 @@ impl App {
         for command in commands::client_command_suggestions(
             self.application.plugin_catalog().as_ref(),
             query.as_str(),
+            self.is_bot_session(),
         ) {
             let name = command.name();
             let key = format!("command:{}", command.id());

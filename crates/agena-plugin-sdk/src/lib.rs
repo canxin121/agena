@@ -95,6 +95,9 @@ pub use manifest::{
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
 pub use schemars::JsonSchema;
+// Session-kind applicability is part of the manifest vocabulary, so a plugin
+// author names it here like every other declaration type.
+pub use agena_domain::{ApplicableSessions, SessionKind};
 pub use service_client::{
     PluginServiceClient, PluginServiceEndpoint, PluginServiceEndpointClient,
     PluginServiceInvokeExt, PluginServiceResponse, encode_service_output,

@@ -45,6 +45,7 @@ fn fixture(
             docs: Default::default(),
             runtime: Default::default(),
             tags: vec![],
+            applies_to: Default::default(),
         },
         payload,
     };

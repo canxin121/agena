@@ -53,12 +53,12 @@ use sha2::{Digest, Sha256};
 
 use agena_plugin_host::sdk::host_api::{HostCommandRegisterRequest, HostCommandRemoveRequest};
 use agena_plugin_host::sdk::{
-    CommandDefinition, CommandDocs, CommandInvokeInput, CommandResult, CommandTarget,
-    HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError, PluginKey,
-    PluginManifest, PluginManifestTranslation, PluginSkillDefinition, Result as SdkResult,
-    SettingsContract, SettingsNode, SettingsNodeKind, ToolContract, ToolDefinition,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolDocs, ToolInvokeInput, ToolInvokeOutput,
-    ToolRuntimePolicy, ToolStreamingMode, ToolTag, macro_support,
+    ApplicableSessions, CommandDefinition, CommandDocs, CommandInvokeInput, CommandResult,
+    CommandTarget, HookSubscription, HostClient, InitContext, InitOutcome, Plugin, PluginError,
+    PluginKey, PluginManifest, PluginManifestTranslation, PluginSkillDefinition,
+    Result as SdkResult, SettingsContract, SettingsNode, SettingsNodeKind, ToolContract,
+    ToolDefinition, ToolDefinitionInput, ToolDefinitionPatch, ToolDocs, ToolInvokeInput,
+    ToolInvokeOutput, ToolRuntimePolicy, ToolStreamingMode, ToolTag, macro_support,
 };
 
 use discovery::{
@@ -82,7 +82,9 @@ const DISCOVERED_CATEGORY: &str = "Skill";
 /// `action` is the client-side vocabulary name; `slash` is what a user types.
 /// `usage` is the argument shape shown in the palette (empty when the command
 /// takes none), and `summary_key` is the Fluent / vue-i18n key for its one-line
-/// description.
+/// description. Which conversation kinds offer the command is not stored here:
+/// [`built_in_applies_to`] owns that one policy table, so a command's scope is
+/// read in one place instead of beside every entry.
 struct BuiltInCommand {
     action: &'static str,
     slash: &'static str,
@@ -112,7 +114,11 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
     BuiltInCommand {
         action: "new",
         slash: "/new",
-        aliases: &["clear"],
+        // `/clear` is its own command now, with its own meaning: it resets the
+        // current conversation instead of starting another one. The old
+        // `clear` alias here would have made that name ambiguous, and
+        // registration refuses two declarations that overlap.
+        aliases: &[],
         usage: None,
         summary_key: "command-new-summary",
     },
@@ -400,6 +406,7 @@ fn built_in_commands() -> Vec<CommandDefinition> {
                 .iter()
                 .map(|alias| (*alias).to_string())
                 .collect(),
+            applies_to: built_in_applies_to(built_in.action),
             // Built-in commands document themselves through the client's
             // message catalog, so only the key is declared here. Usage, where
             // the command takes arguments, is the one literal: it is a shape,
@@ -425,6 +432,30 @@ fn built_in_summary_key_title(summary_key: &str) -> String {
         .trim_start_matches("command-")
         .trim_end_matches("-summary")
         .to_string()
+}
+
+/// Which conversation kinds a built-in command is offered to.
+///
+/// The list below names the built-ins that cannot mean anything in the
+/// operator Bot. `/new` starts a project conversation, and `/commit` and `/pr`
+/// act on a project's Git state: the Bot has no working directory by design,
+/// so offering them there would promise an action the runtime cannot perform.
+/// The client hides them from the Bot palette, and the server refuses a direct
+/// dispatch.
+///
+/// Everything else stays available in both kinds — session navigation,
+/// transcript, model, export, settings, and the commands that open another
+/// surface all mean the same thing in either conversation. A new built-in
+/// therefore defaults to both kinds; add it here only when it genuinely needs
+/// a project directory.
+const PROJECT_ONLY_BUILT_INS: &[&str] = &["new", "commit", "pr"];
+
+fn built_in_applies_to(action: &str) -> ApplicableSessions {
+    if PROJECT_ONLY_BUILT_INS.contains(&action) {
+        ApplicableSessions::project()
+    } else {
+        ApplicableSessions::all()
+    }
 }
 
 /// Both clients group built-ins together; `category` distinguishes them from
@@ -1040,6 +1071,7 @@ fn tool_definition(
             streaming: ToolStreamingMode::Buffered,
         },
         tags: tags.to_vec(),
+        applies_to: ApplicableSessions::all(),
     }
 }
 
@@ -1938,6 +1970,12 @@ fn package_command_definition(name: &str, entry: &PackageEntry) -> CommandDefini
         category: Some(DISCOVERED_CATEGORY.to_string()),
         slash: None,
         aliases: entry.command.frontmatter.aliases.clone(),
+        // A Skill is selected as composer content rather than dispatched as a
+        // slash command, and the skills manager already resolves an
+        // instance-only root inside a global session. So an entry is offered
+        // wherever the catalog is read, and its instructions decide what it
+        // may act on.
+        applies_to: ApplicableSessions::all(),
         docs: CommandDocs {
             summary: Some(CommandsPlugin::package_description(entry)),
             usage: None,
@@ -2768,5 +2806,47 @@ mod bot_command_tests {
             .find(|c| c.action == "assistant")
             .unwrap();
         assert!(!assistant.aliases.contains(&"bot"));
+    }
+
+    /// The policy table is the only place a built-in's scope lives, so the
+    /// whole catalog must be free of two declarations that answer to one name
+    /// in the same conversation. `agena.commands` declares `/clear` and `/new`
+    /// itself; an alias on either that collides with the other would now fail
+    /// registration, and this test states the intent instead of letting it
+    /// surface as a load-time block.
+    #[test]
+    fn built_in_names_are_unambiguous_within_one_conversation_kind() {
+        let commands = built_in_commands();
+        for (index, left) in commands.iter().enumerate() {
+            left.validate()
+                .unwrap_or_else(|error| panic!("`{}` is invalid: {error}", left.id));
+            for right in commands.iter().skip(index + 1) {
+                assert_eq!(
+                    left.conflicting_name(right),
+                    None,
+                    "`{}` and `{}` both answer to one slash",
+                    left.id,
+                    right.id
+                );
+            }
+        }
+    }
+
+    /// `/new`, `/commit` and `/pr` act on a project working directory. The
+    /// Bot has none by design, so those rows must not reach its palette.
+    #[test]
+    fn project_only_built_ins_declare_the_project_kind() {
+        for command in built_in_commands() {
+            let action = match &command.target {
+                CommandTarget::Client { action } => action.as_str(),
+                other => panic!("built-in `{}` has target {other:?}", command.id),
+            };
+            let expected = if PROJECT_ONLY_BUILT_INS.contains(&action) {
+                ApplicableSessions::project()
+            } else {
+                ApplicableSessions::all()
+            };
+            assert_eq!(command.applies_to, expected, "`/{action}`");
+        }
     }
 }

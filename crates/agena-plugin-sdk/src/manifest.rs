@@ -415,6 +415,18 @@ pub struct ToolDefinition {
     /// anything.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
+    /// Which conversation kinds this tool is offered to.
+    ///
+    /// Absent means every kind. A project-only tool never enters a Bot
+    /// session's catalog, and the executor refuses it if it is called anyway;
+    /// a Bot-only tool does the same inside a project. Applicability is a
+    /// visibility rule, not a permission: the permission layer still decides
+    /// whether an applicable tool may act.
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::ApplicableSessions::is_all"
+    )]
+    pub applies_to: agena_domain::ApplicableSessions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

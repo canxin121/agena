@@ -279,5 +279,8 @@ pub use channel_access::*;
 mod message_identity;
 pub use message_identity::*;
 
+mod session_kind;
+pub use session_kind::*;
+
 mod session_owner;
 pub use session_owner::*;

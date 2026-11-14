@@ -642,6 +642,35 @@ fn validate_manifest(
             .validate()
             .map_err(|error| fail(format!("command `{}` is invalid: {error}", command.id)))?;
     }
+    // Two declarations in one manifest may share a slash only when the session
+    // kinds they serve do not overlap. Registration enforces this against the
+    // whole host too, but a manifest-internal clash is the plugin author's
+    // mistake and deserves an error that names both declarations.
+    for (index, command) in manifest.commands.iter().enumerate() {
+        // A command that dispatches to one of this manifest's tools borrows
+        // that tool's scope: offering the slash where the tool itself is not
+        // available would only produce a refused invocation.
+        if let crate::sdk::CommandTarget::Tool { tool } = &command.target
+            && let Some(definition) = manifest
+                .tools
+                .iter()
+                .find(|candidate| candidate.name.as_str() == tool)
+            && !command.applies_to.remove(definition.applies_to).is_empty()
+        {
+            return Err(fail(format!(
+                "command `{}` is offered to a session kind its tool `{tool}` does not serve",
+                command.id
+            )));
+        }
+        for other in manifest.commands.iter().skip(index + 1) {
+            if let Some(name) = command.conflicting_name(other) {
+                return Err(fail(format!(
+                    "commands `{}` and `{}` both answer to `/{name}` for an overlapping session kind",
+                    command.id, other.id
+                )));
+            }
+        }
+    }
 
     manifest
         .services
@@ -798,4 +827,97 @@ pub fn verify_signature_bytes(
             &error,
         )
     })
+}
+
+#[cfg(test)]
+mod command_name_validation_tests {
+    use super::*;
+    use agena_plugin_sdk::{
+        ApplicableSessions, CommandDefinition, CommandDocs, CommandTarget, SettingsContract,
+    };
+
+    fn command(
+        id: &str,
+        slash: &str,
+        aliases: &[&str],
+        applies_to: ApplicableSessions,
+    ) -> CommandDefinition {
+        CommandDefinition {
+            id: id.to_string(),
+            title: id.to_string(),
+            group: "Test".to_string(),
+            category: None,
+            slash: Some(slash.to_string()),
+            aliases: aliases.iter().map(|alias| (*alias).to_string()).collect(),
+            applies_to,
+            docs: CommandDocs::default(),
+            input: SettingsContract::empty_object("No input", ""),
+            target: CommandTarget::Client {
+                action: "help".to_string(),
+            },
+        }
+    }
+
+    fn manifest_with(commands: Vec<CommandDefinition>) -> PluginManifest {
+        let mut manifest = PluginManifest::new("test", "scope", "1.0.0");
+        manifest.commands = commands;
+        manifest
+    }
+
+    fn key() -> PluginKey {
+        "test.scope".parse().unwrap()
+    }
+
+    fn validate(commands: Vec<CommandDefinition>) -> Result<(), HostError> {
+        validate_manifest("test.scope", &key(), &manifest_with(commands), "manifest")
+    }
+
+    #[test]
+    fn a_tool_backed_command_cannot_outreach_its_tool() {
+        let mut manifest = manifest_with(Vec::new());
+        // `bot.sessions` serves the Bot only; a `/sessions` command offered to
+        // projects would only ever be refused at invocation.
+        let tool: agena_plugin_sdk::ToolDefinition =
+            serde_json::from_value(serde_json::json!({"name": "sessions", "applies_to": "bot"}))
+                .unwrap();
+        manifest.tools = vec![tool];
+        let mut wider = command("sessions", "/sessions", &[], ApplicableSessions::all());
+        wider.target = CommandTarget::Tool {
+            tool: "sessions".to_string(),
+        };
+        manifest.commands = vec![wider];
+        let error = validate_manifest("test.scope", &key(), &manifest, "manifest").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("its tool `sessions` does not serve"),
+            "{error}"
+        );
+
+        // The same command narrowed to the Bot is exactly right.
+        manifest.commands[0].applies_to = ApplicableSessions::bot();
+        validate_manifest("test.scope", &key(), &manifest, "manifest").unwrap();
+    }
+
+    #[test]
+    fn one_manifest_may_share_a_slash_across_disjoint_session_kinds() {
+        validate(vec![
+            command("new", "/new", &[], ApplicableSessions::project()),
+            command("new-bot", "/new", &[], ApplicableSessions::bot()),
+        ])
+        .unwrap();
+    }
+
+    #[test]
+    fn one_manifest_refuses_a_slash_two_declarations_both_serve() {
+        let error = validate(vec![
+            command("first", "/status", &[], ApplicableSessions::all()),
+            command("second", "/status", &[], ApplicableSessions::project()),
+        ])
+        .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("first"), "{message}");
+        assert!(message.contains("second"), "{message}");
+        assert!(message.contains("/status"), "{message}");
+    }
 }

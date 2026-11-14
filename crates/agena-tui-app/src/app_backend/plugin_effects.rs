@@ -74,9 +74,19 @@ pub(crate) fn plugin_logs(
 /// A `Client` target is the rendering client's own command: the TUI runs it
 /// locally from [`crate::commands::client_commands`], so listing it here would
 /// both duplicate the palette row and offer a round trip the server refuses.
+///
+/// `is_bot_session` drops declarations that do not name this conversation
+/// kind. The server would refuse them anyway; filtering here keeps the
+/// palette from offering an operation that cannot run.
 pub(crate) fn plugin_slash_commands(
     application: &super::TuiBackend,
+    is_bot_session: bool,
 ) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
+    let kind = if is_bot_session {
+        agena_plugin_sdk::SessionKind::Bot
+    } else {
+        agena_plugin_sdk::SessionKind::Project
+    };
     application
         .plugin_catalog()
         .map(|catalog| {
@@ -84,14 +94,16 @@ pub(crate) fn plugin_slash_commands(
                 .commands
                 .into_iter()
                 .filter(|entry| {
-                    !matches!(
-                        entry.command.target,
-                        agena_plugin_sdk::CommandTarget::Client { .. }
-                    ) && !entry
-                        .command
-                        .category
-                        .as_deref()
-                        .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
+                    entry.command.applies_to.contains(kind)
+                        && !matches!(
+                            entry.command.target,
+                            agena_plugin_sdk::CommandTarget::Client { .. }
+                        )
+                        && !entry
+                            .command
+                            .category
+                            .as_deref()
+                            .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
                         && entry
                             .command
                             .slash

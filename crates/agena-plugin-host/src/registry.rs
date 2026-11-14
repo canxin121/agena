@@ -48,6 +48,7 @@ mod protocol_boundary_tests {
             docs: Default::default(),
             runtime: Default::default(),
             tags: vec![],
+            applies_to: Default::default(),
         };
         let protocol = PluginKey::new("agena", "tools").unwrap();
         assert!(RegisteredTool::new(protocol, definition.clone()).is_err());
@@ -71,6 +72,7 @@ mod contract_tests {
             docs: Default::default(),
             runtime: Default::default(),
             tags: vec![],
+            applies_to: Default::default(),
         }
     }
 

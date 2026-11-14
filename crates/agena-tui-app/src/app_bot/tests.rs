@@ -389,7 +389,7 @@ async fn slash_bot_action_opens_canonical_session_without_a_selected_session() {
     let server = Server::start().await;
     let (_temp, mut app) = app(Some(&server.endpoint));
     let catalog = crate::commands::bot_tests::bot_catalog();
-    let command = crate::commands::find_client_command(Some(&catalog), "bot").unwrap();
+    let command = crate::commands::find_client_command(Some(&catalog), "bot", false).unwrap();
     assert!(app.transcript.session_id.is_none());
     app.execute_command(&command, "");
     assert!(matches!(app.current_route, Route::BotEntry(_)));
@@ -499,7 +499,7 @@ async fn empty_hub_bot_keyboard_and_mouse_paths_work_at_42_by_18_in_every_locale
                 _ => {
                     let catalog = crate::commands::bot_tests::bot_catalog();
                     let command =
-                        crate::commands::find_client_command(Some(&catalog), "bot").unwrap();
+                        crate::commands::find_client_command(Some(&catalog), "bot", false).unwrap();
                     app.execute_command(&command, "");
                 }
             }
@@ -658,6 +658,7 @@ async fn create_edit_rename_instructions_use_typed_profile_and_keep_native_title
     let command = crate::commands::find_client_command(
         Some(&crate::commands::bot_tests::bot_catalog()),
         "bot",
+        false,
     )
     .unwrap();
     app.execute_command(&command, "create");

@@ -140,27 +140,53 @@ impl ClientCommand {
     }
 }
 
-/// Every declared command, reduced to the ones this client can run.
+/// Which conversation kinds a catalog entry serves.
+///
+/// The declaration names the kinds it belongs to; the server omits the field
+/// when a command applies everywhere. A client hides the rest rather than
+/// offering a row the server would refuse, because a project-only command is
+/// not "denied" in a Bot — it simply does not belong there.
+fn command_applies_to_session(entry: &CommandCatalogItem, is_bot_session: bool) -> bool {
+    let kind = if is_bot_session {
+        agena_plugin_sdk::SessionKind::Bot
+    } else {
+        agena_plugin_sdk::SessionKind::Project
+    };
+    entry.command.applies_to.contains(kind)
+}
+
+/// Every declared command, reduced to the ones this client can run in the
+/// conversation it is rendering.
 ///
 /// `catalog` is `None` before the first plugin surface snapshot arrives; the
 /// client then renders no commands at all rather than inventing a local list.
-pub(crate) fn client_commands(catalog: Option<&PluginSurfaceCatalog>) -> Vec<ClientCommand> {
+pub(crate) fn client_commands(
+    catalog: Option<&PluginSurfaceCatalog>,
+    is_bot_session: bool,
+) -> Vec<ClientCommand> {
     let Some(catalog) = catalog else {
         return Vec::new();
     };
-    catalog.commands.iter().filter_map(client_command).collect()
+    catalog
+        .commands
+        .iter()
+        .filter(|entry| command_applies_to_session(entry, is_bot_session))
+        .filter_map(client_command)
+        .collect()
 }
 
-/// Resolve the command that `/name` names, if this client declares one.
+/// Resolve the command that `/name` names, if this client declares one for the
+/// conversation it is rendering.
 pub(crate) fn find_client_command(
     catalog: Option<&PluginSurfaceCatalog>,
     name: &str,
+    is_bot_session: bool,
 ) -> Option<ClientCommand> {
     let name = name.trim().trim_start_matches('/');
     if name.is_empty() {
         return None;
     }
-    client_commands(catalog)
+    client_commands(catalog, is_bot_session)
         .into_iter()
         .find(|command| command.matches_name(name))
 }
@@ -169,9 +195,10 @@ pub(crate) fn find_client_command(
 pub(crate) fn client_command_suggestions(
     catalog: Option<&PluginSurfaceCatalog>,
     query: &str,
+    is_bot_session: bool,
 ) -> Vec<ClientCommand> {
     let query = query.trim().to_ascii_lowercase();
-    let commands = client_commands(catalog);
+    let commands = client_commands(catalog, is_bot_session);
     if query.is_empty() {
         return commands;
     }
@@ -256,11 +283,11 @@ pub(crate) mod bot_tests {
             let i18n = I18n::resolve(Some(locale), None);
             for name in ["task", "tasks"] {
                 assert!(
-                    find_client_command(Some(&catalog), name).is_none(),
+                    find_client_command(Some(&catalog), name, false).is_none(),
                     "{locale}"
                 );
                 assert!(
-                    client_command_suggestions(Some(&catalog), name).is_empty(),
+                    client_command_suggestions(Some(&catalog), name, false).is_empty(),
                     "{locale}"
                 );
                 assert!(
@@ -275,9 +302,11 @@ pub(crate) mod bot_tests {
             ] {
                 assert!(i18n.try_text(key).is_none(), "{locale}: {key}");
             }
-            assert_eq!(client_commands(Some(&catalog)).len(), 1);
+            assert_eq!(client_commands(Some(&catalog), false).len(), 1);
             assert_eq!(
-                find_client_command(Some(&catalog), "bot").unwrap().action(),
+                find_client_command(Some(&catalog), "bot", false)
+                    .unwrap()
+                    .action(),
                 ClientCommandAction::Bot
             );
         }
@@ -286,7 +315,7 @@ pub(crate) mod bot_tests {
     #[test]
     fn bot_catalog_command_resolves_without_session_context_and_is_localized() {
         let catalog = bot_catalog();
-        let command = find_client_command(Some(&catalog), "bot").unwrap();
+        let command = find_client_command(Some(&catalog), "bot", false).unwrap();
         assert_eq!(command.action(), ClientCommandAction::Bot);
         assert_eq!(command.invocation(), "/bot");
         assert!(!command.takes_arguments());
@@ -297,5 +326,35 @@ pub(crate) mod bot_tests {
             assert!(i18n.try_text("bot-retry-help").is_some());
             assert!(i18n.try_text("hub-bot-entry").is_some());
         }
+    }
+
+    /// `/new` is a project command; the TUI must not offer it in a Bot, and
+    /// `/bot`-style commands must still resolve in a project conversation.
+    #[test]
+    fn applicability_decides_which_palette_rows_a_conversation_kind_sees() {
+        let mut catalog = bot_catalog();
+        let mut project_only = catalog.commands[0].clone();
+        project_only.command.id = "new".into();
+        project_only.command.slash = Some("/new".into());
+        project_only.command.target = CommandTarget::Client {
+            action: "new".into(),
+        };
+        project_only.command.applies_to = agena_plugin_sdk::ApplicableSessions::project();
+        catalog.commands.push(project_only);
+
+        let bot_ids = client_commands(Some(&catalog), true)
+            .into_iter()
+            .map(|command| command.id().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(bot_ids, vec!["bot".to_string()]);
+        assert!(find_client_command(Some(&catalog), "new", true).is_none());
+        assert!(client_command_suggestions(Some(&catalog), "new", true).is_empty());
+
+        let project_ids = client_commands(Some(&catalog), false)
+            .into_iter()
+            .map(|command| command.id().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(project_ids, vec!["bot".to_string(), "new".to_string()]);
+        assert!(find_client_command(Some(&catalog), "new", false).is_some());
     }
 }

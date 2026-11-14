@@ -139,7 +139,14 @@ pub async fn run_plugin_command(
     Path((plugin_id, command_id)): Path<(String, String)>,
     Json(request): Json<CommandRequestContext>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let workspace_root = command_workspace_root(&state, request.session_id).await?;
+    // A command decides whether it belongs to a project or to the operator
+    // Bot; the transport must not pre-empt that with a blanket workspace
+    // requirement. Only a project conversation needs a workspace path, and
+    // Application refuses a declaration that does not name this kind.
+    let workspace_root = match command_session_kind(&state, request.session_id).await? {
+        Some(agena_domain::SessionKind::Bot) => None,
+        _ => command_workspace_root(&state, request.session_id).await?,
+    };
     let result = state
         .application()
         .invoke_plugin_command(
@@ -160,7 +167,24 @@ pub async fn run_plugin_command(
     }))
 }
 
-async fn command_workspace_root(
+/// The conversation kind a command request is dispatched from, or `None` when
+/// no session is named or the named session no longer exists.
+async fn command_session_kind(
+    state: &AppState,
+    session_id: Option<i64>,
+) -> Result<Option<agena_domain::SessionKind>, ServerError> {
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let session = state
+        .service()
+        .get_session(session_id)
+        .await
+        .map_err(server_error_from_application)?;
+    Ok(session.map(|session| agena_domain::SessionKind::from_workspace(session.workspace_id)))
+}
+
+pub(crate) async fn command_workspace_root(
     state: &AppState,
     session_id: Option<i64>,
 ) -> Result<Option<String>, ServerError> {

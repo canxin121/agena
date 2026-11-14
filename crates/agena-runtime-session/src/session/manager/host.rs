@@ -507,7 +507,10 @@ impl crate::SessionPluginCommandService for SessionManager {
         // command belongs here. A Bot-only command is legitimate in a Bot and
         // a project command is not, which the host also enforces per
         // declaration; this check keeps the error honest before dispatch.
-        let kind = agena_domain::SessionKind::from_workspace(session.workspace_id);
+        let kind = agena_domain::SessionKind::from_scope(
+            session.workspace_id,
+            session.execution.owner.is_some(),
+        );
         let applies = self
             .tool_executor()
             .plugin_manager()

@@ -14,7 +14,7 @@ fn bot_manifest_exposes_only_native_session_and_integration_tools() {
     assert_eq!(tools, ["connections", "sessions"].into_iter().collect());
     assert!(!tools.contains("manage"));
     // Both tools act on projects and conversations through the instance, so
-    // they are declared for the operator Bot only: a project session must not
+    // they are declared for Bot conversations: a project session must not
     // see or reach them.
     for tool in &manifest.tools {
         assert_eq!(

@@ -296,56 +296,6 @@ impl SessionManager {
         Ok(path)
     }
 
-    /// A Bot's operator conversation: a local root with no project scope.
-    ///
-    /// Ownership is recorded on the row itself, so this is a direct check
-    /// instead of a registry scan. The ancestry check still runs because a
-    /// conversation can be reached through an inherited scope that Patron
-    /// routing must not treat as an operator surface.
-    async fn require_bot_root(
-        &self,
-        id: i64,
-        owner: &agena_domain::SessionOwner,
-    ) -> Result<(), AppError> {
-        let config = self
-            .kernel()
-            .reader
-            .configuration(session_id(id)?)
-            .await
-            .map_err(kernel_error)?;
-        if !owner.surface.is_local()
-            || config.parent_session_id.is_some()
-            || config.relation_kind != agena_domain::SessionRelationKind::Root
-        {
-            return Err(invalid(
-                "the operator Bot must remain its server-owned local root conversation",
-            ));
-        }
-        let metadata = self
-            .kernel()
-            .reader
-            .metadata(session_id(id)?)
-            .await
-            .map_err(kernel_error)?;
-        if metadata.workspace_id.is_some() {
-            return Err(invalid(
-                "the operator Bot must be an isolated global root conversation",
-            ));
-        }
-        let ancestry = self
-            .kernel()
-            .reader
-            .management_ancestry(session_id(id)?)
-            .await
-            .map_err(kernel_error)?;
-        if ancestry.len() != 1 || ancestry.iter().any(|ancestor| ancestor.excluded_scope) {
-            return Err(invalid(
-                "the operator Bot must be an isolated global root conversation",
-            ));
-        }
-        Ok(())
-    }
-
     /// Ordinary children/forks/rewinds remain human-continuable sessions.
     /// Check ancestry too: a fork must not escape a channel or Subagent boundary.
     async fn require_project_session(&self, id: i64) -> Result<(), AppError> {
@@ -375,7 +325,7 @@ impl SessionManager {
     }
 
     async fn require_operator_bot(&self, source: i64) -> Result<(), AppError> {
-        let Some((bot, owner)) = self.bot_owner_of(source).await? else {
+        let Some((bot, _)) = self.bot_owner_of(source).await? else {
             return Err(invalid(
                 "cross-project session management requires an active registered Bot",
             ));
@@ -385,17 +335,19 @@ impl SessionManager {
                 "archived Bot history cannot manage project sessions",
             ));
         }
-        self.require_bot_root(source, &owner).await
+        // Bot ownership carries across local and external conversations. A
+        // channel's current binding authorization still applies to each call.
+        self.verify_channel_session(source).await
     }
 
     pub async fn bot_context(&self, source: i64) -> Result<Value, AppError> {
-        let Some((profile, owner)) = self.bot_owner_of(source).await? else {
+        let Some((profile, _)) = self.bot_owner_of(source).await? else {
             return Ok(json!({"enabled":false}));
         };
         if profile.archived {
             return Err(invalid("archived Bot history has no active identity"));
         }
-        self.require_bot_root(source, &owner).await?;
+        self.verify_channel_session(source).await?;
         Ok(
             json!({"enabled":true,"session_id":source,"role":"instance_operator_bot","bot_id":profile.id,"id":profile.id,"name":profile.name,"revision":profile.revision}),
         )
@@ -404,10 +356,8 @@ impl SessionManager {
     async fn bot_target(&self, source: i64, target: Option<i64>) -> Result<i64, AppError> {
         self.require_operator_bot(source).await?;
         let target = target.ok_or_else(|| invalid("session_id is required"))?;
-        // A Bot conversation is a global session, so the project-scope check
-        // answers first: it is not a project target at all. The ownership
-        // check below then covers a Bot conversation that *does* sit inside an
-        // inherited project scope.
+        // Targets are ordinary project conversations. A Bot-owned channel
+        // may have a private workspace, so ownership is checked separately.
         self.require_project_session(target).await?;
         let ancestry = self
             .kernel()
@@ -765,5 +715,7 @@ impl SessionManager {
     }
 }
 
+#[cfg(test)]
+mod channel_tests;
 #[cfg(test)]
 mod tests;

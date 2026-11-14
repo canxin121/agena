@@ -1,12 +1,10 @@
 //! Which kind of conversation a capability may serve.
 //!
-//! Two entrances share one runtime but not one vocabulary. A **project
-//! session** owns a working directory, edits a repository and runs project
-//! tooling. A **Bot session** is the instance operator's global conversation:
-//! it has no working directory by design and instead manages projects and
-//! ordinary conversations through its own tools. A slash command or a model
-//! tool that names project files has no meaning as the Bot, and the Bot's
-//! cross-project tool has no meaning inside a project.
+//! A **project session** owns a working directory and runs project tooling.
+//! A **Bot session** belongs to a registered Bot and manages projects and
+//! ordinary conversations through its own tools. Bot ownership applies across
+//! local and external entrances; a channel's private workspace does not turn
+//! its Bot conversation into a project conversation.
 //!
 //! [`SessionKind`] is that distinction, and [`ApplicableSessions`] is the set a
 //! capability declares. The vocabulary lives in `agena-domain` because every
@@ -42,8 +40,8 @@ pub enum SessionKind {
     /// directory and its tools act on that project.
     #[default]
     Project,
-    /// The operator Bot's global conversation: no working directory, and its
-    /// tools manage projects and ordinary conversations.
+    /// A Bot-owned conversation, local or external, whose tools manage
+    /// projects and ordinary conversations.
     Bot,
 }
 
@@ -65,13 +63,19 @@ impl SessionKind {
         }
     }
 
-    /// The session kind a session resolves to.
+    /// Resolve capability applicability from conversation ownership and scope.
     ///
-    /// `workspace_id` is the discriminator the runtime already uses to pick
-    /// the execution scope: a session with a project workspace runs project
-    /// tools, and a global session with no workspace is the operator Bot.
-    /// A chat-channel room that has no workspace is created with an isolated
-    /// workspace, so it resolves to `Project` here as well.
+    /// Bot ownership takes precedence over the private workspace allocated to
+    /// a channel. Unowned conversations retain their workspace-based kind.
+    pub const fn from_scope(workspace_id: Option<i64>, bot_owned: bool) -> Self {
+        if bot_owned {
+            Self::Bot
+        } else {
+            Self::from_workspace(workspace_id)
+        }
+    }
+
+    /// Resolve a context that has no separate Bot ownership information.
     pub const fn from_workspace(workspace_id: Option<i64>) -> Self {
         match workspace_id {
             Some(_) => Self::Project,
@@ -316,6 +320,17 @@ mod tests {
         assert_eq!(SessionKind::from_workspace(Some(9)), SessionKind::Project);
         assert_eq!(SessionKind::from_workspace(None), SessionKind::Bot);
         assert_eq!(SessionKind::default(), SessionKind::Project);
+    }
+
+    #[test]
+    fn bot_ownership_takes_precedence_over_a_channel_private_workspace() {
+        assert_eq!(SessionKind::from_scope(Some(9), true), SessionKind::Bot);
+        assert_eq!(SessionKind::from_scope(None, true), SessionKind::Bot);
+        assert_eq!(
+            SessionKind::from_scope(Some(9), false),
+            SessionKind::Project
+        );
+        assert_eq!(SessionKind::from_scope(None, false), SessionKind::Bot);
     }
 
     #[test]

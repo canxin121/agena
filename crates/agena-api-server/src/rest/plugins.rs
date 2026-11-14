@@ -181,7 +181,9 @@ async fn command_session_kind(
         .get_session(session_id)
         .await
         .map_err(server_error_from_application)?;
-    Ok(session.map(|session| agena_domain::SessionKind::from_workspace(session.workspace_id)))
+    Ok(session.map(|session| {
+        agena_domain::SessionKind::from_scope(session.workspace_id, session.owner_bot_id.is_some())
+    }))
 }
 
 pub(crate) async fn command_workspace_root(

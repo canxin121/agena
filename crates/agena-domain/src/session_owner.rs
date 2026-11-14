@@ -13,9 +13,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// `surface` is the conversation's entrance shape, not an authority: the
 /// capability a conversation holds still comes from its permission
-/// configuration and, for chat, from the binding grant. Server code treats an
-/// owner with `surface == Local` as the operator conversation that may manage
-/// other project sessions.
+/// configuration and, for chat, from the binding grant. Bot-owned local and
+/// external conversations can manage project sessions when their tools and
+/// permissions allow it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionOwner {

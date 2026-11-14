@@ -56,6 +56,9 @@ impl Session {
 pub struct SessionExecutionContext {
     #[serde(default)]
     pub global: bool,
+    /// Conversation identity is independent of its execution workspace.
+    #[serde(default)]
+    pub owner: Option<agena_domain::SessionOwner>,
     pub scope_session_id: Option<i64>,
     #[serde(default)]
     pub relation_kind: SessionRelationKind,
@@ -76,6 +79,13 @@ pub struct SessionExecutionContext {
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     fn is_global(&self) -> bool {
         self.global
+    }
+    fn session_kind(&self) -> agena_domain::SessionKind {
+        if self.global || self.owner.is_some() {
+            agena_domain::SessionKind::Bot
+        } else {
+            agena_domain::SessionKind::Project
+        }
     }
     fn relation_kind(&self) -> SessionRelationKind {
         self.relation_kind

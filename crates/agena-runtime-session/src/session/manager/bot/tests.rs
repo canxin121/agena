@@ -1,6 +1,13 @@
 use super::*;
 
 pub(super) async fn fixture() -> (SessionManager, SessionId) {
+    fixture_with_plugins(vec![], Default::default()).await
+}
+
+pub(super) async fn fixture_with_plugins(
+    static_plugins: Vec<agena_plugin_host::StaticPluginRegistration>,
+    config: agena_plugin_host::PluginsConfig,
+) -> (SessionManager, SessionId) {
     let kernel = Arc::new(
         agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
             .await
@@ -26,8 +33,8 @@ pub(super) async fn fixture() -> (SessionManager, SessionId) {
         .value
         .id;
     let plugins = agena_plugin_host::PluginHost::new(agena_plugin_host::PluginHostBuildConfig {
-        static_plugins: vec![],
-        config: Default::default(),
+        static_plugins,
+        config,
         workspace_root: root.clone(),
         agena_version: "test".into(),
         callback_base_url: None,
@@ -131,8 +138,7 @@ async fn global_bot_root_is_an_operator_but_not_a_project_target() {
         .await
         .unwrap();
     assert_eq!(metadata.workspace_id, None);
-    let owner = manager.session_owner(bot).await.unwrap().unwrap();
-    manager.require_bot_root(bot, &owner).await.unwrap();
+    assert!(manager.session_owner(bot).await.unwrap().is_some());
     manager.require_operator_bot(bot).await.unwrap();
     assert!(manager.require_project_session(bot).await.is_err());
     manager

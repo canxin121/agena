@@ -207,6 +207,7 @@ impl SessionManager {
             .overlay_with_cascade(&metadata.selection.clone().unwrap_or_default());
         let context = ToolContext {
             global: metadata.workspace_id.is_none(),
+            owner: configuration.owner.clone(),
             scope_session_id: Some(id),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
@@ -327,6 +328,7 @@ impl SessionManager {
         }
         Ok(ToolContext {
             global: metadata.workspace_id.is_none(),
+            owner: configuration.owner.clone(),
             scope_session_id: Some(id.get()),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),

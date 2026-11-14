@@ -343,7 +343,12 @@ impl Application {
             return Ok(Some(agena_domain::SessionKind::default()));
         };
         let session = self.service().get_session(session_id).await?;
-        Ok(session.map(|session| agena_domain::SessionKind::from_workspace(session.workspace_id)))
+        Ok(session.map(|session| {
+            agena_domain::SessionKind::from_scope(
+                session.workspace_id,
+                session.owner_bot_id.is_some(),
+            )
+        }))
     }
 }
 

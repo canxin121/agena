@@ -184,24 +184,28 @@ impl ChannelGrant {
                     "{tool} changes instance-level configuration and cannot be delegated through a channel role"
                 ));
             }
-            if matches!(
-                plugin.as_str(),
-                "agena.config"
-                    | "agena.settings"
-                    | "agena.permission"
-                    | "agena.permissions"
-                    | "agena.plugin"
-                    | "agena.plugins"
-                    | "agena.secret"
-                    | "agena.secrets"
-                    | "agena.session"
-                    | "agena.bot"
-                    | "agena.companion"
-                    | "agena.memory"
-                    | "agena.cron"
-                    | "agena.monitor"
-                    | "agena.mcp"
-            ) {
+            // Cross-project session management can be explicitly delegated
+            // to a Bot-owned channel. Other Bot administration stays local.
+            if tool != "agena.bot.sessions"
+                && matches!(
+                    plugin.as_str(),
+                    "agena.config"
+                        | "agena.settings"
+                        | "agena.permission"
+                        | "agena.permissions"
+                        | "agena.plugin"
+                        | "agena.plugins"
+                        | "agena.secret"
+                        | "agena.secrets"
+                        | "agena.session"
+                        | "agena.bot"
+                        | "agena.companion"
+                        | "agena.memory"
+                        | "agena.cron"
+                        | "agena.monitor"
+                        | "agena.mcp"
+                )
+            {
                 return Err(format!(
                     "{tool} cannot be granted directly to a channel; use the scoped capability controls"
                 ));
@@ -689,6 +693,19 @@ mod tests {
                 .is_err()
         );
     }
+    #[test]
+    fn bot_session_management_can_be_explicitly_granted_to_shared_channels() {
+        let mut p = policy();
+        assert!(!p.grant.allowed_tools().contains("agena.bot.sessions"));
+        p.grant.tools.insert("agena.bot.sessions".into());
+        assert!(p.validate(1).is_ok());
+        assert!(p.grant.allowed_tools().contains("agena.bot.sessions"));
+        p.session_mode = ChannelSessionMode::PerActor;
+        assert!(p.validate(1).is_ok());
+        p.grant.tools.insert("agena.bot.connections".into());
+        assert!(p.validate(1).is_err());
+    }
+
     #[test]
     fn role_labels_do_not_grant_machine_permissions() {
         let p = policy();

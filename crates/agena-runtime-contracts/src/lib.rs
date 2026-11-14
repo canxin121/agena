@@ -38,10 +38,9 @@ pub trait ToolSessionContext {
     }
     /// The conversation kind this execution serves.
     ///
-    /// Derived from [`Self::is_global`] by default so every implementation
-    /// that already distinguishes a project session from the instance scope
-    /// gets the right answer without a new field. A context that learns the
-    /// kind from somewhere else may override it.
+    /// Derived from [`Self::is_global`] by default. Contexts with explicit Bot
+    /// ownership override this so an external Bot conversation keeps its kind
+    /// even when it runs in a private channel workspace.
     fn session_kind(&self) -> agena_domain::SessionKind {
         if self.is_global() {
             agena_domain::SessionKind::Bot

@@ -1,4 +1,4 @@
-//! Canonical operator Bot adapter for ordinary sessions and integration grants.
+//! Canonical named Bot adapter for ordinary sessions and integration grants.
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
     ChatSystemTransformInput, ChatSystemTransformPatch, InitContext, InitOutcome, PluginError,
@@ -12,7 +12,7 @@ pub(crate) struct BotPlugin {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "bot", version = env!("CARGO_PKG_VERSION"),
-    summary = "Operator Bot access to ordinary project sessions and integration grants.",
+    summary = "Named Bot access to ordinary project sessions and integration grants.",
     translations(
         locale("zh-CN", summary = "Bot 管理普通项目会话和接入授权。"),
         locale("zh-TW", summary = "Bot 管理一般專案會話及接入授權。"),
@@ -36,7 +36,7 @@ impl BotPlugin {
     #[hook(
         init,
         summary = "Bind Bot services",
-        help = "Connects the operator Bot to host session and integration services.",
+        help = "Connects the named Bot to host session and integration services.",
         translations(
             locale(
                 "zh-CN",
@@ -100,8 +100,8 @@ impl BotPlugin {
     }
 
     #[hook(chat.system,
-        summary = "Attach operator Bot instructions",
-        help = "Adds operator project and session guidance to an active named Bot conversation.",
+        summary = "Attach named Bot instructions",
+        help = "Adds project and session guidance to an active named Bot conversation.",
         translations(
             locale("zh-CN", summary = "补充 Bot 操作指引", help = "仅向实例的 Bot 会话加入项目与普通会话的操作指引。"),
             locale("zh-TW", summary = "補充 Bot 操作指引", help = "僅向實例的 Bot 會話加入專案與一般會話的操作指引。"),
@@ -147,11 +147,11 @@ impl BotPlugin {
     #[tool(
         tags(agent),
         applies_to(bot),
-        summary = "Manage ordinary project conversations as the active named operator Bot. Resolve project names/paths with projects(query), inspect project(workspace_id), then sessions(query/favorite/pinned/states) globally or within that project; never ask humans to find IDs. Read/read_text and status provide evidence, native guards, current model, pending decisions and links. Continue a relevant existing session with send; otherwise create a normally titled root then send a self-contained request. Rename/organize set explicit metadata with expected_version. Fork creates a normal visible branch inheriting transcript/model/permissions at a stable boundary. Delete soft-deletes one idle conversation only, after a native human card naming exact workspace/title/ID; status guards must still match after approval. Clarify ambiguous destructive scope. Models lists configured native choices; configure preserves unset options and needs expected_version. Queue lists identities; queue_pause/queue_edit/queue_remove use observed control version and execution/generation guards, preserve attachments and never silently overwrite. Export returns the existing authenticated transcript download. Register_project records an existing directory, not a new physical folder. Every write requires an exact current direct-user quote and stable request_key; reuse identical payload on retry. Never approve permissions or answer human decisions. Return target links and distinguish queued/running/waiting/completed using native evidence; use bounded pages, never poll forever. Native tools and existing Subagents execute project work with existing permissions.",
+        summary = "Manage ordinary project conversations as the active named Bot, locally or through a chat-channel binding explicitly authorized for this tool. Resolve project names/paths with projects(query), inspect project(workspace_id), then sessions(query/favorite/pinned/states) globally or within that project; never ask humans to find IDs. Read/read_text and status provide evidence, native guards, current model, pending decisions and links. Continue a relevant existing session with send; otherwise create a normally titled root then send a self-contained request. Rename/organize set explicit metadata with expected_version. Fork creates a normal visible branch inheriting transcript/model/permissions at a stable boundary. Delete soft-deletes one idle conversation only, after a native human card naming exact workspace/title/ID; status guards must still match after approval. Clarify ambiguous destructive scope. Models lists configured native choices; configure preserves unset options and needs expected_version. Queue lists identities; queue_pause/queue_edit/queue_remove use observed control version and execution/generation guards, preserve attachments and never silently overwrite. Export returns the existing authenticated transcript download. Register_project records an existing directory, not a new physical folder. Every write requires an exact current direct-user quote and stable request_key; reuse identical payload on retry. Never approve permissions or answer human decisions. Return target links and distinguish queued/running/waiting/completed using native evidence; use bounded pages, never poll forever. Native tools and existing Subagents execute project work with existing permissions.",
         translations(
             locale(
                 "zh-CN",
-                summary = "Bot 管理项目和普通会话：创建、继续、查看、重命名和停止；需当前用户授权。"
+                summary = "Bot 从本地或获工具授权的聊天平台管理项目和普通会话；写操作关联当前用户指令。"
             ),
             locale(
                 "zh-TW",

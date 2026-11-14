@@ -51,24 +51,7 @@ pub struct SessionHierarchyRequest {
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Request to update session metadata and additional instructions.
-pub struct SessionUpdateRequest {
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub favorite: Option<bool>,
-    #[serde(default)]
-    pub pinned: Option<bool>,
-    /// Resume automatic naming, or lock the current title. Takes effect on the
-    /// next user turn; assigning a title alone always locks it.
-    #[serde(default)]
-    pub auto_title: Option<bool>,
-    /// Omit to keep the current session layer; an object replaces it.
-    #[serde(default)]
-    pub prompts: Option<agena_prompt_layers::PromptLayer>,
-}
+pub use agena_api::extended_sessions::SessionMetadataUpdate as SessionUpdateRequest;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 /// A validated read-only query sent to the runtime.
 pub enum Query {
+    /// Product operations shared by HTTP and plugin callers.
+    Business(crate::business::BusinessQuery),
+    Management(crate::management::ManagementQuery),
+    ExtendedSession(crate::extended_sessions::SessionQuery),
+    Server(crate::server_control::ServerQuery),
     ReadParts(ReadPartsParams),
     ReadRuns(ReadRunsParams),
     ReadContent(super::content::ReadContentParams),
@@ -34,6 +39,32 @@ pub enum Query {
     ListActivities(ListActivitiesParams),
     GetActivity(GetActivityParams),
     ActivityLogs(ActivityLogsParams),
+}
+
+pub use crate::business::BusinessQuery;
+pub use crate::extended_sessions::SessionQuery;
+pub use crate::management::ManagementQuery;
+
+impl From<BusinessQuery> for Query {
+    fn from(query: BusinessQuery) -> Self {
+        Self::Business(query)
+    }
+}
+impl From<ManagementQuery> for Query {
+    fn from(query: ManagementQuery) -> Self {
+        Self::Management(query)
+    }
+}
+impl From<SessionQuery> for Query {
+    fn from(query: SessionQuery) -> Self {
+        Self::ExtendedSession(query)
+    }
+}
+
+impl From<crate::server_control::ServerQuery> for Query {
+    fn from(request: crate::server_control::ServerQuery) -> Self {
+        Self::Server(request)
+    }
 }
 
 // ─── params ──────────────────────────────────────────────────────────────
@@ -188,6 +219,9 @@ pub struct ListSessionsParams {
     pub bucket: Option<SessionListBucket>,
     #[serde(default)]
     pub include_total: bool,
+    /// Return only the matching count without loading session resources.
+    #[serde(default)]
+    pub count_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,6 +293,10 @@ impl Query {
     /// variant cannot silently escape that check.
     pub fn session_id(&self) -> Option<i64> {
         match self {
+            Query::Business(query) => query.session_id(),
+            Query::Management(query) => query.session_id(),
+            Query::ExtendedSession(query) => query.session_id(),
+            Query::Server(_) => None,
             Query::Health
             | Query::Runtime
             | Query::ListProviders

@@ -45,7 +45,11 @@ async fn reset_recovery_keeps_commits_while_its_notification_is_backpressured() 
     {
         let recovery = recover_watch(&mut watch, || Ok(feed.watch(session, None)), &tx);
         tokio::pin!(recovery);
-        assert!(futures_util::poll!(recovery.as_mut()).is_pending());
+        std::future::poll_fn(|context| {
+            assert!(std::future::Future::poll(recovery.as_mut(), context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
 
         // The transport has not drained its preceding event. A new commit
         // during this delivery window must belong to the replacement watch.

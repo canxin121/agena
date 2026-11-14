@@ -1,52 +1,9 @@
-pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
-    let plugin_runtime = state.plugin_runtime();
-    let items = plugin_runtime
-        .plugin_statuses()
-        .into_iter()
-        .map(|status| {
-            let manifest = plugin_runtime
-                .plugin_inspect(status.plugin_id.to_string().as_str())
-                .and_then(|plugin| plugin.manifest);
-            agena_application::dto::PluginListItem::new(status, manifest)
-        })
-        .collect::<Vec<_>>();
-    Ok(items_json(items))
-}
-
-pub async fn get_plugin_architecture_catalog(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(state.plugin_runtime().plugin_architecture_catalog()))
-}
-
-pub async fn get_plugin_surface_catalog(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, ServerError> {
-    let plugin_runtime = state.plugin_runtime();
-    Ok(Json(PluginSurfaceCatalogResponse {
-        catalog: plugin_runtime.plugin_surface_catalog(),
-        permission_tools: plugin_runtime
-            .permission_tool_catalog()
-            .into_iter()
-            .map(
-                |tool| agena_application::dto::PermissionToolCatalogResource {
-                    name: tool.name,
-                    summary: tool.summary,
-                    summary_translations: tool.summary_translations,
-                    tags: tool.tags,
-                },
-            )
-            .collect(),
-        notifications: plugin_runtime.host_notifications(),
-        notifications_at_ms: Some(chrono::Utc::now().timestamp_millis()),
-        activity_kinds: state.application().activity_kind_catalog(),
-        tool_registry_generation: plugin_runtime.tool_registry_generation(),
-        tool_registry_last_event: plugin_runtime
-            .tool_registry_events_since(None, 1)
-            .into_iter()
-            .next(),
-    }))
-}
+use super::{
+    AppState, AxumQuery, CommandRequestContext, Deserialize, IntoResponse, Json, Path,
+    PluginLogListQuery, PluginSettingsUpdateRequest, PluginToolInvokeRequest, ServerError, State,
+    json_http, server_error_from_application,
+};
+use agena_api::management::{PluginCommand, PluginQuery};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for plugin tool registry changes.
@@ -57,18 +14,127 @@ pub struct PluginToolRegistryChangesQuery {
     pub limit: Option<usize>,
 }
 
+pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::List),
+    )
+    .await
+}
+
+pub async fn get_plugin_architecture_catalog(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::Architecture),
+    )
+    .await
+}
+
+pub async fn get_plugin_surface_catalog(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::Surface),
+    )
+    .await
+}
+
 pub async fn list_plugin_tool_registry_changes(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<PluginToolRegistryChangesQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let plugin_runtime = state.plugin_runtime();
-    Ok(Json(serde_json::json!({
-        "generation": plugin_runtime.tool_registry_generation(),
-        "events": plugin_runtime.tool_registry_events_since(
-            query.after_generation,
-            query.limit.unwrap_or(100),
-        ),
-    })))
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::ToolChanges {
+                after_generation: query.after_generation,
+                limit: query.limit,
+            }),
+    )
+    .await
+}
+
+pub async fn get_plugin(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::Get { plugin_id }),
+    )
+    .await
+}
+
+pub async fn get_plugin_settings(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::Settings { plugin_id }),
+    )
+    .await
+}
+
+pub async fn update_plugin_settings(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+    Json(request): Json<PluginSettingsUpdateRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .command_plugin_management(PluginCommand::SetSettings {
+                plugin_id,
+                settings: request.value,
+            }),
+    )
+    .await
+}
+
+pub async fn run_plugin_command(
+    State(state): State<AppState>,
+    Path((plugin_id, command_id)): Path<(String, String)>,
+    Json(request): Json<CommandRequestContext>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .command_plugin_management(PluginCommand::InvokeCommand {
+                plugin_id,
+                command_id,
+                input: request.input,
+                session_id: request.session_id,
+                slash: request.slash,
+                raw: request.raw,
+            }),
+    )
+    .await
+}
+
+pub async fn list_plugin_logs(
+    State(state): State<AppState>,
+    Path(plugin_id): Path<String>,
+    AxumQuery(query): AxumQuery<PluginLogListQuery>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(
+        state
+            .application()
+            .query_plugin_management(PluginQuery::Logs {
+                plugin_id,
+                after_seq: query.after_seq,
+                limit: query.limit,
+            }),
+    )
+    .await
 }
 
 pub async fn invoke_plugin_tool(
@@ -92,182 +158,4 @@ pub async fn invoke_plugin_tool(
         .await
         .map_err(server_error_from_application)?;
     Ok(Json(response))
-}
-
-pub async fn get_plugin(
-    State(state): State<AppState>,
-    Path(plugin_id): Path<String>,
-) -> Result<impl IntoResponse, ServerError> {
-    let plugin = state
-        .plugin_runtime()
-        .plugin_inspect(plugin_id.as_str())
-        .ok_or_else(|| {
-            ServerError::not_found_with_diagnostic(
-                "The plugin was not found.",
-                format!("plugin not found: {plugin_id}"),
-            )
-        })?;
-    Ok(Json(PluginInspectResponse { plugin }))
-}
-
-pub async fn get_plugin_settings(
-    State(state): State<AppState>,
-    Path(plugin_id): Path<String>,
-) -> Result<impl IntoResponse, ServerError> {
-    let settings = state
-        .application()
-        .plugin_settings(plugin_id.as_str())
-        .map_err(server_error_from_application)?;
-    Ok(Json(settings))
-}
-
-pub async fn update_plugin_settings(
-    State(state): State<AppState>,
-    Path(plugin_id): Path<String>,
-    Json(request): Json<PluginSettingsUpdateRequest>,
-) -> Result<impl IntoResponse, ServerError> {
-    let response = state
-        .application()
-        .update_plugin_settings(plugin_id.as_str(), request.value)
-        .await
-        .map_err(server_error_from_application)?;
-    Ok(Json(response))
-}
-
-pub async fn run_plugin_command(
-    State(state): State<AppState>,
-    Path((plugin_id, command_id)): Path<(String, String)>,
-    Json(request): Json<CommandRequestContext>,
-) -> Result<impl IntoResponse, ServerError> {
-    // A command decides whether it belongs to a project or to the operator
-    // Bot; the transport must not pre-empt that with a blanket workspace
-    // requirement. Only a project conversation needs a workspace path, and
-    // Application refuses a declaration that does not name this kind.
-    let workspace_root = match command_session_kind(&state, request.session_id).await? {
-        Some(agena_domain::SessionKind::Bot) => None,
-        _ => command_workspace_root(&state, request.session_id).await?,
-    };
-    let result = state
-        .application()
-        .invoke_plugin_command(
-            plugin_id.as_str(),
-            command_id.as_str(),
-            request.input,
-            request.session_id,
-            workspace_root,
-            request.slash,
-            request.raw,
-        )
-        .await
-        .map_err(server_error_from_application)?;
-    Ok(Json(agena_api::resource::PluginCommandInvokeResponse {
-        plugin_id,
-        command_id,
-        result,
-    }))
-}
-
-/// The conversation kind a command request is dispatched from, or `None` when
-/// no session is named or the named session no longer exists.
-async fn command_session_kind(
-    state: &AppState,
-    session_id: Option<i64>,
-) -> Result<Option<agena_domain::SessionKind>, ServerError> {
-    let Some(session_id) = session_id else {
-        return Ok(None);
-    };
-    let session = state
-        .service()
-        .get_session(session_id)
-        .await
-        .map_err(server_error_from_application)?;
-    Ok(session.map(|session| {
-        agena_domain::SessionKind::from_scope(session.workspace_id, session.owner_bot_id.is_some())
-    }))
-}
-
-pub(crate) async fn command_workspace_root(
-    state: &AppState,
-    session_id: Option<i64>,
-) -> Result<Option<String>, ServerError> {
-    let Some(session_id) = session_id else {
-        return Ok(None);
-    };
-    let session = state
-        .service()
-        .get_session(session_id)
-        .await
-        .map_err(server_error_from_application)?
-        .ok_or_else(|| {
-            ServerError::not_found_with_diagnostic(
-                "The session was not found.",
-                format!("session not found: {session_id}"),
-            )
-        })?;
-    let workspace_id = command_workspace_id(session.workspace_id)?;
-    let workspace = state
-        .service()
-        .get_workspace(workspace_id)
-        .await
-        .map_err(server_error_from_application)?
-        .ok_or_else(|| {
-            ServerError::not_found_with_diagnostic(
-                "The workspace was not found.",
-                format!("workspace not found: {workspace_id}"),
-            )
-        })?;
-    Ok(Some(workspace.path))
-}
-
-fn command_workspace_id(workspace_id: Option<i64>) -> Result<i64, ServerError> {
-    workspace_id.ok_or_else(|| {
-        ServerError::bad_request("This session has no project workspace. Run the plugin command from a session in an explicit project.")
-    })
-}
-
-pub async fn list_plugin_logs(
-    State(state): State<AppState>,
-    Path(plugin_id): Path<String>,
-    AxumQuery(query): AxumQuery<PluginLogListQuery>,
-) -> Result<impl IntoResponse, ServerError> {
-    let plugin_runtime = state.plugin_runtime();
-    if !plugin_runtime
-        .plugin_statuses()
-        .iter()
-        .any(|status| status.plugin_id.to_string() == plugin_id)
-    {
-        return Err(ServerError::not_found_with_diagnostic(
-            "The plugin was not found.",
-            format!("plugin not found: {plugin_id}"),
-        ));
-    }
-    Ok(Json(PluginLogListResponse {
-        plugin_id: plugin_id.clone(),
-        logs: plugin_runtime.plugin_logs(
-            plugin_id.as_str(),
-            query.after_seq,
-            query.limit.unwrap_or(50),
-        ),
-    }))
-}
-
-use super::{
-    AppState, AxumQuery, CommandRequestContext, Deserialize, IntoResponse, Json, Path,
-    PluginInspectResponse, PluginLogListQuery, PluginLogListResponse, PluginSettingsUpdateRequest,
-    PluginSurfaceCatalogResponse, PluginToolInvokeRequest, ServerError, State, items_json,
-    server_error_from_application,
-};
-
-#[cfg(test)]
-mod workspace_tests {
-    use super::*;
-
-    #[test]
-    fn global_session_command_requires_an_explicit_project_session() {
-        assert_eq!(command_workspace_id(Some(42)).unwrap(), 42);
-        let error = command_workspace_id(None).unwrap_err();
-        assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
-        let body = serde_json::to_string(&error.into_api()).unwrap();
-        assert!(body.contains("explicit project"));
-    }
 }

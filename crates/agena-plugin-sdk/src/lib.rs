@@ -44,6 +44,7 @@ pub mod configuration;
 pub mod error;
 pub mod hooks;
 pub mod host_api;
+pub use agena_session_api as operations;
 pub mod identity;
 pub mod inspection;
 #[doc(hidden)]
@@ -77,7 +78,7 @@ pub use cancellation::{CancellationToken, current_cancellation_token};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;
 pub use host_api::{
-    HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
+    HostClient, HostClientExt, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
     HostImageOperation, HostPluginDescriptor, HostPluginListResponse, NoopHostClient,
     PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest,
 };

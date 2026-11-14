@@ -17,37 +17,22 @@ pub struct AppState {
     next_operator_call_id: Arc<AtomicI64>,
     #[cfg(feature = "http")]
     revisions: Arc<Mutex<Option<Arc<crate::revisions::ResourceRevisions>>>>,
-    #[cfg(feature = "http")]
-    file_changes: Arc<crate::rest::FileChangesProjectionCache>,
 }
 
 impl AppState {
     pub fn from_application(application: Application) -> Self {
-        let instance_id = application.instance_id().to_owned();
+        let server = application.server_identity().clone();
         Self {
             application,
-            server: agena_api::resource::ServerIdentityResource {
-                instance_id,
-                id: uuid::Uuid::new_v4(),
-                pid: std::process::id(),
-                started_at: chrono::Utc::now(),
-                protocol_version: agena_api::PROTOCOL_VERSION,
-            },
+            server,
             next_operator_call_id: Arc::new(AtomicI64::new(1)),
             #[cfg(feature = "http")]
             revisions: Arc::new(Mutex::new(None)),
-            #[cfg(feature = "http")]
-            file_changes: Arc::new(crate::rest::FileChangesProjectionCache::default()),
         }
     }
 
     pub fn server(&self) -> &agena_api::resource::ServerIdentityResource {
         &self.server
-    }
-
-    #[cfg(feature = "http")]
-    pub(crate) fn file_changes_cache(&self) -> &crate::rest::FileChangesProjectionCache {
-        &self.file_changes
     }
 
     #[cfg(feature = "http")]

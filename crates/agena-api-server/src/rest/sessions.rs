@@ -45,6 +45,23 @@ pub async fn list_sessions(
     AxumQuery(query): AxumQuery<SessionListQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
+    if query.owner_bot_id.is_some()
+        || query.owner_surface.is_some()
+        || (query.parent_id.is_some() && query.workspace_id.is_none())
+    {
+        // Global Bot conversations do not advance project list clocks. Hash
+        // this bounded page for owner and unscoped parent queries.
+        let page = state
+            .service()
+            .list_sessions(query)
+            .await
+            .map_err(server_error_from_application)?;
+        let read = crate::revisions::ConditionalRead::for_value(&state, &page)?;
+        if let Some(response) = read.not_modified(&headers) {
+            return Ok(response);
+        }
+        return read.json(page).await;
+    }
     let bucket = query.bucket.map(|bucket| {
         serde_json::to_value(bucket)
             .expect("bucket")

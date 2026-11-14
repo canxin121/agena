@@ -140,39 +140,27 @@ pub async fn pause_activity(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let activity = state
-        .runtime_activities()
-        .map_err(server_error_from_application)?
-        .pause_activity(&activity_id)
-        .await
-        .map_err(activity_control_error)?;
-    Ok(Json(BackgroundActivityResource::from(&activity)))
+    Ok(Json(
+        state.application().pause_activity(&activity_id).await?,
+    ))
 }
 
 pub async fn resume_activity(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let activity = state
-        .runtime_activities()
-        .map_err(server_error_from_application)?
-        .resume_activity(&activity_id)
-        .await
-        .map_err(activity_control_error)?;
-    Ok(Json(BackgroundActivityResource::from(&activity)))
+    Ok(Json(
+        state.application().resume_activity(&activity_id).await?,
+    ))
 }
 
 pub async fn delete_activity(
     State(state): State<AppState>,
     Path(activity_id): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let activity = state
-        .runtime_activities()
-        .map_err(server_error_from_application)?
-        .delete_activity(&activity_id)
-        .await
-        .map_err(activity_control_error)?;
-    Ok(Json(BackgroundActivityResource::from(&activity)))
+    Ok(Json(
+        state.application().delete_activity(&activity_id).await?,
+    ))
 }
 
 pub async fn dismiss_activity(

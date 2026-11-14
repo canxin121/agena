@@ -14,6 +14,11 @@ use agena_domain::{ComposerDocument, ExecutionId};
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 /// A validated command sent to the runtime, expressed as typed parameters.
 pub enum Command {
+    /// Product operations shared by HTTP and plugin callers.
+    Business(crate::business::BusinessCommand),
+    Management(crate::management::ManagementCommand),
+    ExtendedSession(crate::extended_sessions::SessionCommand),
+    Server(crate::server_control::ServerCommand),
     // ── workspace ──
     CreateWorkspace(CreateWorkspaceParams),
     UpdateWorkspace(UpdateWorkspaceParams),
@@ -53,6 +58,32 @@ pub enum Command {
     StopActivity(StopActivityParams),
     DismissActivity(DismissActivityParams),
     ClearFinishedActivities,
+}
+
+pub use crate::business::BusinessCommand;
+pub use crate::extended_sessions::SessionCommand;
+pub use crate::management::ManagementCommand;
+
+impl From<BusinessCommand> for Command {
+    fn from(command: BusinessCommand) -> Self {
+        Self::Business(command)
+    }
+}
+impl From<ManagementCommand> for Command {
+    fn from(command: ManagementCommand) -> Self {
+        Self::Management(command)
+    }
+}
+impl From<SessionCommand> for Command {
+    fn from(command: SessionCommand) -> Self {
+        Self::ExtendedSession(command)
+    }
+}
+
+impl From<crate::server_control::ServerCommand> for Command {
+    fn from(request: crate::server_control::ServerCommand) -> Self {
+        Self::Server(request)
+    }
 }
 
 // ─── workspace ───────────────────────────────────────────────────────────
@@ -99,6 +130,8 @@ pub struct CreateSessionParams {
     pub auto_title: bool,
     #[serde(default)]
     pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub prompts: Option<agena_prompt_layers::PromptLayer>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +248,8 @@ pub struct ForkSessionParams {
     pub at_message_id: Option<i64>,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub expected_version: Option<i64>,
 }
 
 /// List every session sharing the given tree root, in `(depth, id)` order.
@@ -322,6 +357,10 @@ impl Command {
     /// The session this write targets, when it is session-scoped.
     pub fn session_id(&self) -> Option<i64> {
         match self {
+            Command::Business(command) => command.session_id(),
+            Command::Management(command) => command.session_id(),
+            Command::ExtendedSession(command) => command.session_id(),
+            Command::Server(_) => None,
             Command::CreateWorkspace(_)
             | Command::UpdateWorkspace(_)
             | Command::DeleteWorkspace(_)

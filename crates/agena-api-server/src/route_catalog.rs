@@ -68,6 +68,7 @@
 //! | GET,PUT | `/api/v1/bots/{id}` | `get_bot()`, `update_bot()` |
 //! | POST | `/api/v1/bots/{id}/archive` | `archive_bot()` |
 //! | POST | `/api/v1/bots/{id}/session` | `ensure_named_bot_session()` |
+//! | POST | `/api/v1/bots/{id}/sessions` | `create_bot_conversation()` |
 //!
 //! ### `changes`
 //!
@@ -76,6 +77,12 @@
 //! | GET | `/api/v1/changes/revisions` | `resource_revisions()` |
 //! | GET | `/api/v1/changes/stream` | `sse()` |
 //! | GET | `/api/v1/changes/stream` | `sse()` |
+//!
+//! ### `commands`
+//!
+//! | Method | Path | Handlers |
+//! |---|---|---|
+//! | POST | `/api/v1/commands` | `command()` |
 //!
 //! ### `config`
 //!
@@ -232,6 +239,12 @@
 //! | GET,POST | `/api/v1/providers/{provider_id}/models` | `list_provider_models()`, `list_saved_provider_adapter_models()` |
 //! | GET | `/api/v1/providers/{provider_id}/configured-models` | `list_configured_provider_adapter_models()` |
 //! | GET | `/api/v1/providers/{provider_id}/configured-local-models` | `list_configured_provider_models()` |
+//!
+//! ### `queries`
+//!
+//! | Method | Path | Handlers |
+//! |---|---|---|
+//! | POST | `/api/v1/queries` | `query()` |
 //!
 //! ### `runtime`
 //!

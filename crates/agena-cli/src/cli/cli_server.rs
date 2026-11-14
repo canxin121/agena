@@ -1762,6 +1762,7 @@ impl AgenaCli {
                 session_id: args.session_id,
                 at_message_id: args.at_message,
                 title: args.title,
+                expected_version: None,
             }))
             .await
             .map_err(|error| client_error("failed to fork session through server", error))?;

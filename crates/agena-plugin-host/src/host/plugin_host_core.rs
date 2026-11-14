@@ -51,6 +51,29 @@ fn plugin_tool_registry_read<'a>(
 }
 
 impl PluginHost {
+    /// Activate business-dependent plugin work only after Application is bound.
+    pub async fn application_ready(&self) -> Result<(), PluginError> {
+        let timeout = self.timeouts.fast_or(Duration::from_secs(30));
+        for plugin in &self.plugins {
+            if !plugin
+                .manifest
+                .hooks
+                .contains(HookSubscription::APPLICATION_READY)
+            {
+                continue;
+            }
+            self.call_hook_with_default_context(
+                plugin,
+                method::META_READY,
+                serde_json::json!({}),
+                timeout,
+            )
+            .await
+            .map_err(transport_to_plugin_error)?;
+        }
+        Ok(())
+    }
+
     // Even hooks without session/tool privileges need an originating call
     // authority, so control callbacks can defer retirement until they return.
     async fn call_hook_with_default_context(

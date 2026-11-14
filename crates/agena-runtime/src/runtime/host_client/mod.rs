@@ -48,11 +48,6 @@ use agena_plugin_host::{
 
 mod image;
 mod mappers;
-mod session_commands;
-mod session_queries;
-
-#[cfg(test)]
-mod session_op_tests;
 
 use image::*;
 use mappers::*;
@@ -135,6 +130,25 @@ fn plugin_error_from_app(error: crate::AppError) -> PluginError {
     }
 }
 
+fn plugin_error_from_failure(failure: agena_failure::Failure) -> PluginError {
+    use agena_failure::FailureCategory;
+    use agena_plugin_sdk::PluginErrorKind;
+    let kind = match failure.category {
+        FailureCategory::InvalidInput | FailureCategory::NotFound | FailureCategory::Conflict => {
+            PluginErrorKind::InvalidParams
+        }
+        FailureCategory::PermissionRequired | FailureCategory::PermissionDenied => {
+            PluginErrorKind::PolicyDenied
+        }
+        FailureCategory::DependencyUnavailable => PluginErrorKind::HostUnavailable,
+        FailureCategory::Timeout => PluginErrorKind::Timeout,
+        _ => PluginErrorKind::Internal,
+    };
+    let mut error = PluginError::from_kind(kind, &failure.user.fallback);
+    error.failure = Box::new(failure);
+    error
+}
+
 pub(super) struct RuntimeHostClient {
     generation: u64,
     config: serde_json::Value,
@@ -211,475 +225,6 @@ impl RuntimeHostClient {
         let executor = self.tool_executor()?;
         let feature = feature(&executor).ok_or_else(|| host_unavailable(unavailable))?;
         Ok((executor, feature))
-    }
-
-    /// Run one read-only session operation.
-    ///
-    /// The plugin contract is the shared transport contract, so this matches
-    /// the same `Query` enum the REST and WebSocket surfaces dispatch. An
-    /// operation added there fails to compile here until it is routed.
-    async fn run_session_query(
-        &self,
-        query: agena_session_api::queries::Query,
-    ) -> Result<serde_json::Value, PluginError> {
-        use agena_session_api::queries::Query;
-        let runtime = self.runtime()?;
-        let services = runtime.application_services();
-        // Session reads name their target; instance-wide reads need no session.
-        let scope = query.session_id();
-        let target = match scope {
-            Some(_) => self.callback_or_requested_session_id(scope, "session_query")?,
-            None => 0,
-        };
-        let data = match query {
-            Query::ListSessions(params) => self.list_plugin_sessions(params).await?,
-            Query::GetSession(_) => {
-                let session = self
-                    .use_session_manager(|manager| async move { manager.get_session(target).await })
-                    .await?;
-                serde_json::to_value(
-                    crate::runtime::host_client::mappers::session_resource_from_session(&session),
-                )
-                .map_err(|error| PluginError::internal_error(&error))?
-            }
-            Query::GetSessionState(_) => {
-                // Same sources the HTTP session-state endpoint reads: one
-                // control snapshot plus the query service. The plugin receives
-                // the durable facts, not a client-shaped duplicate.
-                let queries = services
-                    .session_queries
-                    .ok_or_else(|| host_unavailable("session queries are not enabled"))?;
-                let kernel = self.session_manager()?.session_kernel();
-                let snapshot = kernel
-                    .reader
-                    .control_snapshot(kernel_session_id(target)?, 128)
-                    .await
-                    .map_err(|error| PluginError::internal_error(&error))?;
-                let manager = self.session_manager()?;
-                let summary = manager
-                    .get_session_summary(target)
-                    .await
-                    .map_err(plugin_error)?;
-                let running = manager.is_run_active(target).await;
-                let context = queries
-                    .execution_context(&snapshot)
-                    .map_err(|error| PluginError::internal(error.to_string()))?;
-                let state = agena_plugin_host::sdk::host_api::HostSessionState {
-                    session: super::host_client::mappers::session_resource_from_summary(&summary),
-                    running,
-                    queue_paused: snapshot.configuration.message_queue_paused,
-                    queued_messages: snapshot
-                        .active_executions
-                        .executions
-                        .iter()
-                        .filter(|execution| {
-                            execution.phase == agena_storage::kernel::ExecutionPhase::Queued
-                                && execution.purpose
-                                    == agena_storage::kernel::ExecutionPurpose::Message
-                        })
-                        .map(
-                            |execution| agena_plugin_host::sdk::host_api::HostQueuedMessage {
-                                execution_id: execution.id.0.to_string(),
-                                message_id: execution.message_id.get(),
-                            },
-                        )
-                        .collect(),
-                    control_version: snapshot.control_version,
-                    workflow_state: format!("{:?}", context.workflow_state),
-                    selected_permission: serde_json::to_value(&context.selected_permission)
-                        .unwrap_or(serde_json::Value::Null),
-                    effective_permission: serde_json::to_value(&context.effective_permission)
-                        .unwrap_or(serde_json::Value::Null),
-                    permission_ceiling: serde_json::to_value(&context.permission_ceiling)
-                        .unwrap_or(serde_json::Value::Null),
-                    model: agena_plugin_host::sdk::host_api::HostSessionModel {
-                        provider_id: context.model_provider_id,
-                        adapter_id: context.model_adapter_id,
-                        model_id: context.model_id,
-                        thinking_mode: context.model_thinking_mode,
-                        speed_mode: context.model_speed_mode,
-                        verbosity: context.model_verbosity,
-                        parallel_tool_calls: context.model_parallel_tool_calls,
-                    },
-                    workspace_root: context.effective_workspace_root,
-                    agent: agena_plugin_host::sdk::host_api::HostSessionAgent {
-                        id: context.agent_id,
-                        name: context.agent_name,
-                        status: context.agent_status,
-                        started_at: context.agent_started_at.map(|at| at.to_rfc3339()),
-                        finished_at: context.agent_finished_at.map(|at| at.to_rfc3339()),
-                        failure: context
-                            .agent_failure
-                            .and_then(|failure| serde_json::to_value(failure).ok()),
-                    },
-                };
-                serde_json::to_value(state).map_err(|error| PluginError::internal_error(&error))?
-            }
-            Query::ReadParts(params) => {
-                let page = self
-                    .use_session_manager(|manager| async move {
-                        let kernel = manager.session_kernel();
-                        kernel
-                            .reader
-                            .message_history(
-                                agena_storage::kernel::SessionId::try_from(params.session_id)
-                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
-                                None,
-                                params.limit.unwrap_or(8).clamp(1, 32) as usize,
-                                32,
-                            )
-                            .await
-                            .map_err(|error| crate::AppError::Config(error.to_string()))
-                    })
-                    .await?;
-                serde_json::to_value(agena_plugin_host::sdk::host_api::HostPartsPage {
-                    entries: serde_json::to_value(&page.entries)
-                        .map_err(|error| PluginError::internal_error(&error))?,
-                    user_message_count: page.user_message_count,
-                    has_more: page.has_more,
-                })
-                .map_err(|error| PluginError::internal_error(&error))?
-            }
-            Query::ReadContent(params) => {
-                let range = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .kernel()
-                            .reader
-                            .text_range(
-                                agena_storage::kernel::SessionId::try_from(params.session_id)
-                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
-                                params.resource_id,
-                                None,
-                                params.max_bytes,
-                            )
-                            .await
-                            .map_err(|error| crate::AppError::Internal(error.to_string()))
-                    })
-                    .await?;
-                // `TextRange` is a kernel read view, not a wire type. Project
-                // the durable facts a reader needs.
-                serde_json::json!({
-                    "resource": range.stream,
-                    "start": range.start,
-                    "text": String::from_utf8_lossy(&range.bytes),
-                    "has_more": range.has_more,
-                })
-            }
-            Query::ReadRuns(_) => {
-                let page = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .kernel()
-                            .reader
-                            .message_history(
-                                agena_storage::kernel::SessionId::try_from(target)
-                                    .map_err(|error| crate::AppError::Config(error.to_string()))?,
-                                None,
-                                32,
-                                1,
-                            )
-                            .await
-                            .map_err(|error| crate::AppError::Internal(error.to_string()))
-                    })
-                    .await?;
-                serde_json::to_value(agena_plugin_host::sdk::host_api::HostExecutionList {
-                    executions: page
-                        .messages
-                        .iter()
-                        .map(
-                            |message| agena_plugin_host::sdk::host_api::HostExecutionSummary {
-                                execution_id: message.id.get(),
-                                part_count: message.entry_count,
-                                loaded_count: message.loaded_count,
-                            },
-                        )
-                        .collect(),
-                    user_message_count: page.user_message_count,
-                    has_more: page.has_more,
-                })
-                .map_err(|error| PluginError::internal_error(&error))?
-            }
-            Query::GetSessionCost(_) => {
-                let queries = services
-                    .session_queries
-                    .ok_or_else(|| host_unavailable("session queries are not enabled"))?;
-                let summary = queries
-                    .session_cost_summary(target)
-                    .await
-                    .map_err(|error| PluginError::invalid_params(error.to_string()))?;
-                serde_json::to_value(summary)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            Query::GetSessionTree(params) => {
-                let sessions = self
-                    .use_session_manager(|manager| async move {
-                        manager.list_session_tree(params.session_id).await
-                    })
-                    .await?;
-                serde_json::to_value(sessions)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            Query::GetSessionPlatforms(_) => {
-                let assistant = self
-                    .runtime()?
-                    .assistant_service()
-                    .ok_or_else(|| host_unavailable("assistant service unavailable"))?;
-                let inventory = agena_assistant::AssistantService::platform_inventory(
-                    assistant.as_ref(),
-                    target,
-                )
-                .await
-                .map_err(|error| PluginError::invalid_params(error.to_string()))?;
-                serde_json::to_value(inventory)
-                    .map_err(|error| PluginError::internal_error(&error))?
-            }
-            query @ (Query::Health
-            | Query::Runtime
-            | Query::ListProviders
-            | Query::ListProviderModels(_)
-            | Query::ListProviderAdapterModels(_)
-            | Query::ListSavedProviderAdapterModels(_)
-            | Query::ListWorkspaces(_)
-            | Query::GetWorkspace(_)
-            | Query::ListPermissionRules(_)
-            | Query::GetPermissionRule(_)
-            | Query::ListActivities(_)
-            | Query::GetActivity(_)
-            | Query::ActivityLogs(_)
-            | Query::ReadContentText(_)) => self.run_global_session_query(query).await?,
-        };
-        Ok(data)
-    }
-
-    /// Run one side-effectful session operation.
-    ///
-    /// Plugins use the shared command enum, including instance-wide management
-    /// operations that do not require an existing conversation.
-    async fn run_session_command(
-        &self,
-        command: agena_session_api::commands::Command,
-    ) -> Result<serde_json::Value, PluginError> {
-        use agena_session_api::commands::Command;
-        // Management commands return their own envelope below. The remaining
-        // commands all carry an explicit session ID.
-        let target = command.session_id().unwrap_or_default();
-        let mut execution_ids = Vec::new();
-        let mut data = None;
-        match command {
-            Command::SubmitMessage(params) => {
-                let outcome = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .submit_managed_document(
-                                params.session_id,
-                                String::new(),
-                                params.document,
-                                None,
-                                None,
-                            )
-                            .await
-                    })
-                    .await?;
-                if let Some(receipt) = outcome.receipt {
-                    execution_ids.push(receipt.execution_id.to_string());
-                }
-            }
-            Command::CancelRun(_) => {
-                let outcome = self
-                    .use_session_manager(|manager| async move {
-                        manager.cancel_active_execution_with_outcome(target).await
-                    })
-                    .await?;
-                data = serde_json::to_value(outcome.result).ok();
-            }
-            Command::UpdateSession(params) => {
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .rename_session(params.session_id, params.title)
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(session).ok();
-            }
-            Command::ForkSession(params) => {
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .fork_session(crate::session::SessionForkRequest {
-                                conversation_mode: params.conversation_mode,
-                                session_id: params.session_id,
-                                at_message_id: params.at_message_id,
-                                title: params.title,
-                                expected_version: None,
-                            })
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(session).ok();
-            }
-            Command::RewindSession(params) => {
-                let result = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .rewind_session(crate::session::SessionRewindRequest {
-                                session_id: params.session_id,
-                                at_message_id: params.at_message_id,
-                                mode: params.mode,
-                                expected_version: params.expected_version,
-                            })
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(&result.0).ok();
-            }
-            Command::CompactSession(_) => {
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        let options = manager.session_run_options(target).await?;
-                        manager
-                            .compact_session(crate::session::SessionExecutionRequest {
-                                session_id: target,
-                                options,
-                            })
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(&session).ok();
-            }
-            Command::ContinueRun(_) => {
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        let options = manager.session_run_options(target).await?;
-                        manager
-                            .continue_session(crate::session::SessionExecutionRequest {
-                                session_id: target,
-                                options,
-                            })
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(&session).ok();
-            }
-            Command::ClearSession(params) => {
-                let mode = match params.mode {
-                    agena_session_api::commands::SessionClearMode::History => {
-                        crate::session::SessionClearMode::History
-                    }
-                    agena_session_api::commands::SessionClearMode::ContextOnly => {
-                        crate::session::SessionClearMode::Context
-                    }
-                };
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        manager.clear_session(params.session_id, mode).await
-                    })
-                    .await?;
-                data = serde_json::to_value(&session).ok();
-            }
-            Command::ReplyPermission(params) => {
-                self.use_session_manager(|manager| async move {
-                    let options = manager.session_run_options(params.session_id).await?;
-                    manager
-                        .reply_permission(crate::SessionPermissionReplyRequest::new(
-                            params.session_id,
-                            options,
-                            params.reply.into(),
-                            None,
-                        ))
-                        .await
-                })
-                .await?;
-            }
-            Command::ReplyUserInput(params) => {
-                let reply: agena_domain::UserInputReply = params.reply.into();
-                self.use_session_manager(|manager| async move {
-                    let options = manager.session_run_options(params.session_id).await?;
-                    manager
-                        .reply_user_input(crate::SessionExecutionReplyRequest::new(
-                            params.session_id,
-                            options,
-                            reply,
-                        ))
-                        .await
-                })
-                .await?;
-            }
-            Command::UpdateSessionSelection(params) => {
-                let selection =
-                    params.options.model.clone().ok_or_else(|| {
-                        PluginError::invalid_params("selection.model is required")
-                    })?;
-                use std::str::FromStr;
-                let reference = match selection.adapter_id.as_deref() {
-                    Some(adapter) => format!(
-                        "{}/{}/{}",
-                        selection.provider_id, adapter, selection.model_id
-                    ),
-                    None => format!("{}/{}", selection.provider_id, selection.model_id),
-                };
-                let model =
-                    agena_domain::ModelRef::from_str(reference.trim()).map_err(|error| {
-                        PluginError::invalid_params(format!(
-                            "selection must name a provider/model reference: {error}"
-                        ))
-                    })?;
-                let session = self
-                    .use_session_manager(|manager| async move {
-                        manager
-                            .set_session_model_override(params.session_id, model)
-                            .await
-                    })
-                    .await?;
-                data = serde_json::to_value(&session).ok();
-            }
-            Command::MarkInteractiveRequestPresented(params) => {
-                self.use_session_manager(|manager| async move {
-                    manager
-                        .mark_interactive_request_presented(params.session_id, params.request_id)
-                        .await
-                })
-                .await?;
-            }
-            Command::ListSessionTree(params) => {
-                // The same `SessionResource` rows the REST tree route returns,
-                // projected from the summaries the manager already walked. The
-                // walk itself is scoped to the root session's workspace.
-                let summaries = self
-                    .use_session_manager(|manager| async move {
-                        manager.list_session_tree(params.root_id).await
-                    })
-                    .await?;
-                data = serde_json::to_value(
-                    summaries
-                        .iter()
-                        .map(super::host_client::mappers::session_resource_from_summary)
-                        .collect::<Vec<_>>(),
-                )
-                .ok();
-            }
-            command @ (Command::CreateWorkspace(_)
-            | Command::UpdateWorkspace(_)
-            | Command::DeleteWorkspace(_)
-            | Command::ResolveWorkspace(_)
-            | Command::CreateSession(_)
-            | Command::DeleteSession(_)
-            | Command::UpsertPermissionRule(_)
-            | Command::ReplacePermissionRule(_)
-            | Command::RevokePermissionRule(_)
-            | Command::DeletePermissionRule(_)
-            | Command::StopActivity(_)
-            | Command::DismissActivity(_)
-            | Command::ClearFinishedActivities) => {
-                return self.run_management_session_command(command).await;
-            }
-        }
-        Ok(serde_json::json!({
-            "session_id": target,
-            "execution_ids": execution_ids,
-            "data": data,
-        }))
     }
 
     async fn callback_session_context(
@@ -1485,18 +1030,23 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn session_op(&self, op: SessionOp) -> Result<SessionOpResponse, PluginError> {
-        // The plugin contract *is* the HTTP contract: `SessionOp` wraps the
-        // same `Query`/`Command` enums a browser client sends. One exhaustive
-        // match per direction is the only place a new operation is routed.
+        let runtime = self.runtime()?;
+        let backend = runtime
+            .application_services()
+            .session_api_backend
+            .backend()
+            .ok_or_else(|| host_unavailable("the shared application API has not been attached"))?;
         match op {
-            SessionOp::Query(query) => {
-                let response = self.run_session_query(query).await?;
-                Ok(SessionOpResponse::Query(response))
-            }
-            SessionOp::Command(command) => {
-                let response = self.run_session_command(command).await?;
-                Ok(SessionOpResponse::Command(response))
-            }
+            SessionOp::Query(query) => backend
+                .query(query)
+                .await
+                .map(SessionOpResponse::Query)
+                .map_err(plugin_error_from_failure),
+            SessionOp::Command(command) => backend
+                .command(command)
+                .await
+                .map(SessionOpResponse::Command)
+                .map_err(plugin_error_from_failure),
         }
     }
 
@@ -1967,11 +1517,6 @@ impl HostClient for RuntimeHostClient {
             }
         }
     }
-}
-
-fn kernel_session_id(id: i64) -> Result<agena_storage::kernel::SessionId, PluginError> {
-    agena_storage::kernel::SessionId::try_from(id)
-        .map_err(|error| PluginError::invalid_params(error.to_string()))
 }
 
 #[cfg(test)]

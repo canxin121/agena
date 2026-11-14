@@ -82,22 +82,14 @@ pub async fn create_workspace(
     State(state): State<AppState>,
     Json(request): Json<WorkspacePathRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let revisions = state.revisions()?;
-    revisions.refresh_durable(&state).await?;
-    let result = json_http(state.service().create_workspace(request)).await?;
-    revisions.observe_workspace_change();
-    Ok(result)
+    json_http(state.service().create_workspace(request)).await
 }
 
 pub async fn resolve_workspace(
     State(state): State<AppState>,
     Json(request): Json<WorkspaceResolveRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let revisions = state.revisions()?;
-    revisions.refresh_durable(&state).await?;
-    let result = json_http(state.service().resolve_workspace(request)).await?;
-    revisions.observe_workspace_change();
-    Ok(result)
+    json_http(state.service().resolve_workspace(request)).await
 }
 
 pub async fn replace_workspace(
@@ -105,22 +97,14 @@ pub async fn replace_workspace(
     Path(workspace_id): Path<i64>,
     Json(request): Json<WorkspacePathRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let revisions = state.revisions()?;
-    revisions.refresh_durable(&state).await?;
-    let result = json_http(state.service().replace_workspace(workspace_id, request)).await?;
-    revisions.observe_workspace_change();
-    Ok(result)
+    json_http(state.service().replace_workspace(workspace_id, request)).await
 }
 
 pub async fn delete_workspace(
     State(state): State<AppState>,
     Path(workspace_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let revisions = state.revisions()?;
-    revisions.refresh_durable(&state).await?;
-    let result = json_http(state.service().delete_workspace(workspace_id)).await?;
-    revisions.observe_workspace_change();
-    Ok(result)
+    json_http(state.service().delete_workspace(workspace_id)).await
 }
 
 pub async fn list_workspace_files(

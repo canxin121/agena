@@ -1,10 +1,8 @@
 //! Browser page APIs and public, immutable assets of installed plugins.
 
 use agena_api::resource::{
-    PluginCommandInvokeResponse, PluginWebCommandRequest, PluginWebSettingsQuery,
-    PluginWebSettingsUpdateRequest,
+    PluginWebCommandRequest, PluginWebSettingsQuery, PluginWebSettingsUpdateRequest,
 };
-use agena_plugin_host::sdk::CommandInvokeInput;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -101,30 +99,19 @@ async fn invoke_command(
     Path((plugin_id, page_id, command_id)): Path<(String, String, String)>,
     Json(request): Json<PluginWebCommandRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let workspace_root = crate::rest::command_workspace_root(&state, request.session_id).await?;
     let result = state
         .application()
-        .invoke_plugin_web_command(
-            &plugin_id,
-            &page_id,
-            &request.generation,
-            CommandInvokeInput {
-                command_id: command_id.clone(),
-                input: request.input,
-                session_id: request.session_id,
-                call_id: None,
-                workspace_root,
-                slash: None,
-                raw: String::new(),
-            },
-        )
+        .command_plugin_management(agena_api::management::PluginCommand::InvokeWebCommand {
+            plugin_id,
+            page_id,
+            generation: request.generation,
+            command_id,
+            input: request.input,
+            session_id: request.session_id,
+        })
         .await
         .map_err(ServerError::from)?;
-    Ok(Json(PluginCommandInvokeResponse {
-        plugin_id,
-        command_id,
-        result,
-    }))
+    Ok(Json(result))
 }
 
 async fn read_settings(

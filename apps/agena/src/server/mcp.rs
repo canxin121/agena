@@ -849,110 +849,123 @@ impl McpServerState {
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct McpServerControlResponse {
-    enabled: bool,
-    server_url: Option<String>,
-    public_url: Option<String>,
-    oauth_issuer_url: Option<String>,
-    resource_url: String,
-    ready: bool,
-    warnings: Vec<String>,
-    oauth: McpOAuthControlStatus,
+pub(crate) use agena_api::server_control::{
+    McpOAuthControlStatus, McpServerControlResponse, UpdateMcpServerControlRequest,
+};
+
+struct McpServerControlBridge {
+    state: std::sync::Weak<McpServerState>,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct McpOAuthControlStatus {
-    configured: bool,
-    password_configured: bool,
-    password_source: String,
-    ready: bool,
-    authorization_server_kind: String,
-    registration_methods: Vec<String>,
-    token_endpoint_auth_methods: Vec<String>,
-    pkce_methods: Vec<String>,
-    oidc_supported: bool,
-    warnings: Vec<String>,
-    scope: String,
-    issuer: String,
-    authorization_endpoint: String,
-    token_endpoint: String,
-    revocation_endpoint: String,
-    protected_resource_metadata: String,
-    authorization_server_metadata: String,
-    jwks_uri: String,
+impl agena_application::server_control::ServerControlPort for McpServerControlBridge {
+    fn mcp_status(&self) -> Result<McpServerControlResponse, agena_application::ApplicationError> {
+        let state = self.state.upgrade().ok_or_else(|| {
+            agena_application::ApplicationError::service_unavailable(
+                "The MCP server listener has stopped.",
+            )
+        })?;
+        Ok(state.control_status(&HeaderMap::new()))
+    }
+
+    fn update_mcp(
+        &self,
+        request: UpdateMcpServerControlRequest,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<McpServerControlResponse, agena_application::ApplicationError>,
+                > + Send
+                + '_,
+        >,
+    > {
+        Box::pin(async move {
+            let state = self.state.upgrade().ok_or_else(|| {
+                agena_application::ApplicationError::service_unavailable(
+                    "The MCP server listener has stopped.",
+                )
+            })?;
+            state.apply_control_request(request).await
+        })
+    }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct UpdateMcpServerControlRequest {
-    #[serde(default)]
-    enabled: Option<bool>,
-    /// One Agena origin determines both `/mcp` and the OAuth issuer. Supplying
-    /// this field also clears the explicit resource and issuer overrides.
-    #[serde(default, deserialize_with = "deserialize_nullable_update")]
-    server_url: Option<Option<String>>,
-    /// `None` means "leave unchanged"; `Some(None)` explicitly clears the
-    /// configured public URL and returns to the listener-local fallback.
-    #[serde(default, deserialize_with = "deserialize_nullable_update")]
-    public_url: Option<Option<String>>,
-    /// `None` means "leave unchanged"; `Some(None)` clears the configured
-    /// issuer and returns to the resource-derived issuer.
-    #[serde(default, deserialize_with = "deserialize_nullable_update")]
-    oauth_issuer_url: Option<Option<String>>,
+#[derive(Debug)]
+struct McpControlValidationError(String);
+
+impl std::fmt::Display for McpControlValidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
 }
 
-fn deserialize_nullable_update<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Some)
+impl std::error::Error for McpControlValidationError {}
+
+impl McpServerState {
+    /// The listener owns this state; the application keeps only a weak adapter.
+    pub(crate) fn install_application_control(self: &Arc<Self>) {
+        self.application
+            .install_server_control(Arc::new(McpServerControlBridge {
+                state: Arc::downgrade(self),
+            }));
+    }
+
+    async fn apply_control_request(
+        &self,
+        request: UpdateMcpServerControlRequest,
+    ) -> Result<McpServerControlResponse, agena_application::ApplicationError> {
+        let invalid = |error| {
+            agena_application::ApplicationError::bad_request_error(&McpControlValidationError(
+                error,
+            ))
+        };
+        let enabled = request.enabled.unwrap_or_else(|| self.is_enabled());
+        let (configured_resource, configured_issuer) = resolve_control_identity(
+            &request,
+            self.configured_public_url(),
+            self.configured_oauth_issuer_url(),
+        )
+        .map_err(invalid)?;
+        let headers = HeaderMap::new();
+        if enabled {
+            let effective_resource =
+                self.public_resource_with_configured(&headers, configured_resource.as_deref());
+            validate_managed_oauth_identity(
+                effective_resource.as_str(),
+                configured_issuer.as_deref(),
+            )
+            .map_err(invalid)?;
+        }
+        self.update_control(enabled, configured_resource, configured_issuer)
+            .await
+            .map_err(agena_application::ApplicationError::internal)?;
+        Ok(self.control_status(&headers))
+    }
 }
 
-pub(crate) async fn get_mcp_server_control(
-    State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
-) -> Response {
-    json_no_store(StatusCode::OK, state.mcp_server.control_status(&headers))
+pub(crate) async fn get_mcp_server_control(State(state): State<Arc<crate::AppState>>) -> Response {
+    match state.application.mcp_server_control() {
+        Ok(status) => json_no_store(StatusCode::OK, status),
+        Err(error) => application_control_error(error),
+    }
 }
 
 pub(crate) async fn update_mcp_server_control(
     State(state): State<Arc<crate::AppState>>,
-    headers: HeaderMap,
     Json(request): Json<UpdateMcpServerControlRequest>,
 ) -> Response {
-    let enabled = request
-        .enabled
-        .unwrap_or_else(|| state.mcp_server.is_enabled());
-    let (configured_resource, configured_issuer) = match resolve_control_identity(
-        &request,
-        state.mcp_server.configured_public_url(),
-        state.mcp_server.configured_oauth_issuer_url(),
-    ) {
-        Ok(identity) => identity,
-        Err(error) => return control_error(StatusCode::BAD_REQUEST, error),
+    match state.application.update_mcp_server_control(request).await {
+        Ok(status) => json_no_store(StatusCode::OK, status),
+        Err(error) => application_control_error(error),
+    }
+}
+
+fn application_control_error(error: agena_application::ApplicationError) -> Response {
+    let status = match error.failure.category {
+        agena_failure::FailureCategory::InvalidInput => StatusCode::BAD_REQUEST,
+        agena_failure::FailureCategory::DependencyUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    if enabled {
-        let effective_resource = state
-            .mcp_server
-            .public_resource_with_configured(&headers, configured_resource.as_deref());
-        if let Err(error) = validate_managed_oauth_identity(
-            effective_resource.as_str(),
-            configured_issuer.as_deref(),
-        ) {
-            return control_error(StatusCode::BAD_REQUEST, error);
-        }
-    }
-    if let Err(error) = state
-        .mcp_server
-        .update_control(enabled, configured_resource, configured_issuer)
-        .await
-    {
-        return control_error(StatusCode::INTERNAL_SERVER_ERROR, error);
-    }
-    json_no_store(StatusCode::OK, state.mcp_server.control_status(&headers))
+    control_error(status, error.failure.user.fallback.clone())
 }
 
 fn resolve_control_identity(

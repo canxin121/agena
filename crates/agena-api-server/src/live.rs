@@ -1,18 +1,15 @@
-//! Bounded kernel change delivery shared by WS, SSE and IPC.
+//! HTTP stream delivery and resource revision adaptation.
 use crate::{error::ServerError, state::AppState};
 use agena_api::{
     Scope,
-    live::{
-        RuntimeSignalResource, SessionChangeResource, SessionPartsResource, ToolDetailResource,
-        ToolDetailSection,
-    },
+    live::{SessionPartsResource, ToolDetailResource, ToolDetailSection},
     part::PartResource,
 };
-use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
-use agena_runtime_contracts::part_content::ToolCallContent;
-use agena_storage::kernel::{KernelError, KernelWatch, WatchError};
+pub(crate) use agena_application::LiveItem;
 use std::sync::Arc;
+#[cfg(feature = "ws")]
 use tokio::sync::mpsc;
+
 #[cfg(feature = "ws")]
 pub(crate) async fn spawn_content_delivery(
     state: &AppState,
@@ -67,16 +64,10 @@ pub(crate) async fn spawn_content_delivery(
     }))
 }
 
-#[derive(Debug, Clone)]
-pub(crate) enum LiveItem {
-    SessionChanged(SessionChangeResource),
-    RuntimeSignal(RuntimeSignalResource),
-    Lagged(u64),
-}
 pub(crate) struct LiveSubscription {
-    rx: mpsc::Receiver<LiveItem>,
-    projection_task: tokio::task::JoinHandle<()>,
+    subscription: agena_application::LiveSubscription,
     revisions: Arc<crate::revisions::ResourceRevisions>,
+    state: AppState,
 }
 impl LiveSubscription {
     pub(crate) fn revisions_for(
@@ -86,277 +77,47 @@ impl LiveSubscription {
         match item {
             LiveItem::SessionChanged(change) => self.revisions.live_tokens(Some(change), None),
             LiveItem::RuntimeSignal(signal) => self.revisions.live_tokens(None, Some(signal)),
-            _ => Default::default(),
+            LiveItem::Lagged(_) => Default::default(),
         }
     }
     pub(crate) async fn recv(&mut self) -> Option<LiveItem> {
-        self.rx.recv().await
+        let item = self.subscription.recv().await?;
+        // Revision tokens cover the global durable feed, including commits
+        // omitted by this subscription's session or workspace filter.
+        if self.revisions.refresh_durable(&self.state).await.is_err() {
+            return Some(LiveItem::Lagged(1));
+        }
+        Some(item)
     }
 }
-impl Drop for LiveSubscription {
-    fn drop(&mut self) {
-        self.projection_task.abort();
-    }
-}
+
 pub(crate) fn subscribe(state: &AppState, scope: Scope) -> Result<LiveSubscription, ServerError> {
-    subscribe_with_queue_capacity(state, scope, 256)
-}
-
-fn includes_session_change(
-    scope: &Scope,
-    session_id: i64,
-    workspace_id: Option<i64>,
-    include_in_lists: bool,
-) -> bool {
-    match scope {
-        Scope::Session {
-            session_id: requested,
-        } => *requested == session_id,
-        Scope::Workspace {
-            workspace_id: requested,
-        } => include_in_lists && workspace_id == Some(*requested),
-        Scope::Global => include_in_lists && workspace_id.is_some(),
-    }
-}
-
-fn belongs_to_workspace(workspace_id: i64, session_workspace_id: Option<i64>) -> bool {
-    session_workspace_id == Some(workspace_id)
-}
-
-fn is_global_invalidation(signal: &RuntimeSignalResource) -> bool {
-    // These runtime-wide signals carry no conversation content. A scoped
-    // viewer still needs new tools and attention from other conversations.
-    signal.session_id.is_none()
-        && (signal.kind == "tool_registry_changed"
-            || (signal.kind == "plugin"
-                && signal
-                    .payload
-                    .get("kind")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("attention.changed")))
-}
-
-async fn recover_watch(
-    watch: &mut KernelWatch,
-    replacement: impl FnOnce() -> Result<KernelWatch, KernelError>,
-    tx: &mpsc::Sender<LiveItem>,
-) -> bool {
-    // Recovery reads may begin as soon as the reset reaches the transport.
-    // Install their live tail first, including while delivery is backpressured.
-    match replacement() {
-        Ok(replacement) => *watch = replacement,
-        Err(error) => {
-            tracing::warn!(%error, "kernel change feed ended during recovery");
-            return false;
-        }
-    }
-    tx.send(LiveItem::Lagged(1)).await.is_ok()
-}
-
-fn subscribe_with_queue_capacity(
-    state: &AppState,
-    scope: Scope,
-    capacity: usize,
-) -> Result<LiveSubscription, ServerError> {
-    let kernel = state.application().session_kernel()?.clone();
-    let mut watch = match scope {
-        Scope::Session { session_id } => kernel.reader.watch(
-            session_id
-                .try_into()
-                .map_err(|error| ServerError::bad_request_error(&error))?,
-            None,
-        ),
-        _ => kernel.reader.watch_all(None),
-    }
-    .map_err(|error| ServerError::internal_error(&error))?;
-    let revisions = state.revisions()?;
-    let signals = state.live_signals()?;
-    let mut signals = signals.subscribe();
-    let (tx, rx) = mpsc::channel(capacity);
-    let state = state.clone();
-    let projection_revisions = revisions.clone();
-    let projection_task = tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _=tx.closed()=>break,
-                notice=watch.recv()=>{
-                    let change=match notice {Ok(change)=>change,Err(WatchError::Closed)=>break,
-                        Err(WatchError::Reset{..})=>{
-                            let replacement=||match scope {Scope::Session{session_id}=>kernel.reader.watch(
-                                session_id.try_into().map_err(|error:agena_domain::session_kernel::InvalidKernelNumber|KernelError::Invalid(error.to_string()))?,None),
-                                _=>kernel.reader.watch_all(None)};
-                            if !recover_watch(&mut watch,replacement,&tx).await {break;}
-                            continue;
-                        }};
-                    // Session watches can omit other sessions' earlier commits.
-                    // Only the global feed may advance the shared resource clock.
-                    if projection_revisions.refresh_durable(&state).await.is_err() {
-                        if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}
-                        continue;
-                    }
-                    let id=change.session.get();
-                    if !includes_session_change(&scope,id,change.workspace_id,change.include_in_lists){continue;}
-                    let metadata=match kernel.reader.summary(change.session).await {
-                        Ok(metadata)=>metadata,
-                        Err(agena_storage::kernel::KernelError::NotFound(_))=>{
-                            if tx.send(LiveItem::SessionChanged(SessionChangeResource::SessionDeleted{session_id:id,workspace_id:change.workspace_id})).await.is_err(){break;}
-                            continue;
-                        },Err(_)=>{if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}continue;}
-                    };
-                    if !includes_session_change(&scope,id,metadata.workspace_id,change.include_in_lists){continue;}
-                    if tx.send(LiveItem::SessionChanged(SessionChangeResource::SessionMetaUpdated {session_id:id,
-                        version:metadata.metadata_version.get(),title:metadata.title.clone(),favorite:metadata.favorite,
-                        pinned:metadata.pinned,updated_at_ms:metadata.updated_at_ms})).await.is_err(){break;}
-                    // Ordinary byte checkpoints have their own content watch.
-                    // Content commits on this feed are terminal checkpoints:
-                    // their changed entries and snapshot requirements matter.
-                    if change.requires_snapshot {
-                        if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}
-                        continue;
-                    }
-                    if change.affected_entries.is_empty() { continue; }
-                    let page=match state.application().read_parts(agena_api::queries::ReadPartsParams {
-                        session_id:id,ids:change.affected_entries.iter().map(|entry|entry.get()).collect(),..Default::default()}).await {
-                        Ok(page)=>page,Err(_)=>{if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}continue;}
-                    };
-                    // Entry identities and revisions make repeats harmless.
-                    // Tail content itself travels on its native source watch.
-                    for part in page.parts {
-                        if tx.send(LiveItem::SessionChanged(SessionChangeResource::PartUpdated{
-                            session_id:id,part:Box::new(part)})).await.is_err(){return;}
-                    }
-
-                },
-                signal=signals.recv()=>{
-                    let signal=match signal {Some(RuntimeLiveSignalItem::Signal(signal))=>signal,
-                        Some(RuntimeLiveSignalItem::Lagged(skipped))=>{if tx.send(LiveItem::Lagged(skipped)).await.is_err(){break;}continue;},None=>break};
-                    let signal=project_signal(signal);
-                    // Attention invalidates a runtime-wide plugin queue. A TUI
-                    // viewing one session must also learn about another
-                    // session's notification; this signal carries no transcript.
-                    let global_invalidation=is_global_invalidation(&signal);
-                    let allowed=global_invalidation||match (&scope,signal.session_id) {
-                        (Scope::Global,_)=>true,(Scope::Session{session_id},Some(id))=>*session_id==id,
-                        (Scope::Workspace{workspace_id},Some(id))=>match id.try_into(){Ok(id)=>kernel.reader.metadata(id).await.is_ok_and(|m|belongs_to_workspace(*workspace_id,m.workspace_id)),Err(_)=>false},_=>false};
-                    if allowed&&tx.send(LiveItem::RuntimeSignal(signal)).await.is_err(){break;}
-                }
-            }
-        }
-    });
     Ok(LiveSubscription {
-        rx,
-        projection_task,
-        revisions,
+        subscription: state.application().watch_changes(scope)?,
+        revisions: state.revisions()?,
+        state: state.clone(),
     })
 }
+
 pub(crate) async fn session_parts(
     state: &AppState,
     session_id: i64,
 ) -> Result<SessionPartsResource, ServerError> {
     state
         .application()
-        .read_runs(agena_api::queries::ReadRunsParams {
-            session_id,
-            limit: Some(8),
-            part_limit: Some(32),
-            ..Default::default()
-        })
+        .session_parts(session_id)
         .await
         .map_err(ServerError::from)
 }
+
 pub(crate) async fn project_tool_detail(
     state: &AppState,
     part: &PartResource,
     section: ToolDetailSection,
     locale: Option<&str>,
 ) -> Option<ToolDetailResource> {
-    if part.kind != ToolCallContent::kind() {
-        return None;
-    }
-    let content = ToolCallContent::try_from(&part.content).ok()?;
-    let value = match section {
-        ToolDetailSection::Metadata => serde_json::to_value(content.metadata).ok()?,
-        ToolDetailSection::Input => content.input,
-        ToolDetailSection::Output => serde_json::to_value(content.output).ok()?,
-        ToolDetailSection::Presentation => {
-            let mut document = state.application().part_document(part).await;
-            if let Some(document) = document.as_mut() {
-                agena_application::part_locale::localize_part_document(document, locale);
-            }
-            serde_json::to_value(document).ok()?
-        }
-    };
-    Some(ToolDetailResource {
-        part_id: part.part_id,
-        revision: part.revision,
-        updated_at_ms: part.updated_at_ms,
-        section,
-        part_state: (section == ToolDetailSection::Output).then(|| part.state.clone()),
-        value,
-    })
+    state
+        .application()
+        .project_tool_detail(part, section, locale)
+        .await
 }
-fn live_signal_payload<T: serde::Serialize>(value: &T, context: &'static str) -> serde_json::Value {
-    match serde_json::to_value(value) {
-        Ok(payload) => payload,
-        Err(error) => {
-            tracing::error!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    context,
-                    &error,
-                ),
-                "runtime live signal payload could not be serialized"
-            );
-            serde_json::json!({
-                "projection_error": "The runtime signal payload could not be encoded."
-            })
-        }
-    }
-}
-
-fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
-    match signal {
-        RuntimeLiveSignal::Activity(activity) => RuntimeSignalResource {
-            kind: "activity".to_owned(),
-            // Delegated work is displayed and controlled by its parent. Its
-            // child transcript has a separate stream of part updates.
-            session_id: activity
-                .activity
-                .parent_session_id
-                .or(activity.activity.session_id),
-            payload: live_signal_payload(
-                &serde_json::json!({
-                    "activity_id": activity.activity_id,
-                    "reason": activity.reason,
-                    "ts_ms": activity.ts_ms,
-                    "activity": agena_api::resource::BackgroundActivityResource::from(&activity.activity),
-                }),
-                "serialize a runtime activity live signal payload",
-            ),
-        },
-        RuntimeLiveSignal::Plugin {
-            session_id,
-            plugin_id,
-            kind_label,
-            payload,
-        } => RuntimeSignalResource {
-            kind: "plugin".to_owned(),
-            session_id,
-            payload: serde_json::json!({
-                "plugin_id": plugin_id.to_string(),
-                "kind": kind_label,
-                "payload": payload,
-            }),
-        },
-        RuntimeLiveSignal::ToolRegistryChanged(change) => RuntimeSignalResource {
-            kind: "tool_registry_changed".to_owned(),
-            session_id: None,
-            payload: live_signal_payload(
-                &*change,
-                "serialize a runtime tool-registry live signal payload",
-            ),
-        },
-    }
-}
-
-#[cfg(test)]
-mod tests;

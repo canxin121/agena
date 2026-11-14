@@ -16,22 +16,27 @@ fn search_pagination(
 }
 
 pub async fn dispatch_query(
-    state: &crate::AppState,
+    state: &super::Application,
     query: Query,
 ) -> Result<QueryResult, ApplicationError> {
     match query {
+        Query::Server(query) => Ok(QueryResult::Data(state.dispatch_server_query(query).await?)),
+        Query::Business(query) => Ok(QueryResult::Data(
+            state.dispatch_business_query(query).await?,
+        )),
+        Query::Management(query) => Ok(QueryResult::Data(
+            state.dispatch_management_query(query).await?,
+        )),
+        Query::ExtendedSession(query) => Ok(QueryResult::Data(
+            state.dispatch_extended_session_query(query).await?,
+        )),
         Query::ReadContentText(params) => Ok(QueryResult::ContentText(
-            state.application().read_content_text(params).await?,
+            state.read_content_text(params).await?,
         )),
-        Query::ReadParts(params) => Ok(QueryResult::Parts(
-            state.application().read_parts(params).await?,
-        )),
-        Query::ReadRuns(params) => Ok(QueryResult::Parts(
-            state.application().read_runs(params).await?,
-        )),
+        Query::ReadParts(params) => Ok(QueryResult::Parts(state.read_parts(params).await?)),
+        Query::ReadRuns(params) => Ok(QueryResult::Parts(state.read_runs(params).await?)),
         Query::ReadContent(params) => Ok(QueryResult::Content(
             state
-                .application()
                 .read_content(
                     params.session_id,
                     params.resource_id,
@@ -47,7 +52,7 @@ pub async fn dispatch_query(
             include_session_count,
             offset,
         }) => Ok(QueryResult::Workspaces(
-            http_page_result(state.service().list_workspaces(WorkspaceListQuery {
+            page_result(state.service().list_workspaces(WorkspaceListQuery {
                 pagination: search_pagination(cursor, limit, search),
                 include_session_count,
                 offset,
@@ -55,7 +60,7 @@ pub async fn dispatch_query(
             .await?,
         )),
         Query::GetWorkspace(GetWorkspaceParams { workspace_id }) => Ok(QueryResult::Workspace(
-            http_optional_result(state.service().get_workspace(workspace_id), || {
+            optional_result(state.service().get_workspace(workspace_id), || {
                 format!("workspace {workspace_id} not found")
             })
             .await?,
@@ -72,9 +77,10 @@ pub async fn dispatch_query(
             offset,
             bucket,
             include_total,
+            count_only,
             search,
         }) => Ok(QueryResult::Sessions(
-            http_page_result(state.service().list_sessions(SessionListQuery {
+            page_result(state.service().list_sessions(SessionListQuery {
                 pagination: search_pagination(cursor, limit, search),
                 workspace_id,
                 owner_bot_id,
@@ -85,27 +91,30 @@ pub async fn dispatch_query(
                 offset,
                 bucket,
                 include_total,
-                count_only: false,
+                count_only,
             }))
             .await?,
         )),
         Query::GetSession(GetSessionParams { session_id }) => Ok(QueryResult::Session(
-            http_optional_result(state.service().get_session(session_id), || {
+            optional_result(state.service().get_session(session_id), || {
                 format!("session {session_id} not found")
             })
             .await?,
         )),
-        Query::Health => Ok(QueryResult::Health(agena_api::resource::HealthResponse {
-            status: "ok".into(),
-            generation: 0,
-            loaded_at: chrono::Utc::now(),
-            database_connected: true,
-            server: state.server().clone(),
-        })),
+        Query::Health => {
+            let snapshot = state.runtime_snapshot_summary().await;
+            Ok(QueryResult::Health(agena_api::resource::HealthResponse {
+                status: "ok".into(),
+                generation: snapshot.generation,
+                loaded_at: snapshot.loaded_at,
+                database_connected: true,
+                server: state.server_identity().clone(),
+            }))
+        }
         Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await?)),
         Query::ListActivities(params) => {
             let service = state.runtime_activities()?;
-            let filter = agena_application::service::activity_filter_from_params(&params);
+            let filter = crate::service::activity_filter_from_params(&params);
             let activities = service
                 .list_activities(&filter)
                 .await
@@ -141,15 +150,11 @@ pub async fn dispatch_query(
             Ok(QueryResult::ActivityLogs(read.into()))
         }
         Query::ListProviders => Ok(QueryResult::Providers(
-            agena_application::provider_queries::list_providers_response(state),
+            crate::provider_queries::list_providers_response(state),
         )),
         Query::ListProviderModels(ListProviderModelsParams { provider_id }) => {
             Ok(QueryResult::ProviderModels(
-                agena_application::provider_queries::list_provider_models_response(
-                    state,
-                    provider_id,
-                )
-                .await?,
+                crate::provider_queries::list_provider_models_response(state, provider_id).await?,
             ))
         }
         Query::ListProviderAdapterModels(ListProviderAdapterModelsParams {
@@ -159,7 +164,7 @@ pub async fn dispatch_query(
             api_key,
             adapter_ids,
         }) => Ok(QueryResult::ProviderAdapterModels(
-            agena_application::provider_queries::list_provider_adapter_models_response(
+            crate::provider_queries::list_provider_adapter_models_response(
                 state,
                 ListProviderAdapterModelsParams {
                     provider_id,
@@ -175,7 +180,7 @@ pub async fn dispatch_query(
             provider_id,
             adapter_ids,
         }) => Ok(QueryResult::ProviderAdapterModels(
-            agena_application::provider_queries::list_saved_provider_adapter_models_response(
+            crate::provider_queries::list_saved_provider_adapter_models_response(
                 state,
                 ListSavedProviderAdapterModelsParams {
                     provider_id,
@@ -189,7 +194,6 @@ pub async fn dispatch_query(
         )),
         Query::GetSessionCost(GetSessionParams { session_id }) => Ok(QueryResult::SessionCost(
             state
-                .application()
                 .session_query_service()?
                 .session_cost_summary(session_id)
                 .await
@@ -197,23 +201,18 @@ pub async fn dispatch_query(
         )),
         Query::GetSessionTree(GetSessionParams { session_id }) => {
             let summaries = state
-                .application()
                 .session_execution_services()?
                 .queries
                 .list_session_tree(session_id)
                 .await
                 .map_err(|error| ApplicationError::from_failure(*error.failure))?;
             Ok(QueryResult::SessionTree(
-                state
-                    .application()
-                    .session_resources_from_summaries(summaries)
-                    .await?,
+                state.session_resources_from_summaries(summaries).await?,
             ))
         }
         Query::GetSessionPlatforms(GetSessionParams { session_id }) => {
             Ok(QueryResult::SessionPlatforms(
                 state
-                    .application()
                     .assistant_service()?
                     .platform_inventory(session_id)
                     .await
@@ -225,7 +224,7 @@ pub async fn dispatch_query(
             limit,
             search,
         }) => Ok(QueryResult::PermissionRules(
-            http_page_result(
+            page_result(
                 state
                     .service()
                     .list_permission_rules(search_pagination(cursor, limit, search)),
@@ -234,7 +233,7 @@ pub async fn dispatch_query(
         )),
         Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
             Ok(QueryResult::PermissionRule(
-                http_optional_result(state.service().get_permission_rule(rule_id), || {
+                optional_result(state.service().get_permission_rule(rule_id), || {
                     format!("permission rule {rule_id} not found")
                 })
                 .await?,
@@ -247,8 +246,8 @@ use super::{
     GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
     ListProviderAdapterModelsParams, ListProviderModelsParams,
     ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
-    QueryResult, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, http_optional_result,
-    http_page_result,
+    QueryResult, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, optional_result,
+    page_result,
 };
 
 fn activity_control_error(error: agena_runtime::ActivityControlError) -> ApplicationError {

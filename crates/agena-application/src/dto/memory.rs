@@ -11,15 +11,6 @@ pub struct MemoryResource {
     pub metadata: agena_domain::MemoryMetadata,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Create a record without a revision, or update one at its observed revision.
-pub struct MemoryWriteRequest {
-    #[serde(default)]
-    pub description: String,
-    pub kind: agena_domain::MemoryKind,
-    pub body: String,
-    pub expected_sha256: Option<String>,
-}
+pub use agena_api::business::MemoryWriteRequest;
 
 use super::{Deserialize, Serialize};

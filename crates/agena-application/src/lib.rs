@@ -18,10 +18,14 @@
 //!   chat history is per-session ordered parts, never a global event log.
 
 mod application;
+mod application_bridge;
+mod application_live;
+pub use application_live::{LiveItem, LiveSubscription};
 mod application_archives;
 mod application_config;
 mod application_content;
 mod application_conversations;
+mod application_file_changes;
 mod application_inline_ui;
 mod application_mcp_connections;
 mod application_models;
@@ -31,13 +35,16 @@ mod application_provider_studio;
 mod application_sessions;
 mod application_skills;
 mod application_tools;
+pub mod dispatch;
 pub mod dto;
 mod error;
 pub mod filesystem_discovery;
+mod operation_io;
 pub mod pagination;
 pub mod part_locale;
 pub mod provider_queries;
 pub mod provider_studio;
+pub mod server_control;
 pub mod service;
 pub mod session;
 

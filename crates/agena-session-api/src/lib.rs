@@ -5,14 +5,19 @@
 //! new operation is added once and every `match` over them must handle it.
 
 pub mod activity;
+pub mod bridge;
+pub mod business;
 pub mod commands;
 pub mod content;
+pub mod extended_sessions;
 pub mod interaction;
 pub mod live;
+pub mod management;
 pub mod pagination;
 pub mod part;
 pub mod queries;
 pub mod resource;
+pub mod server_control;
 
 pub use commands::*;
 pub use queries::*;

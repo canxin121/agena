@@ -2538,6 +2538,7 @@ impl TuiBackend {
                 session_id,
                 at_message_id: None,
                 title,
+                expected_version: None,
             }))
             .await
             .context("failed to fork session")?;

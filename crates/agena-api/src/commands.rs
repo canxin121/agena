@@ -17,17 +17,29 @@ use crate::resource::{
 #[allow(clippy::large_enum_variant)] // protocol-shaped enum; boxing breaks wire format
 /// Result of executing a [`Command`].
 pub enum CommandResult {
+    /// Domain handlers serialize their public resource at the wire boundary.
+    Data(serde_json::Value),
     Workspace(WorkspaceResource),
-    WorkspaceDeleted { id: i64 },
+    WorkspaceDeleted {
+        id: i64,
+    },
     Session(SessionResource),
-    SessionDeleted { id: i64 },
+    SessionDeleted {
+        id: i64,
+    },
     SessionTree(Vec<SessionResource>),
     Execution(SessionExecutionResource),
     Cancellation(agena_domain::CancellationOutcome),
     PermissionRule(crate::resource::PermissionRuleResource),
-    PermissionRuleDeleted { id: i64 },
+    PermissionRuleDeleted {
+        id: i64,
+    },
     Activity(BackgroundActivityResource),
-    ActivityDeleted { id: String },
-    ActivitiesCleared { count: usize },
+    ActivityDeleted {
+        id: String,
+    },
+    ActivitiesCleared {
+        count: usize,
+    },
     Ack,
 }

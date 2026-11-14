@@ -40,23 +40,7 @@ pub struct PermissionRuleRevokeRequest {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-/// Request to apply one operation to selected permission rules in one scope.
-pub struct PermissionRuleBatchRequest {
-    pub rule_ids: Vec<i64>,
-    pub scope: String,
-    #[serde(default)]
-    pub session_id: Option<i64>,
-    pub operation: PermissionRuleBatchOperation,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case")]
-/// Supported bulk permission-rule operations.
-pub enum PermissionRuleBatchOperation {
-    Delete,
-    SetMode { mode: ApiPermissionMode },
-}
+pub use agena_api::management::{PermissionRuleBatchOperation, PermissionRuleBatchRequest};
 
 #[derive(Debug, Clone, Serialize)]
 /// Rules changed by a bulk operation and selected IDs that no longer matched its scope.
@@ -66,4 +50,3 @@ pub struct PermissionRuleBatchResponse {
 }
 
 use super::{Deserialize, Serialize};
-use agena_api::resource::PermissionMode as ApiPermissionMode;

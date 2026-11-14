@@ -7,6 +7,10 @@ rust-version.workspace = true
 description = "Session operation contract shared by every Agena transport"
 
 [dependencies]
+agena-assistant = { workspace = true }
+agena-notification = { workspace = true }
+agena-provider = { workspace = true }
+agena-skills = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-prompt-layers = { workspace = true }
@@ -14,6 +18,7 @@ chrono = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 uuid = { workspace = true }
 
 [lints]

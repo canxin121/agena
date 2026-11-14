@@ -108,6 +108,9 @@ pub struct RuntimeBootstrapRequest {
     pub config_override_expressions: Vec<String>,
     pub database_url: Option<String>,
     pub database_path: Option<PathBuf>,
+    /// Start periodic maintenance after Application activation. Embedded and
+    /// isolated test processes may disable it; normal process startup uses true.
+    pub automatic_maintenance: Option<bool>,
     pub tracing_reload_handle: Option<crate::TracingFilterReloadHandle>,
 }
 

@@ -62,10 +62,14 @@ pub async fn bootstrap_application_services(
     request: agena_runtime::RuntimeBootstrapRequest,
 ) -> Result<agena_runtime::RuntimeBootstrapResult, agena_runtime::RuntimeBootstrapError> {
     agena_runtime::ownership_audit::ensure_runtime_bootstrap_allowed()?;
-    agena_runtime::compose_runtime_bootstrap(request, |config| async move {
-        let runtime = AgenaRuntime::new(config)
-            .await
-            .map_err(runtime_bootstrap_error)?;
+    let automatic_maintenance = request.automatic_maintenance.unwrap_or(true);
+    agena_runtime::compose_runtime_bootstrap(request, move |config| async move {
+        let runtime = if automatic_maintenance {
+            AgenaRuntime::new(config).await
+        } else {
+            AgenaRuntime::new_with_maintenance(config, false).await
+        }
+        .map_err(runtime_bootstrap_error)?;
         Ok(agena_runtime::RuntimeBootstrapComposition::new(
             runtime.application_services(),
             runtime.clone() as Arc<dyn agena_runtime::RuntimeBootstrapLifecycle>,
@@ -191,6 +195,8 @@ impl AgenaRuntime {
                 background_completion,
                 automatic_maintenance,
                 assistant_service: Default::default(),
+                session_api_backend: Default::default(),
+                application_activation: tokio::sync::Mutex::new(false),
                 shutdown_completion: Default::default(),
             }),
         };
@@ -244,18 +250,11 @@ impl AgenaRuntime {
                 )),
             );
             let _ = runtime.assistant_service.set(assistant.clone());
-            assistant.start(runtime.task_control_handle());
         }
 
         runtime.apply_tracing_filter(initial_snapshot.tracing_config());
         // Opening the session kernel reconciles abandoned native attempts
         // before the initial snapshot and its readers are published.
-        if automatic_maintenance {
-            runtime.spawn_background_tasks();
-        }
-        runtime.spawn_agent_activity_bridge();
-        runtime.start_scheduler_activity_bridge();
-        runtime.spawn_background_delivery_recovery();
         agena_runtime::install_plugin_host(initial_snapshot.plugin_manager());
         agena_runtime::install_global_plugin_host(initial_snapshot.global_plugin_manager());
         Ok(runtime)
@@ -1823,9 +1822,49 @@ fn runtime_settings_schema_validator(
 
 #[async_trait::async_trait]
 impl agena_runtime::RuntimeControlService for AgenaRuntime {
+    async fn application_ready(&self) -> Result<(), agena_runtime::RuntimeControlServiceError> {
+        let mut activated = self.application_activation.lock().await;
+        if *activated {
+            return Ok(());
+        }
+        if self.session_api_backend.backend().is_none() {
+            return Err(agena_runtime::RuntimeControlServiceError::new(
+                "application backend must be installed before activation",
+            ));
+        }
+        if let Some(assistant) = self.assistant_service.get() {
+            assistant.start(self.task_control_handle());
+        }
+        self.publish_application_ready()
+            .await
+            .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))?;
+        if self.automatic_maintenance {
+            self.spawn_background_tasks();
+        }
+        self.spawn_agent_activity_bridge();
+        self.start_scheduler_activity_bridge();
+        self.spawn_background_delivery_recovery();
+        *activated = true;
+        Ok(())
+    }
+
     async fn reload(
         &self,
     ) -> Result<agena_runtime::RuntimeReloadReport, agena_runtime::RuntimeControlServiceError> {
+        if let Some(completion) = agena_plugin_host::current_plugin_call_completion() {
+            let task = self
+                .start_plugin_reload_task(completion)
+                .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))?;
+            crate::reload::record_deferred_reload(&task.task.id);
+            let current = self.current_snapshot();
+            return Ok(agena_runtime::RuntimeReloadReport {
+                cause: RuntimeReloadCause::Manual,
+                previous_generation: current.generation(),
+                generation: current.generation(),
+                loaded_at: current.loaded_at(),
+                deferred_task_id: Some(task.task.id),
+            });
+        }
         AgenaRuntime::reload(self)
             .await
             .map_err(|error| match error {
@@ -2181,6 +2220,8 @@ pub(crate) struct AgenaRuntimeShared {
     background_completion: crate::activity::BackgroundCompletionBridge,
     automatic_maintenance: bool,
     assistant_service: std::sync::OnceLock<Arc<super::assistant::AssistantRuntime>>,
+    session_api_backend: agena_session_api::bridge::SessionApiBackendSlot,
+    application_activation: tokio::sync::Mutex<bool>,
     shutdown_completion: crate::bootstrap_result::RuntimeShutdownCompletion,
 }
 
@@ -2258,6 +2299,7 @@ impl AgenaRuntime {
         agena_runtime::compose_runtime_application_services(
             agena_runtime::RuntimeApplicationServiceCompositionInputs {
                 workspace_root: self.workspace_root().to_path_buf(),
+                session_api_backend: self.session_api_backend.clone(),
                 instance_id: self
                     .inner
                     .session_kernel
@@ -2474,7 +2516,31 @@ impl AgenaRuntime {
                 self.activities.monitor.clone(),
             ) => result?,
         });
-        self.publish_reload_candidate(previous, next, cause)
+        let report = self.publish_reload_candidate(previous, next, cause)?;
+        if self.session_api_backend.backend().is_some() {
+            self.publish_application_ready().await.map_err(|error| {
+                AppError::Internal(format!(
+                    "Runtime generation {} was published, but application.ready failed: {error}",
+                    report.generation
+                ))
+            })?;
+        }
+        Ok(report)
+    }
+
+    async fn publish_application_ready(&self) -> Result<(), AppError> {
+        let snapshot = self.current_snapshot();
+        snapshot
+            .plugin_manager()
+            .application_ready()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        snapshot
+            .global_plugin_manager()
+            .application_ready()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        Ok(())
     }
 
     /// Commit a completed candidate while the caller owns the reload gate.
@@ -2526,6 +2592,7 @@ impl AgenaRuntime {
             previous_generation,
             generation: next.generation(),
             loaded_at: next.loaded_at(),
+            deferred_task_id: None,
         })
     }
 
@@ -2596,6 +2663,26 @@ impl AgenaRuntime {
         cause: RuntimeReloadCause,
         origin: RuntimeBackgroundTaskOrigin,
     ) -> Result<RuntimeBackgroundTaskStart, RuntimeBackgroundTaskControlError> {
+        if let Some(after) = agena_plugin_host::current_plugin_call_completion() {
+            let runtime = self.clone();
+            let start = self.spawn_background_task(
+                RuntimeBackgroundTaskKind::RuntimeReload,
+                origin,
+                "Reload runtime after plugin call",
+                Some(format!("plugin_reload:{}", after.id())),
+                false,
+                move |_| async move {
+                    after.wait().await;
+                    let report = runtime.reload_with_cause(cause).await?;
+                    Ok(RuntimeBackgroundTaskOutcome::succeeded(format!(
+                        "Runtime generation {} is active",
+                        report.generation
+                    )))
+                },
+            )?;
+            crate::reload::record_deferred_reload(&start.task.id);
+            return Ok(start);
+        }
         let dedupe_key = Some("runtime_reload".to_owned());
         let title = match &cause {
             RuntimeReloadCause::Manual => "Reload runtime".to_owned(),

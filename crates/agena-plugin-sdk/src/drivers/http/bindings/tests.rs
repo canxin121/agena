@@ -263,7 +263,7 @@ impl Wire {
         context: Option<HostCallbackContext>,
     ) -> ResponsePayload {
         let id = self.ids.fetch_add(1, Ordering::SeqCst);
-        let response: Response = self
+        let response = self
             .client
             .post(&self.url)
             .headers(headers)
@@ -276,10 +276,25 @@ impl Wire {
             })
             .send()
             .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("HTTP fixture request {method_name} (id {id}) failed: {error}")
+            });
+        let status = response.status();
+        let body = response.bytes().await.unwrap_or_else(|error| {
+            panic!("HTTP fixture response {method_name} (id {id}, status {status}) failed: {error}")
+        });
+        assert_eq!(
+            status,
+            axum::http::StatusCode::OK,
+            "HTTP fixture response {method_name} (id {id}): {}",
+            String::from_utf8_lossy(&body)
+        );
+        let response: Response = serde_json::from_slice(&body).unwrap_or_else(|error| {
+            panic!(
+                "HTTP fixture response {method_name} (id {id}, status {status}) was not JSON-RPC: {error}; body: {}",
+                String::from_utf8_lossy(&body)
+            )
+        });
         assert_eq!(response.id, RequestId::Num(id));
         response.payload
     }

@@ -1,5 +1,5 @@
+use crate::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateRequest};
 use agena_api::resource::SessionExecutionResource;
-use agena_application::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateRequest};
 
 // ─── Command dispatch ───────────────────────────────────────────────────
 
@@ -13,8 +13,19 @@ pub async fn dispatch_command(
     state: &Application,
     command: Command,
 ) -> Result<CommandResult, ApplicationError> {
-    let session_services = state.session_execution_services()?;
     match command {
+        Command::Server(command) => Ok(CommandResult::Data(
+            state.dispatch_server_command(command).await?,
+        )),
+        Command::Business(command) => Ok(CommandResult::Data(
+            state.dispatch_business_command(command).await?,
+        )),
+        Command::Management(command) => Ok(CommandResult::Data(
+            state.dispatch_management_command(command).await?,
+        )),
+        Command::ExtendedSession(command) => Ok(CommandResult::Data(
+            state.dispatch_extended_session_command(command).await?,
+        )),
         Command::CreateWorkspace(CreateWorkspaceParams { path }) => {
             let workspace = state
                 .service()
@@ -53,6 +64,7 @@ pub async fn dispatch_command(
             title,
             auto_title,
             parent_id,
+            prompts,
         }) => {
             let session = state
                 .service()
@@ -62,7 +74,7 @@ pub async fn dispatch_command(
                         title,
                         parent_id,
                         auto_title,
-                        prompts: None,
+                        prompts,
                     },
                 })
                 .await?;
@@ -109,7 +121,8 @@ pub async fn dispatch_command(
             mode,
             expected_version,
         }) => {
-            let outcome = session_services
+            let outcome = state
+                .session_execution_services()?
                 .commands
                 .rewind_session(agena_runtime::SessionRewindRequest {
                     session_id,
@@ -128,13 +141,21 @@ pub async fn dispatch_command(
             session_id,
             at_message_id,
             title,
+            expected_version,
         }) => Ok(execution_command_result(
             state
-                .fork_session(session_id, at_message_id, title, conversation_mode, None)
+                .fork_session(
+                    session_id,
+                    at_message_id,
+                    title,
+                    conversation_mode,
+                    expected_version,
+                )
                 .await?,
         )),
         Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
-            let summaries = session_services
+            let summaries = state
+                .session_execution_services()?
                 .queries
                 .list_session_tree(root_id)
                 .await

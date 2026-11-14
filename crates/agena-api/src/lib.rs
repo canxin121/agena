@@ -35,6 +35,8 @@
 //!   protocol generations or downgrade behavior are retained.
 
 pub mod client_command;
+pub use agena_session_api::server_control;
+pub use agena_session_api::{business, extended_sessions, management};
 pub mod commands;
 pub mod content;
 pub mod error;

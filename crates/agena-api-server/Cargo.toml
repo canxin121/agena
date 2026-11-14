@@ -48,3 +48,8 @@ uuid = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+agena-bundled-plugins.workspace = true
+tempfile.workspace = true
+tower = { workspace = true, features = ["util"] }

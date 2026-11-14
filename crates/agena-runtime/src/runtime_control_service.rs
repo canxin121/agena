@@ -60,6 +60,11 @@ pub trait RuntimeControlService: Send + Sync {
         None
     }
 
+    /// Finish runtime activation after the application backend has been attached.
+    async fn application_ready(&self) -> Result<(), RuntimeControlServiceError> {
+        Ok(())
+    }
+
     async fn reload(&self) -> Result<RuntimeReloadReport, RuntimeControlServiceError>;
 
     /// Fetches provider client-version data through the Runtime-owned network

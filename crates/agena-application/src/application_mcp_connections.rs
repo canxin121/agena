@@ -70,11 +70,19 @@ impl Application {
     }
 
     async fn mcp_saved(&self, id: Option<String>) -> Result<McpMutationResult, ApplicationError> {
-        let mut warning = self.runtime_control().reload().await.err().map(|_| "Configuration was saved, but runtime reload failed. Check diagnostics and reload before using the connection.".to_owned());
+        let reload = self.runtime_control().reload().await;
+        let reload_task_id = reload
+            .as_ref()
+            .ok()
+            .and_then(|report| report.deferred_task_id.clone());
+        let mut warning = reload.err().map(|_| "Configuration was saved, but runtime reload failed. Check diagnostics and reload before using the connection.".to_owned());
         let connection = if let Some(id) = id {
             match self.mcp_connection(id).await {
                 Ok(mut detail) => {
-                    if warning.is_some() && detail.summary.effective && detail.summary.enabled {
+                    if (warning.is_some() || reload_task_id.is_some())
+                        && detail.summary.effective
+                        && detail.summary.enabled
+                    {
                         detail.summary.state = "pending_reload".into();
                         detail.summary.error = warning.clone();
                     }
@@ -92,7 +100,7 @@ impl Application {
             saved: true,
             connection,
             warning,
-            reload_task_id: None,
+            reload_task_id,
         })
     }
 

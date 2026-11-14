@@ -17,26 +17,14 @@ use agena_api::{
 };
 use agena_application::dto::{
     CommandRequestContext, GitCommitRequest, GitPullRequestCreateRequest, GitStageRequest,
-    HealthResponse, ItemsResponse, MarketplaceIdentityResource, MarketplaceInstallRequest,
-    MarketplaceInstalledPluginResource, MarketplaceOutdatedPluginResource,
-    MarketplacePluginResource, MarketplaceRegistryRequest, MarketplaceSearchRequest,
-    MarketplaceSearchResponse, MarketplaceUninstallRequestBody, MarketplaceUpgradeRequest,
-    MemoryWriteRequest, OperatorToolInvokeRequest, PermissionRuleBatchRequest,
-    PermissionRuleRevokeRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
-    PluginSettingsUpdateRequest, PluginSurfaceCatalogResponse, PluginToolInvokeRequest,
-    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
-    SessionCreateRequest, SessionListQuery, SessionReplyRequestBody, SessionRewindRequestBody,
-    SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, WorkspaceFileDownloadQuery,
+    HealthResponse, ItemsResponse, MemoryWriteRequest, OperatorToolInvokeRequest,
+    PermissionRuleBatchRequest, PermissionRuleRevokeRequest, PluginLogListQuery,
+    PluginSettingsUpdateRequest, PluginToolInvokeRequest, RuntimeBackgroundTaskCancelResponse,
+    RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
+    SessionListQuery, SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequest,
+    SessionRunRequestBody, SessionUpdateRequest, WorkspaceFileDownloadQuery,
     WorkspaceFileTreeQuery, WorkspaceFileUploadRequest, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
-};
-use agena_domain::{UsagePeriod, UsageStatsQuery, get_json_path};
-use agena_runtime::{
-    ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
-    ConfigSettingsLayer, ConfigSettingsListInput, ConfigSettingsListResponse,
-    ConfigSettingsPatchInput, ConfigSettingsReadResponse, ConfigSettingsReloadResponse,
-    ConfigSettingsSetInput, ConfigSettingsSource, ConfigSettingsValidateInput,
-    RuntimeConfigSettingsError, list_json_path,
 };
 use async_stream::stream;
 use axum::{
@@ -149,30 +137,7 @@ pub struct ToolDetailSectionQuery {
     pub locale: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-/// Query for HTTP usage statistics.
-pub struct UsageStatsHttpQuery {
-    #[serde(default)]
-    pub period: Option<UsagePeriod>,
-    #[serde(default)]
-    pub from: Option<String>,
-    #[serde(default)]
-    pub to: Option<String>,
-    /// Comma-separated provider ids to include.
-    #[serde(default)]
-    pub provider: Option<String>,
-    /// Comma-separated model ids to include.
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Comma-separated session ids to include.
-    #[serde(default)]
-    pub session: Option<String>,
-    #[serde(default)]
-    pub include_subagents: Option<bool>,
-    /// Fixed UTC offset used for preset boundaries and daily buckets.
-    #[serde(default)]
-    pub timezone_offset_minutes: Option<i32>,
-}
+pub use agena_api::management::UsageQuery as UsageStatsHttpQuery;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
@@ -440,108 +405,7 @@ pub async fn get_usage_stats(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<UsageStatsHttpQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let usage_query = usage_stats_query_from_http(query)?;
-    let session_services = state.application().session_execution_services()?;
-    Ok(Json(
-        session_services
-            .queries
-            .usage_stats(usage_query)
-            .await
-            .map_err(|error| ServerError::internal_error(&error))?,
-    ))
-}
-
-fn usage_stats_query_from_http(query: UsageStatsHttpQuery) -> Result<UsageStatsQuery, ServerError> {
-    let timezone_offset_minutes = query.timezone_offset_minutes.unwrap_or_default();
-    if !(-1_439..=1_439).contains(&timezone_offset_minutes) {
-        return Err(ServerError::bad_request(
-            "The timezone offset must be between -1439 and 1439 minutes.",
-        ));
-    }
-    let provider_ids = parse_usage_csv(query.provider.as_deref());
-    let model_ids = parse_usage_csv(query.model.as_deref());
-    let session_ids = parse_usage_session_ids(query.session.as_deref())?;
-    let include_subagents = query.include_subagents.unwrap_or(true);
-    let has_custom_range = query.from.is_some() || query.to.is_some();
-    if has_custom_range {
-        let from = query
-            .from
-            .as_deref()
-            .map(|value| parse_usage_datetime(value, false))
-            .transpose()?;
-        let to = query
-            .to
-            .as_deref()
-            .map(|value| parse_usage_datetime(value, true))
-            .transpose()?
-            .or_else(|| Some(chrono::Utc::now()));
-        if let (Some(from), Some(to)) = (from.as_ref(), to.as_ref())
-            && from > to
-        {
-            return Err(ServerError::bad_request(
-                "The start date must be earlier than or equal to the end date.",
-            ));
-        }
-        return Ok(UsageStatsQuery::custom(from, to)
-            .with_timezone_offset(timezone_offset_minutes)
-            .with_filters(provider_ids, model_ids, session_ids, include_subagents));
-    }
-
-    Ok(UsageStatsQuery::for_period_with_offset(
-        query.period.unwrap_or(UsagePeriod::Last7Days),
-        chrono::Utc::now(),
-        timezone_offset_minutes,
-    )
-    .with_filters(provider_ids, model_ids, session_ids, include_subagents))
-}
-
-fn parse_usage_csv(raw: Option<&str>) -> Vec<String> {
-    raw.unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn parse_usage_session_ids(raw: Option<&str>) -> Result<Vec<i64>, ServerError> {
-    parse_usage_csv(raw)
-        .into_iter()
-        .map(|value| {
-            value.parse::<i64>().map_err(|_| {
-                ServerError::bad_request_with_diagnostic(
-                    "A session ID in the usage filter is invalid.",
-                    format!("invalid session id `{value}` in usage filter"),
-                )
-            })
-        })
-        .collect()
-}
-
-fn parse_usage_datetime(
-    raw: &str,
-    end_of_day: bool,
-) -> Result<chrono::DateTime<chrono::Utc>, ServerError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Err(ServerError::bad_request("The usage date cannot be empty."));
-    }
-    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(trimmed) {
-        return Ok(parsed.with_timezone(&chrono::Utc));
-    }
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-        let datetime = if end_of_day {
-            date.and_hms_milli_opt(23, 59, 59, 999)
-        } else {
-            date.and_hms_milli_opt(0, 0, 0, 0)
-        }
-        .expect("valid date boundary");
-        return Ok(datetime.and_utc());
-    }
-    Err(ServerError::bad_request_with_diagnostic(
-        "The usage date must use YYYY-MM-DD or RFC3339 format.",
-        format!("invalid usage date `{raw}`"),
-    ))
+    json_http(state.application().query_usage_stats(query)).await
 }
 
 pub async fn reload_runtime(
@@ -607,35 +471,6 @@ fn server_error_from_runtime_background_task(
     error: agena_runtime::RuntimeBackgroundTaskControlError,
 ) -> ServerError {
     agena_application::ApplicationError::from(error).into()
-}
-
-async fn reload_settings_if_needed(
-    state: &AppState,
-    response: &mut ConfigSettingsEditResponse,
-) -> Result<(), ServerError> {
-    if !response.reload_required {
-        return Ok(());
-    }
-
-    let report = state
-        .runtime_control()
-        .reload()
-        .await
-        .map_err(|error| server_error_from_application(error.into()))?;
-    METRIC_RUNTIME_RELOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    response.reload = Some(ConfigSettingsReloadResponse {
-        previous_generation: report.previous_generation,
-        generation: report.generation,
-        loaded_at: report.loaded_at.to_rfc3339(),
-    });
-    Ok(())
-}
-
-fn settings_error(error: RuntimeConfigSettingsError) -> ServerError {
-    ServerError::from_failure_with_diagnostic(
-        error.failure().clone(),
-        error.diagnostic().to_owned(),
-    )
 }
 
 fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError> {

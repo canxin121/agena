@@ -298,7 +298,7 @@ pub(crate) use provider_composition::{
 pub(crate) use refresh::run_cancellable_refresh;
 pub(crate) use refresh_policy::should_refresh;
 pub(crate) use registration::spawn_registration_batch;
-pub use reload::{RuntimeReloadCause, RuntimeReloadReport};
+pub use reload::{RuntimeReloadCause, RuntimeReloadReport, capture_deferred_reloads};
 pub(crate) use reload_gate::ReloadGate;
 pub(crate) use reload_watch::run_reload_watch_loop;
 pub use runtime_authentication_service::{

@@ -1,3 +1,4 @@
+use super::MAX_UPLOAD_BYTES;
 use agena_storage::WorkspaceListQuery as StorageWorkspaceListQuery;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use path_clean::PathClean;
@@ -397,6 +398,7 @@ impl ApplicationService {
             .create(path)
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?;
+        self.workspace_catalog_changed();
 
         workspace_record_resource(&created, Some(0))
     }
@@ -484,6 +486,7 @@ impl ApplicationService {
                 format!("workspace not found: {workspace_id}"),
             ));
         };
+        self.workspace_catalog_changed();
         let counts = self.workspace_session_counts(&[updated.id]).await?;
         workspace_record_resource(&updated, counts.get(&updated.id).copied())
     }
@@ -509,6 +512,7 @@ impl ApplicationService {
             .delete(workspace_id)
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?;
+        self.workspace_catalog_changed();
         workspace_record_resource(&existing, counts.get(&workspace_id).copied())
     }
 }
@@ -1006,7 +1010,6 @@ fn store_uploaded_file(
     request: WorkspaceFileUploadRequest,
     bytes: Option<Vec<u8>>,
 ) -> ApplicationResult<WorkspaceFileUploadResource> {
-    const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
     let filename = sanitize_upload_filename(request.filename.as_str());
     if filename.is_empty() {
         return Err(ApplicationError::bad_request(

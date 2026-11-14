@@ -244,6 +244,7 @@ pub fn parse_plugin_hook_attr(
 fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<PluginHookKind> {
     match key {
         "init" => Ok(PluginHookKind::Init),
+        "application.ready" => Ok(PluginHookKind::ApplicationReady),
         "shutdown" => Ok(PluginHookKind::Shutdown),
         "tool.before" => Ok(PluginHookKind::ToolExecuteBefore),
         "tool.after" => Ok(PluginHookKind::ToolExecuteAfter),
@@ -421,7 +422,9 @@ pub enum PluginHookExpectedOutput {
 
 pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInput {
     match hook {
-        PluginHookKind::Shutdown => PluginHookExpectedInput::None,
+        PluginHookKind::ApplicationReady | PluginHookKind::Shutdown => {
+            PluginHookExpectedInput::None
+        }
         PluginHookKind::Init => PluginHookExpectedInput::Init,
         PluginHookKind::ToolExecuteBefore => PluginHookExpectedInput::Single("ToolBeforeInput"),
         PluginHookKind::ToolExecuteAfter => PluginHookExpectedInput::Single("ToolAfterInput"),
@@ -477,7 +480,8 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
 pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOutput {
     match hook {
         PluginHookKind::Init => PluginHookExpectedOutput::Init,
-        PluginHookKind::Shutdown
+        PluginHookKind::ApplicationReady
+        | PluginHookKind::Shutdown
         | PluginHookKind::ToolExecuteFailure
         | PluginHookKind::Notification
         | PluginHookKind::PreRun
@@ -607,6 +611,7 @@ fn option_inner_type(ty: &Type) -> Option<&Type> {
 pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
     match hook {
         PluginHookKind::Init => "init",
+        PluginHookKind::ApplicationReady => "application.ready",
         PluginHookKind::Shutdown => "shutdown",
         PluginHookKind::ToolExecuteBefore => "tool.before",
         PluginHookKind::ToolExecuteAfter => "tool.after",

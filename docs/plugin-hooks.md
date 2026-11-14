@@ -123,6 +123,7 @@ permissions, and observer results cannot change completed operations.
 | `#[hook(...)]` | Trigger | Effect |
 | --- | --- | --- |
 | `init` | Plugin initialization | Initialize resources |
+| `application.ready` | Shared Application API attached; each published runtime generation | Start business work through HostClient |
 | `shutdown` | Plugin shutdown | Release resources |
 | `session.start` | Session initialized, restored, or cleared | Initial context |
 | `session.end` | Session ends | Observe |
@@ -132,6 +133,34 @@ permissions, and observer results cannot change completed operations.
 | `agent.stop` | Agent intends to stop | Request continuation |
 | `agent.cancel` | Agent cancelled | Observe |
 | `config.resolved` | Plugin configuration resolved | Transform |
+
+`Application::bootstrap` prepares the runtime and plugin manifests, installs
+the shared query/command backend, then dispatches `application.ready`. This
+sequence is the same for an embedded process and for the HTTP server; opening
+an HTTP listener is not a prerequisite. Use `init` for settings, registration,
+and plugin-owned resources. Start work that queries or changes application
+resources in `application.ready`:
+
+```rust
+#[hook(
+    application.ready,
+    summary = "Start the channel worker",
+    help = "Starts the channel worker after the application API is available."
+)]
+async fn start_worker(&self) -> Result<()> {
+    // self.host.query(Query::Business(...)).await?;
+    // Start or refresh the plugin-owned worker.
+    Ok(())
+}
+```
+
+The direct `Plugin` implementation method is `application_ready`; external
+transports receive `meta/ready` when their manifest subscribes to
+`application.ready`. Runtime reload publishes the new generation before it
+dispatches this event again. A retained plugin instance may therefore receive
+it repeatedly: make worker startup idempotent and refresh its dependencies.
+Configuration changes requested from a plugin callback return a deferred reload
+task; retirement waits until that callback finishes.
 
 A **run** is a single claimed session execution, not a provider request or a
 model round. `run.pre` and `run.post` each fire once for that execution,

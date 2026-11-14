@@ -23,6 +23,8 @@ pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 mod bot;
 mod companion;
 mod integrations;
+mod operations;
+pub use operations::HostClientExt;
 mod session;
 mod workspace;
 pub use bot::{BotAction, BotRequest};
@@ -263,6 +265,19 @@ pub trait HostClient: Send + Sync + 'static {
     /// exhaustive match then fails to compile until it is routed.
     async fn session_op(&self, _op: SessionOp) -> Result<SessionOpResponse> {
         Err(unavailable())
+    }
+
+    /// Execute any shared application query and retain its result envelope.
+    async fn query(&self, query: agena_session_api::queries::Query) -> Result<serde_json::Value> {
+        operations::response_value(self.session_op(SessionOp::Query(query)).await?, false)
+    }
+
+    /// Execute any shared application command and retain its result envelope.
+    async fn command(
+        &self,
+        command: agena_session_api::commands::Command,
+    ) -> Result<serde_json::Value> {
+        operations::response_value(self.session_op(SessionOp::Command(command)).await?, true)
     }
 
     /// Subscribe to a live session stream. Returns a subscription id; events are

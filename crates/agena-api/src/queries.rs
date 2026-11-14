@@ -20,6 +20,8 @@ use crate::resource::{
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
 /// Result of a [`Query`].
 pub enum QueryResult {
+    /// Domain handlers serialize their public resource at the wire boundary.
+    Data(serde_json::Value),
     Parts(crate::live::SessionPartsResource),
     Content(agena_domain::ContentPage),
     ContentText(agena_domain::ContentTextPage),

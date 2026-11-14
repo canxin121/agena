@@ -3,11 +3,7 @@ use agena_api::bot::*;
 use axum::extract::{Path, Query};
 use uuid::Uuid;
 
-#[derive(Default, serde::Deserialize)]
-pub struct BotListQuery {
-    #[serde(default)]
-    pub include_archived: bool,
-}
+pub use agena_api::business::BotListQuery;
 fn bot_id(id: &str) -> Result<Uuid, ServerError> {
     id.parse()
         .map_err(|_| ServerError::bad_request("invalid Bot UUID"))

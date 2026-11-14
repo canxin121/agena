@@ -107,6 +107,14 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(InitOutcome::ack(self.manifest()))
     }
 
+    /// Called after the shared application API is attached and after each
+    /// published runtime generation. Subscribe to `application.ready` and put
+    /// business-dependent startup here; `init` prepares configuration/registries.
+    /// Retained instances should make their background startup idempotent.
+    async fn application_ready(&self) -> Result<()> {
+        Ok(())
+    }
+
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
@@ -381,5 +389,50 @@ impl ToolStreamSink {
                 "plugin tool text stream receiver was dropped"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod application_ready_tests {
+    use crate::{HookSubscription, Plugin, Result};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[derive(Default)]
+    struct ReadyProbe {
+        calls: AtomicUsize,
+    }
+
+    #[crate::agena_plugin(
+        namespace = "test",
+        name = "application-ready",
+        version = "1.0.0",
+        summary = "Application readiness test plugin"
+    )]
+    impl ReadyProbe {
+        #[hook(
+            application.ready,
+            summary = "Activate application work",
+            help = "Runs after the shared application backend is available."
+        )]
+        async fn activate(&self) -> Result<()> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn ready_macro_declares_and_dispatches_the_lifecycle_hook() {
+        let plugin = ReadyProbe::default();
+        let manifest = plugin.manifest();
+        assert!(manifest.hooks.contains(HookSubscription::APPLICATION_READY));
+        assert!(
+            manifest
+                .hook_handlers
+                .iter()
+                .any(|handler| handler.event == "application.ready")
+        );
+        plugin.application_ready().await.unwrap();
+        plugin.application_ready().await.unwrap();
+        assert_eq!(plugin.calls.load(Ordering::Relaxed), 2);
     }
 }

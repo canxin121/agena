@@ -50,10 +50,6 @@ pub use agena_domain::{
     WorkflowState,
 };
 
-fn is_false(value: &bool) -> bool {
-    !*value
-}
-
 // ─── Health / runtime ────────────────────────────────────────────────────
 
 /// Atomically-published local discovery record for one server.
@@ -258,6 +254,8 @@ pub struct RuntimeReloadResponse {
     pub previous_generation: u64,
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_task_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -291,6 +289,8 @@ pub struct ConfigSettingsReloadResponse {
     pub previous_generation: u64,
     pub generation: u64,
     pub loaded_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_task_id: Option<String>,
 }
 
 // ─── Workspaces ──────────────────────────────────────────────────────────
@@ -785,22 +785,6 @@ pub struct RuntimeTaskResource {
     pub interval_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-/// Adapter model probe result for one adapter.
-pub struct ProviderAdapterModelsResource {
-    pub adapter_id: String,
-    pub enabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_base_url: Option<String>,
-    pub models: Vec<ProviderModelResource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<agena_failure::UserProblem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Response containing provider adapter model probes.
-pub struct ProviderAdapterModelsResponse {
-    pub provider_id: String,
-    pub adapters: Vec<ProviderAdapterModelsResource>,
-}
+pub use agena_session_api::management::provider::{
+    ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+};

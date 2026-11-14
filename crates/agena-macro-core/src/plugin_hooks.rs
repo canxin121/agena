@@ -31,6 +31,7 @@ pub struct PluginHookPlan {
 /// Kind of a plugin hook.
 pub enum PluginHookKind {
     Init,
+    ApplicationReady,
     Shutdown,
     ToolExecuteBefore,
     ToolExecuteAfter,
@@ -221,6 +222,9 @@ pub fn expand_plugin_layer_hook_methods(
 fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStream {
     match hook {
         PluginHookKind::Init => quote! { ::agena_plugin_sdk::HookSubscription::INIT },
+        PluginHookKind::ApplicationReady => {
+            quote! { ::agena_plugin_sdk::HookSubscription::APPLICATION_READY }
+        }
         PluginHookKind::Shutdown => quote! { ::agena_plugin_sdk::HookSubscription::SHUTDOWN },
         PluginHookKind::ToolExecuteBefore => {
             quote! { ::agena_plugin_sdk::HookSubscription::TOOL_BEFORE }
@@ -304,6 +308,7 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
 fn plugin_hook_order() -> &'static [PluginHookKind] {
     &[
         PluginHookKind::Init,
+        PluginHookKind::ApplicationReady,
         PluginHookKind::Shutdown,
         PluginHookKind::ToolExecuteBefore,
         PluginHookKind::ToolExecuteAfter,
@@ -344,6 +349,9 @@ fn expand_plugin_layer_hook_method_group(
 ) -> Result<proc_macro2::TokenStream> {
     let tokens = match hook {
         PluginHookKind::Init => unreachable!("init is expanded separately"),
+        PluginHookKind::ApplicationReady => {
+            expand_plugin_layer_no_arg_unit_hook("application_ready", bindings)
+        }
         PluginHookKind::Shutdown => expand_plugin_layer_no_arg_unit_hook("shutdown", bindings),
         PluginHookKind::ToolExecuteBefore => expand_plugin_layer_single_arg_hook_group(
             "tool_execute_before",

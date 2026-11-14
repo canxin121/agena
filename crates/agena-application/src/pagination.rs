@@ -5,13 +5,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::ApplicationError;
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-/// Ordering of a page of results.
-pub enum PageOrder {
-    Asc,
-    Desc,
-}
+pub use agena_api::pagination::PageOrder;
 
 #[derive(Debug, Clone, Serialize)]
 /// Pagination metadata for one page of results.
@@ -44,6 +38,8 @@ pub fn api_page_from_application<T, U>(
         total: value.total,
         items: value.items.into_iter().map(&mut map_item).collect(),
         page: agena_api::pagination::PageInfo {
+            limit: Some(value.page.limit),
+            order: Some(value.page.order),
             next_cursor: value.page.next_cursor,
             has_more: value.page.has_more,
             returned: value.page.returned as u64,
@@ -70,4 +66,31 @@ where
     serde_json::from_slice(&bytes).map_err(|error| {
         ApplicationError::bad_request_with_diagnostic("The page cursor is invalid.", error)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_protocol_keeps_complete_resource_page_metadata() {
+        let source = PaginatedResponse {
+            total: Some(30),
+            items: vec!["one"],
+            page: PageInfo {
+                limit: 50,
+                returned: 1,
+                has_more: true,
+                next_cursor: Some("opaque-next".into()),
+                order: PageOrder::Desc,
+            },
+        };
+        let expected = serde_json::to_value(&source).unwrap();
+        let shared = api_page_from_application(source, |item| item);
+        assert_eq!(serde_json::to_value(&shared).unwrap(), expected);
+        let decoded: agena_api::pagination::PaginatedResponse<String> =
+            serde_json::from_value(expected).unwrap();
+        assert_eq!(decoded.page.limit, Some(50));
+        assert_eq!(decoded.page.order, Some(PageOrder::Desc));
+    }
 }

@@ -17,6 +17,7 @@ use std::{
 };
 struct Clock {
     position: Option<WatchCursor>,
+    workspace_catalog_revision: u64,
     revision: i64,
     reset_revision: i64,
     local: lru::LruCache<String, i64>,
@@ -25,6 +26,7 @@ impl Clock {
     fn new() -> Self {
         Self {
             position: None,
+            workspace_catalog_revision: 0,
             revision: chrono::Utc::now().timestamp_millis(),
             reset_revision: chrono::Utc::now().timestamp_millis(),
             local: lru::LruCache::new(std::num::NonZeroUsize::new(8192).unwrap()),
@@ -284,6 +286,7 @@ impl ResourceRevisions {
     /// The kernel has one process owner. Observe the in-memory committed head;
     /// normal requests never rescan the database or every session's metadata.
     pub(crate) async fn refresh_durable(&self, state: &AppState) -> Result<(), ServerError> {
+        self.observe_workspace_revision(state.service().workspace_catalog_revision());
         self.refresh_durable_with(|after| {
             state
                 .application()
@@ -338,8 +341,12 @@ impl ResourceRevisions {
         }
         Ok(())
     }
-    pub(crate) fn observe_workspace_change(&self) {
+    fn observe_workspace_revision(&self, observed: u64) {
         let mut clock = self.clock.lock().unwrap_or_else(|e| e.into_inner());
+        if observed <= clock.workspace_catalog_revision {
+            return;
+        }
+        clock.workspace_catalog_revision = observed;
         let revision = clock.tick();
         for key in ["workspaces", "workspaces:catalog"] {
             clock.set(key.into(), revision);

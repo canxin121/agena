@@ -140,6 +140,7 @@ pub mod method {
     pub const CANCEL_REQUEST: &str = "$/cancelRequest";
     // host -> plugin
     pub const META_INIT: &str = "meta/init";
+    pub const META_READY: &str = "meta/ready";
     pub const META_SHUTDOWN: &str = "meta/shutdown";
     pub const META_MANIFEST: &str = "meta/manifest";
     pub const META_PING: &str = "meta/ping";

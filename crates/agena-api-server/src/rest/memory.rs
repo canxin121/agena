@@ -1,76 +1,32 @@
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MemoryBatchDeleteRequest {
-    pub records: Vec<agena_domain::MemoryRevision>,
-}
+pub use agena_api::business::{MemoryBatchDeleteRequest, MemoryDeleteQuery};
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MemoryDeleteQuery {
-    pub expected_sha256: String,
-}
+use super::{
+    AppState, IntoResponse, Json, MemoryWriteRequest, Path, ServerError, State, json_http,
+};
 
 pub async fn list_memories(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async {
-        state
-            .application()
-            .run_blocking(|app| app.service().list_memories())
-            .await?
-    })
-    .await
+    json_http(state.application().list_memories()).await
 }
 
 pub async fn get_memory_overview(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let workspace_root = state
-        .application()
-        .runtime_diagnostics()
-        .await
-        .workspace_root;
-    let (directory, items) = state
-        .application()
-        .run_blocking(|app| {
-            Ok::<_, agena_application::ApplicationError>((
-                app.service().memory_directory(),
-                app.service().list_memories()?,
-            ))
-        })
-        .await
-        .map_err(ServerError::from)?
-        .map_err(ServerError::from)?;
-    Ok(Json(serde_json::json!({
-        "workspace_root": workspace_root,
-        "directory": directory,
-        "items": items,
-    })))
+    Ok(Json(state.application().memory_overview().await?))
 }
 
 pub async fn ensure_memory_index(
     State(state): State<AppState>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let path = state
-        .application()
-        .run_blocking(|app| app.service().memory_index_path())
-        .await
-        .map_err(ServerError::from)?
-        .map_err(ServerError::from)?;
-    Ok(Json(serde_json::json!({ "path": path })))
+    Ok(Json(state.application().ensure_memory_index().await?))
 }
 
 pub async fn get_memory(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async {
-        state
-            .application()
-            .run_blocking(move |app| app.service().get_memory(&name))
-            .await?
-    })
-    .await
+    json_http(state.application().get_memory(name)).await
 }
 
 pub async fn save_memory(
@@ -78,13 +34,7 @@ pub async fn save_memory(
     Path(name): Path<String>,
     Json(request): Json<MemoryWriteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async {
-        state
-            .application()
-            .run_blocking(move |app| app.service().save_memory(&name, request))
-            .await?
-    })
-    .await
+    json_http(state.application().save_memory(name, request)).await
 }
 
 pub async fn delete_memory(
@@ -92,12 +42,11 @@ pub async fn delete_memory(
     Path(name): Path<String>,
     axum::extract::Query(query): axum::extract::Query<MemoryDeleteQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async {
+    json_http(
         state
             .application()
-            .run_blocking(move |app| app.service().delete_memory(&name, &query.expected_sha256))
-            .await?
-    })
+            .delete_memory(name, query.expected_sha256),
+    )
     .await
 }
 
@@ -105,15 +54,5 @@ pub async fn delete_memories(
     State(state): State<AppState>,
     Json(request): Json<MemoryBatchDeleteRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(async move {
-        state
-            .application()
-            .run_blocking(move |app| app.service().delete_memories(&request.records))
-            .await?
-    })
-    .await
+    json_http(state.application().delete_memories(request.records)).await
 }
-
-use super::{
-    AppState, IntoResponse, Json, MemoryWriteRequest, Path, ServerError, State, json_http,
-};

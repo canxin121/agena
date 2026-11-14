@@ -1097,6 +1097,7 @@ impl Application {
                 returned: parts.len() as u64,
                 has_more,
                 next_cursor: encode_part_cursor(request.session_id, next)?,
+                ..Default::default()
             },
             parts,
             runs: Vec::new(),
@@ -1145,6 +1146,7 @@ impl Application {
                         returned: message.loaded_count,
                         has_more: message.loaded_count < message.entry_count,
                         next_cursor: encode_part_cursor(request.session_id, message.next)?,
+                        ..Default::default()
                     },
                 })
             })
@@ -1159,6 +1161,7 @@ impl Application {
                 returned: page.messages.len() as u64,
                 has_more: page.has_more,
                 next_cursor: encode_part_cursor(request.session_id, page.next)?,
+                ..Default::default()
             },
         })
     }

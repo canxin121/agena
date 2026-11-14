@@ -40,6 +40,7 @@ use crate::{
 };
 
 type ApplicationResult<T> = Result<T, ApplicationError>;
+pub(crate) const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(crate) mod execution;
 mod git;
@@ -101,6 +102,7 @@ pub struct ApplicationService {
     workspace_root: String,
     memory_repository: Arc<dyn agena_storage::MemoryRepository>,
     workspace_repository: Arc<dyn WorkspaceRepository>,
+    workspace_catalog_revision: Arc<std::sync::atomic::AtomicU64>,
     permission_rule_repository: Arc<dyn PermissionRuleRepository>,
     session_kernel: agena_storage::kernel::SessionKernel,
 }
@@ -108,6 +110,18 @@ pub struct ApplicationService {
 impl ApplicationService {
     pub fn session_kernel(&self) -> &agena_storage::kernel::SessionKernel {
         &self.session_kernel
+    }
+
+    /// One process-local commit clock shared by every clone and transport.
+    /// Workspace catalog writes are separate from the session kernel feed.
+    pub fn workspace_catalog_revision(&self) -> u64 {
+        self.workspace_catalog_revision
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn workspace_catalog_changed(&self) {
+        self.workspace_catalog_revision
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -135,6 +149,7 @@ impl ApplicationService {
             workspace_root: workspace_root.into(),
             memory_repository,
             workspace_repository,
+            workspace_catalog_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             permission_rule_repository,
             session_kernel,
         }

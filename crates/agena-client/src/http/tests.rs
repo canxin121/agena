@@ -226,19 +226,25 @@ async fn explicit_list_refresh_revalidates_even_with_a_live_revision_lease() {
             },
         );
     }
-    let query = Query::ListSessions(ListSessionsParams {
-        workspace_id: Some(1),
-        ..Default::default()
-    });
-    let QueryResult::Sessions(cached) = client.query(query.clone()).await.unwrap() else {
-        panic!("wrong query result")
-    };
-    assert!(!cached.page.has_more);
+    let cached: serde_json::Value = client
+        .conditional_json(
+            resource,
+            client.endpoint("/api/v1/sessions?workspace_id=1"),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached["page"]["has_more"], false);
     assert!(server.requests.lock().unwrap().is_empty());
-    let QueryResult::Sessions(fresh) = client.query_revalidated(query).await.unwrap() else {
-        panic!("wrong query result")
-    };
-    assert!(fresh.page.has_more);
+    let fresh: serde_json::Value = client
+        .conditional_json(
+            resource,
+            client.endpoint("/api/v1/sessions?workspace_id=1"),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(fresh["page"]["has_more"], true);
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert!(
@@ -751,57 +757,63 @@ async fn typed_json_decoder_rejects_overflow_numbers_in_unknown_fields() {
 }
 
 #[tokio::test]
-async fn permission_commands_send_the_public_contract_without_null_fields() {
-    use agena_api::commands::{Command as ApiCommand, UpsertPermissionRuleParams};
-    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"id":7,"action_key":"tool:read","subject_kind":"tool","mode":"allow","scope":"session","source":"user","created_at":"2026-10-31T00:00:00Z","updated_at":"2026-10-31T00:00:00Z"}"#)).await;
+async fn permission_commands_preserve_the_contract_through_the_shared_endpoint() {
+    use agena_api::commands::{
+        Command as ApiCommand, ReplacePermissionRuleParams, UpsertPermissionRuleParams,
+    };
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"result":"permission_rule","data":{"id":7,"action_key":"tool:read","subject_kind":"tool","mode":"allow","scope":"session","source":"user","created_at":"2026-10-31T00:00:00Z","updated_at":"2026-10-31T00:00:00Z"}}"#)).await;
     let client = AgenaClient::new(&server.url).unwrap();
     let minimal = serde_json::json!({"mode":"ask"});
-    let replacement = serde_json::json!({"tool_name":"read", "qualifier":"", "scope":"session", "session_id":7, "mode":"allow"});
-    let result = client
-        .command(ApiCommand::UpsertPermissionRule(
-            serde_json::from_value::<UpsertPermissionRuleParams>(minimal.clone()).unwrap(),
-        ))
-        .await
-        .unwrap();
+    let replacement = serde_json::json!({"tool_name":"read","qualifier":"","scope":"session","session_id":7,"mode":"allow"});
+    let first = ApiCommand::UpsertPermissionRule(
+        serde_json::from_value::<UpsertPermissionRuleParams>(minimal.clone()).unwrap(),
+    );
+    let second = ApiCommand::ReplacePermissionRule(ReplacePermissionRuleParams {
+        rule_id: 7,
+        rule: serde_json::from_value(replacement).unwrap(),
+    });
+    let result = client.command(first.clone()).await.unwrap();
     assert!(matches!(result, CommandResult::PermissionRule(rule) if rule.id == 7));
-    client
-        .command(ApiCommand::ReplacePermissionRule(
-            ReplacePermissionRuleParams {
-                rule_id: 7,
-                rule: serde_json::from_value(replacement.clone()).unwrap(),
-            },
-        ))
-        .await
-        .unwrap();
+    client.command(second.clone()).await.unwrap();
     let requests = server.requests.lock().unwrap();
-    assert!(requests[0].starts_with("POST /api/v1/permission-rules "));
-    assert!(requests[1].starts_with("PUT /api/v1/permission-rules/7 "));
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.starts_with("POST /api/v1/commands "))
+    );
     let bodies = server.request_bodies.lock().unwrap();
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap(),
-        minimal
+        serde_json::to_value(first).unwrap()
     );
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap(),
-        replacement
+        serde_json::to_value(second).unwrap()
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bodies[0]).unwrap()["params"],
+        minimal
     );
 }
 
 #[tokio::test]
-async fn adapter_probe_query_uses_the_same_body_as_the_direct_http_method() {
-    let server = Fixture::new(
+async fn adapter_probe_query_preserves_all_parameters_through_the_shared_endpoint() {
+    let direct_server = Fixture::new(
         "127.0.0.1:0",
         "unused",
         Some(r#"{"provider_id":"fixture","adapters":[]}"#),
     )
     .await;
+    let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"result":"provider_adapter_models","data":{"provider_id":"fixture","adapters":[]}}"#)).await;
+    let direct_client = AgenaClient::new(&direct_server.url).unwrap();
     let client = AgenaClient::new(&server.url).unwrap();
     let request: ListProviderAdapterModelsParams = serde_json::from_value(serde_json::json!({
-        "base_url":"https://example.test", "protocol_paths":{"anthropic":"/messages"},
-        "api_key":{"kind":"env","value":"PROVIDER_KEY"}, "adapter_ids":["anthropic"]
+        "base_url":"https://example.test","protocol_paths":{"anthropic":"/messages"},
+        "api_key":{"kind":"env","value":"PROVIDER_KEY"},"adapter_ids":["anthropic"]
     }))
     .unwrap();
-    let direct = client
+    let direct = direct_client
         .list_provider_adapter_models(request.clone())
         .await
         .unwrap();
@@ -813,12 +825,11 @@ async fn adapter_probe_query_uses_the_same_body_as_the_direct_http_method() {
     assert!(
         matches!(result, QueryResult::ProviderAdapterModels(response) if response.provider_id == "fixture")
     );
-    let bodies = server.request_bodies.lock().unwrap();
-    let direct: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
-    assert_eq!(
-        direct,
-        serde_json::from_slice::<serde_json::Value>(&bodies[1]).unwrap()
-    );
+    let direct: serde_json::Value =
+        serde_json::from_slice(&direct_server.request_bodies.lock().unwrap()[0]).unwrap();
+    let generic: serde_json::Value =
+        serde_json::from_slice(&server.request_bodies.lock().unwrap()[0]).unwrap();
+    assert_eq!(direct, generic["params"]);
     assert_eq!(
         direct["protocol_paths"],
         serde_json::json!({"openai":"/v1","anthropic":"/messages","gemini":"/v1beta"})
@@ -828,13 +839,44 @@ async fn adapter_probe_query_uses_the_same_body_as_the_direct_http_method() {
         serde_json::json!({"kind":"env","value":"PROVIDER_KEY"})
     );
     assert!(
-        server
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.starts_with("POST /api/v1/providers/models "))
+        direct_server.requests.lock().unwrap()[0].starts_with("POST /api/v1/providers/models ")
     );
+    assert!(server.requests.lock().unwrap()[0].starts_with("POST /api/v1/queries "));
+}
+
+#[tokio::test]
+async fn new_business_operations_need_no_http_client_dispatch_branch() {
+    use agena_api::business::{BotListQuery, BusinessCommand, BusinessQuery};
+    let server = Fixture::new(
+        "127.0.0.1:0",
+        "unused",
+        Some(r#"{"result":"data","data":{"items":[]}}"#),
+    )
+    .await;
+    let client = AgenaClient::new(&server.url).unwrap();
+    assert!(matches!(
+        client
+            .query(BusinessQuery::ListBots(BotListQuery {
+                include_archived: true
+            }))
+            .await
+            .unwrap(),
+        QueryResult::Data(_)
+    ));
+    assert!(matches!(
+        client
+            .command(BusinessCommand::DismissNotification {
+                notification_id: "notice".into()
+            })
+            .await
+            .unwrap(),
+        CommandResult::Data(_)
+    ));
+    let bodies = server.request_bodies.lock().unwrap();
+    let query: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+    let command: serde_json::Value = serde_json::from_slice(&bodies[1]).unwrap();
+    assert_eq!(query["params"]["params"]["include_archived"], true);
+    assert_eq!(command["params"]["params"]["notification_id"], "notice");
 }
 
 #[tokio::test]

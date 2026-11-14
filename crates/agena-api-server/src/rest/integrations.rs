@@ -5,90 +5,79 @@ use axum::{
     extract::{Path, State},
 };
 use uuid::Uuid;
-fn error(e: agena_assistant::Error) -> ServerError {
-    match e {
-        agena_assistant::Error::Invalid(s) => ServerError::bad_request(s),
-        agena_assistant::Error::Conflict(s) => ServerError::conflict(s),
-        agena_assistant::Error::NotFound => {
-            ServerError::not_found("integration not found in this workspace")
-        }
-        agena_assistant::Error::Unavailable(s) => ServerError::service_unavailable(s),
-        agena_assistant::Error::Policy(s) => ServerError::bad_request_with_diagnostic(
-            "invalid channel access policy; check identities, owners, role capabilities and limits",
-            s,
-        ),
-        agena_assistant::Error::Storage(s) => ServerError::internal(s),
-    }
-}
+
 pub async fn list_integrations(
-    State(s): State<AppState>,
+    State(state): State<AppState>,
     Path(source): Path<i64>,
 ) -> Result<Json<IntegrationsSnapshot>, ServerError> {
-    s.application()
-        .assistant_service()?
+    state
+        .application()
         .integrations(source)
         .await
         .map(Json)
-        .map_err(error)
+        .map_err(Into::into)
 }
+
 pub async fn create_integration(
-    State(s): State<AppState>,
+    State(state): State<AppState>,
     Path(source): Path<i64>,
-    Json(r): Json<CreateIntegration>,
+    Json(request): Json<CreateIntegration>,
 ) -> Result<Json<IntegrationBinding>, ServerError> {
-    s.application()
-        .assistant_service()?
-        .create_integration(source, r)
+    state
+        .application()
+        .create_integration(source, request)
         .await
         .map(Json)
-        .map_err(error)
+        .map_err(Into::into)
 }
+
 pub async fn integration_detail(
-    State(s): State<AppState>,
+    State(state): State<AppState>,
     Path((source, id)): Path<(i64, Uuid)>,
 ) -> Result<Json<IntegrationDetail>, ServerError> {
-    s.application()
-        .assistant_service()?
+    state
+        .application()
         .integration_detail(source, id)
         .await
         .map(Json)
-        .map_err(error)
+        .map_err(Into::into)
 }
+
 pub async fn control_integration(
-    State(s): State<AppState>,
+    State(state): State<AppState>,
     Path((source, id)): Path<(i64, Uuid)>,
-    Json(r): Json<IntegrationControl>,
+    Json(request): Json<IntegrationControl>,
 ) -> Result<Json<IntegrationBinding>, ServerError> {
-    s.application()
-        .assistant_service()?
-        .control_integration(source, id, r)
+    state
+        .application()
+        .control_integration(source, id, request)
         .await
         .map(Json)
-        .map_err(error)
+        .map_err(Into::into)
 }
 
 pub async fn update_channel_access(
-    State(s): State<AppState>,
+    State(state): State<AppState>,
     Path((source, id)): Path<(i64, Uuid)>,
-    Json(r): Json<ChannelPolicyUpdate>,
+    Json(request): Json<ChannelPolicyUpdate>,
 ) -> Result<Json<IntegrationBinding>, ServerError> {
-    s.application()
-        .assistant_service()?
-        .update_channel_policy(source, id, r)
+    state
+        .application()
+        .update_channel_access(source, id, request)
         .await
         .map(Json)
-        .map_err(error)
+        .map_err(Into::into)
 }
 
-/// Read-only platform inventory for one project conversation's workspace.
+/// Read-only platform inventory for one conversation's integration scope.
 pub async fn platform_inventory(
-    State(s): State<AppState>,
+    State(state): State<AppState>,
     Path(source): Path<i64>,
 ) -> Result<Json<PlatformInventory>, ServerError> {
-    s.application()
-        .assistant_service()?
+    state
+        .application()
         .platform_inventory(source)
         .await
         .map(Json)
-        .map_err(error)
+        .map_err(Into::into)
 }

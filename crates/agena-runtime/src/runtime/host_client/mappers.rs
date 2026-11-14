@@ -172,37 +172,6 @@ pub(super) fn session_resource_from_session(
     }
 }
 
-pub(super) fn session_resource_from_summary(
-    summary: &agena_domain::SessionSummary,
-) -> agena_session_api::resource::SessionResource {
-    agena_session_api::resource::SessionResource {
-        id: summary.id,
-        parent_id: summary.parent_id,
-        depth: summary.depth,
-        root_id: summary.root_id,
-        workspace_id: summary.workspace_id,
-        title: summary.title.clone(),
-        owner_bot_id: None,
-        owner_surface: None,
-        favorite: summary.favorite,
-        pinned: summary.pinned,
-        version: summary.version,
-        relation_kind: summary.relation_kind,
-        lifecycle_state: summary.lifecycle_state,
-        state: agena_session_api::resource::SessionState::default(),
-        source_cutoff_seq_global: None,
-        source_message_id: None,
-        is_subagent: summary.relation_kind.is_subagent(),
-        agent_name: summary.agent_name.clone(),
-        agent_status: summary.agent_status,
-        created_at: summary.created_at,
-        updated_at: summary.updated_at,
-        message_count: summary.message_count,
-        child_session_count: summary.child_session_count,
-        last_message_at: summary.last_message_at,
-    }
-}
-
 pub(super) fn host_status_to_sdk(
     status: agena_plugin_host::status::PluginStatus,
 ) -> HostPluginStatus {

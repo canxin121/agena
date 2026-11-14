@@ -924,6 +924,7 @@ bitflags::bitflags! {
         const SUBAGENT_START            = 1 << 31;
         const SUBAGENT_STOP             = 1 << 32;
         const PERMISSION_REQUEST        = 1 << 33;
+        const APPLICATION_READY         = 1 << 34;
     }
 }
 
@@ -979,6 +980,7 @@ impl<'de> Deserialize<'de> for HookSubscription {
 
 const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("init", HookSubscription::INIT),
+    ("application.ready", HookSubscription::APPLICATION_READY),
     ("shutdown", HookSubscription::SHUTDOWN),
     ("tool.before", HookSubscription::TOOL_BEFORE),
     ("tool.after", HookSubscription::TOOL_AFTER),

@@ -626,6 +626,7 @@ async fn session_transcript_parts(
             returned: page.entries.len() as u64,
             has_more: page.has_more,
             next_cursor: crate::application_parts::encode_part_cursor(session_id, page.next)?,
+            ..Default::default()
         },
     ))
 }

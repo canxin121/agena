@@ -360,100 +360,15 @@ pub async fn continue_provider_studio_auth(
 fn provider_studio_save_error(
     error: agena_application::provider_studio::ProviderStudioSaveError,
 ) -> ServerError {
-    match error {
-        agena_application::provider_studio::ProviderStudioSaveError::Other(problem) => {
-            ServerError::from_failure(problem.into())
-        }
-        agena_application::provider_studio::ProviderStudioSaveError::Validation(validation) => {
-            ServerError::bad_request(provider_studio_validation_message(&validation))
-        }
-        agena_application::provider_studio::ProviderStudioSaveError::ExistingProviderSettingsMustBeObject => {
-            ServerError::bad_request("The existing provider settings must be a JSON object.")
-        }
-        agena_application::provider_studio::ProviderStudioSaveError::ProviderAdapterMustBeObject { .. } => {
-            ServerError::bad_request("The provider adapter settings must be a JSON object.")
-        }
-        agena_application::provider_studio::ProviderStudioSaveError::ProviderModelConfigMustBeObject => {
-            ServerError::bad_request("The provider model configuration must be a JSON object.")
-        }
-        agena_application::provider_studio::ProviderStudioSaveError::ConfiguredProviderAdapterSettingsMustBeObject => {
-            ServerError::bad_request("The configured provider adapters must be a JSON object.")
-        }
-        agena_application::provider_studio::ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject => {
-            ServerError::bad_request("The configured provider models must be a JSON object.")
-        }
-    }
-}
-
-fn provider_studio_validation_message(
-    error: &agena_application::provider_studio::ProviderStudioSaveValidationError,
-) -> &'static str {
-    use agena_application::provider_studio::{
-        ProviderStudioSaveField, ProviderStudioSaveValidationError,
-    };
-
-    match error {
-        ProviderStudioSaveValidationError::FieldRequired(field) => match field {
-            ProviderStudioSaveField::ProviderId => "Provider ID is required.",
-            ProviderStudioSaveField::AdapterId => "Adapter ID is required.",
-            ProviderStudioSaveField::ModelId => "Model ID is required.",
-            ProviderStudioSaveField::AuthMode => "Choose an authentication mode.",
-            ProviderStudioSaveField::AuthSubtype => "Choose an authentication subtype.",
-            ProviderStudioSaveField::CredentialIssuer => "Choose a credential issuer.",
-        },
-        ProviderStudioSaveValidationError::UnsupportedAdapters { .. } => {
-            "One or more selected adapters are not supported by this authentication mode."
-        }
-        ProviderStudioSaveValidationError::ApiBaseUrlRequired => {
-            "A provider base URL is required for this API adapter."
-        }
-        ProviderStudioSaveValidationError::GitlabApiKeyOrEnvRequired => {
-            "A GitLab API key or API-key environment variable is required."
-        }
-        ProviderStudioSaveValidationError::CredentialBaseUrlRequired { .. } => {
-            "A provider base URL is required for this credential issuer."
-        }
-        ProviderStudioSaveValidationError::CredentialServiceKeyEnvRequired { .. } => {
-            "A service-key environment variable is required for this credential issuer."
-        }
-        ProviderStudioSaveValidationError::BedrockKeyPairRequired => {
-            "An AWS profile or both Bedrock access-key fields are required."
-        }
-    }
+    agena_application::ApplicationError::from(error).into()
 }
 
 fn provider_studio_auth_error(
     error: agena_application::provider_studio::ProviderDraftAuthError,
 ) -> ServerError {
-    match error {
-        agena_application::provider_studio::ProviderDraftAuthError::Other(problem) => {
-            ServerError::from_failure(problem.into())
-        }
-        agena_application::provider_studio::ProviderDraftAuthError::UnsupportedInteractiveLogin => {
-            ServerError::bad_request("This provider does not support interactive authentication.")
-        }
-        agena_application::provider_studio::ProviderDraftAuthError::StartBrowserAuthFirst => {
-            ServerError::bad_request("Start browser authorization before continuing.")
-        }
-        agena_application::provider_studio::ProviderDraftAuthError::StartDeviceAuthFirst => {
-            ServerError::bad_request("Start device authorization before continuing.")
-        }
-        agena_application::provider_studio::ProviderDraftAuthError::RequiredField(field) => {
-            let message = match field {
-                agena_application::provider_studio::ProviderDraftAuthField::RedirectUri => {
-                    "Redirect URI is required."
-                }
-                agena_application::provider_studio::ProviderDraftAuthField::InstanceUrl => {
-                    "Provider instance URL is required."
-                }
-                agena_application::provider_studio::ProviderDraftAuthField::CallbackUrl => {
-                    "OAuth callback URL is required."
-                }
-            };
-            ServerError::bad_request(message)
-        }
-    }
+    agena_application::ApplicationError::from(error).into()
 }
+
 use super::{
     AppState, AxumQuery, IntoResponse, Json, ListProviderAdapterModelsParams,
     ListSavedProviderAdapterModelsParams, Path, SavedProviderAdapterModelsRequest, ServerError,

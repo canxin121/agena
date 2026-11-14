@@ -2,7 +2,6 @@ use std::{env, net::SocketAddr, path::Path, sync::Arc, time::Duration};
 
 use agena_api_server::AppState as ApiV2State;
 use agena_application::Application;
-use agena_runtime::bootstrap_application_services;
 use anyhow::{Context, Result, anyhow};
 use axum::{
     Router, middleware,
@@ -643,16 +642,17 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     init_server_tracing(&args, workspace_root.as_path())
         .context("failed to initialize server diagnostics")?;
     let ui_dir = crate::server::web_ui::resolve_ui_dir(args.ui_dir.as_deref(), &workspace_root)?;
-    let runtime = bootstrap_application_services(agena_runtime::RuntimeBootstrapRequest {
+    let (application, runtime) = Application::bootstrap(agena_runtime::RuntimeBootstrapRequest {
         workspace_root: Some(workspace_root),
         config_path: None,
         config_override_expressions: args.overrides.clone(),
         database_url: None,
         database_path: None,
+        automatic_maintenance: None,
         tracing_reload_handle: None,
     })
     .await
-    .context("failed to build agena runtime")?;
+    .map_err(|error| application_startup_error("failed to compose application services", error))?;
 
     let server_state_db = Arc::new(crate::server::persistence::db::ServerStateDb::new(
         runtime
@@ -688,10 +688,6 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         workspace_preview_runtime.clone(),
     ));
 
-    let application = Application::from_composed_runtime_services(runtime.application_services())
-        .map_err(|error| {
-        application_startup_error("failed to compose application services", error)
-    })?;
     let mcp_workspace = application
         .service()
         .resolve_workspace(agena_application::dto::WorkspaceResolveRequest {
@@ -754,6 +750,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
         .await
         .map_err(|error| anyhow!("failed to configure the Agena MCP server: {error}"))?,
     );
+    mcp_state.install_application_control();
     mcp_state.log_startup_status();
 
     let web_push =
@@ -762,7 +759,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
     let shared_state = Arc::new(AppState {
         web_push,
         server_auth: server_auth.clone(),
-        mcp_server: mcp_state.clone(),
+        _mcp_server: mcp_state.clone(),
         terminal,
         workspace_preview_registry,
         workspace_preview_runtime,

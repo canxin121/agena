@@ -28,7 +28,11 @@ impl ApplicationService {
             .session_kernel
             .reader
             .query_summaries(SummaryQuery {
-                include_global: query.parent_id.is_some(),
+                // Bot conversations have no project workspace. An explicit
+                // owner filter must include them in the same summary query.
+                include_global: query.parent_id.is_some()
+                    || query.owner_bot_id.is_some()
+                    || query.owner_surface.is_some(),
                 owner_bot_id: query.owner_bot_id.map(|id| id.to_string()),
                 owner_surface: query.owner_surface.map(|s| s.as_str().to_owned()),
                 workspace_id: query.workspace_id,

@@ -11,6 +11,7 @@ mod git;
 mod health;
 mod mcp;
 mod memories;
+mod operations;
 mod ops;
 mod permissions;
 mod plugins;
@@ -31,6 +32,7 @@ use crate::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(ops::routes())
+        .merge(operations::routes())
         .merge(health::routes())
         .merge(sessions::routes())
         .merge(plugins::routes())

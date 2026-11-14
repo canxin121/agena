@@ -23,6 +23,7 @@ use crate::{
 #[derive(Clone)]
 pub struct RuntimeApplicationServices {
     pub workspace_root: PathBuf,
+    pub session_api_backend: agena_session_api::bridge::SessionApiBackendSlot,
     /// Persistent database identity, independent of server process restarts.
     pub instance_id: Option<String>,
     pub instance_state: Option<Arc<dyn agena_storage::instance_state::InstanceStateRepository>>,
@@ -68,6 +69,7 @@ pub struct RuntimeApplicationRepositories {
 /// owns the stable assembly consumed by entrypoints.
 pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) workspace_root: PathBuf,
+    pub(crate) session_api_backend: agena_session_api::bridge::SessionApiBackendSlot,
     pub(crate) instance_id: Option<String>,
     pub(crate) instance_state:
         Option<Arc<dyn agena_storage::instance_state::InstanceStateRepository>>,
@@ -98,6 +100,7 @@ pub(crate) fn compose_runtime_application_services(
 ) -> RuntimeApplicationServices {
     RuntimeApplicationServices {
         workspace_root: inputs.workspace_root,
+        session_api_backend: inputs.session_api_backend,
         instance_id: inputs.instance_id,
         instance_state: inputs.instance_state,
         repositories: inputs.repositories,

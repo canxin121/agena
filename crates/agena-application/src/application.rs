@@ -27,6 +27,8 @@ static APPLICATION_FILE_WORKERS: agena_async::BlockingPool = agena_async::Blocki
 pub struct Application {
     workspace_root: PathBuf,
     instance_id: String,
+    server_identity: agena_api::resource::ServerIdentityResource,
+    _session_api_backend: Option<Arc<dyn agena_session_api::bridge::SessionApiBackend>>,
     provider_catalog: Arc<dyn ProviderCatalog>,
     model_catalog_runtime: Arc<dyn agena_runtime::ModelCatalogRuntimeService>,
     plugin_runtime: Arc<dyn agena_runtime::PluginRuntimeService>,
@@ -49,6 +51,10 @@ pub struct Application {
     tool_execution: Option<Arc<dyn agena_runtime::SessionToolExecutionService>>,
     plugin_commands: Option<Arc<dyn agena_runtime::SessionPluginCommandService>>,
     pub(crate) part_documents: Arc<crate::application_tools::PartDocumentCache>,
+    pub(crate) operation_io: Arc<crate::operation_io::OperationIo>,
+    pub(crate) session_api_backend: agena_session_api::bridge::SessionApiBackendSlot,
+    pub(crate) server_control: Arc<crate::server_control::ServerControlSlot>,
+    pub(crate) file_changes: Arc<crate::application_file_changes::FileChangesProjectionCache>,
 }
 
 #[derive(Default)]
@@ -122,6 +128,7 @@ impl Application {
         })?;
         let agena_runtime::RuntimeApplicationServices {
             workspace_root,
+            session_api_backend,
             instance_id,
             instance_state: _,
             repositories: _,
@@ -145,10 +152,19 @@ impl Application {
             tool_execution,
             plugin_commands,
         } = runtime;
-        let application = Self {
-            instance_id: instance_id.ok_or_else(|| {
-                ApplicationError::internal("runtime instance identity is unavailable")
-            })?,
+        let instance_id = instance_id.ok_or_else(|| {
+            ApplicationError::internal("runtime instance identity is unavailable")
+        })?;
+        let mut application = Self {
+            server_identity: agena_api::resource::ServerIdentityResource {
+                instance_id: instance_id.clone(),
+                id: uuid::Uuid::new_v4(),
+                pid: std::process::id(),
+                started_at: chrono::Utc::now(),
+                protocol_version: agena_api::PROTOCOL_VERSION,
+            },
+            instance_id,
+            _session_api_backend: None,
             provider_catalog,
             model_catalog_runtime: model_catalog,
             plugin_runtime: plugins,
@@ -182,7 +198,14 @@ impl Application {
             tool_execution,
             plugin_commands,
             part_documents: Arc::new(Default::default()),
+            operation_io: Arc::new(Default::default()),
+            session_api_backend: session_api_backend.clone(),
+            server_control: Arc::new(Default::default()),
+            file_changes: Arc::new(Default::default()),
         };
+        let backend = application.create_session_api_backend();
+        session_api_backend.install(&backend);
+        application._session_api_backend = Some(backend);
         application.spawn_notification_aggregator();
         Ok(application)
     }
@@ -193,6 +216,10 @@ impl Application {
         self.assistant_service.as_ref().ok_or_else(|| {
             ApplicationError::service_unavailable("assistant runtime is unavailable")
         })
+    }
+
+    pub fn server_identity(&self) -> &agena_api::resource::ServerIdentityResource {
+        &self.server_identity
     }
 
     pub fn instance_id(&self) -> &str {

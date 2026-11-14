@@ -98,6 +98,10 @@ impl<P: Plugin> PluginDispatcher<P> {
                 .await?;
                 ok_json(&outcome)
             }
+            method::META_READY => {
+                plugin.application_ready().await?;
+                Ok(Value::Object(Default::default()))
+            }
             method::META_SHUTDOWN => {
                 plugin.shutdown().await?;
                 Ok(Value::Object(Default::default()))

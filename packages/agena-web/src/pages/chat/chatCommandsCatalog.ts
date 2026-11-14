@@ -111,6 +111,26 @@ function slashName(slash: unknown): string {
 }
 
 /**
+ * Whether a catalog declaration serves the conversation being rendered.
+ *
+ * The declaration says which kinds it belongs to; the server omits the field
+ * when it applies everywhere. This is the client half of one rule the server
+ * also enforces: a project-only command is not "denied" in a Bot, it simply
+ * does not belong in a Bot palette.
+ */
+export function commandAppliesToSession(
+  command: Pick<PluginCommandCatalogItem, 'applies_to'>,
+  isBotSession: boolean,
+): boolean {
+  const kind = isBotSession ? 'bot' : 'project'
+  const declared = command?.applies_to
+  if (declared == null) return true
+  if (declared === 'all') return true
+  if (typeof declared === 'string') return declared === kind
+  return Array.isArray(declared) ? declared.includes(kind) : true
+}
+
+/**
  * Read one catalog entry as a command this client runs locally, or `null` when
  * it is not one: another client's `Client` command or a server-owned target.
  */
@@ -138,10 +158,14 @@ export function clientCommandFromCatalog(command: PluginCommandCatalogItem): Cli
   }
 }
 
-/** Every locally-run command the catalog declares, in catalog order. */
-export function clientCommandsFromCatalog(commands: PluginCommandCatalogItem[] | undefined | null): ClientCommand[] {
+/** Every locally-run command the catalog declares for this conversation. */
+export function clientCommandsFromCatalog(
+  commands: PluginCommandCatalogItem[] | undefined | null,
+  isBotSession = false,
+): ClientCommand[] {
   const collected: ClientCommand[] = []
   for (const command of commands || []) {
+    if (!commandAppliesToSession(command, isBotSession)) continue
     const builtin = clientCommandFromCatalog(command)
     if (builtin) collected.push(builtin)
   }

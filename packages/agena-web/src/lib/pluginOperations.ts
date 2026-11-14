@@ -132,10 +132,19 @@ export type PluginCommandCatalogItem = {
   category?: string | null
   slash?: string | null
   aliases?: string[]
+  /**
+   * Which conversation kinds the declaration serves. Absent means every kind,
+   * which is what an undeclared command means: the server omits the field when
+   * a command applies everywhere.
+   */
+  applies_to?: SessionKind | SessionKind[] | 'all' | null
   docs?: PluginCommandDocs
   input: PluginSettingsContract
   target: { kind: 'client'; action: string } | { kind: 'method'; handler: string } | { kind: 'tool'; tool: string }
 }
+
+/** The conversation shapes a capability can be declared for. */
+export type SessionKind = 'project' | 'bot'
 
 export type PluginCommandStatus = 'succeeded' | 'failed' | 'cancelled' | 'unavailable' | 'permission_required'
 

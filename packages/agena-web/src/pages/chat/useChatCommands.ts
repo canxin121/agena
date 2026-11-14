@@ -7,6 +7,7 @@ import { isImeComposing } from '@/lib/imeKeyboard'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import {
   clientCommandsFromCatalog,
+  commandAppliesToSession,
   normalizeCommandPaletteQuery,
   parseSlashInvocation,
   shouldResetCommandPaletteSelection,
@@ -97,10 +98,12 @@ export function useChatCommands(opts: {
   draft: Ref<string>
   composerRef: Ref<ComposerExpose | null>
   composerPickerOpen: Ref<null | 'model' | 'thinking' | 'speed'>
+  /** Whether the rendered conversation is the operator Bot. */
+  isBotSession: Ref<boolean>
   onSend: () => Promise<void>
   onCommandSelected: (command: Command) => void | Promise<void>
 }) {
-  const { draft, composerRef, composerPickerOpen, onSend, onCommandSelected } = opts
+  const { draft, composerRef, composerPickerOpen, isBotSession, onSend, onCommandSelected } = opts
   const { t } = useI18n()
   const commands = ref<Command[]>([])
   const commandsLoading = ref(false)
@@ -194,11 +197,14 @@ export function useChatCommands(opts: {
       }
 
       const next = new Map<string, Command>()
-      for (const command of clientCommandsFromCatalog(catalogCommands)) {
+      for (const command of clientCommandsFromCatalog(catalogCommands, isBotSession.value)) {
         const builtIn = builtInFromCatalog(command)
         if (builtIn && !next.has(builtIn.name)) next.set(builtIn.name, builtIn)
       }
       for (const rawCommand of catalogCommands) {
+        // A declaration that does not name this conversation kind has no row,
+        // exactly as the server refuses to run it here.
+        if (!commandAppliesToSession(rawCommand, isBotSession.value)) continue
         const command = pluginCommandFromCatalog(rawCommand)
         if (!command) continue
         if (next.has(command.name)) continue
@@ -223,6 +229,18 @@ export function useChatCommands(opts: {
       if (commandsLoadInFlight === request) commandsLoadInFlight = null
     }
   }
+
+  // Switching between a project conversation and the Bot changes which
+  // declarations belong in the palette. Keep the rows honest without asking
+  // the server again: the catalog itself is session-agnostic, applicability is
+  // part of each declaration.
+  watch(
+    () => isBotSession.value,
+    () => {
+      if (commands.value.length === 0) return
+      void loadCommands()
+    },
+  )
 
   function commandScore(query: string, candidate: string): number | null {
     const normalizedQuery = query.trim().toLowerCase()

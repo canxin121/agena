@@ -482,6 +482,7 @@ const chatCommands = useChatCommands({
   draft,
   composerRef,
   composerPickerOpen,
+  isBotSession: bot.isBot,
   onSend: send,
   onCommandSelected: handleCommandSelected,
 })

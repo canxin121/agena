@@ -352,51 +352,12 @@ impl Command {
         }
     }
 
-    /// Whether a plugin may run this operation.
+    /// Compatibility check for callers using the shared plugin command API.
     ///
-    /// Plugins act for a conversation, never for the operator: instance-wide
-    /// destruction and permission-policy writes stay on the local surfaces.
-    /// Everything a chat adapter needs — submitting, cancelling, answering
-    /// cards, forking — is allowed.
+    /// Plugins may invoke every command. Operation-specific validation is
+    /// performed by the runtime when the command executes.
     pub fn plugin_allowed(&self) -> Result<(), &'static str> {
-        match self {
-            Command::DeleteSession(_)
-            | Command::DeleteWorkspace(_)
-            | Command::UpdateWorkspace(_)
-            | Command::UpsertPermissionRule(_)
-            | Command::ReplacePermissionRule(_)
-            | Command::RevokePermissionRule(_)
-            | Command::DeletePermissionRule(_)
-            | Command::StopActivity(_)
-            | Command::DismissActivity(_)
-            | Command::ClearFinishedActivities => {
-                Err("destructive and permission-policy operations are operator-only")
-            }
-            // A plugin acts for one conversation: it works inside the session
-            // it was called for, but it does not mint the projects and sessions
-            // that scope one. The Bot plugin reaches the same work through its
-            // own operation contract, which takes the operator's quote and a
-            // request key first.
-            Command::CreateWorkspace(_)
-            | Command::ResolveWorkspace(_)
-            | Command::CreateSession(_) => Err(
-                "creating projects and sessions is operator-only; a plugin acts for one \
-                 conversation",
-            ),
-            Command::UpdateSession(_)
-            | Command::UpdateSessionSelection(_)
-            | Command::SubmitMessage(_)
-            | Command::ContinueRun(_)
-            | Command::CompactSession(_)
-            | Command::ClearSession(_)
-            | Command::CancelRun(_)
-            | Command::RewindSession(_)
-            | Command::ForkSession(_)
-            | Command::ListSessionTree(_)
-            | Command::ReplyPermission(_)
-            | Command::ReplyUserInput(_)
-            | Command::MarkInteractiveRequestPresented(_) => Ok(()),
-        }
+        Ok(())
     }
 }
 
@@ -438,43 +399,30 @@ mod permission_write_contract_tests {
 }
 
 #[cfg(test)]
-mod plugin_scope_tests {
+mod plugin_access_tests {
     use super::*;
     use serde_json::json;
 
-    /// A plugin acts for one conversation. An operation that names no existing
-    /// conversation has no scope to authorize against, so the shared contract
-    /// refuses it rather than letting one transport invent a policy.
     #[test]
-    fn operations_without_a_conversation_scope_are_operator_only() {
-        let unscoped = [
-            Command::CreateWorkspace(CreateWorkspaceParams {
-                path: "/work".into(),
-            }),
-            Command::ResolveWorkspace(ResolveWorkspaceParams {
-                path: "/work".into(),
-                create_if_missing: false,
-            }),
-            Command::CreateSession(
-                serde_json::from_value(json!({
-                    "workspace_id": 1, "title": "Root"
-                }))
-                .unwrap(),
-            ),
+    fn plugins_can_use_workspace_session_policy_and_activity_commands() {
+        let requests = [
+            json!({"method": "create_workspace", "params": {"path": "/work"}}),
+            json!({"method": "resolve_workspace", "params": {"path": "/work", "create_if_missing": true}}),
+            json!({"method": "update_workspace", "params": {"workspace_id": 1, "path": "/new-work"}}),
+            json!({"method": "delete_workspace", "params": {"workspace_id": 1}}),
+            json!({"method": "create_session", "params": {"workspace_id": 1, "title": "Root"}}),
+            json!({"method": "delete_session", "params": {"session_id": 7}}),
+            json!({"method": "upsert_permission_rule", "params": {"mode": "ask"}}),
+            json!({"method": "replace_permission_rule", "params": {"rule_id": 1, "mode": "ask"}}),
+            json!({"method": "revoke_permission_rule", "params": {"rule_id": 1}}),
+            json!({"method": "delete_permission_rule", "params": {"rule_id": 1}}),
+            json!({"method": "stop_activity", "params": {"activity_id": "activity-1"}}),
+            json!({"method": "dismiss_activity", "params": {"activity_id": "activity-1"}}),
+            json!({"method": "clear_finished_activities"}),
         ];
-        for command in unscoped {
-            assert!(
-                command.plugin_allowed().is_err(),
-                "{command:?} names no conversation to authorize"
-            );
+        for request in requests {
+            let command: Command = serde_json::from_value(request).unwrap();
+            assert_eq!(command.plugin_allowed(), Ok(()), "{command:?}");
         }
-        let scoped = Command::ReplyPermission(
-            serde_json::from_value(json!({
-                "session_id": 7,
-                "reply": {"request_id": "11", "kind": "allow_once"}
-            }))
-            .unwrap(),
-        );
-        assert!(scoped.plugin_allowed().is_ok());
     }
 }

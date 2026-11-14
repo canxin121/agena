@@ -16,8 +16,9 @@ pub mod http;
 
 // The HostClient trait remains the public contract. These private declarations
 // share mechanical forwarding while keeping transport capability groups explicit.
-// HTTP uses only the common group; stdio and the replaceable proxy also use the
-// extended group. Admission, permission waits and scoped authority stay local.
+// HTTP and stdio share common callbacks, including session operations. Stdio
+// and the replaceable proxy also use the extended group. Admission, permission
+// waits and scoped authority stay local.
 #[cfg(any(feature = "stdio", feature = "http"))]
 macro_rules! impl_callback_host_client {
     ($client:ty, $context:path, { $($special:item)* }) => {
@@ -46,6 +47,8 @@ macro_rules! impl_callback_host_client {
                 -> $crate::hooks::ToolInvokeOutput = HOST_TOOL_INVOKE { "tool": tool, "input": input };
             invoke_service(request: $crate::PluginServiceInvokeInput)
                 -> $crate::PluginServiceInvokeOutput = HOST_SERVICE_INVOKE { "request": request };
+            session_op(op: $crate::host_api::SessionOp)
+                -> $crate::host_api::SessionOpResponse = HOST_SESSION_OP { "request": op };
             spawn_agent(request: $crate::host_api::AgentSpawnRequest)
                 -> $crate::host_api::AgentHandle = HOST_AGENT_SPAWN { "request": request };
             companion_context() -> $crate::serde_json::Value = HOST_COMPANION_CONTEXT {};
@@ -87,8 +90,6 @@ macro_rules! impl_callback_host_client {
             $($common)*
             session_stream(request: $crate::host_api::HostSessionStreamRequest)
                 -> $crate::host_api::EventSubscription = HOST_SESSION_STREAM { "request": request };
-            session_op(op: $crate::host_api::SessionOp)
-                -> $crate::host_api::SessionOpResponse = HOST_SESSION_OP { "op": op };
             workspace_query(request: $crate::host_api::HostWorkspaceQueryRequest)
                 -> $crate::host_api::HostWorkspaceQueryResponse = HOST_WORKSPACE_QUERY { "request": request };
             ask_user(request: $crate::host_api::AskUserRequest)

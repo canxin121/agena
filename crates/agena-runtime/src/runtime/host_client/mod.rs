@@ -48,6 +48,11 @@ use agena_plugin_host::{
 
 mod image;
 mod mappers;
+mod session_commands;
+mod session_queries;
+
+#[cfg(test)]
+mod session_op_tests;
 
 use image::*;
 use mappers::*;
@@ -220,36 +225,14 @@ impl RuntimeHostClient {
         use agena_session_api::queries::Query;
         let runtime = self.runtime()?;
         let services = runtime.application_services();
-        // Every session-scoped read must name a session this callback may
-        // touch. `None` falls back to the callback's own session.
+        // Session reads name their target; instance-wide reads need no session.
         let scope = query.session_id();
         let target = match scope {
             Some(_) => self.callback_or_requested_session_id(scope, "session_query")?,
             None => 0,
         };
         let data = match query {
-            Query::ListSessions(params) => {
-                let manager = self.session_manager()?;
-                let request = agena_domain::SessionListRequest {
-                    limit: params.limit,
-                    search: params.search.clone(),
-                    ..Default::default()
-                };
-                let rows = manager
-                    .list_session_summaries(request)
-                    .await
-                    .map_err(plugin_error)?;
-                let rows = match params.workspace_id {
-                    // The manager lists within its current workspace; an
-                    // explicit id must match or the caller sees nothing.
-                    Some(id) => rows
-                        .into_iter()
-                        .filter(|row| row.workspace_id == Some(id))
-                        .collect(),
-                    None => rows,
-                };
-                serde_json::to_value(rows).map_err(|error| PluginError::internal_error(&error))?
-            }
+            Query::ListSessions(params) => self.list_plugin_sessions(params).await?,
             Query::GetSession(_) => {
                 let session = self
                     .use_session_manager(|manager| async move { manager.get_session(target).await })
@@ -451,7 +434,7 @@ impl RuntimeHostClient {
                 serde_json::to_value(inventory)
                     .map_err(|error| PluginError::internal_error(&error))?
             }
-            Query::Health
+            query @ (Query::Health
             | Query::Runtime
             | Query::ListProviders
             | Query::ListProviderModels(_)
@@ -464,36 +447,23 @@ impl RuntimeHostClient {
             | Query::ListActivities(_)
             | Query::GetActivity(_)
             | Query::ActivityLogs(_)
-            | Query::ReadContentText(_) => {
-                return Err(PluginError::from_kind(
-                    agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-                    "this operation is operator-only; plugins cannot read runtime, provider, \
-                     workspace or permission state through the session surface",
-                ));
-            }
+            | Query::ReadContentText(_)) => self.run_global_session_query(query).await?,
         };
         Ok(data)
     }
 
     /// Run one side-effectful session operation.
     ///
-    /// Matches the same `Command` enum the REST and WebSocket surfaces
-    /// dispatch, so a plugin reaches exactly the operations a browser client
-    /// reaches. Operator-only operations are refused by
-    /// [`SessionOp::plugin_allowed`] before this runs.
+    /// Plugins use the shared command enum, including instance-wide management
+    /// operations that do not require an existing conversation.
     async fn run_session_command(
         &self,
         command: agena_session_api::commands::Command,
     ) -> Result<serde_json::Value, PluginError> {
         use agena_session_api::commands::Command;
-        // Commands name their session explicitly; a plugin callback may also
-        // omit it, in which case the callback's session is used.
-        let target = match command.session_id() {
-            Some(session_id) => {
-                self.callback_or_requested_session_id(Some(session_id), "session_command")?
-            }
-            None => self.callback_or_requested_session_id(None, "session_command")?,
-        };
+        // Management commands return their own envelope below. The remaining
+        // commands all carry an explicit session ID.
+        let target = command.session_id().unwrap_or_default();
         let mut execution_ids = Vec::new();
         let mut data = None;
         match command {
@@ -689,21 +659,20 @@ impl RuntimeHostClient {
                 )
                 .ok();
             }
-            // Every remaining variant is refused before dispatch: either it is
-            // operator-only, or it targets a surface a plugin cannot own. The
-            // policy itself lives on the shared enums, so a plugin here sees
-            // exactly what the REST dispatcher would enforce.
-            other => {
-                other.plugin_allowed().map_err(|reason| {
-                    PluginError::from_kind(
-                        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-                        reason,
-                    )
-                })?;
-                return Err(PluginError::from_kind(
-                    agena_plugin_host::sdk::PluginErrorKind::NotImplemented,
-                    "this session command is not routed for plugins yet",
-                ));
+            command @ (Command::CreateWorkspace(_)
+            | Command::UpdateWorkspace(_)
+            | Command::DeleteWorkspace(_)
+            | Command::ResolveWorkspace(_)
+            | Command::CreateSession(_)
+            | Command::DeleteSession(_)
+            | Command::UpsertPermissionRule(_)
+            | Command::ReplacePermissionRule(_)
+            | Command::RevokePermissionRule(_)
+            | Command::DeletePermissionRule(_)
+            | Command::StopActivity(_)
+            | Command::DismissActivity(_)
+            | Command::ClearFinishedActivities) => {
+                return self.run_management_session_command(command).await;
             }
         }
         Ok(serde_json::json!({

@@ -5,13 +5,9 @@
 //! `ComposerDocument` content), cancel work, manage the queue, answer a
 //! permission card. These types are the plugin-facing shape of that surface.
 //!
-//! The host still owns authorization. A plugin receives a scoped client bound
-//! to one plugin instance; every call is checked against the sessions that
-//! instance is allowed to touch. A plugin cannot widen its own scope by
-//! naming an id, and it cannot mint [`AuthorKind::InstanceOperator`] for an
-//! external speaker — the host fills the author from the verified context.
-//!
-//! [`AuthorKind::InstanceOperator`]: agena_domain::AuthorKind::InstanceOperator
+//! Plugin callbacks retain their host-issued identity and lifecycle context.
+//! The runtime applies the operation's validation and business rules when it
+//! executes the shared query or command.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,25 +24,12 @@ pub enum SessionOp {
 }
 
 impl SessionOp {
-    /// Whether a plugin may run this operation.
+    /// Compatibility check for existing plugin clients.
     ///
-    /// Plugins act for a conversation, never for the operator: instance-wide
-    /// destruction and permission-policy writes stay on the local surfaces.
-    /// The rules live on the shared enums, so the Web and plugin surfaces
-    /// cannot disagree about what a plugin may do.
+    /// Every shared query and command is available to plugins. The runtime
+    /// performs operation-specific validation when it executes the request.
     pub fn plugin_allowed(&self) -> Result<(), &'static str> {
-        match self {
-            SessionOp::Query(
-                agena_session_api::queries::Query::Runtime
-                | agena_session_api::queries::Query::ListProviders
-                | agena_session_api::queries::Query::ListProviderModels(_)
-                | agena_session_api::queries::Query::ListProviderAdapterModels(_)
-                | agena_session_api::queries::Query::ListSavedProviderAdapterModels(_),
-            ) => Err("runtime, provider and model inspection is operator-only; \
-                 plugins read sessions through the session queries"),
-            SessionOp::Query(_) => Ok(()),
-            SessionOp::Command(command) => command.plugin_allowed(),
-        }
+        Ok(())
     }
 }
 
@@ -156,4 +139,27 @@ pub struct HostPartsPage {
     pub entries: Value,
     pub user_message_count: u64,
     pub has_more: bool,
+}
+
+#[cfg(test)]
+mod plugin_access_tests {
+    use super::SessionOp;
+    use serde_json::json;
+
+    #[test]
+    fn plugins_can_inspect_runtime_and_providers_and_create_sessions() {
+        let requests = [
+            json!({"op": "query", "request": {"method": "runtime"}}),
+            json!({"op": "query", "request": {"method": "list_providers"}}),
+            json!({"op": "query", "request": {"method": "list_provider_models", "params": {"provider_id": "fixture"}}}),
+            json!({"op": "query", "request": {"method": "list_provider_adapter_models", "params": {"base_url": "https://example.test"}}}),
+            json!({"op": "query", "request": {"method": "list_saved_provider_adapter_models", "params": {"provider_id": "fixture"}}}),
+            json!({"op": "command", "request": {"method": "create_session", "params": {"workspace_id": 1, "title": "Plugin session"}}}),
+            json!({"op": "command", "request": {"method": "delete_session", "params": {"session_id": 7}}}),
+        ];
+        for request in requests {
+            let op: SessionOp = serde_json::from_value(request).unwrap();
+            assert_eq!(op.plugin_allowed(), Ok(()), "{op:?}");
+        }
+    }
 }

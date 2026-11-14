@@ -1268,4 +1268,82 @@ mod permission_tests {
 }
 
 #[cfg(test)]
+mod session_operation_tests {
+    use super::*;
+    use crate::host_api::{HostCallbackContext, SessionOp, run_in_isolated_host_callback_context};
+    use agena_session_api::{commands::Command, queries::Query};
+    use axum::{Json, Router, routing::post};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn http_proxy_forwards_session_operations_using_request_envelope() {
+        async fn callback(
+            headers: axum::http::HeaderMap,
+            Json(request): Json<Request>,
+        ) -> Json<Response> {
+            assert_eq!(headers["authorization"], "Bearer callback-secret");
+            assert_eq!(request.method, method::HOST_SESSION_OP);
+            let params = request.params.as_ref().unwrap();
+            assert!(params.get("op").is_none());
+            assert_eq!(params["context"]["plugin_id"], "fixture.connector");
+            assert!(params["context"]["session_id"].is_null());
+            let operation: SessionOp = serde_json::from_value(params["request"].clone()).unwrap();
+            let result = match operation {
+                SessionOp::Command(Command::CreateSession(params)) => {
+                    assert_eq!(params.workspace_id, 1);
+                    assert_eq!(params.title, "Plugin session");
+                    json!({"op": "command", "response": {"session_id": 42}})
+                }
+                SessionOp::Query(Query::Runtime) => {
+                    json!({"op": "query", "response": {"status": "ready"}})
+                }
+                operation => panic!("unexpected session operation: {operation:?}"),
+            };
+            Json(Response {
+                jsonrpc: JsonRpcVersion,
+                id: request.id,
+                payload: ResponsePayload::Ok { result },
+            })
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/", post(callback)))
+                .await
+                .unwrap()
+        });
+        let client = HttpCallbackHostClient::from_binding(HttpCallbackBinding {
+            url: Some(format!("http://{address}/")),
+            token: Some("callback-secret".into()),
+        })
+        .unwrap();
+        let proxy = host_proxy::HostClientProxy::with_cancellation(
+            std::sync::Arc::new(client),
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let context = HostCallbackContext {
+            plugin_id: Some("fixture.connector".into()),
+            ..Default::default()
+        };
+        run_in_isolated_host_callback_context(context, async {
+            let create: SessionOp = serde_json::from_value(json!({
+                "op": "command",
+                "request": {"method": "create_session", "params": {"workspace_id": 1, "title": "Plugin session"}}
+            }))
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(proxy.session_op(create).await.unwrap()).unwrap(),
+                json!({"op": "command", "response": {"session_id": 42}})
+            );
+            assert_eq!(
+                serde_json::to_value(proxy.session_op(SessionOp::Query(Query::Runtime)).await.unwrap()).unwrap(),
+                json!({"op": "query", "response": {"status": "ready"}})
+            );
+        })
+        .await;
+        server.abort();
+    }
+}
+
+#[cfg(test)]
 use crate::hooks::ToolInvokeOutput;

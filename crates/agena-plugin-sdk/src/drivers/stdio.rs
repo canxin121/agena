@@ -1630,4 +1630,72 @@ mod permission_tests {
 }
 
 #[cfg(test)]
+mod session_operation_tests {
+    use super::*;
+    use crate::host_api::{HostCallbackContext, SessionOp, run_in_isolated_host_callback_context};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn session_operations_use_request_envelope_and_preserve_responses() {
+        let (tx, mut rx) = mpsc::channel::<Bytes>(2);
+        let pending = Arc::new(StdMutex::new(
+            HashMap::<RequestId, oneshot::Sender<Response>>::new(),
+        ));
+        let client = StdioHostClient {
+            tx,
+            pending: pending.clone(),
+            next_id: Arc::new(AtomicI64::new(1)),
+        };
+        let context = HostCallbackContext {
+            plugin_id: Some("fixture.connector".into()),
+            ..Default::default()
+        };
+        let expected_context = serde_json::to_value(&context).unwrap();
+        let cases = [
+            (
+                json!({"op": "command", "request": {"method": "create_session", "params": {"workspace_id": 1, "title": "Plugin session"}}}),
+                json!({"op": "command", "response": {"session_id": 42}}),
+            ),
+            (
+                json!({"op": "query", "request": {"method": "runtime"}}),
+                json!({"op": "query", "response": {"status": "ready"}}),
+            ),
+        ];
+        let expected_cases = cases.clone();
+        let invoke = run_in_isolated_host_callback_context(context, async {
+            for (operation, expected_response) in cases {
+                let operation: SessionOp = serde_json::from_value(operation).unwrap();
+                let response = client.session_op(operation).await.unwrap();
+                assert_eq!(serde_json::to_value(response).unwrap(), expected_response);
+            }
+        });
+        let respond = async move {
+            for (operation, response) in expected_cases {
+                let body = rx.recv().await.unwrap();
+                let request: Request = serde_json::from_slice(&body).unwrap();
+                assert_eq!(request.method, method::HOST_SESSION_OP);
+                let operation: SessionOp = serde_json::from_value(operation).unwrap();
+                assert_eq!(
+                    request.params,
+                    Some(json!({"request": operation, "context": expected_context}))
+                );
+                pending
+                    .lock()
+                    .unwrap()
+                    .remove(&request.id)
+                    .unwrap()
+                    .send(Response {
+                        jsonrpc: JsonRpcVersion,
+                        id: request.id,
+                        payload: ResponsePayload::Ok { result: response },
+                    })
+                    .unwrap();
+            }
+        };
+        tokio::join!(invoke, respond);
+        assert!(client.pending.lock().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
 use crate::hooks::ToolInvokeOutput;

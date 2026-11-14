@@ -675,6 +675,7 @@ impl PluginHost {
                 continue;
             };
             let registration = async {
+                plugin.initialize_web_assets().await?;
                 let hook_catalog = hook_registration_for_plugin(&plugin)?;
                 host_handle.own_manifest_resources(&plugin.key(), &plugin.manifest)?;
                 host_handle.set_plugin_hook_catalog(hook_catalog)?;

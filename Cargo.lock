@@ -1685,6 +1685,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-web-dashboard-plugin-stdio"
+version = "0.1.0"
+dependencies = [
+ "agena-plugin-sdk",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "agena-web-types"
 version = "0.1.0"
 dependencies = [

@@ -202,6 +202,25 @@ pub struct PluginSurfaceCatalog {
     pub commands: Vec<CommandCatalogItem>,
     #[serde(default)]
     pub terminal: PluginTerminalSurfaceCatalog,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_pages: Vec<PluginWebPageCatalogItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A currently active native page. Generation is an opaque instance identity;
+/// revision identifies the immutable resource snapshot.
+pub struct PluginWebPageCatalogItem {
+    pub plugin_id: PluginKey,
+    pub page_id: String,
+    pub title: String,
+    pub api_version: u32,
+    pub scope: crate::PluginWebScope,
+    pub entry_url: String,
+    pub style_urls: Vec<String>,
+    pub commands: Vec<String>,
+    pub settings: bool,
+    pub revision: String,
+    pub generation: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

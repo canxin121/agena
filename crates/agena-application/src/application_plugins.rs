@@ -25,64 +25,7 @@ impl Application {
                     format!("plugin not found: {plugin_id}"),
                 )
             })?;
-        let manifest = inspect.manifest.ok_or_else(|| {
-            ApplicationError::service_unavailable(format!(
-                "plugin `{plugin_id}` has no active manifest"
-            ))
-        })?;
-        let contract = manifest.settings.ok_or_else(|| {
-            ApplicationError::not_found_with_diagnostic(
-                "This plugin does not expose editable settings.",
-                format!("plugin settings contract unavailable: {plugin_id}"),
-            )
-        })?;
-        let defaults = contract.default_value().map_err(|error| {
-            ApplicationError::internal(format!(
-                "plugin `{plugin_id}` has an invalid settings default: {error}"
-            ))
-        })?;
-        let configured = inspect
-            .configured_plugin
-            .map(|configured| configured.settings)
-            .unwrap_or(serde_json::Value::Null);
-        let mut effective = defaults.clone();
-        if !configured.is_null() {
-            merge_plugin_settings(&mut effective, &configured);
-        }
-
-        fn merge_plugin_settings(target: &mut serde_json::Value, configured: &serde_json::Value) {
-            match (target, configured) {
-                (serde_json::Value::Object(target), serde_json::Value::Object(configured)) => {
-                    for (key, value) in configured {
-                        match target.get_mut(key) {
-                            Some(existing) => merge_plugin_settings(existing, value),
-                            None => {
-                                target.insert(key.clone(), value.clone());
-                            }
-                        }
-                    }
-                }
-                (target, configured) => *target = configured.clone(),
-            }
-        }
-        let diagnostics = contract
-            .validate_value(&effective)
-            .err()
-            .map(|error| {
-                vec![crate::dto::PluginSettingsDiagnostic {
-                    path: error.path.unwrap_or_default(),
-                    message: error.message,
-                }]
-            })
-            .unwrap_or_default();
-        Ok(crate::dto::PluginSettingsResponse {
-            plugin_id: plugin_id.to_owned(),
-            contract,
-            defaults,
-            configured,
-            effective,
-            diagnostics,
-        })
+        plugin_settings_from_inspect(plugin_id, inspect)
     }
 
     pub async fn update_plugin_settings(
@@ -104,6 +47,52 @@ impl Application {
             settings: self.plugin_settings(plugin_id)?,
             reload_required: edit.reload_required,
         })
+    }
+
+    pub fn plugin_web_settings(
+        &self,
+        plugin_id: &str,
+        page_id: &str,
+        generation: &str,
+    ) -> Result<crate::dto::PluginSettingsResponse, ApplicationError> {
+        let inspect = self
+            .plugin_runtime()
+            .plugin_web_settings_inspect(plugin_id, page_id, generation)
+            .map_err(plugin_web_error)?;
+        plugin_settings_from_inspect(plugin_id, inspect)
+    }
+
+    pub async fn update_plugin_web_settings(
+        &self,
+        plugin_id: &str,
+        page_id: &str,
+        generation: &str,
+        value: serde_json::Value,
+    ) -> Result<crate::dto::PluginSettingsUpdateResponse, ApplicationError> {
+        let edit = self
+            .set_plugin_web_settings_setting(plugin_id, page_id, generation, value)
+            .await?;
+        Ok(crate::dto::PluginSettingsUpdateResponse {
+            settings: self.plugin_settings(plugin_id)?,
+            reload_required: edit.reload_required,
+        })
+    }
+
+    pub async fn invoke_plugin_web_command(
+        &self,
+        plugin_id: &str,
+        page_id: &str,
+        generation: &str,
+        input: CommandInvokeInput,
+    ) -> Result<CommandResult, ApplicationError> {
+        let session_kind = match input.session_id {
+            Some(_) => self.plugin_command_session_kind(input.session_id).await?,
+            None => None,
+        };
+        self.plugin_runtime()
+            .invoke_plugin_web_command(plugin_id, page_id, generation, input, session_kind)
+            .await
+            .map_err(plugin_web_error)
     }
 
     /// Dynamic activity-kind catalog: built-in kinds merged with every kind
@@ -409,5 +398,95 @@ fn plugin_command_result_from_tool(
         effects: vec![CommandHostEffect::RefreshPluginSurface {
             plugin_id: plugin_id.to_owned(),
         }],
+    }
+}
+
+fn plugin_settings_from_inspect(
+    plugin_id: &str,
+    inspect: agena_plugin_host::PluginInspect,
+) -> Result<crate::dto::PluginSettingsResponse, ApplicationError> {
+    let manifest = inspect.manifest.ok_or_else(|| {
+        ApplicationError::service_unavailable(format!(
+            "plugin `{plugin_id}` has no active manifest"
+        ))
+    })?;
+    let contract = manifest.settings.ok_or_else(|| {
+        ApplicationError::not_found_with_diagnostic(
+            "This plugin does not expose editable settings.",
+            format!("plugin settings contract unavailable: {plugin_id}"),
+        )
+    })?;
+    let defaults = contract.default_value().map_err(|error| {
+        ApplicationError::internal(format!(
+            "plugin `{plugin_id}` has an invalid settings default: {error}"
+        ))
+    })?;
+    let configured = inspect
+        .configured_plugin
+        .map(|configured| configured.settings)
+        .unwrap_or(serde_json::Value::Null);
+    let mut effective = defaults.clone();
+    if !configured.is_null() {
+        merge_plugin_settings(&mut effective, &configured);
+    }
+
+    fn merge_plugin_settings(target: &mut serde_json::Value, configured: &serde_json::Value) {
+        match (target, configured) {
+            (serde_json::Value::Object(target), serde_json::Value::Object(configured)) => {
+                for (key, value) in configured {
+                    match target.get_mut(key) {
+                        Some(existing) => merge_plugin_settings(existing, value),
+                        None => {
+                            target.insert(key.clone(), value.clone());
+                        }
+                    }
+                }
+            }
+            (target, configured) => *target = configured.clone(),
+        }
+    }
+    let diagnostics = contract
+        .validate_value(&effective)
+        .err()
+        .map(|error| {
+            vec![crate::dto::PluginSettingsDiagnostic {
+                path: error.path.unwrap_or_default(),
+                message: error.message,
+            }]
+        })
+        .unwrap_or_default();
+    Ok(crate::dto::PluginSettingsResponse {
+        plugin_id: plugin_id.to_owned(),
+        contract,
+        defaults,
+        configured,
+        effective,
+        diagnostics,
+    })
+}
+
+fn plugin_web_error(error: agena_plugin_host::PluginWebError) -> ApplicationError {
+    use agena_plugin_host::PluginWebError;
+    match error {
+        PluginWebError::NotFound => {
+            ApplicationError::not_found("The plugin page is no longer available.")
+        }
+        PluginWebError::StaleGeneration => {
+            ApplicationError::conflict("The plugin changed. Reload this page before continuing.")
+        }
+        PluginWebError::Forbidden => {
+            let error = agena_plugin_host::sdk::PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                "The operation is not declared by this plugin page.",
+            );
+            ApplicationError::from_failure(*error.failure)
+        }
+        PluginWebError::InvalidInput(message) => ApplicationError::bad_request_with_diagnostic(
+            "The plugin page request has an invalid session or operation context.",
+            message,
+        ),
+        PluginWebError::Plugin(error) => {
+            ApplicationError::from_failure_with_diagnostic(*error.failure, error.diagnostic.message)
+        }
     }
 }

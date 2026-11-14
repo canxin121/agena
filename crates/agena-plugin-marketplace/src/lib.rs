@@ -6,6 +6,9 @@ pub mod installer;
 pub mod manifest;
 pub mod project;
 
+#[cfg(test)]
+mod web_package_tests;
+
 use std::time::Duration;
 use std::{collections::BTreeMap, io::Read, path::Path};
 

@@ -76,9 +76,8 @@ pub struct PluginManifest {
     /// activation, and allowed-tool policies before injecting instructions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<PluginSkillDefinition>,
-    /// Neutral plugin surface contributions. Operations are kept in the
-    /// manifest's `commands` collection; this field is terminal-only
-    /// presentation and never defines configuration or executable behavior.
+    /// Terminal presentation and browser page entrypoints. Business operations
+    /// remain in the manifest's `commands` collection.
     #[serde(default, skip_serializing_if = "PluginSurfaceContributions::is_empty")]
     pub surface: PluginSurfaceContributions,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -725,7 +724,7 @@ pub enum ToolStreamingMode {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-/// Terminal-only presentation contributions declared by a plugin.
+/// Presentation contributions declared by a plugin.
 pub struct PluginSurfaceContributions {
     /// Declarative display contributions (Phase 6): pure content plus a kind,
     /// no location/color. The host decides placement and priority.
@@ -733,11 +732,13 @@ pub struct PluginSurfaceContributions {
     pub display: Vec<PluginDisplayContribution>,
     #[serde(default, skip_serializing_if = "PluginTerminalContributions::is_empty")]
     pub terminal: PluginTerminalContributions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<crate::web::PluginWebContributions>,
 }
 
 impl PluginSurfaceContributions {
     pub fn is_empty(&self) -> bool {
-        self.display.is_empty() && self.terminal.is_empty()
+        self.display.is_empty() && self.terminal.is_empty() && self.web.is_none()
     }
 }
 

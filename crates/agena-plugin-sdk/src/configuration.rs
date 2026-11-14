@@ -24,6 +24,10 @@ pub struct ConfiguredPlugin {
     #[serde(default = "default_plugin_enabled")]
     pub enabled: bool,
     pub package: PluginPackage,
+    /// Explicit root of an installed or local development package. Required
+    /// for Web assets; never inferred from an executable or interpreter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_root: Option<PathBuf>,
     #[serde(default)]
     pub settings: serde_json::Value,
     #[serde(default)]
@@ -41,6 +45,7 @@ impl Default for ConfiguredPlugin {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
+            package_root: None,
             settings: serde_json::Value::Null,
             timeouts: TimeoutsConfig::default(),
             activation: PluginActivationConfig::default(),
@@ -106,6 +111,7 @@ impl ConfiguredPlugin {
         Self {
             enabled: true,
             package: PluginPackage::Static {},
+            package_root: None,
             settings,
             timeouts: TimeoutsConfig::default(),
             activation: PluginActivationConfig::default(),

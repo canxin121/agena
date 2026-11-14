@@ -39,6 +39,35 @@ pub trait PluginRuntimeService: Send + Sync {
         agena_plugin_host::PluginArchitectureCatalog::default()
     }
 
+    fn plugin_web_asset(
+        &self,
+        _plugin_id: &str,
+        _revision: &str,
+        _path: &str,
+    ) -> Result<agena_plugin_host::PluginWebAsset, agena_plugin_host::PluginWebError> {
+        Err(agena_plugin_host::PluginWebError::NotFound)
+    }
+
+    fn plugin_web_settings_inspect(
+        &self,
+        _plugin_id: &str,
+        _page_id: &str,
+        _generation: &str,
+    ) -> Result<agena_plugin_host::PluginInspect, agena_plugin_host::PluginWebError> {
+        Err(agena_plugin_host::PluginWebError::NotFound)
+    }
+
+    async fn invoke_plugin_web_command(
+        &self,
+        _plugin_id: &str,
+        _page_id: &str,
+        _generation: &str,
+        _input: agena_plugin_host::sdk::CommandInvokeInput,
+        _session_kind: Option<agena_plugin_host::sdk::SessionKind>,
+    ) -> Result<agena_plugin_host::sdk::CommandResult, agena_plugin_host::PluginWebError> {
+        Err(agena_plugin_host::PluginWebError::NotFound)
+    }
+
     fn permission_tool_catalog(&self) -> Vec<RuntimePluginToolCatalogItem>;
 
     fn display_contributions(&self) -> Vec<agena_plugin_host::HostDisplayContribution>;

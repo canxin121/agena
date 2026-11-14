@@ -154,6 +154,10 @@ pub struct InstalledRecord {
     pub kind: PluginKind,
     pub platform: String,
     pub binary_path: PathBuf,
+    /// Verified archive directory containing the runtime entrypoint and assets.
+    /// Older records and single-file releases omit this value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_root: Option<PathBuf>,
     pub config_path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,

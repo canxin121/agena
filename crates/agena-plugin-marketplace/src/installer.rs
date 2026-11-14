@@ -600,6 +600,12 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             None
         };
 
+        let package_root = if archive_extracted {
+            Some(std::path::absolute(&plugin_dir)?)
+        } else {
+            None
+        };
+
         // Update config
         let config_path = req.config_path.clone();
         let mut document = read_or_create_doc(&config_path)?;
@@ -612,6 +618,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
             &plugin.id,
             &version,
             &artifact_path,
+            package_root.as_deref(),
             runtime_sha256.as_deref(),
             archive_extracted,
         )?;
@@ -629,6 +636,7 @@ impl<F: HttpFetcher> MarketplaceClient<F> {
                 kind: version.kind,
                 platform: version.platform.clone(),
                 binary_path: artifact_path.clone(),
+                package_root,
                 config_path: config_path.clone(),
                 sha256: version.sha256.clone(),
                 installed_at: Utc::now(),
@@ -1192,6 +1200,7 @@ fn write_plugin_config(
     plugin_id: &str,
     version: &PluginVersion,
     artifact_path: &Path,
+    package_root: Option<&Path>,
     runtime_sha256: Option<&str>,
     archive_extracted: bool,
 ) -> Result<(), MarketplaceError> {
@@ -1254,6 +1263,15 @@ fn write_plugin_config(
     }
     let mut plugin_config = JsonMap::new();
     plugin_config.insert("package".to_string(), JsonValue::Object(package));
+    if let Some(package_root) = package_root {
+        // The archive root is independent of its executable or interpreter.
+        // Keep this explicit so the runtime resolves only declared UI assets.
+        let package_root = std::path::absolute(package_root)?;
+        plugin_config.insert(
+            "package_root".to_string(),
+            JsonValue::from(package_root.display().to_string()),
+        );
+    }
     if !version.settings.is_null() {
         plugin_config.insert("settings".to_string(), version.settings.clone());
     }

@@ -35,6 +35,8 @@ pub mod scoped_registry;
 pub mod services;
 pub mod status;
 pub mod transport;
+pub mod web;
+pub use web::{PluginWebAsset, PluginWebError};
 
 pub use activation::{
     PluginActivationBlock, PluginActivationPlan, PluginReloadAction, PluginReloadDecision,

@@ -789,6 +789,10 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
 
     let api_state = ApiV2State::from_application(application.clone());
     let server_identity = api_state.server().clone();
+    // Installed plugin bundles have the same public-asset policy as web-dist.
+    // Their catalog, settings and commands remain on the authenticated API.
+    let plugin_web_assets =
+        agena_api_server::plugin_web_asset_routes().with_state(api_state.clone());
     let agena_api = agena_api_server::router(api_state).layer(middleware::from_fn_with_state(
         shared_state.clone(),
         crate::server::auth::require_server_auth,
@@ -803,6 +807,7 @@ pub(crate) async fn run(args: crate::server::ServerArgs) -> Result<()> {
             ));
 
     let app = public_router
+        .merge(plugin_web_assets)
         .merge(agena_api)
         .merge(server_api_routes)
         .merge(crate::server::mcp::router(mcp_state));

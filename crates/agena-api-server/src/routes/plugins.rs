@@ -5,6 +5,7 @@ use crate::{AppState, rest};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .merge(crate::plugin_web::operation_routes())
         .route("/api/v1/plugins", get(rest::list_plugins))
         .route(
             "/api/v1/plugins/surface",

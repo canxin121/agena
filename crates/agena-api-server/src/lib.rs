@@ -41,6 +41,8 @@ pub mod jsonrpc;
 #[cfg(any(feature = "http", feature = "ws", feature = "sse"))]
 mod live;
 #[cfg(feature = "http")]
+mod plugin_web;
+#[cfg(feature = "http")]
 pub mod rest;
 #[cfg(feature = "http")]
 mod revisions;
@@ -113,4 +115,12 @@ pub fn transport_router(state: AppState) -> Router {
         );
 
     router.with_state(state)
+}
+
+/// Public immutable build resources of currently active native plugin pages.
+/// Mount separately from the authenticated API router; no settings or runtime
+/// operations are exposed by this router.
+#[cfg(feature = "http")]
+pub fn plugin_web_asset_routes() -> Router<AppState> {
+    plugin_web::asset_routes()
 }

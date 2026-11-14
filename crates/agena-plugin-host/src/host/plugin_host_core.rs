@@ -2630,6 +2630,7 @@ impl PluginHost {
         PluginSurfaceCatalog {
             commands,
             terminal: PluginTerminalSurfaceCatalog { display, themes },
+            web_pages: self.web_page_catalog(),
         }
     }
 

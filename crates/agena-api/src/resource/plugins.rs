@@ -94,6 +94,30 @@ pub struct CommandRequestContext {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// A page call bound to one active plugin generation.
+pub struct PluginWebCommandRequest {
+    pub generation: String,
+    #[serde(default = "empty_object")]
+    pub input: serde_json::Value,
+    #[serde(default)]
+    pub session_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWebSettingsQuery {
+    pub generation: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginWebSettingsUpdateRequest {
+    pub generation: String,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 /// Request to invoke a registered plugin tool explicitly.
 pub struct PluginToolInvokeRequest {
     pub tool: String,

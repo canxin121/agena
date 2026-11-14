@@ -27,7 +27,7 @@ agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-git-http = { workspace = true }
 agena-mcp-server = { workspace = true }
-agena-runtime = { workspace = true }
+agena-runtime = { workspace = true, features = ["plugin-signing"] }
 agena-tui = { workspace = true }
 agena-tui-app = { workspace = true }
 agena-tui-platform = { workspace = true }

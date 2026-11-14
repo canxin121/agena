@@ -70,6 +70,7 @@ members = [
     "examples/echo_plugin",
     "examples/echo_plugin_stdio",
     "examples/multi_tool_plugin_stdio",
+    "examples/web_dashboard_plugin_stdio",
     "tools/agena-plugin-dev",
     "tools/agena-web-types",
 ]

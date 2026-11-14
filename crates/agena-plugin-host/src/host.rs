@@ -81,6 +81,9 @@ mod lifecycle_tests;
 mod permission_tests;
 mod plugin_host_build;
 mod plugin_host_core;
+mod plugin_web;
+#[cfg(test)]
+mod plugin_web_tests;
 mod process_scope;
 #[cfg(test)]
 mod rpc_route_tests;
@@ -257,6 +260,8 @@ pub struct LoadedPlugin {
     pub effect_scope: Arc<PluginEffectScope>,
     pub trust_level: String,
     pub provenance: Vec<String>,
+    pub(crate) web_bundle: std::sync::OnceLock<Arc<crate::web::PluginWebBundle>>,
+    pub(crate) web_generation: String,
 }
 
 impl LoadedPlugin {
@@ -341,6 +346,8 @@ impl LoadedPlugin {
             effect_scope,
             trust_level,
             provenance,
+            web_bundle: std::sync::OnceLock::new(),
+            web_generation: uuid::Uuid::new_v4().to_string(),
         }
     }
 

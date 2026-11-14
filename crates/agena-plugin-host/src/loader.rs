@@ -389,7 +389,7 @@ pub async fn activate_entry(
             plugin: plugin_id.clone(),
             message: agena_failure::diagnostic::format_error_chain(&error),
         })?;
-    Ok(LoadedPlugin::new_with_scope(
+    let plugin = LoadedPlugin::new_with_scope(
         prepared.kind,
         prepared.configured_plugin,
         prepared.transport,
@@ -397,7 +397,15 @@ pub async fn activate_entry(
         outcome.manifest,
         prepared.trust_level,
         prepared.provenance,
-    ))
+    );
+    plugin
+        .initialize_web_assets()
+        .await
+        .map_err(|error| HostError::Init {
+            plugin: plugin_id,
+            message: error.to_string(),
+        })?;
+    Ok(plugin)
 }
 
 #[allow(clippy::too_many_arguments)]

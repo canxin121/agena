@@ -1,0 +1,15 @@
+schema_version = 1
+
+[plugin]
+id = "demo.web_dashboard"
+name = "Workspace board"
+description = "An independently loaded Web dashboard with a persistent stdio backend."
+version = "0.1.0"
+kind = "stdio"
+license = "AGPL-3.0-or-later"
+category = "development"
+tags = ["example", "web", "dashboard"]
+
+[release]
+entrypoint = "bin/agena-web-dashboard-plugin-stdio"
+include = ["web/dist", "README.md"]

@@ -57,6 +57,10 @@ pub mod rpc;
 #[cfg(feature = "schema-validation")]
 pub mod schema_validation;
 pub mod service_client;
+pub mod web;
+pub use web::{
+    PluginWebAssets, PluginWebContributions, PluginWebPage, PluginWebPlacement, PluginWebScope,
+};
 mod settings_contract;
 
 #[cfg(feature = "cdylib")]

@@ -96,6 +96,74 @@ impl Application {
         self.set_config_setting_direct(path.as_str(), record).await
     }
 
+    /// Validate the page again inside the blocking mutation and use the file
+    /// revision we read when composing the record. A queued stale page cannot
+    /// overwrite settings after another edit or plugin activation.
+    pub(crate) async fn set_plugin_web_settings_setting(
+        &self,
+        plugin_id: &str,
+        page_id: &str,
+        generation: &str,
+        value: serde_json::Value,
+    ) -> Result<ConfigSettingsEditResponse, ApplicationError> {
+        let plugin_id = plugin_id.to_owned();
+        let page_id = page_id.to_owned();
+        let generation = generation.to_owned();
+        let response = self
+            .run_blocking(move |app| {
+                let current = app.plugin_web_settings(&plugin_id, &page_id, &generation)?;
+                current.contract.validate_value(&value).map_err(|error| {
+                    ApplicationError::bad_request_with_diagnostic(
+                        "The plugin settings are invalid.",
+                        error.to_string(),
+                    )
+                })?;
+                let mut sources = app.config_json_sources()?;
+                let persisted = app
+                    .runtime_config_settings()
+                    .read_file_settings(agena_runtime::ConfigSettingsGetInput::default())
+                    .map_err(|error| {
+                        ApplicationError::from_failure_with_diagnostic(
+                            error.failure().clone(),
+                            error.diagnostic(),
+                        )
+                    })?;
+                sources.file = persisted.value;
+                let mut record = plugin_record_for_settings_edit(&sources, &plugin_id);
+                let settings = normalize_plugin_record_for_settings_edit(&mut record)
+                    .map_err(ApplicationError::internal)?;
+                set_nested_json_value(settings, &[], value);
+                app.plugin_web_settings(&plugin_id, &page_id, &generation)?;
+                app.runtime_config_settings()
+                    .set_file_setting(ConfigSettingsSetInput {
+                        path: format!("plugins.list.{}", quoted_settings_segment(&plugin_id)),
+                        value: record,
+                        options: ConfigSettingsEditOptions {
+                            expected_revision: persisted.revision,
+                            dry_run: false,
+                            validate: true,
+                            reload: true,
+                        },
+                    })
+                    .map_err(|error| {
+                        ApplicationError::from_failure_with_diagnostic(
+                            error.failure().clone(),
+                            error.diagnostic(),
+                        )
+                    })
+            })
+            .await??;
+        if response.reload_required {
+            self.runtime_control().reload().await.map_err(|error| {
+                ApplicationError::runtime_control_error_with_context(
+                    "failed to reload runtime after plugin page settings change",
+                    &error,
+                )
+            })?;
+        }
+        Ok(response)
+    }
+
     pub async fn delete_plugin_settings_setting(
         &self,
         plugin_id: &str,

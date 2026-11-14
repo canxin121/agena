@@ -1009,6 +1009,41 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
             .architecture_catalog()
     }
 
+    fn plugin_web_asset(
+        &self,
+        plugin_id: &str,
+        revision: &str,
+        path: &str,
+    ) -> Result<agena_plugin_host::PluginWebAsset, agena_plugin_host::PluginWebError> {
+        self.current_snapshot()
+            .plugin_manager()
+            .web_asset(plugin_id, revision, path)
+    }
+
+    fn plugin_web_settings_inspect(
+        &self,
+        plugin_id: &str,
+        page_id: &str,
+        generation: &str,
+    ) -> Result<agena_plugin_host::PluginInspect, agena_plugin_host::PluginWebError> {
+        self.current_snapshot()
+            .plugin_manager()
+            .web_settings_inspect(plugin_id, page_id, generation)
+    }
+
+    async fn invoke_plugin_web_command(
+        &self,
+        plugin_id: &str,
+        page_id: &str,
+        generation: &str,
+        input: agena_plugin_host::sdk::CommandInvokeInput,
+        session_kind: Option<agena_plugin_host::sdk::SessionKind>,
+    ) -> Result<agena_plugin_host::sdk::CommandResult, agena_plugin_host::PluginWebError> {
+        let host = self.current_snapshot().plugin_manager();
+        host.invoke_web_command(plugin_id, page_id, generation, input, session_kind)
+            .await
+    }
+
     fn permission_tool_catalog(&self) -> Vec<agena_runtime::RuntimePluginToolCatalogItem> {
         let mut tools = self
             .current_snapshot()

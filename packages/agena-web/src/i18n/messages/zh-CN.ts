@@ -1,4 +1,7 @@
+import { pluginWebMessages } from '../pluginWeb'
+
 export default {
+  pluginWeb: pluginWebMessages['zh-CN'],
   bot: {
     conversations: {
       title: '{name} 的会话',
@@ -646,6 +649,7 @@ export default {
     },
   },
   nav: {
+    plugins: '插件',
     chat: '聊天',
     files: '文件',
     preview: '预览',

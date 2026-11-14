@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line } from '@remixicon/vue'
+import { RiRobot2Line, RiApps2Line } from '@remixicon/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -70,6 +70,7 @@ const NAV_ICONS: Record<MainTabId, Component> = {
   chat: RiChat4Line,
   files: RiFolder6Line,
   preview: RiGlobalLine,
+  plugins: RiApps2Line,
   terminal: RiTerminalBoxLine,
   git: RiGitMergeLine,
   settings: RiSettings3Line,

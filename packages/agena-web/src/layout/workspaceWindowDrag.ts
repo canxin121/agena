@@ -3,7 +3,7 @@ export const WORKSPACE_WINDOW_TEMPLATE_DRAG_MIME = 'application/x-agena-workspac
 const WORKSPACE_WINDOW_TEMPLATE_TEXT_PREFIX = 'agena-workspace-window-template:'
 
 export type WorkspaceWindowTemplateDragData = {
-  tab: 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings'
+  tab: 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings' | 'plugins'
   query?: Record<string, string>
   title?: string
   matchKeys?: string[]
@@ -74,7 +74,8 @@ function normalizeTemplateTab(raw: unknown): WorkspaceWindowTemplateDragData['ta
     value === 'preview' ||
     value === 'terminal' ||
     value === 'git' ||
-    value === 'settings'
+    value === 'settings' ||
+    value === 'plugins'
   ) {
     return value
   }

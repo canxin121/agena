@@ -146,6 +146,7 @@ function readMatchQueryValue(record: Record<string, string> | null | undefined, 
 function defaultMatchKeysForMainTab(tab: MainTab): string[] {
   if (tab === 'chat') return ['sessionId']
   if (tab === 'bot') return ['botId']
+  if (tab === 'plugins') return ['sessionId']
   return []
 }
 
@@ -1524,7 +1525,12 @@ export const useUiStore = defineStore('ui', () => {
         continue
       }
 
-      if (!matchKeys.length) {
+      // Match the same identity rule as group de-duplication. Optional
+      // match keys (for example a plugin's sessionId) can be absent on an
+      // instance page; in that case its complete query is its identity.
+      // Otherwise reopening an exact deep link creates a duplicate which is
+      // then discarded, restoring an unrelated previously-active tab.
+      if (!matchKeys.length || !matchKeys.every((key) => readMatchQueryValue(query, key))) {
         if (areStringRecordsEqual(item.routeQuery || {}, query)) return item
         continue
       }

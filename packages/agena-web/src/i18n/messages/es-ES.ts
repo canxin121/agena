@@ -1,4 +1,7 @@
+import { pluginWebMessages } from '../pluginWeb'
+
 export default {
+  pluginWeb: pluginWebMessages['es-ES'],
   bot: {
     conversations: {
       title: 'Conversaciones de {name}',
@@ -1199,6 +1202,7 @@ export default {
     removeBackendTitle: '¿Eliminar backend?',
   },
   nav: {
+    plugins: 'Plugins',
     chat: 'Chat',
     files: 'Archivos',
     preview: 'Vista previa',

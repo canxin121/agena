@@ -34,6 +34,7 @@ export default defineConfig(({ mode }) => {
       // the API/auth/health routes there (see src/lib/backend.ts).
       proxy: {
         '/api': 'http://127.0.0.1:3210',
+        '/plugin-assets': 'http://127.0.0.1:3210',
         '/auth': 'http://127.0.0.1:3210',
         '/health': 'http://127.0.0.1:3210',
       },

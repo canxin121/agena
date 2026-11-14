@@ -1,4 +1,7 @@
+import { pluginWebMessages } from '../pluginWeb'
+
 export default {
+  pluginWeb: pluginWebMessages['hi-IN'],
   bot: {
     conversations: {
       title: '{name} की बातचीत',
@@ -3128,6 +3131,7 @@ export default {
     },
   },
   nav: {
+    plugins: 'प्लगइन',
     chat: 'चैट',
     files: 'फ़ाइलें',
     preview: 'पूर्वावलोकन',

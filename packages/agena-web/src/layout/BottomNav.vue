@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line } from '@remixicon/vue'
+import { RiRobot2Line, RiApps2Line } from '@remixicon/vue'
 import { computed, type Component } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -15,6 +15,7 @@ const TAB_ICONS: Record<NavigationMainTabId, Component> = {
   bot: RiRobot2Line,
   files: RiFolder6Line,
   preview: RiGlobalLine,
+  plugins: RiApps2Line,
   terminal: RiTerminalBoxLine,
   git: RiGitMergeLine,
 }
@@ -42,7 +43,7 @@ function isActive(tab: NavigationMainTabId) {
     class="oc-bottom-nav fixed bottom-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-t border-border pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)]"
     :aria-label="String(t('aria.primaryNavigation'))"
   >
-    <div class="grid grid-cols-6 h-[56px]">
+    <div class="grid grid-flow-col auto-cols-fr h-[56px]">
       <RouterLink
         v-for="item in items"
         :key="item.to"
@@ -56,7 +57,7 @@ function isActive(tab: NavigationMainTabId) {
         :aria-current="isActive(item.id) ? 'page' : undefined"
       >
         <component :is="item.icon" class="w-5 h-5" />
-        <span class="text-[10px] font-medium whitespace-nowrap">{{ item.label }}</span>
+        <span class="max-w-full truncate px-0.5 text-[10px] font-medium">{{ item.label }}</span>
       </RouterLink>
     </div>
   </nav>

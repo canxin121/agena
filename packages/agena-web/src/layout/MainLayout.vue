@@ -208,6 +208,7 @@ type WorkspaceDropSource =
 function matchKeysForTab(tab: MainTabId): string[] {
   if (tab === 'chat') return ['sessionId']
   if (tab === 'bot') return ['botId']
+  if (tab === 'plugins') return ['sessionId']
   if (tab === 'files') return ['filePath']
   return []
 }

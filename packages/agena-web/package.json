@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test:plugin-web": "bun test ./tests/pluginWeb.test.ts ./tests/pluginHub.test.ts ./tests/pluginWorkspaceIdentity.test.ts",
+    "test:plugin-web:browser": "node ./scripts/probe-plugin-web.cjs",
     "test:bot": "bun test ./tests/botConversation.test.ts ./tests/namedBots.test.ts ./tests/chatConsistency.test.ts ./tests/conversationRouting.test.ts ./tests/taskRetirement.test.ts",
     "test:bot:browser": "node ./scripts/probe-bot.cjs",
     "test:mcp:browser": "node ./scripts/probe-mcp.cjs",
@@ -37,7 +39,9 @@
     "test:inline-ui:browser": "node ./scripts/probe-inline-ui.cjs",
     "test:inline-ui:live": "node ./scripts/probe-stateful-ui.cjs",
     "test:inline-ui:layout": "node ./scripts/probe-inline-ui-layout.cjs",
-    "test:assistant:browser": "node ./scripts/probe-assistant.cjs"
+    "test:assistant:browser": "node ./scripts/probe-assistant.cjs",
+    "test:telegram": "bun test ./tests/telegramManagerModel.test.ts ./tests/integrations.test.ts ./tests/pluginWorkspaceIdentity.test.ts",
+    "test:telegram:browser": "node ./scripts/probe-telegram.cjs"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.2.7",

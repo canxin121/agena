@@ -23,7 +23,11 @@ import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
 import PluginEmptyState from '@/components/settings/plugins/PluginEmptyState.vue'
 import PluginHooksPanel from '@/components/settings/plugins/PluginHooksPanel.vue'
-import { buildPluginHookEntries, type PluginHookDeclaration, type PluginHookRegistration } from '@/components/settings/plugins/pluginHooks'
+import {
+  buildPluginHookEntries,
+  type PluginHookDeclaration,
+  type PluginHookRegistration,
+} from '@/components/settings/plugins/pluginHooks'
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
 import { pluginStateLabel } from '@/components/settings/pluginLabels'
 import Button from '@/components/ui/Button.vue'
@@ -49,6 +53,9 @@ import {
   type PluginSettingsUpdateResponse,
 } from '@/lib/pluginOperations'
 import { useChatStore } from '@/stores/chat'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
+import { pluginPagePath } from '@/features/pluginWeb/model'
+import type { PluginPageCatalogItem } from '@/features/pluginWeb/sdk'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 
@@ -261,6 +268,7 @@ type PluginArchitectureCatalog = {
 type PluginSurfaceCatalogResponse = {
   catalog?: {
     commands?: PluginCommandCatalogItem[]
+    web_pages?: PluginPageCatalogItem[]
   }
   tool_registry_generation?: number
 }
@@ -284,6 +292,7 @@ const activeTab = computed(() => props.tab)
 
 const route = useRoute()
 const router = useRouter()
+const workspaceNavigation = useWorkspaceNavigation()
 const { locale } = useI18n()
 const chat = useChatStore()
 const toasts = useToastsStore()
@@ -468,6 +477,17 @@ const selectedCommands = computed(() =>
     (command) => command.plugin_id === selectedPluginId.value && command.category?.trim().toLowerCase() !== 'skill',
   ),
 )
+const selectedWebPages = computed(() =>
+  (catalog.value?.catalog?.web_pages || []).filter((page) => page.plugin_id === selectedPluginId.value),
+)
+
+async function openWebPage(page: PluginPageCatalogItem) {
+  await workspaceNavigation.openWorkspaceLocation('plugins', {
+    path: pluginPagePath(page.plugin_id, page.page_id),
+    title: page.title,
+  })
+}
+
 const selectedTools = computed(() =>
   Array.isArray(selectedManifest.value?.tools) ? selectedManifest.value!.tools! : [],
 )
@@ -1088,6 +1108,19 @@ defineExpose({ refresh })
               <p v-if="selectedSummary" class="mt-2 break-words text-xs leading-relaxed text-muted-foreground">
                 {{ selectedSummary }}
               </p>
+              <div v-if="selectedWebPages.length" class="mt-3 flex flex-wrap gap-2">
+                <Button
+                  v-for="page in selectedWebPages"
+                  :key="page.page_id"
+                  size="sm"
+                  variant="outline"
+                  data-plugin-open-page
+                  @click="openWebPage(page)"
+                >
+                  {{ $t('pluginWeb.open') }} · {{ page.title }}
+                  <RiArrowRightLine class="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                </Button>
+              </div>
             </div>
           </header>
           <div

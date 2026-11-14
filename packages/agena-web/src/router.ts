@@ -64,6 +64,16 @@ const routes: RouteRecordRaw[] = [
     meta: { shellSidebar: 'none', mobilePanel: 'git' },
   },
   {
+    path: '/plugins',
+    component: () => import('./pages/PluginAppPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'plugins' },
+  },
+  {
+    path: '/plugins/:pluginId/:pageId/:pathMatch(.*)*',
+    component: () => import('./pages/PluginAppPage.vue'),
+    meta: { shellSidebar: 'none', mobilePanel: 'plugins' },
+  },
+  {
     path: '/settings/:section?',
     component: () => import('./pages/SettingsPage.vue'),
     meta: { shellSidebar: 'none', mobilePanel: 'settings' },

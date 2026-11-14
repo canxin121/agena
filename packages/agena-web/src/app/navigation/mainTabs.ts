@@ -1,4 +1,4 @@
-export type MainTabId = 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings' | 'bot'
+export type MainTabId = 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings' | 'bot' | 'plugins'
 export type NavigationMainTabId = Exclude<MainTabId, 'settings'>
 
 export type MainTabDef<T extends MainTabId = MainTabId> = {
@@ -14,6 +14,7 @@ export const WORKSPACE_MAIN_TABS: MainTabDef[] = [
   { id: 'preview', path: '/preview', labelKey: 'nav.preview' },
   { id: 'terminal', path: '/terminal', labelKey: 'nav.terminal' },
   { id: 'git', path: '/git', labelKey: 'nav.git' },
+  { id: 'plugins', path: '/plugins', labelKey: 'nav.plugins' },
   { id: 'settings', path: '/settings', labelKey: 'nav.settings' },
 ]
 
@@ -35,7 +36,7 @@ export function isConversationSettingsPath(path: string): boolean {
 
 export function isWorkspaceMainTabPath(path: string): boolean {
   const p = String(path || '').toLowerCase()
-  return WORKSPACE_MAIN_TABS.some((tab) => p.startsWith(tab.path))
+  return WORKSPACE_MAIN_TABS.some((tab) => p === tab.path || p.startsWith(`${tab.path}/`))
 }
 
 export function isMainTabId(value: string): value is MainTabId {
@@ -45,7 +46,7 @@ export function isMainTabId(value: string): value is MainTabId {
 export function mainTabFromPath(path: string): MainTabId {
   const p = String(path || '').toLowerCase()
   for (const tab of WORKSPACE_MAIN_TABS) {
-    if (p.startsWith(tab.path)) return tab.id
+    if (p === tab.path || p.startsWith(`${tab.path}/`)) return tab.id
   }
   return 'chat'
 }

@@ -1,4 +1,7 @@
+import { pluginWebMessages } from '../pluginWeb'
+
 export default {
+  pluginWeb: pluginWebMessages['fr-FR'],
   bot: {
     conversations: {
       title: 'Conversations de {name}',
@@ -3484,6 +3487,7 @@ export default {
     },
   },
   nav: {
+    plugins: 'Plugins',
     chat: 'Discussion',
     files: 'Fichiers',
     preview: 'Aperçu',

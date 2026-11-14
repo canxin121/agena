@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { ApiError, apiJson, apiUrl } from '../lib/api'
+import { clearAuthRequiredFromStorage } from '../lib/authEvents'
 import {
   buildActiveServerAuthHeaders,
   clearServerAuthTokenForBaseUrl,
@@ -105,6 +106,7 @@ export const useAuthStore = defineStore('auth', () => {
         // requirement instead of mounting the protected page and waiting for
         // its first request to return 401.
         locked.value = !disabled.value && Boolean(data.locked)
+        if (authenticated.value || disabled.value) clearAuthRequiredFromStorage()
 
         // Best-effort: if the backend returns a token (optional), persist it.
         const token = typeof data.token === 'string' ? data.token.trim() : ''
@@ -194,6 +196,7 @@ export const useAuthStore = defineStore('auth', () => {
       authenticated.value = Boolean(data?.authenticated)
       disabled.value = Boolean(data?.disabled)
       locked.value = !authenticated.value && !disabled.value
+      if (authenticated.value || disabled.value) clearAuthRequiredFromStorage()
       lastError.value = null
     } catch (err) {
       if (requestRevision !== stateRevision) return

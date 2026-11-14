@@ -21,7 +21,7 @@ import { useAuthStore } from './stores/auth'
 import { sessionStorageKeys } from './lib/persistence/storageKeys'
 import {
   OC_AUTH_REQUIRED_EVENT,
-  readAuthRequiredFromStorage,
+  consumeAuthRequiredFromStorage,
   clearAuthRequiredFromStorage,
   type AuthRequiredDetail,
 } from './lib/authEvents.ts'
@@ -75,6 +75,9 @@ function ensureAuthRefreshSoon() {
 }
 
 function handleAuthRequired(detail?: AuthRequiredDetail) {
+  // The synchronous event consumes its fallback record, including stale events
+  // that are ignored below. It must not survive a later successful login.
+  clearAuthRequiredFromStorage()
   // Requests started before login can finish with 401 after the new token has
   // been written. Their event is stale and must not bounce the app back to the
   // login page. The version is intentionally metadata only; the bearer token
@@ -118,8 +121,7 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 }
 
 // Best-effort replay for early or non-CustomEvent environments.
-const stored = readAuthRequiredFromStorage()
-clearAuthRequiredFromStorage()
+const stored = consumeAuthRequiredFromStorage()
 if (stored && stored.at > 0 && Date.now() - stored.at < 30_000) {
   handleAuthRequired(stored.detail)
 }

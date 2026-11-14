@@ -4,6 +4,10 @@ export const OC_AUTH_REQUIRED_EVENT = 'agena.auth-required'
 
 export const OC_AUTH_REQUIRED_STORAGE_KEY = sessionStorageKeys.auth.authRequired
 
+// Request versions belong to one loaded document. A recent denial from an old
+// document must not match a version counter that restarted after a page reload.
+const authEventDocumentId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`
+
 export type AuthRequiredDetail = {
   message?: string
   status?: number
@@ -14,6 +18,7 @@ export type AuthRequiredDetail = {
 }
 
 export type StoredAuthRequired = {
+  documentId: string
   at: number
   detail: AuthRequiredDetail
 }
@@ -44,10 +49,11 @@ export function readAuthRequiredFromStorage(): StoredAuthRequired | null {
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
     const record = parsed as Record<string, unknown>
+    if (record.documentId !== authEventDocumentId) return null
     const at = typeof record.at === 'number' && Number.isFinite(record.at) ? Math.floor(record.at) : 0
     const detail = record.detail
     if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return null
-    return { at, detail: detail as AuthRequiredDetail }
+    return { documentId: authEventDocumentId, at, detail: detail as AuthRequiredDetail }
   } catch {
     return null
   }
@@ -62,10 +68,16 @@ export function clearAuthRequiredFromStorage() {
   }
 }
 
+export function consumeAuthRequiredFromStorage(): StoredAuthRequired | null {
+  const stored = readAuthRequiredFromStorage()
+  clearAuthRequiredFromStorage()
+  return stored
+}
+
 function persistAuthRequired(detail: AuthRequiredDetail) {
   if (typeof sessionStorage === 'undefined') return
   try {
-    const payload: StoredAuthRequired = { at: Date.now(), detail }
+    const payload: StoredAuthRequired = { documentId: authEventDocumentId, at: Date.now(), detail }
     sessionStorage.setItem(OC_AUTH_REQUIRED_STORAGE_KEY, JSON.stringify(payload))
   } catch {
     // ignore

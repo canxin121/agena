@@ -10,7 +10,7 @@ use agena_api::{
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
 use agena_runtime_contracts::part_content::ToolCallContent;
-use agena_storage::kernel::{ChangeKind, KernelError, KernelWatch, WatchError};
+use agena_storage::kernel::{KernelError, KernelWatch, WatchError};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 #[cfg(feature = "ws")]
@@ -123,6 +123,19 @@ fn belongs_to_workspace(workspace_id: i64, session_workspace_id: Option<i64>) ->
     session_workspace_id == Some(workspace_id)
 }
 
+fn is_global_invalidation(signal: &RuntimeSignalResource) -> bool {
+    // These runtime-wide signals carry no conversation content. A scoped
+    // viewer still needs new tools and attention from other conversations.
+    signal.session_id.is_none()
+        && (signal.kind == "tool_registry_changed"
+            || (signal.kind == "plugin"
+                && signal
+                    .payload
+                    .get("kind")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("attention.changed")))
+}
+
 async fn recover_watch(
     watch: &mut KernelWatch,
     replacement: impl FnOnce() -> Result<KernelWatch, KernelError>,
@@ -194,7 +207,9 @@ fn subscribe_with_queue_capacity(
                     if tx.send(LiveItem::SessionChanged(SessionChangeResource::SessionMetaUpdated {session_id:id,
                         version:metadata.metadata_version.get(),title:metadata.title.clone(),favorite:metadata.favorite,
                         pinned:metadata.pinned,updated_at_ms:metadata.updated_at_ms})).await.is_err(){break;}
-                    if matches!(change.kind,ChangeKind::Content){continue;}
+                    // Ordinary byte checkpoints have their own content watch.
+                    // Content commits on this feed are terminal checkpoints:
+                    // their changed entries and snapshot requirements matter.
                     if change.requires_snapshot {
                         if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}
                         continue;
@@ -219,9 +234,8 @@ fn subscribe_with_queue_capacity(
                     // Attention invalidates a runtime-wide plugin queue. A TUI
                     // viewing one session must also learn about another
                     // session's notification; this signal carries no transcript.
-                    let global_attention=signal.session_id.is_none()&&signal.kind=="plugin"
-                        &&signal.payload.get("kind").and_then(serde_json::Value::as_str)==Some("attention.changed");
-                    let allowed=global_attention||match (&scope,signal.session_id) {
+                    let global_invalidation=is_global_invalidation(&signal);
+                    let allowed=global_invalidation||match (&scope,signal.session_id) {
                         (Scope::Global,_)=>true,(Scope::Session{session_id},Some(id))=>*session_id==id,
                         (Scope::Workspace{workspace_id},Some(id))=>match id.try_into(){Ok(id)=>kernel.reader.metadata(id).await.is_ok_and(|m|belongs_to_workspace(*workspace_id,m.workspace_id)),Err(_)=>false},_=>false};
                     if allowed&&tx.send(LiveItem::RuntimeSignal(signal)).await.is_err(){break;}

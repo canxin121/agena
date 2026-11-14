@@ -21,7 +21,9 @@ import { ApiError } from '../lib/api'
 import { createRevalidator } from '../lib/revalidation'
 import { createLatestRequestGuard } from '../lib/latestRequest'
 import { isDocumentVisible } from '../lib/backgroundReads'
+import { connectSessionLive } from '../lib/sessionLive'
 import {
+  applyResourceEvent,
   canReuseResource,
   captureResourceObservation,
   checkResourceVersions,
@@ -317,7 +319,23 @@ const useChatStoreDefinition = defineStore('chat', () => {
         membershipRevalidation.add(sid)
         messageRevalidator(sid).invalidate(0)
       })
+      const releaseLive = connectSessionLive(
+        sid,
+        (event) => {
+          applyResourceEvent(event)
+          applyEvent(event)
+        },
+        () => {
+          transcriptRecovery.add(sid)
+          executionRecovery.add(sid)
+          membershipRevalidation.add(sid)
+          invalidateResources([`session:${sid}:parts`, `session:${sid}:state`])
+          messageRevalidator(sid).invalidate(0)
+          scheduleSessionStatusRefresh(sid, 0)
+        },
+      )
       sessionResourceSubscriptions.set(sid, () => {
+        releaseLive()
         releaseState()
         releaseTranscript()
       })
@@ -331,7 +349,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     invalidateResources([`session:${sid}:state`])
     scheduleSessionStatusRefresh(sid, 0)
     if (evictedTranscriptSessions.delete(sid)) void refreshMessages(sid, { silent: true }).catch(() => {})
+    let released = false
     return () => {
+      if (released) return
+      released = true
       const count = (visibleSessions.get(sid) || 1) - 1
       if (count) visibleSessions.set(sid, count)
       else {

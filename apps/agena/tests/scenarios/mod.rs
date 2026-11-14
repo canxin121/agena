@@ -24,6 +24,7 @@ mod git;
 mod integrations;
 mod interaction;
 mod lifecycle;
+mod live_delivery;
 mod marketplace;
 mod native;
 mod plugins;

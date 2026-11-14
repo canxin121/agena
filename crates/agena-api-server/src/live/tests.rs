@@ -1,7 +1,7 @@
 use super::*;
 use agena_domain::KernelEpoch;
 use agena_storage::backend::kernel::ChangeFeed;
-use agena_storage::kernel::{CommitPosition, CommitSequence, SessionId};
+use agena_storage::kernel::{ChangeKind, CommitPosition, CommitSequence, SessionId};
 
 #[test]
 fn session_scope_receives_global_changes_without_exposing_them_to_project_lists() {
@@ -60,4 +60,26 @@ async fn reset_recovery_keeps_commits_while_its_notification_is_backpressured() 
         .expect("the recovery watch must retain a commit made before reset delivery");
     assert_eq!(change.cursor.position, position);
     assert_eq!(change.session, session);
+}
+
+#[test]
+fn scoped_conversations_keep_runtime_wide_invalidations_without_other_session_content() {
+    for (kind, payload) in [
+        ("tool_registry_changed", serde_json::Value::Null),
+        ("plugin", serde_json::json!({"kind": "attention.changed"})),
+    ] {
+        let mut signal = RuntimeSignalResource {
+            kind: kind.into(),
+            session_id: None,
+            payload,
+        };
+        assert!(is_global_invalidation(&signal));
+        signal.session_id = Some(99);
+        assert!(!is_global_invalidation(&signal));
+    }
+    assert!(!is_global_invalidation(&RuntimeSignalResource {
+        kind: "plugin".into(),
+        session_id: None,
+        payload: serde_json::json!({"kind": "plan.changed"}),
+    }));
 }

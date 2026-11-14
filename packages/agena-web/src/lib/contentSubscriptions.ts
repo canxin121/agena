@@ -42,9 +42,49 @@ export function createContentSubscriptions(
 ): (sessionId: string, resource: ContentRef, observer: Observer) => () => void {
   const interests = new Map<string, Interest>()
   const MAX_IDLE_RESOURCES = 16
+  let observerCount = 0
+  let releaseLifecycle: (() => void) | undefined
+
+  function recoverVisibleContent() {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    for (const interest of interests.values()) {
+      if (!interest.observers.size) continue
+      schedule(interest)
+      clearTimeout(interest.retry)
+      interest.retry = undefined
+      if (isComplete(interest)) continue
+      // Fetch can remain half-open after sleep/BFCache. Keep the accepted
+      // cursor, but do not wait for the old connection's idle timeout.
+      if (interest.controller) interest.controller.abort()
+      else void connect(interest)
+    }
+  }
+
+  function retainLifecycle() {
+    if (++observerCount !== 1 || typeof document === 'undefined') return
+    const doc = document
+    const browser = typeof window === 'undefined' ? undefined : window
+    doc.addEventListener('visibilitychange', recoverVisibleContent)
+    browser?.addEventListener('online', recoverVisibleContent)
+    browser?.addEventListener('pageshow', recoverVisibleContent)
+    releaseLifecycle = () => {
+      doc.removeEventListener('visibilitychange', recoverVisibleContent)
+      browser?.removeEventListener('online', recoverVisibleContent)
+      browser?.removeEventListener('pageshow', recoverVisibleContent)
+    }
+  }
 
   function isComplete(interest: Interest): boolean {
-    return Boolean(interest.buffer.resource && interest.buffer.resource.state !== 'active')
+    const { resource, cursor } = interest.buffer
+    // The producer may already be terminal while a reconnect is still reading
+    // several bounded pages. Completion requires consuming its final cursor.
+    return Boolean(
+      resource &&
+      cursor &&
+      resource.state !== 'active' &&
+      cursor.epoch === resource.cursor.epoch &&
+      cursor.sequence >= resource.cursor.sequence,
+    )
   }
 
   function deliver(subscription: Subscription, frame: ContentFrame) {
@@ -107,7 +147,7 @@ export function createContentSubscriptions(
           schedule(interest)
         },
       )
-      if (!controller.signal.aborted && interest.buffer.resource?.state === 'active')
+      if (!controller.signal.aborted && !isComplete(interest))
         throw new Error(i18n.global.t('errors.content.connectionClosedBeforeCursor'))
     } catch (error) {
       if (!controller.signal.aborted) {
@@ -121,12 +161,7 @@ export function createContentSubscriptions(
         void connect(interest)
         return
       }
-      if (
-        interest.observers.size &&
-        !controller.signal.aborted &&
-        !isComplete(interest) &&
-        interest.buffer.resource?.state !== 'interrupted'
-      ) {
+      if (interest.observers.size && !controller.signal.aborted && !isComplete(interest)) {
         interest.retry = setTimeout(() => void connect(interest), Math.min(250 * 2 ** interest.failures, 8000))
       }
     }
@@ -154,6 +189,7 @@ export function createContentSubscriptions(
     const current = interest
     const subscription: Subscription = { observer, cursor: null }
     current.observers.add(subscription)
+    retainLifecycle()
     clearTimeout(current.retry)
     current.retry = undefined
     deliver(subscription, {
@@ -165,7 +201,11 @@ export function createContentSubscriptions(
     })
     void connect(current)
     return () => {
-      current.observers.delete(subscription)
+      if (!current.observers.delete(subscription)) return
+      if (--observerCount === 0) {
+        releaseLifecycle?.()
+        releaseLifecycle = undefined
+      }
       if (current.observers.size) return
       current.controller?.abort()
       clearTimeout(current.retry)

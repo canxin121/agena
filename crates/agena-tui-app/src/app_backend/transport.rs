@@ -2824,12 +2824,13 @@ impl TuiBackend {
         let (tx, rx) = mpsc::channel(256);
         tokio::spawn(async move {
             loop {
-                // Subscribe before reading the snapshot. Global scope is
-                // required for session-less runtime signals such as dynamic
-                // tool-registry changes; session mutations are filtered below.
+                // The global feed is a project-list feed: it deliberately
+                // excludes workspace-free Bot conversations. Subscribe to the
+                // actual conversation before reading its snapshot. The server
+                // also forwards global attention/tool-registry invalidations.
                 let mut subscription = match tokio::select! {
                     _ = tx.closed() => return,
-                    result = client.stream_changes(agena_api::Scope::Global) => result,
+                    result = client.stream_changes(agena_api::Scope::Session { session_id }) => result,
                 } {
                     Ok(subscription) => subscription,
                     Err(error) => {

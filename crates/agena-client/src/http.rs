@@ -731,10 +731,12 @@ impl AgenaClient {
                 reads.global_live_users.load(Ordering::Acquire) > 0,
             )
         };
-        // A client without a global stream cannot know that a cached token
-        // stayed current. Validate its explicit read with If-None-Match;
-        // otherwise ordinary API callers can miss completion for 30 seconds.
-        let reuse = !force && live;
+        // The global feed covers project lists, not every conversation: Bot
+        // sessions have no workspace and are intentionally excluded. Never let
+        // that lease suppress an explicit conversation/part read for 30s.
+        // Conditional HTTP reads stay cheap when the representation is current.
+        let conversation = resource.starts_with("session:") || resource.starts_with("part:");
+        let reuse = !force && live && !conversation;
         if cached.is_some() && due && reuse {
             let _check = self.revision_check.lock().await;
             let (keys, observations, due) = {

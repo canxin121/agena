@@ -157,9 +157,11 @@ export class ContentBuffer {
     const reset = this.recovering || (previousEpoch !== undefined && previousEpoch !== page.next_cursor.epoch)
     if (page.resource.cursor.epoch !== page.next_cursor.epoch)
       throw new Error(i18n.global.t('errors.content.mixedResourceEpochs'))
-    if (page.resource.committed_cursor.epoch !== page.next_cursor.epoch ||
+    if (
+      page.resource.committed_cursor.epoch !== page.next_cursor.epoch ||
       page.resource.committed_cursor.sequence > page.resource.cursor.sequence ||
-      page.next_cursor.sequence > page.resource.cursor.sequence)
+      page.next_cursor.sequence > page.resource.cursor.sequence
+    )
       return { appended: [], reset: false, missing: true }
     const appended: ContentChunk[] = []
     let expected = reset ? undefined : this.cursor?.sequence
@@ -201,7 +203,9 @@ export class ContentBuffer {
             document = updateDocument(document, chunk.payload.input.event)
           } else if (!document) document = { blocks: [] }
           documentCursor = chunk.cursor
-        } catch { return recover() }
+        } catch {
+          return recover()
+        }
       } else if (chunk.payload.type === 'structured_snapshot') {
         try {
           document = validateDocument(chunk.payload.document)
@@ -247,7 +251,12 @@ export class ContentBuffer {
       this.windowed = false
       this.terminalScreen = null
     }
-    if (!this.cursor && appended[0] && contentChunkStart(appended[0], page.resource.kind) > 0 && page.resource.kind !== 'structured')
+    if (
+      !this.cursor &&
+      appended[0] &&
+      contentChunkStart(appended[0], page.resource.kind) > 0 &&
+      page.resource.kind !== 'structured'
+    )
       this.windowed = true
     for (const chunk of appended) {
       if (chunk.payload.type === 'terminal') {
@@ -281,13 +290,23 @@ export class ContentBuffer {
       const resource = page.resource.cursor.sequence >= previous.cursor.sequence ? page.resource : previous
       this.resource = {
         ...resource,
-        committed_cursor: { ...resource.committed_cursor, sequence: Math.max(previous.committed_cursor.sequence, page.resource.committed_cursor.sequence) },
+        committed_cursor: {
+          ...resource.committed_cursor,
+          sequence: Math.max(previous.committed_cursor.sequence, page.resource.committed_cursor.sequence),
+        },
         dropped_bytes: Math.max(previous.dropped_bytes, page.resource.dropped_bytes),
         dropped_packets: Math.max(previous.dropped_packets, page.resource.dropped_packets),
         committed_dropped_bytes: Math.max(previous.committed_dropped_bytes, page.resource.committed_dropped_bytes),
-        committed_dropped_packets: Math.max(previous.committed_dropped_packets, page.resource.committed_dropped_packets),
+        committed_dropped_packets: Math.max(
+          previous.committed_dropped_packets,
+          page.resource.committed_dropped_packets,
+        ),
       }
-      if (previous.state !== 'active' && resource.state === 'active' && previous.cursor.sequence === resource.cursor.sequence)
+      if (
+        previous.state !== 'active' &&
+        resource.state === 'active' &&
+        previous.cursor.sequence === resource.cursor.sequence
+      )
         this.resource.state = previous.state
     }
     this.gap ||= page.gap || page.resource.dropped_bytes > 0 || page.resource.dropped_packets > 0
@@ -299,10 +318,12 @@ export class ContentBuffer {
   }
 
   text(): string {
-    return this.chunks.map(({ payload }) => {
-      const input = payload.type === 'document_event' ? payload.input : payload
-      return 'text' in input ? input.text : ''
-    }).join('')
+    return this.chunks
+      .map(({ payload }) => {
+        const input = payload.type === 'document_event' ? payload.input : payload
+        return 'text' in input ? input.text : ''
+      })
+      .join('')
   }
 
   replayChunks(): ContentChunk[] {
@@ -336,6 +357,7 @@ export async function streamContent(
   after: ContentCursor | null,
   signal: AbortSignal,
   onPage: (page: ContentPage) => void,
+  timeouts: { handshakeMs?: number; idleMs?: number } = {},
 ): Promise<void> {
   const query = new URLSearchParams({ max_bytes: String(64 * 1024) })
   if (after) {
@@ -343,13 +365,30 @@ export async function streamContent(
     query.set('after', String(after.sequence))
   }
   const endpoint = `/api/v1/sessions/${encodeURIComponent(sessionId)}/content/${encodeURIComponent(resourceId)}/stream?${query}`
-  const response = await apiResponse(apiUrl(endpoint), { signal, headers: { accept: 'text/event-stream' } })
-  if (!response.body) throw new Error(i18n.global.t('errors.content.streamingUnavailable'))
-  const reader = response.body.getReader()
+  // A half-open content connection must not leave the reply loading forever.
+  // The server emits a heartbeat every 15s; reset this watchdog on every byte,
+  // including comments, rather than imposing a total response duration.
+  const controller = new AbortController()
+  const combined = AbortSignal.any([signal, controller.signal])
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const arm = (ms: number) => {
+    clearTimeout(timer)
+    timer = setTimeout(
+      () => controller.abort(new Error(i18n.global.t('errors.content.connectionClosedBeforeCursor'))),
+      ms,
+    )
+  }
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
   const decoder = new TextDecoder()
   const frames = new SseFrames()
   try {
-    while (!signal.aborted) {
+    combined.throwIfAborted()
+    arm(timeouts.handshakeMs ?? 15_000)
+    const response = await apiResponse(apiUrl(endpoint), { signal: combined, headers: { accept: 'text/event-stream' } })
+    if (!response.body) throw new Error(i18n.global.t('errors.content.streamingUnavailable'))
+    reader = response.body.getReader()
+    while (!combined.aborted) {
+      arm(timeouts.idleMs ?? 45_000)
       const { value, done } = await reader.read()
       if (done) break
       for (const frame of frames.push(decoder.decode(value, { stream: true }))) {
@@ -367,12 +406,25 @@ export async function streamContent(
           const failure = JSON.parse(body)
           throw new Error(failure.problem?.user?.fallback || 'Content is unavailable')
         }
-        if (event === 'content') onPage(JSON.parse(body) as ContentPage)
+        if (event === 'content') {
+          const page = JSON.parse(body) as ContentPage
+          onPage(page)
+          if (
+            page.resource.state !== 'active' &&
+            !page.has_more &&
+            page.next_cursor.epoch === page.resource.cursor.epoch &&
+            page.next_cursor.sequence >= page.resource.cursor.sequence
+          )
+            return
+        }
       }
     }
+    combined.throwIfAborted()
   } finally {
-    await reader.cancel().catch(() => {})
-    reader.releaseLock()
+    clearTimeout(timer)
+    controller.abort()
+    await reader?.cancel().catch(() => {})
+    reader?.releaseLock()
   }
 }
 export type ContentFormat = 'plain' | 'markdown' | 'code' | 'diff' | 'json'

@@ -249,6 +249,44 @@ async fn explicit_list_refresh_revalidates_even_with_a_live_revision_lease() {
 }
 
 #[tokio::test]
+async fn conversation_reads_do_not_trust_a_project_global_stream() {
+    for resource in ["session:6:state", "session:6:parts", "part:8"] {
+        let server = Fixture::new("127.0.0.1:0", "unused", Some(r#"{"state":"completed"}"#)).await;
+        let client = AgenaClient::new(&server.url).unwrap();
+        let url = client.endpoint("/api/v1/sessions/6/state");
+        {
+            let mut reads = client.reads.lock().await;
+            reads.global_live_users.store(1, Ordering::Release);
+            reads.checked_at = Some(Instant::now());
+            reads.versions.insert(resource.to_owned(), "old".to_owned());
+            reads.remember(
+                format!("{resource}\n{url}"),
+                CachedRead {
+                    resource: resource.to_owned(),
+                    token: "old".to_owned(),
+                    etag: "\"old\"".to_owned(),
+                    value: serde_json::json!({"state":"running"}),
+                    bytes: 64,
+                    used: 0,
+                    generation: 0,
+                },
+            );
+        }
+        // A live global/project feed deliberately omits workspace-free Bot
+        // sessions. An explicit read must not reuse their stale cached body.
+        let fresh: serde_json::Value = client.conditional_json(resource, url, false).await.unwrap();
+        assert_eq!(fresh["state"], "completed", "stale body for {resource}");
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"old\"")
+        );
+    }
+}
+
+#[tokio::test]
 #[ignore = "invoked by proxy tests in a process with isolated environment"]
 async fn proxy_environment_child() {
     let mode = std::env::var("AGENA_CLIENT_TEST_MODE").unwrap();

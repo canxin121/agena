@@ -179,9 +179,12 @@ const showWorkspacePaneDropTargets = computed(
     !isGroupPaneResizing.value &&
     (Boolean(String(ui.workspaceWindowDragId || '').trim()) || isWorkspaceDropDragActive.value),
 )
+// Standalone plugin applications have no second plugin directory/sidebar.
+// Keep the user's expansion preference for the original Settings and Chat views.
+const desktopSidebarExpanded = computed(() => ui.isSidebarOpen && mainTabFromPath(route.path) !== 'plugins')
 const desktopSidebarRenderWidth = computed(() => {
   if (!showDesktopSidebarHost.value) return 0
-  if (ui.isSidebarOpen) return ui.sidebarWidth
+  if (desktopSidebarExpanded.value) return ui.sidebarWidth
   return DESKTOP_SIDEBAR_COLLAPSED_WIDTH
 })
 
@@ -708,7 +711,7 @@ watch(
           ]"
         >
           <div
-            v-if="ui.isSidebarOpen"
+            v-if="desktopSidebarExpanded"
             role="separator"
             aria-orientation="vertical"
             :aria-label="String(t('header.windowTabs.resizingSidebar'))"
@@ -726,10 +729,10 @@ watch(
             class="relative h-full min-h-0"
             :class="{ 'oc-sidebar-host-resizing': isLeftSidebarResizing }"
           >
-            <AppDesktopSidebar :expanded="ui.isSidebarOpen" :resizing="isLeftSidebarResizing" />
+            <AppDesktopSidebar :expanded="desktopSidebarExpanded" :resizing="isLeftSidebarResizing" />
 
             <div
-              v-if="ui.isSidebarOpen && isLeftSidebarResizing"
+              v-if="desktopSidebarExpanded && isLeftSidebarResizing"
               class="oc-sidebar-resize-overlay pointer-events-none absolute inset-0 z-20 flex items-center justify-center px-3"
             >
               <div class="flex flex-col items-center gap-2 text-center">

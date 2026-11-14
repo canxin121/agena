@@ -65,7 +65,7 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/plugins',
-    component: () => import('./pages/PluginAppPage.vue'),
+    component: () => import('./pages/PluginSettingsEntry.vue'),
     meta: { shellSidebar: 'none', mobilePanel: 'plugins' },
   },
   {

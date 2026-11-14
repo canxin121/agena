@@ -54,7 +54,11 @@ import {
 } from '@/lib/pluginOperations'
 import { useChatStore } from '@/stores/chat'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
-import { pluginPagePath } from '@/features/pluginWeb/model'
+import {
+  pluginInteractionPages,
+  pluginInteractionLocation,
+  type PluginInteractionPage,
+} from '@/features/pluginWeb/settingsEntry'
 import type { PluginPageCatalogItem } from '@/features/pluginWeb/sdk'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -478,12 +482,19 @@ const selectedCommands = computed(() =>
   ),
 )
 const selectedWebPages = computed(() =>
-  (catalog.value?.catalog?.web_pages || []).filter((page) => page.plugin_id === selectedPluginId.value),
+  pluginInteractionPages(selectedPluginId.value, catalog.value?.catalog?.web_pages || []),
 )
 
-async function openWebPage(page: PluginPageCatalogItem) {
+async function openWebPage(page: PluginInteractionPage) {
+  if (page.plugin_id !== selectedPluginId.value || selectedStatus.value?.state !== 'running') return
+  if (!(await canLeavePlugin())) return
+  if (page.plugin_id !== selectedPluginId.value || selectedStatus.value?.state !== 'running' || settingsSaving.value)
+    return
+  // Opening the application leaves the settings view. Only discard a draft
+  // after the existing confirmation has explicitly permitted leaving.
+  if (settingsDirty.value) discardSettings()
   await workspaceNavigation.openWorkspaceLocation('plugins', {
-    path: pluginPagePath(page.plugin_id, page.page_id),
+    ...pluginInteractionLocation(page, activeTab.value),
     title: page.title,
   })
 }
@@ -1108,18 +1119,23 @@ defineExpose({ refresh })
               <p v-if="selectedSummary" class="mt-2 break-words text-xs leading-relaxed text-muted-foreground">
                 {{ selectedSummary }}
               </p>
-              <div v-if="selectedWebPages.length" class="mt-3 flex flex-wrap gap-2">
-                <Button
-                  v-for="page in selectedWebPages"
-                  :key="page.page_id"
-                  size="sm"
-                  variant="outline"
-                  data-plugin-open-page
-                  @click="openWebPage(page)"
-                >
-                  {{ $t('pluginWeb.open') }} · {{ page.title }}
-                  <RiArrowRightLine class="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
-                </Button>
+              <div v-if="selectedWebPages.length" class="mt-3 space-y-2" data-plugin-app-links>
+                <p class="text-xs font-medium text-muted-foreground">{{ $t('pluginWeb.interactivePages') }}</p>
+                <div class="flex flex-wrap gap-2">
+                  <Button
+                    v-for="page in selectedWebPages"
+                    :key="page.page_id"
+                    size="sm"
+                    variant="outline"
+                    data-plugin-open-page
+                    :data-plugin-app="page.page_id"
+                    :disabled="selectedStatus.state !== 'running' || settingsSaving"
+                    @click="openWebPage(page)"
+                  >
+                    {{ $t('pluginWeb.open') }} · {{ page.title }}
+                    <RiArrowRightLine class="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                  </Button>
+                </div>
               </div>
             </div>
           </header>

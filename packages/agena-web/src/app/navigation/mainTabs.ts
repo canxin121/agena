@@ -1,5 +1,6 @@
 export type MainTabId = 'chat' | 'files' | 'preview' | 'terminal' | 'git' | 'settings' | 'bot' | 'plugins'
-export type NavigationMainTabId = Exclude<MainTabId, 'settings'>
+export type NavigationMainTabId = Exclude<MainTabId, 'settings' | 'plugins'>
+export type PrimaryMainTabId = Exclude<MainTabId, 'plugins'>
 
 export type MainTabDef<T extends MainTabId = MainTabId> = {
   id: T
@@ -18,7 +19,12 @@ export const WORKSPACE_MAIN_TABS: MainTabDef[] = [
   { id: 'settings', path: '/settings', labelKey: 'nav.settings' },
 ]
 
-export const MAIN_TABS: MainTabDef<NavigationMainTabId>[] = WORKSPACE_MAIN_TABS.filter(
+// Plugin applications remain addressable workspace tabs, but are opened from
+// Settings → Plugins and never add a second top-level plugin directory.
+export const PRIMARY_MAIN_TABS: MainTabDef<PrimaryMainTabId>[] = WORKSPACE_MAIN_TABS.filter(
+  (tab): tab is MainTabDef<PrimaryMainTabId> => tab.id !== 'plugins',
+)
+export const MAIN_TABS: MainTabDef<NavigationMainTabId>[] = PRIMARY_MAIN_TABS.filter(
   (tab): tab is MainTabDef<NavigationMainTabId> => tab.id !== 'settings',
 )
 

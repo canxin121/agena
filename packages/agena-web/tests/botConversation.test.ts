@@ -141,7 +141,7 @@ describe('canonical Bot conversation', () => {
   })
 
   test('Bot remains a primary desktop/mobile destination and Task is absent', () => {
-    expect(MAIN_TABS.map((tab) => tab.id)).toEqual(['bot', 'chat', 'files', 'preview', 'terminal', 'git', 'plugins'])
+    expect(MAIN_TABS.map((tab) => tab.id)).toEqual(['bot', 'chat', 'files', 'preview', 'terminal', 'git'])
     expect(mainTabFromPath('/bot')).toBe('bot')
     expect(mainTabPath('bot')).toBe('/bot')
     expect(WORKSPACE_MAIN_TABS.some((tab) => String(tab.id) === 'tasks')).toBe(false)

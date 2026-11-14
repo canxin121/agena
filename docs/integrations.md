@@ -197,7 +197,7 @@ signature = "sha256=" + HMAC_SHA256(
 
 ### 多 Bot 工作台
 
-登录 Agena Web 后打开 **插件 → Telegram**，或访问 `/plugins/agena.telegram/manage`。左侧可以添加、切换、重命名、停用和移除多个 Telegram Bot；每个 Bot 独立保存连接身份、凭据、同步位置、聊天目录和诊断信息，单实例最多配置 32 个 Bot。
+登录 Agena Web 后打开 **设置 → 插件与工具 → 插件工作台**，选中 **agena.telegram**，点击详情顶部的 **打开交互页面 · Telegram**；也可以直接访问 `/plugins/agena.telegram/manage`。左侧可以添加、切换、重命名、停用和移除多个 Telegram Bot；每个 Bot 独立保存连接身份、凭据、同步位置、聊天目录和诊断信息，单实例最多配置 32 个 Bot。
 
 每个 Bot 的界面分成四个区域：
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line, RiApps2Line } from '@remixicon/vue'
+import { RiRobot2Line } from '@remixicon/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -16,7 +16,7 @@ import {
 
 import ChatSidebar from '@/layout/ChatSidebar.vue'
 import BotSidebar from '@/layout/BotSidebar.vue'
-import { WORKSPACE_MAIN_TABS, mainTabFromPath, type MainTabId } from '@/app/navigation/mainTabs'
+import { PRIMARY_MAIN_TABS, mainTabFromPath, type MainTabId, type PrimaryMainTabId } from '@/app/navigation/mainTabs'
 import { WORKSPACE_SIDEBAR_PANEL_HOST_ID } from '@/layout/workspaceSidebarHost'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
@@ -65,12 +65,11 @@ const activeTab = computed<MainTabId>(() => {
   return mainTabFromPath(String(route.path || ''))
 })
 
-const NAV_ICONS: Record<MainTabId, Component> = {
+const NAV_ICONS: Record<PrimaryMainTabId, Component> = {
   bot: RiRobot2Line,
   chat: RiChat4Line,
   files: RiFolder6Line,
   preview: RiGlobalLine,
-  plugins: RiApps2Line,
   terminal: RiTerminalBoxLine,
   git: RiGitMergeLine,
   settings: RiSettings3Line,
@@ -96,7 +95,7 @@ function getRememberedSettingsRoute(): string {
 function routeForTab(tabId: MainTabId): string {
   return tabId === 'settings'
     ? getRememberedSettingsRoute()
-    : (WORKSPACE_MAIN_TABS.find((item) => item.id === tabId)?.path ?? '/chat')
+    : (PRIMARY_MAIN_TABS.find((item) => item.id === tabId)?.path ?? '/chat')
 }
 
 function refreshDiffFileCount() {
@@ -125,7 +124,7 @@ onBeforeUnmount(() => {
 })
 
 const navItems = computed<NavItem[]>(() =>
-  WORKSPACE_MAIN_TABS.map((tab) => ({
+  PRIMARY_MAIN_TABS.map((tab) => ({
     id: tab.id,
     label: String(t(tab.labelKey)),
     to: routeForTab(tab.id),
@@ -207,7 +206,7 @@ async function activateRailItem(tabId: MainTabId) {
 <template>
   <div class="flex h-full min-h-0 overflow-hidden bg-sidebar text-sidebar-foreground">
     <div class="flex h-full w-[76px] shrink-0 flex-col border-r border-sidebar-border/70 bg-sidebar/95 px-2 py-3">
-      <div class="mb-3 flex justify-center">
+      <div v-if="activeTab !== 'plugins'" class="mb-3 flex justify-center">
         <button
           type="button"
           class="flex h-11 w-11 items-center justify-center rounded-2xl border border-sidebar-border/70 bg-background/60 text-foreground transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

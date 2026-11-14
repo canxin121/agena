@@ -300,27 +300,54 @@ async function main() {
         assert.ok(!item.url().includes(token), 'asset URL must not carry the host credential')
       }
     })
-    await page.goto(origin + '/plugins')
+    await page.goto(
+      origin +
+        '/settings/plugins-tools?view=plugin-workbench&plugin=' +
+        encodeURIComponent(pluginId) +
+        '&pluginTab=commands',
+    )
     await page.locator('#password').fill(password)
     await page.locator('#password').press('Enter')
-    // Enter through the actual primary navigation after authentication, rather
-    // than coupling plugin lifecycle coverage to first-login landing policy.
-    await page.locator('[data-main-nav-tab="plugins"]').waitFor({ timeout: 30000 })
-    await page.locator('[data-main-nav-tab="plugins"]').click()
-    await page.locator('[data-plugin-page-link]').filter({ hasText: /./ }).first().waitFor({ timeout: 30000 })
-    await page.locator('[data-plugin-page-link]').first().click()
-    await page.locator('[data-plugin-web-state="ready"]').waitFor({ timeout: 30000 })
-    await page.locator('[data-plugin-dashboard]').waitFor()
+    const appLaunch = page.locator('[data-plugin-open-page][data-plugin-app="' + pageId + '"]:visible')
+    await appLaunch.waitFor({ timeout: 30000 })
+    assert.equal(await page.locator('[data-main-nav-tab="plugins"]').count(), 0, 'no primary plugin navigation')
+    assert.equal(await page.locator('[data-plugin-inventory]').count(), 0, 'no second plugin directory')
+    assert.ok(
+      (await page.locator('[data-plugin-detail] [role="tab"][aria-selected="true"]').textContent()).includes(
+        'Commands',
+      ),
+    )
+    await page.screenshot({ path: path.join(temporary, 'settings-app-launch.png'), fullPage: true })
+    await appLaunch.click()
+    await page.locator('[data-plugin-web-page]:visible[data-plugin-web-state="ready"]').waitFor({ timeout: 30000 })
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard]').waitFor()
     assert.ok(page.url().includes(pageRoute))
-    check('real login, plugin directory, workspace navigation, and native module mount')
+    assert.equal(new URL(page.url()).searchParams.get('settingsTab'), 'commands')
+    assert.equal(
+      await page.locator('[data-plugin-nav]').count(),
+      0,
+      'application does not render a cross-plugin sidebar',
+    )
+    check('original plugin settings open interactive pages with no separate primary plugin directory')
+
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-return-settings]').click()
+    await appLaunch.waitFor({ timeout: 30000 })
+    assert.ok(new URL(page.url()).pathname === '/settings/plugins-tools')
+    assert.equal(new URL(page.url()).searchParams.get('plugin'), pluginId)
+    assert.equal(new URL(page.url()).searchParams.get('pluginTab'), 'commands')
+    await appLaunch.click()
+    await page.locator('[data-plugin-web-page]:visible[data-plugin-web-state="ready"]').waitFor({ timeout: 30000 })
+    check('return from the application restores the same plugin and original settings tab')
 
     const title = 'Browser-verified item'
-    await page.locator('[data-plugin-dashboard] [data-action="new"]').first().click()
-    await page.locator('[data-plugin-dashboard] [name="title"]').fill(title)
-    await page.locator('[data-plugin-dashboard] [name="description"]').fill('Saved by the installed plugin backend.')
-    await page.locator('[data-plugin-dashboard] [name="priority"]').selectOption('high')
-    await page.locator('[data-plugin-dashboard] [data-action="save"]').click()
-    await page.locator('[data-task-item]').filter({ hasText: title }).waitFor()
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [data-action="new"]').first().click()
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [name="title"]').fill(title)
+    await page
+      .locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [name="description"]')
+      .fill('Saved by the installed plugin backend.')
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [name="priority"]').selectOption('high')
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [data-action="save"]').click()
+    await page.locator('[data-plugin-web-page]:visible [data-task-item]').filter({ hasText: title }).waitFor()
     // Initial UI preferences may reload the runtime after installation. The
     // out-of-band assertion must use the current catalog, just as the UI SDK does.
     entry = await until(catalog, Boolean, 'current installed page generation')
@@ -330,8 +357,8 @@ async function main() {
     check('native page mutation persists through the plugin backend')
     await page.screenshot({ path: path.join(temporary, 'desktop-before-refresh.png'), fullPage: true })
     await page.reload()
-    await page.locator('[data-plugin-web-state="ready"]').waitFor()
-    await page.locator('[data-task-item]').filter({ hasText: title }).waitFor()
+    await page.locator('[data-plugin-web-page]:visible[data-plugin-web-state="ready"]').waitFor()
+    await page.locator('[data-plugin-web-page]:visible [data-task-item]').filter({ hasText: title }).waitFor()
     check('custom page edits reach the plugin backend and survive deep-link refresh')
     for (const close of await page.locator('[data-sonner-toast] [data-close-button]').all()) {
       if (await close.isVisible()) await close.click()
@@ -348,10 +375,14 @@ async function main() {
       page: document.documentElement.scrollWidth,
     }))
     assert.ok(width.page <= width.viewport + 1, 'mobile document must not overflow: ' + JSON.stringify(width))
-    await page.locator('[data-plugin-dashboard] [data-action="new"]').first().click()
-    await page.locator('[data-plugin-dashboard] [name="title"]').fill('Keyboard dismissal')
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [data-action="new"]').first().click()
+    await page
+      .locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [name="title"]')
+      .fill('Keyboard dismissal')
     await page.keyboard.press('Escape')
-    await page.locator('[data-plugin-dashboard] [name="title"]').waitFor({ state: 'hidden' })
+    await page
+      .locator('[data-plugin-web-page]:visible [data-plugin-dashboard] [name="title"]')
+      .waitFor({ state: 'hidden' })
     check('desktop and mobile layouts, theme changes, and keyboard dismissal')
 
     await page.setViewportSize({ width: 1440, height: 1000 })
@@ -365,39 +396,76 @@ async function main() {
       'open page remount after reload',
       30000,
     )
-    await page.locator('[data-plugin-web-state="ready"]').waitFor()
-    await page.locator('[data-task-item]').filter({ hasText: title }).waitFor()
+    await page.locator('[data-plugin-web-page]:visible[data-plugin-web-state="ready"]').waitFor()
+    await page.locator('[data-plugin-web-page]:visible [data-task-item]').filter({ hasText: title }).waitFor()
     check('runtime reload retires old calls and remounts the open page with persisted data')
 
     const enabledPath = 'plugins.list."' + pluginId + '".enabled'
     await api('PUT', '/api/v1/settings', { path: enabledPath, value: false, reload: true })
     await until(catalog, (value) => !value, 'disabled plugin removed from catalog', 60000)
-    await page.locator('[data-plugin-web-state="unavailable"]').waitFor({ timeout: 30000 })
+    await page
+      .locator('[data-plugin-web-page]:visible[data-plugin-web-state="unavailable"]')
+      .waitFor({ timeout: 30000 })
     assert.equal((await request('GET', entry.entry_url, undefined, false)).status, 404)
-    await page.locator('[data-plugin-dashboard]').waitFor({ state: 'detached' })
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-dashboard]').waitFor({ state: 'detached' })
     await api('PUT', '/api/v1/settings', { path: enabledPath, value: true, reload: true })
     entry = await until(catalog, Boolean, 're-enabled plugin catalog', 60000)
-    await page.locator('[data-plugin-web-state="ready"]').waitFor({ timeout: 30000 })
-    await page.locator('[data-task-item]').filter({ hasText: title }).waitFor()
+    await page.locator('[data-plugin-web-page]:visible[data-plugin-web-state="ready"]').waitFor({ timeout: 30000 })
+    await page.locator('[data-plugin-web-page]:visible [data-task-item]').filter({ hasText: title }).waitFor()
     check('disable and re-enable clean up the mounted page and restore its data')
 
     await task(await api('POST', '/api/v1/plugins/marketplace/uninstall', { plugin_id: pluginId }))
     await task(await api('POST', '/api/v1/runtime/reload'))
     await until(catalog, (value) => !value, 'uninstalled page removed from catalog')
-    await page.locator('[data-plugin-web-state="unavailable"]').waitFor({ timeout: 30000 })
+    await page
+      .locator('[data-plugin-web-page]:visible[data-plugin-web-state="unavailable"]')
+      .waitFor({ timeout: 30000 })
     assert.equal((await request('GET', entry.entry_url, undefined, false)).status, 404)
     assert.deepEqual(pageErrors, [], 'browser JavaScript errors')
     check('uninstall revokes page discovery and resources without browser errors')
 
     // The all-plugin hub shows builtins even when they export no Web assets.
     await page.goto(origin + '/plugins')
-    await page.locator('[data-plugin-entry="agena.telegram"]').waitFor({ timeout: 30000 })
-    assert.ok((await api('GET', '/api/v1/plugins')).items.some((item) => item.plugin_id === 'agena.telegram'))
-    await page.locator('[data-plugin-entry="agena.telegram"]').click()
-    await page.locator('[data-plugin-web-state="telegram"]').waitFor({ timeout: 30000 })
-    await page.locator('[data-testid="telegram-connection"]').waitFor()
+    await page.waitForURL((url) => url.pathname === '/settings/plugins-tools', { timeout: 30000 })
+    await page.locator('[data-plugin-workbench]').waitFor()
+    assert.equal(await page.locator('[data-main-nav-tab="plugins"]').count(), 0)
+    check('the former plugin-directory address opens the original settings instead of another catalog')
+
+    await page.goto(origin + '/settings/plugins-tools?view=plugin-workbench&plugin=agena.telegram&pluginTab=settings')
+    const nativeLaunch = page.locator('[data-plugin-open-page][data-plugin-app="manage"]:visible')
+    await nativeLaunch.waitFor({ timeout: 30000 })
+    const input = page.locator('[data-plugin-detail] [data-setting-path] input[type="text"]:visible').first()
+    await input.waitFor()
+    const beforeDraft = await input.inputValue()
+    await input.fill(beforeDraft + '_unsaved')
+    await nativeLaunch.click()
+    await page.getByRole('button', { name: 'Keep editing', exact: true }).last().click()
+    assert.equal(new URL(page.url()).pathname, '/settings/plugins-tools')
+    assert.equal(await input.inputValue(), beforeDraft + '_unsaved')
+    await input.fill(beforeDraft)
+    await page.screenshot({ path: path.join(temporary, 'telegram-settings-launch.png'), fullPage: true })
+    await nativeLaunch.click()
+    await page.locator('[data-plugin-web-page]:visible [data-testid="telegram-manager"]').waitFor({ timeout: 30000 })
     assert.ok(page.url().includes('/plugins/agena.telegram/manage'))
-    check('all-plugin directory discovers Telegram without surface.web and opens native manager')
+    assert.equal(new URL(page.url()).searchParams.get('settingsTab'), 'settings')
+    await page.locator('[data-plugin-web-page]:visible [data-plugin-return-settings]').click()
+    await nativeLaunch.waitFor()
+    assert.equal(new URL(page.url()).searchParams.get('plugin'), 'agena.telegram')
+    assert.equal(new URL(page.url()).searchParams.get('pluginTab'), 'settings')
+    check('Telegram opens from its original settings and unsaved settings are protected before launching')
+
+    await page.setViewportSize({ width: 390, height: 844 })
+    await nativeLaunch.waitFor()
+    assert.equal(await page.locator('a[href="/plugins"]').count(), 0, 'no mobile primary plugin entry')
+    await nativeLaunch.click()
+    await page.locator('[data-plugin-web-page]:visible [data-testid="telegram-manager"]').waitFor()
+    assert.ok(
+      await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1),
+      'mobile app entry must not overflow',
+    )
+    await page.screenshot({ path: path.join(temporary, 'telegram-settings-app-mobile.png'), fullPage: true })
+    assert.deepEqual(pageErrors, [])
+    check('settings-first launch also works on mobile with zero browser errors')
   } catch (error) {
     failure = error
     console.error(error.stack || error)

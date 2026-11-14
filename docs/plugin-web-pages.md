@@ -1,6 +1,6 @@
 # 插件 Web 页面
 
-插件可以在同一个发布包中提供后端代码和原生 Web 客户端模块。安装并启用后，Agena 根据插件声明展示页面入口，加载插件自己的 JavaScript 和 CSS，并通过宿主 SDK 调用插件命令。新增插件页面无需重新构建 Agena Web。
+插件可以在同一个发布包中提供后端代码和原生 Web 客户端模块。安装并启用后，Agena 在原有“设置 → 插件与工具”的插件详情中，根据插件声明展示交互页面入口，加载插件自己的 JavaScript 和 CSS，并通过宿主 SDK 调用插件命令。新增插件页面无需重新构建 Agena Web。
 
 完整示例位于 [Workspace board](../examples/web_dashboard_plugin_stdio/README.md)。它包含独立 stdio 后端、可持久化的任务看板、多文件 ES module、主题与语言适配、响应式布局和清理逻辑。
 
@@ -155,14 +155,17 @@ const unsubscribe = sdk.subscribeEnvironment(({ theme, locale }) => {
 
 `scope = "session"` 的页面绑定真实会话上下文，适合需要项目目录或会话状态的 Method 命令。后端使用宿主能力时，项目路径和网络权限申请继续走会话权限链。需要项目的操作必须使用实际项目会话，不能构造占位会话 ID。页面命令入口只执行声明的 Method 命令，不接受 Tool target。
 
-## 插件目录与内置管理页
+## 从原有插件设置打开交互页面
 
-Web `/plugins` 汇合两份独立的权威目录：
+插件的唯一管理入口仍为 **设置 → 插件与工具 → 插件工作台**（`/settings/plugins-tools?view=plugin-workbench`）。原有插件列表、概览、设置、工具、命令、Hooks、日志和诊断保留。主侧栏和手机底栏不增加独立“插件”入口，应用页也不再显示另一份跨插件目录。
 
-- `GET /api/v1/plugins` 列出所有运行时插件（包括 `static`、`stdio`、`cdylib` 等类型）。没有独立 Web 页面的插件依然可被发现，点击后进入现有的插件设置工作台。
-- `GET /api/v1/plugins/surface` 的 `catalog.web_pages` 列出插件自己声明的可挂载 Web 模块。一个插件可以有多个页面。
+选中插件后，详情顶部的 **交互页面** 区域列出该插件可打开的页面。点击 **打开交互页面** 后进入独立应用标签；页面顶部的 **返回插件设置** 回到原插件及打开前的设置标签。配置尚未保存时，先使用原有的未保存修改确认，取消后留在编辑器中。未提供交互页面的插件继续使用原来的设置和能力面板。
 
-内置 `agena.telegram` 的 `/plugins/agena.telegram/manage` 页面由 Agena 宿主提供，复用已有插件设置、命令与集成绑定 API。其管理界面不属于第三方发布包，也不要求 Telegram 插件声明 `surface.web`。这类内置管理页必须检查对应插件仍存在于运行时目录，不能在插件卸载或禁用后继续冒用其身份。Telegram 多 Bot 工作台将 Bot ID、管理会话与当前区域保存在深链接中，通过插件命令读写私有 Bot 注册表、独立凭据存储和持久收件队列。聊天发现与授权响应分别展示，多个 Bot 的相同 Chat ID 不合并。Telegram 配置、会话成员与频道权限的操作说明见 [集成说明](integrations.md#内置-telegram-渠道插件)。
+插件可以提供多个交互页面，详情中分别列出；应用页仅允许在同一插件的页面之间切换。会话作用域页面需要显式选择项目会话，插件实例页面不会自动继承当前聊天。旧 `/plugins` 地址直接打开原插件设置，不再展示独立插件目录。
+
+宿主读取两份已有目录：`GET /api/v1/plugins` 提供插件运行状态，`GET /api/v1/plugins/surface` 的 `catalog.web_pages` 提供可挂载 Web 模块。运行状态非 running 时禁用打开按钮；应用卸载、停用或加载失败后，可从页面返回该插件设置排查。
+
+内置 `agena.telegram` 的 `/plugins/agena.telegram/manage` 页面由宿主提供，复用插件命令与集成绑定 API，无需声明外部 `surface.web`。在原有插件设置中选中 **agena.telegram**，同样可以打开 Telegram 交互页面。多 Bot、私聊、群组、频道、权限和消息管理功能保持不变。操作说明见 [集成说明](integrations.md#内置-telegram-渠道插件)。
 
 ## 服务端边界
 

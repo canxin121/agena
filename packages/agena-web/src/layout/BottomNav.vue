@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line, RiApps2Line } from '@remixicon/vue'
+import { RiRobot2Line } from '@remixicon/vue'
 import { computed, type Component } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
@@ -15,7 +15,6 @@ const TAB_ICONS: Record<NavigationMainTabId, Component> = {
   bot: RiRobot2Line,
   files: RiFolder6Line,
   preview: RiGlobalLine,
-  plugins: RiApps2Line,
   terminal: RiTerminalBoxLine,
   git: RiGitMergeLine,
 }

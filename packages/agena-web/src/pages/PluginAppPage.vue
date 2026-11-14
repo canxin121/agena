@@ -2,33 +2,28 @@
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import {
-  RiArrowLeftLine,
-  RiArrowRightUpLine,
-  RiApps2Line,
-  RiErrorWarningLine,
-  RiLoader4Line,
-  RiRefreshLine,
-  RiSearchLine,
-  RiSettings3Line,
-  RiSendPlane2Line,
-} from '@remixicon/vue'
+import { RiArrowLeftLine, RiApps2Line, RiErrorWarningLine, RiLoader4Line, RiRefreshLine } from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
-import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
-import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import { useUiStore } from '@/stores/ui'
 import { useChatStore } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
 import { apiJson, apiUrl } from '@/lib/api'
 import { usePluginWebCatalog } from '@/features/pluginWeb/catalog'
-import { pluginHubEntries, TELEGRAM_PAGE_ID, TELEGRAM_PLUGIN_ID, type PluginHubEntry } from '@/features/pluginWeb/hub'
+import { TELEGRAM_PAGE_ID, TELEGRAM_PLUGIN_ID } from '@/features/pluginWeb/hub'
+import {
+  pluginInteractionPages,
+  pluginInteractionLocation,
+  pluginSettingsLocation,
+  pluginReturnTab,
+  type PluginInteractionPage,
+} from '@/features/pluginWeb/settingsEntry'
 import { createPluginUI } from '@/features/pluginWeb/createSdk'
 import { PluginPageMount } from '@/features/pluginWeb/mount'
 import { usePluginSessionRefresh } from '@/features/pluginWeb/usePluginSessionRefresh'
-import { pluginAssetUrl, pluginPageKey, pluginPagePath, pluginPageSession } from '@/features/pluginWeb/model'
+import { pluginAssetUrl, pluginPagePath, pluginPageSession } from '@/features/pluginWeb/model'
 import type { PluginPageCatalogItem, PluginUIEnvironment } from '@/features/pluginWeb/sdk'
 
 const TelegramManager = defineAsyncComponent(() => import('@/features/telegram/TelegramManager.vue'))
@@ -51,24 +46,7 @@ const selected = computed(() =>
 const sessionId = computed(() =>
   selected.value?.scope === 'session' ? pluginPageSession(location.value.query.sessionId) : null,
 )
-const search = ref('')
-const pages = computed(() => {
-  const query = search.value.trim().toLocaleLowerCase()
-  return [...catalog.pages]
-    .filter((page) => !query || `${page.title} ${page.plugin_id}`.toLocaleLowerCase().includes(query))
-    .sort((a, b) => a.title.localeCompare(b.title, String(locale.value)))
-})
-const allPlugins = computed(() => pluginHubEntries(catalog.plugins, catalog.pages, String(locale.value)))
-const entries = computed(() => {
-  const query = search.value.trim().toLocaleLowerCase()
-  return allPlugins.value.filter(
-    (entry) =>
-      !query ||
-      `${entry.plugin_id} ${entry.title} ${entry.summary} ${entry.state} ${entry.pages.map((page) => page.title).join(' ')}`
-        .toLocaleLowerCase()
-        .includes(query),
-  )
-})
+const applicationPages = computed(() => pluginInteractionPages(pluginId.value, catalog.pages))
 const isTelegram = computed(
   () =>
     pluginId.value === TELEGRAM_PLUGIN_ID &&
@@ -77,9 +55,6 @@ const isTelegram = computed(
 )
 const telegramStatus = computed(() => catalog.plugins.find((plugin) => plugin.plugin_id === TELEGRAM_PLUGIN_ID))
 const telegramSource = computed(() => pluginPageSession(location.value.query.source))
-const showSidebar = computed(
-  () => !ui.isCompactLayout && !isEmbeddedWorkspacePaneContext(location.value.query) && (!pane || pane.isFocused.value),
-)
 const container = ref<HTMLElement>()
 const mountError = ref('')
 const mounting = ref(false)
@@ -106,9 +81,9 @@ const mounts = new PluginPageMount(() => {
 })
 
 const state = computed(() => {
-  if (!pluginId.value) return 'library'
+  if (!pluginId.value) return 'unavailable'
   if (!catalog.loaded) return catalog.error ? 'error' : 'loading'
-  if (isTelegram.value) return 'telegram'
+  if (isTelegram.value) return telegramStatus.value?.state === 'running' ? 'telegram' : 'unavailable'
   if (!selected.value) return 'unavailable'
   if (selected.value.scope === 'session' && sessionId.value === null) return 'no-session'
   if (mountError.value) return 'error'
@@ -140,36 +115,21 @@ async function navigate(path: string, query: Record<string, string> = {}) {
   else await router.push({ path, query })
 }
 
-async function openPage(page: PluginPageCatalogItem) {
-  const query = page.scope === 'session' && sessionId.value !== null ? { sessionId: String(sessionId.value) } : {}
-  await navigation.openWorkspaceLocation('plugins', {
-    path: pluginPagePath(page.plugin_id, page.page_id),
-    query,
-    title: page.title,
-    matchKeys: page.scope === 'session' ? ['sessionId'] : [],
-  })
+async function openPage(page: PluginInteractionPage) {
+  if (page.plugin_id !== pluginId.value) return
+  const target = pluginInteractionLocation(
+    page,
+    location.value.query.settingsTab,
+    sessionId.value === null ? undefined : String(sessionId.value),
+  )
+  await navigate(target.path, target.query)
 }
-
-async function managePlugin(id: string) {
-  await navigation.openMainTab('settings', {
-    path: '/settings/plugins-tools',
-    query: { view: 'plugin-workbench', ...(id ? { plugin: id } : {}) },
-  })
+async function selectPage(id: string) {
+  const page = applicationPages.value.find((candidate) => candidate.page_id === id)
+  if (page) await openPage(page)
 }
 async function managePlugins() {
-  await managePlugin(pluginId.value)
-}
-async function openPlugin(entry: PluginHubEntry) {
-  if (entry.native) {
-    await navigation.openWorkspaceLocation('plugins', {
-      path: pluginPagePath(entry.plugin_id, TELEGRAM_PAGE_ID),
-      title: entry.title,
-    })
-  } else if (entry.pages.length) {
-    await openPage(entry.pages[0]!)
-  } else {
-    await managePlugin(entry.plugin_id)
-  }
+  await navigation.openMainTab('settings', pluginSettingsLocation(pluginId.value, location.value.query.settingsTab))
 }
 async function updateTelegramQuery(patch: Record<string, string>) {
   const query: Record<string, string> = {}
@@ -260,10 +220,10 @@ async function loadPage() {
               (candidate) => candidate.plugin_id === page.plugin_id && candidate.page_id === nextPageId,
             )
             if (!target) throw new Error(String(t('pluginWeb.unavailableTitle')))
-            await navigate(
-              pluginPagePath(page.plugin_id, target.page_id),
-              target.scope === 'session' && ownerSession !== null ? { sessionId: String(ownerSession) } : {},
-            )
+            await navigate(pluginPagePath(page.plugin_id, target.page_id), {
+              settingsTab: pluginReturnTab(location.value.query.settingsTab),
+              ...(target.scope === 'session' && ownerSession !== null ? { sessionId: String(ownerSession) } : {}),
+            })
           },
           setTitle,
           notify: (message, tone) => toasts.push(tone, message),
@@ -293,7 +253,10 @@ async function retry() {
 
 async function selectSession(value: string) {
   if (!selected.value) return
-  await navigate(location.value.path, value ? { sessionId: value } : {})
+  await navigate(location.value.path, {
+    settingsTab: pluginReturnTab(location.value.query.settingsTab),
+    ...(value ? { sessionId: value } : {}),
+  })
 }
 
 watch(
@@ -338,76 +301,18 @@ onBeforeUnmount(() => {
     data-plugin-web-page
     :data-plugin-web-state="state"
   >
-    <Teleport v-if="showSidebar" :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR">
-      <aside class="flex h-full min-h-0 flex-col" :aria-label="t('pluginWeb.title')">
-        <div class="border-b border-sidebar-border/60 px-4 pb-4 pt-5">
-          <div class="mb-3 flex items-center gap-2">
-            <RiApps2Line class="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 class="text-sm font-semibold">{{ t('pluginWeb.title') }}</h2>
-          </div>
-          <label class="relative block">
-            <RiSearchLine
-              class="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <input
-              v-model="search"
-              type="search"
-              :aria-label="t('pluginWeb.search')"
-              :placeholder="t('pluginWeb.search')"
-              class="h-9 w-full rounded-lg border border-border/70 bg-background/70 pl-8 pr-2 text-xs outline-none focus:ring-2 focus:ring-ring"
-            />
-          </label>
-        </div>
-        <nav class="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-          <div v-for="entry in entries" :key="entry.plugin_id">
-            <button
-              type="button"
-              :data-plugin-nav="entry.plugin_id"
-              class="flex w-full min-w-0 items-center gap-2 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              :class="entry.plugin_id === pluginId ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'"
-              :aria-current="entry.plugin_id === pluginId ? 'page' : undefined"
-              @click="openPlugin(entry)"
-            >
-              <RiSendPlane2Line v-if="entry.native" class="h-4 w-4 shrink-0 text-sky-500" aria-hidden="true" />
-              <RiApps2Line v-else class="h-4 w-4 shrink-0 opacity-60" aria-hidden="true" />
-              <span class="min-w-0 flex-1">
-                <span class="block truncate text-sm font-medium">{{ entry.title }}</span>
-                <span class="mt-0.5 block truncate font-mono text-[10px] opacity-70">{{ entry.state }}</span>
-              </span>
-            </button>
-            <button
-              v-for="page in entry.pages.slice(1)"
-              :key="pluginPageKey(page)"
-              type="button"
-              class="ml-6 flex w-[calc(100%-1.5rem)] min-w-0 items-center rounded-lg px-3 py-2 text-left text-xs text-muted-foreground hover:bg-accent"
-              :class="page.plugin_id === pluginId && page.page_id === pageId ? 'bg-accent text-foreground' : ''"
-              @click="openPage(page)"
-            >
-              <span class="truncate">{{ page.title }}</span>
-            </button>
-          </div>
-          <p v-if="!entries.length" class="p-3 text-xs leading-relaxed text-muted-foreground">
-            {{ t(allPlugins.length ? 'pluginWeb.noMatches' : 'pluginWeb.emptyDescription') }}
-          </p>
-        </nav>
-        <div class="border-t border-sidebar-border/60 p-3">
-          <Button variant="ghost" size="sm" class="w-full justify-start gap-2" @click="managePlugins">
-            <RiSettings3Line class="h-4 w-4" aria-hidden="true" />{{ t('pluginWeb.manage') }}
-          </Button>
-        </div>
-      </aside>
-    </Teleport>
-
-    <header v-if="pluginId" class="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
+    <header class="flex shrink-0 flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
       <Button
         variant="ghost"
         size="sm"
         :title="t('pluginWeb.back')"
         :aria-label="t('pluginWeb.back')"
-        @click="navigate('/plugins')"
+        data-plugin-return-settings
+        @click="managePlugins"
       >
-        <RiArrowLeftLine class="h-4 w-4" aria-hidden="true" />
+        <RiArrowLeftLine class="h-4 w-4" aria-hidden="true" /><span class="hidden sm:inline">{{
+          t('pluginWeb.back')
+        }}</span>
       </Button>
       <div class="min-w-0 flex-1">
         <h1 class="truncate text-sm font-semibold">
@@ -427,152 +332,29 @@ onBeforeUnmount(() => {
       <Button
         variant="ghost"
         size="sm"
-        :disabled="mounting"
+        :disabled="mounting || catalog.loading"
         :title="t('pluginWeb.refresh')"
         :aria-label="t('pluginWeb.refresh')"
         @click="retry"
-      >
-        <RiRefreshLine class="h-4 w-4" :class="mounting ? 'animate-spin' : ''" aria-hidden="true" />
-      </Button>
+        ><RiRefreshLine class="h-4 w-4" :class="mounting || catalog.loading ? 'animate-spin' : ''" aria-hidden="true"
+      /></Button>
     </header>
-
-    <div
-      v-if="catalog.error && catalog.loaded"
-      class="flex shrink-0 items-center justify-between gap-3 border-b border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive"
-      role="status"
+    <nav
+      v-if="applicationPages.length > 1"
+      class="flex shrink-0 gap-1 overflow-x-auto border-b border-border/50 px-4 py-2"
+      :aria-label="t('pluginWeb.interactivePages')"
     >
-      <span>{{ catalog.error }}</span>
-      <button type="button" class="shrink-0 underline underline-offset-2" @click="catalog.refresh()">
-        {{ t('pluginWeb.retry') }}
-      </button>
-    </div>
-
-    <div v-if="state === 'library'" class="min-h-0 flex-1 overflow-y-auto">
-      <div class="mx-auto max-w-6xl px-5 py-7 sm:px-8 sm:py-10">
-        <div class="mb-7 flex flex-wrap items-start justify-between gap-4">
-          <div class="max-w-xl">
-            <div
-              class="mb-4 flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/15 bg-primary/8 text-primary"
-            >
-              <RiApps2Line class="h-6 w-6" aria-hidden="true" />
-            </div>
-            <h1 class="text-2xl font-semibold tracking-tight">{{ t('pluginWeb.title') }}</h1>
-            <p class="mt-2 text-sm leading-relaxed text-muted-foreground">{{ t('pluginWeb.description') }}</p>
-          </div>
-          <Button variant="outline" size="sm" class="gap-2" @click="managePlugins"
-            ><RiSettings3Line class="h-4 w-4" aria-hidden="true" />{{ t('pluginWeb.manage') }}</Button
-          >
-        </div>
-        <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
-          <p class="text-xs text-muted-foreground">{{ t('pluginWeb.count', { count: allPlugins.length }) }}</p>
-          <div class="flex items-center gap-2">
-            <input
-              v-model="search"
-              type="search"
-              :aria-label="t('pluginWeb.search')"
-              :placeholder="t('pluginWeb.search')"
-              class="h-9 w-52 max-w-full rounded-lg border border-border bg-background px-3 text-xs outline-none focus:ring-2 focus:ring-ring"
-            />
-            <Button
-              variant="ghost"
-              size="sm"
-              :disabled="catalog.loading"
-              :title="t('pluginWeb.refresh')"
-              :aria-label="t('pluginWeb.refresh')"
-              @click="catalog.refresh()"
-            >
-              <RiRefreshLine class="h-4 w-4" :class="catalog.loading ? 'animate-spin' : ''" aria-hidden="true" />
-            </Button>
-          </div>
-        </div>
-        <div v-if="entries.length" class="grid gap-4 md:grid-cols-2 xl:grid-cols-3" data-plugin-inventory>
-          <button
-            v-for="entry in entries"
-            :key="entry.plugin_id"
-            type="button"
-            :data-plugin-entry="entry.plugin_id"
-            class="group flex min-w-0 flex-col rounded-2xl border border-border/70 bg-card p-5 text-left transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            @click="openPlugin(entry)"
-          >
-            <div class="mb-5 flex w-full items-start justify-between gap-3">
-              <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-muted/60 text-primary">
-                <RiSendPlane2Line v-if="entry.native" class="h-5 w-5 text-sky-500" aria-hidden="true" />
-                <RiApps2Line v-else class="h-5 w-5" aria-hidden="true" />
-              </span>
-              <span class="rounded-md bg-muted/60 px-2 py-1 text-[10px] text-muted-foreground">{{ entry.state }}</span>
-            </div>
-            <h2 class="w-full truncate text-base font-semibold">{{ entry.title }}</h2>
-            <p
-              v-if="entry.title !== entry.plugin_id"
-              class="mt-1 w-full truncate font-mono text-[11px] text-muted-foreground"
-            >
-              {{ entry.plugin_id }}
-            </p>
-            <p class="mt-2 line-clamp-2 min-h-9 text-xs leading-relaxed text-muted-foreground">{{ entry.summary }}</p>
-            <span class="mt-5 inline-flex items-center gap-2 text-xs font-medium text-primary">
-              {{ entry.native || entry.pages.length ? t('pluginWeb.open') : t('pluginWeb.manage') }}
-              <RiArrowRightUpLine
-                class="h-3.5 w-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
-                aria-hidden="true"
-              />
-            </span>
-          </button>
-        </div>
-        <div v-if="pages.length" class="mt-8">
-          <h2 class="mb-4 text-sm font-semibold">{{ t('pluginWeb.workspaces') }}</h2>
-          <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <button
-              v-for="page in pages"
-              :key="pluginPageKey(page)"
-              type="button"
-              data-plugin-page-link
-              :data-plugin-id="page.plugin_id"
-              :data-page-id="page.page_id"
-              class="group flex min-w-0 flex-col rounded-2xl border border-border/70 bg-card p-5 text-left transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              @click="openPage(page)"
-            >
-              <div class="mb-5 flex w-full items-start justify-between gap-3">
-                <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-muted/60 text-primary"
-                  ><RiApps2Line class="h-5 w-5" aria-hidden="true"
-                /></span>
-                <span class="rounded-md bg-muted/60 px-2 py-1 text-[10px] text-muted-foreground">{{
-                  t(page.scope === 'session' ? 'pluginWeb.sessionScope' : 'pluginWeb.instanceScope')
-                }}</span>
-              </div>
-              <h2 class="w-full truncate text-base font-semibold">{{ page.title }}</h2>
-              <p class="mt-1 w-full truncate font-mono text-[11px] text-muted-foreground">{{ page.plugin_id }}</p>
-              <span class="mt-6 inline-flex items-center gap-2 text-xs font-medium text-primary"
-                >{{ t('pluginWeb.open')
-                }}<RiArrowRightUpLine
-                  class="h-3.5 w-3.5 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
-                  aria-hidden="true"
-              /></span>
-            </button>
-          </div>
-        </div>
-        <div v-else-if="!entries.length" class="rounded-2xl border border-dashed border-border px-6 py-14 text-center">
-          <RiLoader4Line
-            v-if="catalog.loading && !catalog.loaded"
-            class="mx-auto mb-4 h-7 w-7 animate-spin text-primary"
-            aria-hidden="true"
-          />
-          <RiApps2Line v-else class="mx-auto mb-4 h-9 w-9 text-muted-foreground/50" aria-hidden="true" />
-          <h2 class="text-base font-semibold">
-            {{ t(allPlugins.length ? 'pluginWeb.noMatches' : 'pluginWeb.emptyTitle') }}
-          </h2>
-          <p class="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-muted-foreground">
-            {{ catalog.error || t('pluginWeb.emptyDescription') }}
-          </p>
-          <Button v-if="search" variant="ghost" size="sm" class="mt-4" @click="search = ''">{{
-            t('pluginWeb.clearSearch')
-          }}</Button>
-          <Button v-else variant="outline" size="sm" class="mt-5" @click="managePlugins">{{
-            t('pluginWeb.manage')
-          }}</Button>
-        </div>
-      </div>
-    </div>
-
+      <Button
+        v-for="page in applicationPages"
+        :key="page.page_id"
+        size="sm"
+        :variant="page.page_id === pageId ? 'secondary' : 'ghost'"
+        :aria-pressed="page.page_id === pageId"
+        :data-plugin-sibling-page="page.page_id"
+        @click="selectPage(page.page_id)"
+        >{{ page.title }}</Button
+      >
+    </nav>
     <div v-if="state === 'telegram'" class="min-h-0 flex-1 overflow-y-auto">
       <TelegramManager
         :status="telegramStatus"
@@ -588,7 +370,7 @@ onBeforeUnmount(() => {
         @integrations="openIntegrations"
       />
     </div>
-    <div v-show="state !== 'library' && state !== 'telegram'" class="relative min-h-0 flex-1">
+    <div v-show="state !== 'telegram'" class="relative min-h-0 flex-1">
       <div
         ref="container"
         data-plugin-web-mount
@@ -598,7 +380,7 @@ onBeforeUnmount(() => {
         :inert="state !== 'ready' ? true : undefined"
       />
       <div
-        v-if="state !== 'ready' && state !== 'library'"
+        v-if="state !== 'ready'"
         class="absolute inset-0 flex items-center justify-center overflow-auto p-6"
         role="status"
       >

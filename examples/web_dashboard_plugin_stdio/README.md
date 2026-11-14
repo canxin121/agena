@@ -42,7 +42,7 @@ Merge this entry into the instance configuration's `plugins.list`, replacing bot
 }
 ~~~
 
-The instance configuration is `<data-dir>/agena.json`. Reload the instance configuration, then choose **Plugins → Workspace board**, or open:
+The instance configuration is `<data-dir>/agena.json`. Reload the instance configuration, then open **Settings → Plugins & Tools**, select **demo.web_dashboard**, and choose **Open interactive page · Workspace board**, or open:
 
 ~~~text
 /plugins/demo.web_dashboard/dashboard

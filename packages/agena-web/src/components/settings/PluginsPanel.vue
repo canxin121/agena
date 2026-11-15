@@ -4,6 +4,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } fro
 import { useI18n } from 'vue-i18n'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import {
+  RiArrowLeftLine,
   RiArrowRightLine,
   RiCheckboxCircleLine,
   RiCommandLine,
@@ -11,7 +12,6 @@ import {
   RiGitBranchLine,
   RiInformationLine,
   RiPlayLine,
-  RiPlugLine,
   RiRefreshLine,
   RiSearchLine,
   RiSettings3Line,
@@ -22,6 +22,8 @@ import {
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import PluginContractEditor from '@/components/settings/PluginContractEditor.vue'
 import PluginEmptyState from '@/components/settings/plugins/PluginEmptyState.vue'
+import PluginAvatar from '@/components/settings/plugins/PluginAvatar.vue'
+import PluginCard from '@/components/settings/plugins/PluginCard.vue'
 import PluginHooksPanel from '@/components/settings/plugins/PluginHooksPanel.vue'
 import {
   buildPluginHookEntries,
@@ -306,7 +308,7 @@ const error = ref('')
 const statuses = ref<PluginStatus[]>([])
 const catalog = ref<PluginSurfaceCatalogResponse | null>(null)
 const architecture = ref<PluginArchitectureCatalog | null>(null)
-const selectedPluginId = ref('')
+const selectedPluginId = computed(() => (typeof route.query.plugin === 'string' ? route.query.plugin.trim() : ''))
 const selectedInspect = ref<PluginInspectResponse | null>(null)
 const logs = ref<PluginLog[]>([])
 const detailLoading = ref(false)
@@ -318,7 +320,6 @@ const commandDrafts = ref<Record<string, JsonValue>>({})
 const busyCommandKey = ref('')
 const lastCommandResult = ref<PluginCommandResult | null>(null)
 const lastCommandKey = ref('')
-const pluginList = ref<HTMLElement | null>(null)
 const pluginQuery = ref('')
 const stateFilter = ref('')
 const commandQuery = ref('')
@@ -349,16 +350,6 @@ const tabs = computed<Array<{ id: PanelTab; label: string; count?: number }>>(()
 ])
 const runningCount = computed(() => statuses.value.filter((status) => status.state === 'running').length)
 const failedCount = computed(() => statuses.value.filter((status) => status.state === 'failed').length)
-const pluginOptions = computed(() =>
-  sortedStatuses.value.map((status) => ({
-    value: status.plugin_id,
-    label: status.plugin_id,
-    description: [pluginSummaries.value.get(status.plugin_id), pluginStateLabel(status.state)]
-      .filter(Boolean)
-      .join(' · '),
-  })),
-)
-
 const sortedStatuses = computed(() =>
   [...statuses.value].sort((left, right) => left.plugin_id.localeCompare(right.plugin_id)),
 )
@@ -481,20 +472,28 @@ const selectedCommands = computed(() =>
     (command) => command.plugin_id === selectedPluginId.value && command.category?.trim().toLowerCase() !== 'skill',
   ),
 )
-const selectedWebPages = computed(() =>
-  pluginInteractionPages(selectedPluginId.value, catalog.value?.catalog?.web_pages || []),
+const pluginPages = computed(
+  () =>
+    new Map(
+      statuses.value.map((status) => [
+        status.plugin_id,
+        pluginInteractionPages(status.plugin_id, catalog.value?.catalog?.web_pages || []),
+      ]),
+    ),
 )
+const selectedWebPages = computed(() => pluginPages.value.get(selectedPluginId.value) || [])
 
 async function openWebPage(page: PluginInteractionPage) {
-  if (page.plugin_id !== selectedPluginId.value || selectedStatus.value?.state !== 'running') return
+  const isAvailable = () =>
+    statuses.value.some((status) => status.plugin_id === page.plugin_id && status.state === 'running')
+  if (!isAvailable()) return
   if (!(await canLeavePlugin())) return
-  if (page.plugin_id !== selectedPluginId.value || selectedStatus.value?.state !== 'running' || settingsSaving.value)
-    return
+  if (!isAvailable() || settingsSaving.value) return
   // Opening the application leaves the settings view. Only discard a draft
   // after the existing confirmation has explicitly permitted leaving.
   if (settingsDirty.value) discardSettings()
   await workspaceNavigation.openWorkspaceLocation('plugins', {
-    ...pluginInteractionLocation(page, activeTab.value),
+    ...pluginInteractionLocation(page, selectedPluginId.value ? activeTab.value : 'overview'),
     title: page.title,
   })
 }
@@ -613,10 +612,11 @@ function clearFilters() {
   stateFilter.value = ''
 }
 
-function showFailedPlugins() {
+async function showFailedPlugins() {
+  if (selectedPluginId.value) await showPluginList()
+  if (selectedPluginId.value) return
+  pluginQuery.value = ''
   stateFilter.value = 'failed'
-  const failed = statuses.value.find((status) => status.state === 'failed')
-  if (failed) void selectPlugin(failed.plugin_id)
 }
 
 async function selectTab(tab: PanelTab) {
@@ -666,7 +666,7 @@ onBeforeRouteUpdate((to) => {
   if (
     to.params.section === 'plugins-tools' &&
     pluginTabForSettingsView(to.query.view || 'plugin-workbench') !== null &&
-    String(to.query.plugin || selectedPluginId.value) === selectedPluginId.value
+    String(to.query.plugin || '').trim() === selectedPluginId.value
   )
     return true
   return canLeavePlugin()
@@ -677,15 +677,6 @@ function beforeUnload(event: BeforeUnloadEvent) {
   if (!settingsDirty.value) return
   event.preventDefault()
   event.returnValue = ''
-}
-
-function preferredPluginId(): string {
-  const contributedIds = new Set(allCommands.value.map((command) => command.plugin_id))
-  return (
-    sortedStatuses.value.find((status) => contributedIds.has(status.plugin_id))?.plugin_id ||
-    sortedStatuses.value[0]?.plugin_id ||
-    ''
-  )
 }
 
 function commandKey(command: PluginCommandCatalogItem): string {
@@ -818,7 +809,10 @@ async function loadSelectedPlugin() {
   const preserveDraft = settingsState.value?.plugin_id === id && settingsDirty.value
   detailError.value = ''
   settingsError.value = ''
-  if (!id) return
+  if (!id) {
+    detailLoading.value = false
+    return
+  }
   detailLoading.value = true
   try {
     const inspect = await apiJson<PluginInspectResponse>(`/api/v1/plugins/${encodeURIComponent(id)}`)
@@ -881,20 +875,9 @@ async function refresh() {
     else catalogError.value = String(catalogResult.reason)
     if (architectureResult.status === 'fulfilled') architecture.value = architectureResult.value
     else architectureError.value = String(architectureResult.reason)
-    const ids = new Set(statuses.value.map((status) => status.plugin_id))
-    const requested = String(route.query.plugin || '').trim()
-    const target =
-      requested && ids.has(requested)
-        ? requested
-        : ids.has(selectedPluginId.value)
-          ? selectedPluginId.value
-          : preferredPluginId()
-    if (selectedPluginId.value === target) {
+    if (selectedPluginId.value) {
       await loadSelectedPlugin()
       if (activeTab.value === 'logs') await loadLogs()
-    } else selectedPluginId.value = target
-    if (!disposed && requested !== target) {
-      await router.replace({ query: { ...route.query, plugin: target || undefined }, hash: route.hash })
     }
   } catch (err) {
     if (!disposed) error.value = err instanceof Error ? err.message : String(err)
@@ -903,9 +886,22 @@ async function refresh() {
   }
 }
 
-async function selectPlugin(pluginId: string) {
-  if (!pluginId || pluginId === selectedPluginId.value) return
-  await router.push({ query: { ...route.query, plugin: pluginId }, hash: route.hash })
+async function selectPlugin(pluginId: string, tab: PanelTab = 'overview') {
+  if (!pluginId) return
+  await router.push({
+    query: {
+      ...route.query,
+      view: 'plugin-workbench',
+      plugin: pluginId,
+      pluginTab: tab === 'overview' ? undefined : tab,
+    },
+    hash: route.hash,
+  })
+}
+
+async function showPluginList() {
+  const { plugin: _plugin, pluginTab: _tab, ...query } = route.query
+  await router.push({ query: { ...query, view: 'plugin-workbench' }, hash: route.hash })
 }
 
 watch(selectedPluginId, () => {
@@ -932,16 +928,7 @@ watch([selectedPluginId, activeTab], async () => {
   }
   await nextTick()
   detailBody.value?.scrollTo({ top: 0 })
-  pluginList.value?.querySelector<HTMLElement>('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' })
 })
-
-watch(
-  () => route.query.plugin,
-  (plugin) => {
-    const requested = String(plugin || '').trim()
-    if (requested && statuses.value.some((status) => status.plugin_id === requested)) selectedPluginId.value = requested
-  },
-)
 
 onMounted(() => {
   window.addEventListener('beforeunload', beforeUnload)
@@ -1001,7 +988,7 @@ defineExpose({ refresh })
     </div>
     <PluginEmptyState v-if="loading && !statuses.length" :title="$st('Loading plugins…')" :icon="RiRefreshLine" />
     <PluginEmptyState
-      v-else-if="!statuses.length && !error"
+      v-else-if="!statuses.length && !error && !selectedPluginId"
       :title="$st('No plugins are loaded.')"
       :description="$st('Browse the marketplace to add plugins to Agena.')"
     >
@@ -1009,97 +996,77 @@ defineExpose({ refresh })
     </PluginEmptyState>
 
     <div
-      v-else-if="statuses.length"
-      class="grid min-w-0 overflow-clip rounded-xl border border-border/60 lg:min-h-0 lg:flex-1 lg:grid-cols-[15rem_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)] lg:overflow-hidden"
+      v-else-if="statuses.length && !selectedPluginId"
+      class="flex min-w-0 flex-col gap-4 lg:min-h-0 lg:flex-1"
       data-plugin-workbench
+      data-plugin-grid
     >
-      <aside class="hidden min-h-0 flex-col border-r border-border/60 bg-muted/10 lg:flex">
-        <div class="space-y-2.5 border-b border-border/50 p-3">
-          <div class="flex items-center justify-between text-xs text-muted-foreground">
-            <span class="font-medium">{{ $st('Plugins') }}</span>
-            <span class="tabular-nums">{{ filteredStatuses.length }} / {{ statuses.length }}</span>
-          </div>
-          <SearchInput
-            v-model="pluginQuery"
-            :placeholder="$st('Search name or purpose')"
-            :show-search-button="false"
-            :input-aria-label="$st('Search plugins')"
-            :clear-aria-label="$st('Clear search')"
-            :clear-title="$st('Clear search')"
-            input-class="h-8 text-xs"
-          />
-          <OptionPicker
-            v-model="stateFilter"
-            :options="stateOptions"
-            size="sm"
-            :title="$st('State filter')"
-            :empty-label="$st('All states')"
-          />
-        </div>
-        <nav
-          ref="pluginList"
-          class="min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain p-2"
-          :aria-label="$st('Configured plugins')"
-          data-plugin-list
-        >
-          <button
-            v-for="status in filteredStatuses"
-            :key="status.plugin_id"
-            type="button"
-            class="flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            :class="
-              selectedPluginId === status.plugin_id
-                ? 'bg-primary/10 text-foreground ring-1 ring-inset ring-primary/20'
-                : 'text-foreground/80 hover:bg-muted/50'
-            "
-            :aria-current="selectedPluginId === status.plugin_id ? 'true' : undefined"
-            :title="
-              [`${status.plugin_id} · ${pluginStateLabel(status.state)}`, pluginSummaries.get(status.plugin_id)]
-                .filter(Boolean)
-                .join('\n')
-            "
-            @click="selectPlugin(status.plugin_id)"
-          >
-            <span class="min-w-0 flex-1">
-              <span class="block truncate font-mono text-xs font-medium">{{ status.plugin_id }}</span>
-              <span class="mt-1 line-clamp-2 break-words text-[11px] leading-relaxed text-muted-foreground">{{
-                pluginSummaries.get(status.plugin_id) || pluginStateLabel(status.state)
-              }}</span>
-            </span>
-            <span
-              class="mt-1.25 h-1.5 w-1.5 shrink-0 rounded-full bg-current"
-              :class="statusTone(status.state)"
-              aria-hidden="true"
-            />
-            <span v-if="pluginSummaries.get(status.plugin_id)" class="sr-only">{{
-              pluginStateLabel(status.state)
-            }}</span>
-          </button>
-          <div v-if="!filteredStatuses.length" class="px-2 py-8 text-center text-xs text-muted-foreground">
-            <RiSearchLine class="mx-auto mb-3 h-5 w-5" aria-hidden="true" />
-            <p>{{ $st('No matching plugins.') }}</p>
-            <Button variant="ghost" size="sm" class="mt-2" @click="clearFilters">{{ $st('Clear filters') }}</Button>
-          </div>
-        </nav>
-      </aside>
+      <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+        <SearchInput
+          v-model="pluginQuery"
+          class="min-w-0 flex-1"
+          :placeholder="$st('Search name or purpose')"
+          :show-search-button="false"
+          :input-aria-label="$st('Search plugins')"
+          :clear-aria-label="$st('Clear search')"
+          :clear-title="$st('Clear search')"
+        />
+        <OptionPicker
+          v-model="stateFilter"
+          class="sm:w-44"
+          :options="stateOptions"
+          :title="$st('State filter')"
+          :empty-label="$st('All states')"
+        />
+        <span class="shrink-0 text-xs tabular-nums text-muted-foreground" aria-live="polite">
+          {{ filteredStatuses.length }} / {{ statuses.length }}
+        </span>
+      </div>
+      <div
+        v-if="catalogError"
+        role="alert"
+        class="flex items-center justify-between gap-3 rounded-lg border border-destructive/30 p-3 text-xs text-destructive"
+      >
+        <span class="min-w-0 break-words">{{ catalogError }}</span>
+        <Button variant="ghost" size="sm" :disabled="loading" @click="refresh">{{ $st('Retry') }}</Button>
+      </div>
+      <div
+        v-if="filteredStatuses.length"
+        class="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] content-start gap-4 p-0.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain"
+        :aria-label="$st('Configured plugins')"
+        data-plugin-list
+      >
+        <PluginCard
+          v-for="status in filteredStatuses"
+          :key="status.plugin_id"
+          :plugin-id="status.plugin_id"
+          :summary="pluginSummaries.get(status.plugin_id) || ''"
+          :kind="status.kind"
+          :state="status.state"
+          :pages="pluginPages.get(status.plugin_id) || []"
+          @settings="selectPlugin(status.plugin_id, 'settings')"
+          @details="selectPlugin(status.plugin_id)"
+          @open-page="openWebPage"
+        />
+      </div>
+      <PluginEmptyState v-else :title="$st('No matching plugins.')" :icon="RiSearchLine">
+        <Button variant="ghost" size="sm" @click="clearFilters">{{ $st('Clear filters') }}</Button>
+      </PluginEmptyState>
+    </div>
 
-      <div class="flex min-w-0 flex-col lg:min-h-0" data-plugin-detail>
-        <div class="border-b border-border/60 p-3 lg:hidden">
-          <OptionPicker
-            :model-value="selectedPluginId"
-            :options="pluginOptions"
-            :include-empty="false"
-            :title="$st('Select plugin')"
-            :search-placeholder="$st('Search name or purpose')"
-            @update:model-value="selectPlugin"
-          />
-        </div>
+    <div v-else-if="selectedPluginId" class="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:flex-1" data-plugin-workbench>
+      <div>
+        <Button variant="ghost" size="sm" :disabled="settingsSaving" data-plugin-back @click="showPluginList">
+          <RiArrowLeftLine class="mr-1.5 h-4 w-4" aria-hidden="true" />{{ $st('Back to plugins') }}
+        </Button>
+      </div>
+      <div
+        class="flex min-w-0 flex-col overflow-clip rounded-xl border border-border/60 lg:min-h-0 lg:flex-1 lg:overflow-hidden"
+        data-plugin-detail
+      >
         <template v-if="selectedStatus">
           <header class="flex shrink-0 items-start gap-3 px-4 pb-4 pt-5 lg:px-5">
-            <span
-              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border/60 bg-muted/30 text-primary"
-              ><RiPlugLine class="h-5 w-5" aria-hidden="true"
-            /></span>
+            <PluginAvatar :plugin-id="selectedPluginId" />
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <h2 class="break-all font-mono text-base font-semibold">{{ selectedPluginId }}</h2>
@@ -1908,6 +1875,7 @@ defineExpose({ refresh })
             </section>
           </div>
         </template>
+        <PluginEmptyState v-else :title="$st('Plugin details are unavailable.')" :description="selectedPluginId" />
       </div>
     </div>
   </div>

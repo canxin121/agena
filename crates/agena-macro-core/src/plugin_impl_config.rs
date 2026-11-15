@@ -12,6 +12,8 @@ pub struct PluginImplConfig {
     pub namespace: Option<Expr>,
     pub name: Option<Expr>,
     pub version: Option<Expr>,
+    pub display_name: Option<Expr>,
+    pub icon: Option<Expr>,
     pub summary: Option<Expr>,
     pub help: Option<Expr>,
     pub translations: Vec<LocalizedToolDocs>,
@@ -43,6 +45,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut namespace = None;
     let mut name = None;
     let mut version = None;
+    let mut display_name = None;
+    let mut icon = None;
     let mut summary = None;
     let mut help = None;
     let mut translations = Vec::new();
@@ -70,6 +74,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     "namespace" => namespace = Some(value.value),
                     "name" => name = Some(value.value),
                     "version" => version = Some(value.value),
+                    "display_name" => display_name = Some(value.value),
+                    "icon" => icon = Some(value.value),
                     "summary" => summary = Some(value.value),
                     "help" => help = Some(value.value),
                     "authors" => authors = Some(value.value),
@@ -210,6 +216,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         namespace,
         name,
         version,
+        display_name,
+        icon,
         summary,
         help,
         translations,

@@ -11,6 +11,10 @@ import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
   pluginId: string
+  displayName?: string | null
+  icon?: string | null
+  version?: string | null
+  authors?: string[]
   summary: string
   kind: string
   state: string
@@ -22,6 +26,10 @@ const emit = defineEmits<{
   'open-page': [page: PluginInteractionPage]
 }>()
 const headingId = useId()
+const title = computed(() => props.displayName?.trim() || props.pluginId)
+const metadata = computed(() =>
+  [props.authors?.join(', '), props.version ? `v${props.version}` : ''].filter(Boolean).join(' · '),
+)
 const ui = useUiStore()
 const interactionAnchor = ref<HTMLElement | null>(null)
 const interactionMenuOpen = ref(false)
@@ -61,13 +69,18 @@ function selectInteraction(item: OptionMenuItem) {
     :data-plugin-kind="kind"
   >
     <header class="flex min-w-0 shrink-0 items-start gap-3">
-      <PluginAvatar :plugin-id="pluginId" />
+      <PluginAvatar :icon="icon" />
       <div class="min-w-0 flex-1">
-        <h2 :id="headingId" class="truncate font-mono text-sm font-semibold leading-6" :title="pluginId">
-          {{ pluginId }}
+        <h2
+          :id="headingId"
+          class="truncate text-sm font-semibold leading-6"
+          :class="displayName ? '' : 'font-mono'"
+          :title="title === pluginId ? pluginId : `${title} · ${pluginId}`"
+        >
+          {{ title }}
         </h2>
         <span
-          class="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] leading-5"
+          class="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] leading-4"
           :class="stateClass"
         >
           <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
@@ -78,10 +91,18 @@ function selectInteraction(item: OptionMenuItem) {
 
     <p
       v-if="summary"
-      class="mt-3 line-clamp-3 shrink-0 break-words text-sm leading-5 text-muted-foreground"
+      class="mt-2 line-clamp-3 shrink-0 break-words text-sm leading-5 text-muted-foreground"
       :title="summary"
     >
       {{ summary }}
+    </p>
+    <p
+      v-if="metadata"
+      class="mt-1 shrink-0 truncate text-[11px] leading-4 text-muted-foreground"
+      :title="metadata"
+      data-plugin-card-metadata
+    >
+      {{ metadata }}
     </p>
 
     <footer class="mt-auto flex shrink-0 items-center gap-2 border-t border-border/50 pt-3">

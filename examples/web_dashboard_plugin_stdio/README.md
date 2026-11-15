@@ -17,6 +17,8 @@ The board provides task creation, editing, deletion, status changes, search, pro
 
 The files in `web/dist` are hand-authored release assets. No Node packages, frontend build step, external fonts or CDN requests are required.
 
+The runtime manifest declares the card's display name, author, tags and a self-contained URI-encoded SVG icon. See [plugin metadata](../../docs/plugin-metadata.md) for URL and base64 image alternatives.
+
 ## Build and open
 
 Run from the Agena repository root:
@@ -42,7 +44,7 @@ Merge this entry into the instance configuration's `plugins.list`, replacing bot
 }
 ~~~
 
-The instance configuration is `<data-dir>/agena.json`. Reload the instance configuration, then open **Settings → Plugins & Tools**, select **demo.web_dashboard**, and choose **Open interactive page · Workspace board**, or open:
+The instance configuration is `<data-dir>/agena.json`. Reload the instance configuration, then open **Settings → Plugins & Tools** and choose **Open** on the **Workspace board** card, or open:
 
 ~~~text
 /plugins/demo.web_dashboard/dashboard

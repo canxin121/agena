@@ -68,6 +68,12 @@ import type { JsonValue } from '@/types/json'
 type PluginStatus = {
   plugin_id: string
   kind: string
+  name?: string | null
+  display_name?: string | null
+  icon?: string | null
+  version?: string | null
+  authors?: string[]
+  tags?: string[]
   summary?: string | null
   translations?: Record<string, Pick<PluginDocumentationTranslation, 'summary'> | undefined>
   state: 'running' | 'restarting' | 'failed' | 'stopped' | string
@@ -97,11 +103,14 @@ type PluginTool = {
 type PluginManifest = {
   namespace?: string
   name?: string
+  display_name?: string | null
+  icon?: string | null
   version?: string
   summary?: string | null
   help?: string | null
   translations?: Record<string, PluginDocumentationTranslation | undefined>
   authors?: string[]
+  tags?: string[]
   transports?: string[]
   hooks?: string[]
   hook_handlers?: PluginHookDeclaration[]
@@ -378,7 +387,7 @@ const filteredStatuses = computed(() => {
   return sortedStatuses.value.filter((status) => {
     if (stateFilter.value && status.state !== stateFilter.value) return false
     if (!query) return true
-    return `${status.plugin_id} ${pluginSummaries.value.get(status.plugin_id)} ${status.state} ${pluginStateLabel(status.state)}`
+    return `${status.plugin_id} ${status.display_name || ''} ${status.authors?.join(' ') || ''} ${status.tags?.join(' ') || ''} ${pluginSummaries.value.get(status.plugin_id)} ${status.state} ${pluginStateLabel(status.state)}`
       .toLowerCase()
       .includes(query)
   })
@@ -392,6 +401,15 @@ const selectedManifest = computed(() => {
   const manifest = selectedPlugin.value?.manifest
   return manifest ? localizePluginManifest(manifest, String(locale.value || 'en-US')) : null
 })
+const selectedMetadata = computed(() => ({
+  displayName: selectedManifest.value?.display_name?.trim() || selectedStatus.value?.display_name?.trim() || '',
+  icon: selectedManifest.value?.icon ?? selectedStatus.value?.icon,
+  version: selectedManifest.value?.version || selectedStatus.value?.version,
+  authors: selectedManifest.value?.authors?.length
+    ? selectedManifest.value.authors
+    : selectedStatus.value?.authors || [],
+  tags: selectedManifest.value?.tags?.length ? selectedManifest.value.tags : selectedStatus.value?.tags || [],
+}))
 const selectedHooks = computed(() => {
   // Hook documentation comes from the Settings locale catalog. Explicitly
   // track the selected language so names/descriptions update without reload.
@@ -1040,6 +1058,10 @@ defineExpose({ refresh })
           v-for="status in filteredStatuses"
           :key="status.plugin_id"
           :plugin-id="status.plugin_id"
+          :display-name="status.display_name"
+          :icon="status.icon"
+          :version="status.version"
+          :authors="status.authors"
           :summary="pluginSummaries.get(status.plugin_id) || ''"
           :kind="status.kind"
           :state="status.state"
@@ -1066,14 +1088,22 @@ defineExpose({ refresh })
       >
         <template v-if="selectedStatus">
           <header class="flex shrink-0 items-start gap-3 px-4 pb-4 pt-5 lg:px-5">
-            <PluginAvatar :plugin-id="selectedPluginId" />
+            <PluginAvatar :icon="selectedMetadata.icon" />
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <h2 class="break-all font-mono text-base font-semibold">{{ selectedPluginId }}</h2>
+                <h2
+                  class="break-words text-base font-semibold"
+                  :class="selectedMetadata.displayName ? '' : 'font-mono'"
+                >
+                  {{ selectedMetadata.displayName || selectedPluginId }}
+                </h2>
+                <span v-if="selectedMetadata.displayName" class="break-all font-mono text-xs text-muted-foreground">{{
+                  selectedPluginId
+                }}</span>
                 <span
-                  v-if="selectedManifest?.version"
+                  v-if="selectedMetadata.version"
                   class="rounded-md bg-muted/50 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
-                  >v{{ selectedManifest.version }}</span
+                  >v{{ selectedMetadata.version }}</span
                 >
               </div>
               <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -1199,7 +1229,26 @@ defineExpose({ refresh })
               <dl class="grid gap-x-6 gap-y-4 border-t border-border/60 pt-4 text-xs sm:grid-cols-2">
                 <div>
                   <dt class="text-muted-foreground">{{ $st('Authors') }}</dt>
-                  <dd class="mt-1">{{ selectedManifest?.authors?.join(', ') || $st('Not reported') }}</dd>
+                  <dd class="mt-1 break-words">{{ selectedMetadata.authors.join(', ') || $st('Not reported') }}</dd>
+                </div>
+                <div>
+                  <dt class="text-muted-foreground">{{ $t('pluginWeb.version') }}</dt>
+                  <dd class="mt-1 break-words font-mono">{{ selectedMetadata.version || $st('Not reported') }}</dd>
+                </div>
+                <div>
+                  <dt class="text-muted-foreground">{{ $t('pluginWeb.pluginId') }}</dt>
+                  <dd class="mt-1 break-all font-mono">{{ selectedPluginId }}</dd>
+                </div>
+                <div v-if="selectedMetadata.tags.length">
+                  <dt class="text-muted-foreground">{{ $t('pluginWeb.tags') }}</dt>
+                  <dd class="mt-1 flex flex-wrap gap-1.5">
+                    <span
+                      v-for="tag in selectedMetadata.tags"
+                      :key="tag"
+                      class="max-w-full break-words rounded bg-muted/50 px-1.5 py-0.5"
+                      >{{ tag }}</span
+                    >
+                  </dd>
                 </div>
                 <div>
                   <dt class="text-muted-foreground">{{ $st('Required plugins') }}</dt>
@@ -1666,7 +1715,9 @@ defineExpose({ refresh })
                     </div>
                     <div>
                       <dt class="text-xs text-muted-foreground">{{ $st('Authors') }}</dt>
-                      <dd class="mt-1 text-sm">{{ selectedManifest?.authors?.join(', ') || $st('Not reported') }}</dd>
+                      <dd class="mt-1 break-words text-sm">
+                        {{ selectedMetadata.authors.join(', ') || $st('Not reported') }}
+                      </dd>
                     </div>
                     <div>
                       <dt class="text-xs text-muted-foreground">{{ $st('Provenance') }}</dt>

@@ -125,9 +125,14 @@ fn default_mcp_config() -> McpConfig {
     namespace = "agena",
     name = "mcp",
     version = env!("CARGO_PKG_VERSION"),
+    display_name = "MCP Connections",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/mcp.svg"))),
+    authors = ["canxin121"],
+    help = "Discover connected MCP servers and bridge their tools, resources and prompts. The shared MCP client manager owns connection lifecycle and operation routing.",
+    tags(agena_plugin_host::sdk::ToolTag::Mcp, agena_plugin_host::sdk::ToolTag::Network),
     summary = "MCP discovery and bridge tools.",
     translations(
-        locale("zh-CN", summary = "发现并调用 MCP 服务器提供的资源、提示和工具。"),
+        locale("zh-CN", summary = "发现并调用 MCP 服务器提供的资源、提示和工具。", help = "发现已连接的 MCP 服务器并使用其工具、资源和提示。共享 MCP 客户端负责连接生命周期和操作路由。"),
         locale("zh-TW", summary = "探索並呼叫 MCP 伺服器提供的資源、提示與工具。"),
         locale("ja-JP", summary = "MCP サーバーが提供するリソース、プロンプト、ツールを検出して利用します。"),
         locale("ko-KR", summary = "MCP 서버가 제공하는 리소스, 프롬프트, 도구를 찾아 호출합니다."),
@@ -489,7 +494,9 @@ impl McpPlugin {
             .transpose()
             .map_err(|_| PluginError::internal("invalid channel tool discovery scope"))?;
         let query = input.query.trim().to_ascii_lowercase();
-        let mut tools = self.scoped_tools(channel.as_ref()).await?
+        let mut tools = self
+            .scoped_tools(channel.as_ref())
+            .await?
             .into_iter()
             .filter_map(|(server, tool)| {
                 if channel.as_ref().is_some_and(|authority| {

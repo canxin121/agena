@@ -1,5 +1,8 @@
 export const pluginWebMessages = {
   'en-US': {
+    pluginId: 'Plugin ID',
+    version: 'Version',
+    tags: 'Tags',
     interactivePages: 'Interactive pages',
     title: 'Plugins',
     description: 'Browse installed plugins, manage connections and open their workspaces.',
@@ -31,6 +34,9 @@ export const pluginWebMessages = {
     workspaces: 'Web workspaces',
   },
   'zh-CN': {
+    pluginId: '插件 ID',
+    version: '版本',
+    tags: '标签',
     interactivePages: '交互页面',
     title: '插件',
     description: '查看所有已安装插件，管理连接和自定义工作台。',
@@ -62,6 +68,9 @@ export const pluginWebMessages = {
     workspaces: '插件工作台',
   },
   'es-ES': {
+    pluginId: 'ID del complemento',
+    version: 'Versión',
+    tags: 'Etiquetas',
     interactivePages: 'Páginas interactivas',
     title: 'Complementos',
     description: 'Explora los complementos instalados, gestiona conexiones y abre sus espacios.',
@@ -94,6 +103,9 @@ export const pluginWebMessages = {
     workspaces: 'Espacios web',
   },
   'fr-FR': {
+    pluginId: 'Identifiant de l’extension',
+    version: 'Version',
+    tags: 'Étiquettes',
     interactivePages: 'Pages interactives',
     title: 'Extensions',
     description: 'Explorez les extensions installées, gérez les connexions et ouvrez leurs espaces.',
@@ -125,6 +137,9 @@ export const pluginWebMessages = {
     workspaces: 'Espaces Web',
   },
   'pt-BR': {
+    pluginId: 'ID do plugin',
+    version: 'Versão',
+    tags: 'Etiquetas',
     interactivePages: 'Páginas interativas',
     title: 'Plugins',
     description: 'Explore os plugins instalados, gerencie conexões e abra seus espaços de trabalho.',
@@ -157,6 +172,9 @@ export const pluginWebMessages = {
     workspaces: 'Espaços Web',
   },
   'hi-IN': {
+    pluginId: 'प्लगइन ID',
+    version: 'संस्करण',
+    tags: 'टैग',
     interactivePages: 'इंटरैक्टिव पृष्ठ',
     title: 'प्लगइन',
     description: 'इंस्टॉल किए गए प्लगइन देखें, कनेक्शन प्रबंधित करें और कार्यस्थान खोलें।',
@@ -188,6 +206,9 @@ export const pluginWebMessages = {
     workspaces: 'वेब कार्यस्थान',
   },
   'ar-SA': {
+    pluginId: 'معرّف الإضافة',
+    version: 'الإصدار',
+    tags: 'الوسوم',
     interactivePages: 'الصفحات التفاعلية',
     title: 'الإضافات',
     description: 'استعرض الإضافات المثبتة وأدر الاتصالات وافتح مساحات العمل.',

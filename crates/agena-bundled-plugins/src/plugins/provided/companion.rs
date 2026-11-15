@@ -56,7 +56,12 @@ pub(crate) struct CompanionPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
 }
 #[agena_plugin_host::sdk::agena_plugin(namespace="agena",name="companion",version=env!("CARGO_PKG_VERSION"),
- summary="Assistant personality and consent-based reminders.",translations(locale("zh-CN", summary = "助手人格和经授权的主动提醒。"),
+    display_name = "Companion",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/companion.svg"))),
+    authors = ["canxin121"],
+    help = "Configure the assistant personality and consent-based reminders. The runtime owns reminder timing, user identities and persistent companion state.",
+    tags(agena_plugin_host::sdk::ToolTag::Interactive, agena_plugin_host::sdk::ToolTag::Custom("assistant".to_owned())),
+ summary="Assistant personality and consent-based reminders.",translations(locale("zh-CN", summary = "助手人格和经授权的主动提醒。", help = "配置助手人格以及经过授权的主动提醒。提醒时机、用户身份和持久状态由运行时统一管理。"),
 locale("zh-TW", summary = "助手人格和經授權的主動提醒。"),
 locale("ja-JP", summary = "アシスタントの個性と同意に基づく通知。"),
 locale("ko-KR", summary = "도우미 성격과 동의 기반 알림."),

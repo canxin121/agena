@@ -125,8 +125,110 @@ fn definition<T: JsonSchema>(
 impl Plugin for SkillsPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "skills", env!("CARGO_PKG_VERSION"));
+        manifest.display_name = Some("Skills".to_owned());
+        manifest.icon = Some(crate::plugin_metadata::icon(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plugin-icons/skills.svg"
+        ))));
+        manifest.authors = vec!["canxin121".to_owned()];
+        manifest.help = Some("Discover, install, create and update complete Agent Skills packages with their scripts, references and assets. Preview installations and validate SKILL.md before writing.".to_owned());
+        manifest.tags = vec![
+            agena_plugin_host::sdk::ToolTag::Discovery,
+            agena_plugin_host::sdk::ToolTag::Filesystem,
+            agena_plugin_host::sdk::ToolTag::Custom("skills".to_owned()),
+        ];
         manifest.summary =
             Some("Discover, install, author, and manage complete Agent Skills packages.".into());
+        manifest.translations.insert("zh-CN".to_owned(), agena_plugin_host::sdk::PluginManifestTranslation {
+            summary: Some("发现、安装、创作和管理完整的 Agent Skills 包。".to_owned()),
+            help: Some("发现、安装、创建和更新包含脚本、参考资料及资源的完整 Agent Skills 包。支持安装预览和 SKILL.md 校验。".to_owned()),
+            ..Default::default()
+        });
+        manifest.translations.insert(
+            "zh-TW".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some("探索、安裝、撰寫與管理完整的 Agent Skills 套件。".to_owned()),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert(
+            "ja-JP".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some(
+                    "Agent Skills パッケージの検索、インストール、作成と管理を行います。"
+                        .to_owned(),
+                ),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert(
+            "ko-KR".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some(
+                    "완전한 Agent Skills 패키지를 검색, 설치, 작성하고 관리합니다.".to_owned(),
+                ),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert(
+            "fr-FR".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some(
+                    "Découvrir, installer, créer et gérer des paquets Agent Skills complets."
+                        .to_owned(),
+                ),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert("de-DE".to_owned(), agena_plugin_host::sdk::PluginManifestTranslation {
+            summary: Some("Vollständige Agent-Skills-Pakete finden, installieren, erstellen und verwalten.".to_owned()),
+            help: None,
+            ..Default::default()
+        });
+        manifest.translations.insert(
+            "es-ES".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some(
+                    "Descubre, instala, crea y administra paquetes completos de Agent Skills."
+                        .to_owned(),
+                ),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert(
+            "hi-IN".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some("संपूर्ण Agent Skills पैकेज खोजें, इंस्टॉल करें, बनाएँ और प्रबंधित करें।".to_owned()),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert(
+            "ar-SA".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some(
+                    "اكتشاف حزم Agent Skills الكاملة وتثبيتها وتأليفها وإدارتها.".to_owned(),
+                ),
+                help: None,
+                ..Default::default()
+            },
+        );
+        manifest.translations.insert(
+            "pt-BR".to_owned(),
+            agena_plugin_host::sdk::PluginManifestTranslation {
+                summary: Some(
+                    "Descubra, instale, crie e gerencie pacotes completos de Agent Skills."
+                        .to_owned(),
+                ),
+                help: None,
+                ..Default::default()
+            },
+        );
         manifest.hooks = HookSubscription::INIT | HookSubscription::TOOL_INVOKE;
         let read = &[ToolTag::Query, ToolTag::Discovery, ToolTag::ReadOnly];
         let write = &[ToolTag::Mutate, ToolTag::Filesystem];

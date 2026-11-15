@@ -12,8 +12,9 @@ use agena_plugin_sdk::host_api::{
 };
 use agena_plugin_sdk::{
     CommandDefinition, CommandDocs, CommandInvokeInput, CommandResult, CommandTarget, InitContext,
-    InitOutcome, Plugin, PluginError, PluginManifest, PluginWebAssets, PluginWebContributions,
-    PluginWebPage, PluginWebPlacement, PluginWebScope, Result, SettingsContract, TransportKind,
+    InitOutcome, Plugin, PluginError, PluginManifest, PluginManifestTranslation, PluginWebAssets,
+    PluginWebContributions, PluginWebPage, PluginWebPlacement, PluginWebScope, Result,
+    SettingsContract, ToolTag, TransportKind,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,7 @@ use tokio::sync::Mutex;
 const STORAGE_NAMESPACE: &str = "board";
 const STORAGE_KEY: &str = "state";
 const MAX_TASKS: usize = 100;
+const PLUGIN_ICON: &str = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%3E%3Crect%20x%3D%222%22%20y%3D%223%22%20width%3D%2220%22%20height%3D%2218%22%20rx%3D%224%22%20fill%3D%22%232563eb%22%2F%3E%3Cpath%20d%3D%22M6%207h3v10H6zm5%200h3v7h-3zm5%200h2v4h-2z%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -319,9 +321,21 @@ fn command(id: &str, title: &str, input: SettingsContract) -> CommandDefinition 
 impl Plugin for DashboardPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("demo", "web_dashboard", env!("CARGO_PKG_VERSION"));
+        manifest.display_name = Some("Workspace board".into());
+        manifest.icon = Some(PLUGIN_ICON.into());
+        manifest.authors = vec!["canxin121".into()];
+        manifest.tags = vec![ToolTag::Interactive, ToolTag::Custom("dashboard".into())];
         manifest.summary =
             Some("An independent Web workspace with a persistent task board.".into());
         manifest.help = Some("Open the Workspace board page to create, edit and complete tasks. The three initial items are sample content; changes persist in this plugin's private storage.".into());
+        manifest.translations.insert(
+            "zh-CN".into(),
+            PluginManifestTranslation {
+                summary: Some("独立的 Web 任务看板，支持持久化保存任务。".into()),
+                help: Some("打开交互页面后可创建、编辑和完成任务。初始的三条任务是示例内容；修改会保存在此插件的私有存储中。".into()),
+                ..Default::default()
+            },
+        );
         manifest.transports = vec![TransportKind::Stdio];
         manifest.commands = vec![
             command(

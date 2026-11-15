@@ -8,6 +8,12 @@ export type PluginRuntimeStatus = {
   kind: string
   state: string
   summary?: string | null
+  name?: string | null
+  display_name?: string | null
+  icon?: string | null
+  version?: string | null
+  authors?: string[]
+  tags?: string[]
   translations?: Record<string, { summary?: string | null } | undefined>
   last_failure?: { message?: string; rendered?: string; user?: { fallback?: string } } | null
 }
@@ -63,7 +69,7 @@ export function pluginHubEntries(
       ''
     entries.set(status.plugin_id, {
       plugin_id: status.plugin_id,
-      title: status.plugin_id === TELEGRAM_PLUGIN_ID ? 'Telegram' : status.plugin_id,
+      title: status.display_name?.trim() || (status.plugin_id === TELEGRAM_PLUGIN_ID ? 'Telegram' : status.plugin_id),
       summary,
       kind: status.kind,
       state: status.state,

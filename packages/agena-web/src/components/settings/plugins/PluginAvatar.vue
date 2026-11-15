@@ -1,56 +1,39 @@
 <script setup lang="ts">
-import { computed, type Component } from 'vue'
-import {
-  RiBook2Line,
-  RiBrainLine,
-  RiCalendarScheduleLine,
-  RiChat3Line,
-  RiCodeSSlashLine,
-  RiDashboard3Line,
-  RiFileList2Line,
-  RiFolder3Line,
-  RiGitBranchLine,
-  RiGlobalLine,
-  RiNotification3Line,
-  RiPlugLine,
-  RiRobot2Line,
-  RiSettings3Line,
-  RiTelegramLine,
-  RiTerminalBoxLine,
-} from '@remixicon/vue'
+import { computed, ref, watch } from 'vue'
+import { RiPlugLine } from '@remixicon/vue'
+import { pluginIconSource } from '@/lib/pluginIcon'
 
-const props = defineProps<{ pluginId: string }>()
+const props = defineProps<{ icon?: string | null }>()
+const source = computed(() => pluginIconSource(props.icon))
+const failedSource = ref<string>()
+watch(source, () => {
+  failedSource.value = undefined
+})
 
-const icons: Record<string, Component> = {
-  'agena.code': RiCodeSSlashLine,
-  'agena.cron': RiCalendarScheduleLine,
-  'agena.fs': RiFolder3Line,
-  'agena.interaction': RiChat3Line,
-  'agena.lsp': RiCodeSSlashLine,
-  'agena.mcp': RiPlugLine,
-  'agena.memory': RiBrainLine,
-  'agena.monitor': RiDashboard3Line,
-  'agena.notebook': RiBook2Line,
-  'agena.notifications': RiNotification3Line,
-  'agena.plan': RiGitBranchLine,
-  'agena.report': RiFileList2Line,
-  'agena.session': RiChat3Line,
-  'agena.settings': RiSettings3Line,
-  'agena.shell': RiTerminalBoxLine,
-  'agena.telegram': RiTelegramLine,
-  'agena.web': RiGlobalLine,
-  'agena.claude': RiRobot2Line,
-  'agena.chatgpt': RiRobot2Line,
-  'agena.gemini': RiRobot2Line,
+function onImageError(event: Event) {
+  const failed = (event.currentTarget as HTMLImageElement).getAttribute('src')
+  if (failed === source.value) failedSource.value = failed
 }
-const icon = computed(() => (Object.hasOwn(icons, props.pluginId) ? icons[props.pluginId]! : RiPlugLine))
 </script>
 
 <template>
   <span
     class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-primary/10 bg-primary/5 text-primary"
     aria-hidden="true"
+    data-plugin-avatar
   >
-    <component :is="icon" class="h-5 w-5" />
+    <img
+      v-if="source && source !== failedSource"
+      :key="source"
+      :src="source"
+      alt=""
+      class="h-7 w-7 object-contain"
+      loading="lazy"
+      decoding="async"
+      referrerpolicy="no-referrer"
+      data-plugin-icon
+      @error="onImageError"
+    />
+    <RiPlugLine v-else class="h-5 w-5" data-plugin-icon-fallback />
   </span>
 </template>

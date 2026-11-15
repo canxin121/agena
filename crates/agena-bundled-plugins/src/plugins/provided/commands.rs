@@ -1092,6 +1092,17 @@ impl CommandsPlugin {
 
     fn manifest_for(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "commands", env!("CARGO_PKG_VERSION"));
+        manifest.display_name = Some("Commands".to_owned());
+        manifest.icon = Some(crate::plugin_metadata::icon(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plugin-icons/commands.svg"
+        ))));
+        manifest.authors = vec!["canxin121".to_owned()];
+        manifest.help = Some("Expose the built-in command catalog to Agena clients and project skills from other agent ecosystems into the same surface. Read command instructions and bundled resources before applying a workflow.".to_owned());
+        manifest.tags = vec![
+            agena_plugin_host::sdk::ToolTag::Discovery,
+            agena_plugin_host::sdk::ToolTag::Custom("commands".to_owned()),
+        ];
         manifest.summary = Some(
             "Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface."
                 .to_string(),
@@ -1101,7 +1112,7 @@ impl CommandsPlugin {
                 "zh-CN".to_owned(),
                 PluginManifestTranslation {
                     summary: Some("声明由 Agena 各客户端本地呈现的内置命令，并将其他智能体生态中的技能映射到同一界面。".to_owned()),
-                    help: None,
+                    help: Some("向 Agena 客户端提供内置命令目录，并将其他智能体生态中的技能映射到同一界面。可读取命令说明和附带资源，再按工作流执行。".to_owned()),
                     ..Default::default()
                 },
             ),

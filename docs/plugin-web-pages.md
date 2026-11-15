@@ -4,6 +4,8 @@
 
 完整示例位于 [Workspace board](../examples/web_dashboard_plugin_stdio/README.md)。它包含独立 stdio 后端、可持久化的任务看板、多文件 ES module、主题与语言适配、响应式布局和清理逻辑。
 
+插件卡片的显示名称、图标、作者和版本由插件自己的 manifest 提供，声明方式见 [插件图标与信息](plugin-metadata.md)。提供图标不要求插件同时提供 Web 页面。
+
 ## 页面声明
 
 在 `PluginManifest.surface.web` 中声明：

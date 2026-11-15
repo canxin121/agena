@@ -22,6 +22,7 @@ async function main() {
     externalRequests: [],
     unexpectedApiRequests: [],
     requests: [],
+    iconRequests: [],
     layouts: {},
   }
   let browser, server, page
@@ -86,9 +87,16 @@ async function main() {
       viewport + ' long plugin titles and descriptions are truncated without growing cards',
     )
   }
+  const iconSvg =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="24" height="24" rx="5" fill="#268bd2"/><path d="m6 12 4 4 8-8" stroke="white" stroke-width="2" fill="none"/></svg>'
   const statuses = [
     {
       plugin_id: 'agena.telegram',
+      display_name: 'Telegram',
+      icon: 'data:image/svg+xml;base64,' + Buffer.from(iconSvg).toString('base64'),
+      authors: ['canxin121'],
+      version: '0.1.0',
+      tags: ['channels', 'messaging'],
       kind: 'builtin',
       state: 'running',
       restart_count: 0,
@@ -96,6 +104,10 @@ async function main() {
     },
     {
       plugin_id: 'fixture.board',
+      display_name: 'Project board',
+      authors: ['canxin121'],
+      version: '1.2.3',
+      tags: ['projects', 'workspace'],
       kind: 'stdio',
       state: 'running',
       restart_count: 0,
@@ -103,6 +115,9 @@ async function main() {
     },
     {
       plugin_id: 'fixture.stopped',
+      icon: '/fixture-icons/missing.svg',
+      authors: ['canxin121'],
+      version: '0.1.0',
       kind: 'stdio',
       state: 'stopped',
       restart_count: 0,
@@ -110,6 +125,9 @@ async function main() {
     },
     {
       plugin_id: 'fixture.very-long-plugin-identifier-for-responsive-layout-and-keyboard-navigation',
+      icon: 'javascript:window.__unsafeIcon=true',
+      authors: ['canxin121'],
+      version: '0.1.0',
       kind: 'builtin',
       state: 'failed',
       restart_count: 0,
@@ -234,6 +252,13 @@ app.mount('#app')
           configureServer(dev) {
             dev.middlewares.use(async (req, res, next) => {
               const url = new URL(req.url, 'http://fixture')
+              if (url.pathname.startsWith('/fixture-icons/')) {
+                report.iconRequests.push({ path: url.pathname, referer: req.headers.referer || null })
+                res.setHeader('Content-Type', 'image/svg+xml')
+                if (url.pathname === '/fixture-icons/board.svg') return res.end(iconSvg)
+                res.statusCode = 404
+                return res.end()
+              }
               if (/^\/(api|auth|health|plugin-assets)(\/|$)/.test(url.pathname)) {
                 report.requests.push({ method: req.method, path: url.pathname })
                 let body
@@ -258,9 +283,12 @@ app.mount('#app')
                           manifest: {
                             namespace: status.plugin_id,
                             name: status.plugin_id,
-                            version: '1.0.0',
+                            display_name: status.display_name,
+                            icon: status.icon,
+                            version: status.version || '1.0.0',
                             summary: status.summary,
-                            authors: ['Fixture'],
+                            authors: status.authors || [],
+                            tags: status.tags || [],
                             settings: contract,
                             tools: [],
                             hooks: [],
@@ -293,6 +321,7 @@ app.mount('#app')
     })
     await server.listen()
     const origin = 'http://127.0.0.1:' + server.httpServer.address().port
+    statuses[1].icon = origin + '/fixture-icons/board.svg'
     browser = await chromium.launch({
       executablePath: process.env.CHROME_BIN || '/usr/bin/google-chrome',
       headless: true,
@@ -328,7 +357,63 @@ app.mount('#app')
       !report.requests.some((request) => /^\/api\/v1\/plugins\/fixture\./.test(request.path)),
       'listing cards does not fetch plugin inspect or settings records',
     )
-    check((await page.locator('[data-plugin-card="agena.telegram"] svg').count()) > 0, 'cards display plugin icons')
+    await page.waitForFunction(() => {
+      const icon = document.querySelector('[data-plugin-card="agena.telegram"] img[data-plugin-icon]')
+      return icon?.complete && icon.naturalWidth > 0
+    })
+    check(
+      (await page.locator('[data-plugin-card="agena.telegram"] img[data-plugin-icon]').getAttribute('src')).startsWith(
+        'data:image/svg+xml;base64,',
+      ),
+      'cards display base64-encoded icons declared by the plugin',
+    )
+    await page.waitForFunction(() => {
+      const icon = document.querySelector('[data-plugin-card="fixture.board"] img[data-plugin-icon]')
+      return icon?.complete && icon.naturalWidth > 0
+    })
+    check(
+      (await page.locator('[data-plugin-card="fixture.board"] img[data-plugin-icon]').getAttribute('src')) ===
+        statuses[1].icon,
+      'cards load plugin-declared absolute HTTP image URLs',
+    )
+    check(
+      report.iconRequests.every((request) => request.referer === null),
+      'plugin icon requests omit the page referrer',
+    )
+    await page.locator('[data-plugin-card="fixture.stopped"] [data-plugin-icon-fallback]').waitFor()
+    check(
+      (await page.locator('[data-plugin-card="fixture.stopped"] img[data-plugin-icon]').count()) === 0,
+      'an image load failure shows the generic plugin icon',
+    )
+    check(
+      (await page.locator('[data-plugin-card*="very-long-plugin-identifier"] [data-plugin-icon-fallback]').count()) ===
+        1,
+      'unsafe icon sources fall back before an image request is made',
+    )
+    const encodedSvg =
+      'data:image/svg+xml;charset=utf-8,' +
+      encodeURIComponent(iconSvg.replace('</svg>', '<script>window.__unsafeIcon=true</script></svg>'))
+    statuses[2].icon = encodedSvg
+    await page.getByRole('button', { name: 'Refresh plugins', exact: true }).click()
+    await page.waitForFunction(() => {
+      const icon = document.querySelector('[data-plugin-card="fixture.stopped"] img[data-plugin-icon]')
+      return icon?.complete && icon.naturalWidth > 0
+    })
+    check(
+      (await page.locator('[data-plugin-card="fixture.stopped"] img[data-plugin-icon]').getAttribute('src')) ===
+        encodedSvg,
+      'changing icon metadata retries a failed image and accepts percent-encoded SVG',
+    )
+    check(
+      await page.evaluate(() => window.__unsafeIcon === undefined),
+      'SVG image metadata cannot execute as page markup',
+    )
+    check(
+      (await page.locator('[data-plugin-card="fixture.board"] h2').innerText()) === 'Project board' &&
+        (await page.locator('[data-plugin-card="fixture.board"] [data-plugin-card-metadata]').innerText()) ===
+          'canxin121 · v1.2.3',
+      'cards show plugin-declared names, authors and versions',
+    )
     check(
       (await page.locator('[data-plugin-card="fixture.board"]').innerText()).includes('project dashboard'),
       'cards display plugin descriptions',
@@ -402,6 +487,14 @@ app.mount('#app')
     check(
       (await page.locator('[data-plugin-detail] [role="tab"][aria-selected="true"]').innerText()).includes('Overview'),
       'card details opens the full-width overview',
+    )
+    await page.locator('[data-plugin-detail] dl').first().waitFor()
+    const detailText = await page.locator('[data-plugin-detail]').innerText()
+    check(
+      ['Project board', 'fixture.board', 'canxin121', '1.2.3', 'projects', 'workspace'].every((value) =>
+        detailText.includes(value),
+      ),
+      'plugin details expose the complete declared metadata',
     )
     await page.locator('[data-plugin-back]').click()
 

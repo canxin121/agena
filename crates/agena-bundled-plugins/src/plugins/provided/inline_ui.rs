@@ -67,9 +67,14 @@ struct UpdateInput {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "inline_ui", version = env!("CARGO_PKG_VERSION"),
+    display_name = "Interactive UI",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/inline_ui.svg"))),
+    authors = ["canxin121"],
+    help = "Create composable, stateful interfaces and live work updates inside assistant responses. Start with guide, then prepare, read and update the interface through the declared tools.",
+    tags(agena_plugin_host::sdk::ToolTag::Interactive, agena_plugin_host::sdk::ToolTag::Custom("ui".to_owned())),
     summary = "Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update.",
     translations(
-        locale("zh-CN", summary = "内嵌式生成 UI：guide() 一次说明核心用法，低频章节可批量查阅；准备后在正文嵌入引用。"),
+        locale("zh-CN", summary = "内嵌式生成 UI：guide() 一次说明核心用法，低频章节可批量查阅；准备后在正文嵌入引用。", help = "在助手回复中创建可组合、有状态的交互界面和实时工作进展。先阅读 guide，再使用 prepare、read 和 update 管理界面。"),
         locale("zh-TW", summary = "內嵌式生成 UI：guide() 一次說明核心用法，進階章節可批量查閱；在正文嵌入引用。"),
         locale("ja-JP", summary = "回答内のインタラクティブ UI。guide() 一回で基本を学び、追加資料は複数章まとめて取得できます。"),
         locale("ko-KR", summary = "답변 안의 인터랙티브 UI. guide() 한 번으로 핵심을 배우고 추가 자료는 여러 장을 함께 조회합니다."),

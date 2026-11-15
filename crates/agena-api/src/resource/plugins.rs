@@ -6,6 +6,18 @@
 pub struct PluginListItem {
     #[serde(flatten)]
     pub status: agena_plugin_sdk::inspection::PluginStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<agena_plugin_sdk::ToolTag>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
@@ -24,10 +36,29 @@ impl PluginListItem {
     ) -> Self {
         let mut item = Self {
             status,
+            name: None,
+            display_name: None,
+            version: None,
+            icon: None,
+            authors: Vec::new(),
+            tags: Vec::new(),
             summary: None,
             translations: std::collections::BTreeMap::new(),
         };
         if let Some(manifest) = manifest {
+            let text = |value: String| {
+                let value = value.trim().to_owned();
+                (!value.is_empty()).then_some(value)
+            };
+            item.name = text(manifest.name);
+            item.display_name = manifest.display_name.and_then(text);
+            item.version = text(manifest.version);
+            item.icon = manifest
+                .icon
+                .as_deref()
+                .and_then(agena_plugin_sdk::normalize_plugin_icon);
+            item.authors = manifest.authors.into_iter().filter_map(text).collect();
+            item.tags = manifest.tags;
             item.summary = manifest
                 .summary
                 .map(|summary| summary.trim().to_owned())
@@ -217,6 +248,39 @@ mod client_response_contract_tests {
         let decoded: PluginListResponse = serde_json::from_value(wire.clone()).unwrap();
         assert!(decoded.items[0].translations.is_empty());
         assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+    }
+
+    #[test]
+    fn plugin_lists_carry_plugin_owned_metadata_without_an_inspect_request() {
+        let mut manifest = agena_plugin_sdk::PluginManifest::new("fixture", "plugin", "1.2.3");
+        manifest.display_name = Some("  Fixture board  ".into());
+        manifest.icon = Some("data:image/svg+xml,%3Csvg%2F%3E".into());
+        manifest.summary = Some("A compact plugin description".into());
+        manifest.authors = vec![" fixture-author ".into(), " ".into()];
+        manifest.tags = vec![agena_plugin_sdk::ToolTag::Interactive];
+        let wire = serde_json::to_value(PluginListItem::new(status(), Some(manifest))).unwrap();
+        assert_eq!(wire["plugin_id"], "fixture.plugin");
+        assert_eq!(wire["name"], "plugin");
+        assert_eq!(wire["display_name"], "Fixture board");
+        assert_eq!(wire["version"], "1.2.3");
+        assert_eq!(wire["icon"], "data:image/svg+xml,%3Csvg%2F%3E");
+        assert_eq!(wire["authors"], json!(["fixture-author"]));
+        assert_eq!(wire["tags"], json!(["interactive"]));
+        let decoded: PluginListItem = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), wire);
+    }
+
+    #[test]
+    fn unsupported_icons_do_not_hide_the_plugin_or_its_other_metadata() {
+        let mut manifest = agena_plugin_sdk::PluginManifest::new("fixture", "plugin", "1.0.0");
+        manifest.icon = Some("javascript:alert(1)".into());
+        manifest.authors = vec!["fixture-author".into()];
+        let item = PluginListItem::new(status(), Some(manifest));
+        assert_eq!(item.status.plugin_id.to_string(), "fixture.plugin");
+        assert_eq!(item.icon, None);
+        assert_eq!(item.authors, ["fixture-author"]);
+        let wire = serde_json::to_value(item).unwrap();
+        assert!(wire.get("icon").is_none());
     }
 
     #[test]

@@ -34,6 +34,14 @@ pub struct PluginManifest {
     pub namespace: String,
     pub name: String,
     pub version: String,
+    /// Human-facing title. The stable plugin identity remains `namespace.name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    /// Image source for host UIs: an HTTP(S) URL, a same-origin absolute path,
+    /// or an image data URI. Hosts render it as an image and fall back to their
+    /// default icon when the source is unsupported or cannot be loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
     /// Short plugin summary used when hosts only need a compact overview.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -1036,6 +1044,8 @@ impl PluginManifest {
             namespace: namespace.into(),
             name: name.into(),
             version: version.into(),
+            display_name: None,
+            icon: None,
             summary: None,
             help: None,
             translations: BTreeMap::new(),
@@ -1099,6 +1109,58 @@ impl PluginManifest {
 
 /// Free-form metadata attached to manifests, tools, and UI definitions.
 pub type Metadata = BTreeMap<String, String>;
+
+#[cfg(test)]
+mod presentation_metadata_tests {
+    use super::*;
+    use crate::Plugin;
+
+    const ICON: &str = concat!("data:image/svg+xml,", "%3Csvg%2F%3E");
+
+    struct PresentationPlugin;
+
+    #[crate::agena_plugin(
+        namespace = "fixture",
+        name = "presentation",
+        version = "1.2.3",
+        display_name = String::from("Presentation") + " plugin",
+        icon = ICON,
+        summary = "Verify plugin-owned presentation metadata",
+        authors = ["fixture-author"]
+    )]
+    impl PresentationPlugin {}
+
+    #[test]
+    fn plugin_macro_preserves_identity_and_accepts_metadata_expressions() {
+        let manifest = PresentationPlugin.manifest();
+        assert_eq!(manifest.namespace, "fixture");
+        assert_eq!(manifest.name, "presentation");
+        assert_eq!(
+            manifest.display_name.as_deref(),
+            Some("Presentation plugin")
+        );
+        assert_eq!(manifest.icon.as_deref(), Some(ICON));
+        assert_eq!(manifest.authors, ["fixture-author"]);
+        let wire = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(wire["icon"], ICON);
+        assert_eq!(
+            serde_json::from_value::<PluginManifest>(wire).unwrap(),
+            manifest
+        );
+    }
+
+    #[test]
+    fn older_manifests_remain_valid_without_presentation_metadata() {
+        let original = PluginManifest::new("fixture", "legacy", "1.0.0");
+        let wire = serde_json::to_value(&original).unwrap();
+        assert!(wire.get("icon").is_none());
+        assert!(wire.get("display_name").is_none());
+        let decoded = serde_json::from_value::<PluginManifest>(wire).unwrap();
+        assert_eq!(decoded, original);
+        assert_eq!(decoded.icon, None);
+        assert_eq!(decoded.display_name, None);
+    }
+}
 
 #[cfg(test)]
 mod hook_catalog_tests {

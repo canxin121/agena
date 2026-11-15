@@ -56,4 +56,19 @@ describe('unified runtime-plugin inventory', () => {
     expect(entries.map((item) => item.plugin_id)).toEqual(['demo.board'])
     expect(entries[0]!.state).toBe('unknown')
   })
+  test('display metadata keeps the runtime identity stable', () => {
+    const plugin = {
+      ...status('demo.board'),
+      display_name: 'Workspace board',
+      icon: 'https://example.test/board.svg',
+      authors: ['canxin121'],
+      version: '1.2.3',
+      tags: ['projects'],
+    }
+    expect(parsePluginStatusList([plugin])).toEqual([plugin])
+    const [entry] = pluginHubEntries([plugin], [page], 'en-US')
+    expect(entry!.title).toBe('Workspace board')
+    expect(entry!.plugin_id).toBe('demo.board')
+    expect(entry!.pages).toEqual([page])
+  })
 })

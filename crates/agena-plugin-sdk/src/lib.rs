@@ -53,6 +53,7 @@ pub mod manifest;
 mod manifest_support;
 pub mod permission_wait;
 pub mod plugin;
+pub mod plugin_icon;
 pub mod prelude;
 pub mod rpc;
 #[cfg(feature = "schema-validation")]
@@ -99,6 +100,7 @@ pub use manifest::{
     TransportKind, normalize_tool_tag_name,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginSettings, ToolStreamSink};
+pub use plugin_icon::{MAX_PLUGIN_ICON_SOURCE_BYTES, normalize_plugin_icon};
 pub use schemars::JsonSchema;
 // Session-kind applicability is part of the manifest vocabulary, so a plugin
 // author names it here like every other declaration type.

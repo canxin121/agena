@@ -12,9 +12,14 @@ pub(crate) struct AgentPlugin {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "agent", version = env!("CARGO_PKG_VERSION"),
+    display_name = "Agents",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/agent.svg"))),
+    authors = ["canxin121"],
+    help = "Create delegated agents, send messages, inspect their status and wait for results. Agent identity, delivery, supervision and recovery are managed by the runtime.",
+    tags(agena_plugin_host::sdk::ToolTag::Agent, agena_plugin_host::sdk::ToolTag::Interactive),
     summary = "Agent communication and delegation.",
     translations(
-            locale("zh-CN", summary = "会话间的 agent 协作工具。"),
+            locale("zh-CN", summary = "会话间的 agent 协作工具。", help = "创建协作代理、发送消息、查看状态并等待结果。代理身份、消息投递、监督和恢复由运行时统一管理。"),
             locale("zh-TW", summary = "會話間的 agent 協作工具。"),
             locale("ja-JP", summary = "エージェント間の連携ツール。"),
             locale("ko-KR", summary = "에이전트 간 협업 도구."),

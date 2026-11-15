@@ -12,9 +12,14 @@ pub(crate) struct BotPlugin {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "bot", version = env!("CARGO_PKG_VERSION"),
+    display_name = "AI Bots",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/bot.svg"))),
+    authors = ["canxin121"],
+    help = "Manage named AI Bots, their ordinary local project conversations and grants to external integrations. Bot identity and conversation routing are owned by the runtime.",
+    tags(agena_plugin_host::sdk::ToolTag::Agent, agena_plugin_host::sdk::ToolTag::Custom("bots".to_owned())),
     summary = "Named Bot access to ordinary project sessions and integration grants.",
     translations(
-        locale("zh-CN", summary = "Bot 管理普通项目会话和接入授权。"),
+        locale("zh-CN", summary = "Bot 管理普通项目会话和接入授权。", help = "管理命名 AI Bot、本地项目会话以及与外部集成的授权关系。Bot 身份和会话路由由运行时统一管理。"),
         locale("zh-TW", summary = "Bot 管理一般專案會話及接入授權。"),
         locale("ja-JP", summary = "Bot による通常のプロジェクト会話と連携承認の管理。"),
         locale("ko-KR", summary = "Bot이 일반 프로젝트 대화와 연결 승인을 관리합니다."),

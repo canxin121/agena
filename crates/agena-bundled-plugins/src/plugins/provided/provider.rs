@@ -63,9 +63,14 @@ fn default_limit() -> usize {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena", name = "provider", version = env!("CARGO_PKG_VERSION"),
+    display_name = "Model Catalog",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/provider.svg"))),
+    authors = ["canxin121"],
+    help = "List model routes across enabled adapters and inspect one model route in detail. Results include discovery sources and failures for the current provider.",
+    tags(agena_plugin_host::sdk::ToolTag::Discovery, agena_plugin_host::sdk::ToolTag::Custom("models".to_owned())),
     summary = "Discover model routes across all enabled adapters of the current provider.",
     translations(
-        locale("zh-CN", summary = "查询当前 provider 全部已启用 adapter 的模型及来源。"),
+        locale("zh-CN", summary = "查询当前 provider 全部已启用 adapter 的模型及来源。", help = "列出当前提供方所有已启用适配器的模型路由，并查看单个路由的详细信息，包括发现来源和失败原因。"),
         locale("zh-TW", summary = "查詢目前 provider 全部已啟用 adapter 的模型與來源。")
     )
 )]

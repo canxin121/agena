@@ -10,6 +10,7 @@ pub mod capability_manifest;
 pub mod docs_reference;
 pub mod memory;
 mod permissions;
+mod plugin_metadata;
 mod plugin_settings_docs;
 mod plugin_tool_docs;
 pub mod plugins;

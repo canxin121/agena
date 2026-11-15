@@ -165,6 +165,14 @@ pub fn expand_plugin_layer_manifest(
     } else {
         quote! {}
     };
+    let display_name_assignment = config
+        .display_name
+        .as_ref()
+        .map(|name| quote! { manifest.display_name = Some((#name).to_string()); });
+    let icon_assignment = config
+        .icon
+        .as_ref()
+        .map(|icon| quote! { manifest.icon = Some((#icon).to_string()); });
     let authors_assignment = config.authors.as_ref().map(|authors| {
         quote! {
             manifest.authors = ::core::iter::IntoIterator::into_iter(#authors)
@@ -296,6 +304,8 @@ pub fn expand_plugin_layer_manifest(
             manifest.hooks = #hooks_expr;
             #(#handler_definitions)*
             #authors_assignment
+            #display_name_assignment
+            #icon_assignment
             #transports_assignment
             #surface_assignment
             #settings_assignment

@@ -28,6 +28,7 @@ fn event(id: &str) -> ExternalEvent {
         event_type: "issue.opened".into(),
         resource: "owner/repo".into(),
         actor: "contributor".into(),
+        actor_display_name: None,
         thread: None,
         bot: false,
         occurred_at_ms: 2000,

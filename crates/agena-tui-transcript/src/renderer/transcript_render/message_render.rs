@@ -30,6 +30,7 @@ use crate::{
     ToolCallView, TranscriptActivityContent, TranscriptActivitySection,
     TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
+use agena_api::resource::RunRole;
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -962,7 +963,7 @@ pub(crate) fn render_transcript_entries_export_markdown(
         if let Some(role) = message.role {
             out.push(format!(
                 "## {} · {} · {}",
-                ui_text::role_label(i18n, role),
+                message_sender_label(message, i18n, role),
                 ui_text::message_state_label(i18n, message.state),
                 timestamp,
             ));
@@ -1089,6 +1090,20 @@ pub(crate) fn tool_output_preview_with_limits(
     }
 }
 
+fn message_sender_label(message: &TranscriptEntry, i18n: &I18n, role: RunRole) -> String {
+    if role == RunRole::User
+        && let Some(author) = &message.author
+        && (!author.is_instance_operator()
+            || author
+                .display_name
+                .as_deref()
+                .is_some_and(|name| !name.trim().is_empty()))
+    {
+        return author.display_label().to_owned();
+    }
+    ui_text::role_label(i18n, role)
+}
+
 pub(crate) fn push_message_header(
     out: &mut Vec<RenderedLine>,
     message: &TranscriptEntry,
@@ -1097,7 +1112,7 @@ pub(crate) fn push_message_header(
 ) {
     let role = message
         .role
-        .map(|role| ui_text::role_label(i18n, role))
+        .map(|role| message_sender_label(message, i18n, role))
         .expect("only message entries render a role header");
     let header = match message.state {
         RunStatus::Completed => role,

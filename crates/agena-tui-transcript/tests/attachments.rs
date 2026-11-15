@@ -43,6 +43,8 @@ fn entry(content: TranscriptPartContent<'static>) -> TranscriptEntry<'static> {
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(1),
         reply_id: None,
+        author: None,
+        origin: None,
         role: Some(RunRole::Assistant),
         state: RunStatus::Completed,
         created_at: chrono::Utc::now(),

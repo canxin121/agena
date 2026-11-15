@@ -238,6 +238,7 @@ mod tests {
             event_type: "message".into(),
             resource: "room".into(),
             actor: "alice".into(),
+            actor_display_name: None,
             thread: Some("thread-a".into()),
             bot: false,
             occurred_at_ms: 2000,

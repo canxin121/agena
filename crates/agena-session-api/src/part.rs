@@ -25,6 +25,12 @@ pub struct PartResource {
     #[serde(default)]
     pub message_boundary: bool,
     pub role: String,
+    /// Persisted sender identity on user-message boundaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<Box<agena_domain::MessageAuthor>>,
+    /// Transport and conversation the user message arrived through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Box<agena_domain::MessageOrigin>>,
     pub state: String,
     /// Run-level execution state for a message boundary. Content parts keep
     /// their own state, so a failed run can still contain completed reasoning.

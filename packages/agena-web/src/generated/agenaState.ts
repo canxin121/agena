@@ -162,6 +162,17 @@ export type AssistantProfile = {
 
 export type AssistantTone = 'balanced' | 'warm' | 'direct' | 'playful'
 
+/** The verified identity of a message's sender, and the authority it implies. */
+export type AuthorKind = {
+  kind: 'instance_operator'
+} | {
+  kind: 'channel_member'
+  role: ChannelRole
+} | {
+  kind: 'system'
+  source: SystemAuthorKind
+}
+
 export type BindingState = 'disabled' | 'enabled' | 'paused' | 'expired' | 'faulted'
 
 export type ChannelAccessAudit = {
@@ -263,6 +274,12 @@ export type ChannelThreadMode = 'exact' | 'per_thread'
 
 export type ChannelTrigger = 'direct_or_mention' | 'every_message'
 
+/** A chat platform supplied by an installed adapter plugin. One binding owns a whole platform account: every group, private chat and channel that account can see. `id` is the adapter's canonical platform id (for example `telegram`), and `account` distinguishes multiple accounts of the same platform. */
+export type ChatPlatform = {
+  account: string
+  id: string
+}
+
 export type ConversationCounts = {
   broadcast: number
   direct: number
@@ -286,6 +303,7 @@ export type ConversationKind = 'direct' | 'group' | 'broadcast'
 
 export type ExternalEvent = {
   actor: string
+  actor_display_name?: string | null
   bot?: boolean
   channel?: ChannelEnvelope
   data?: JsonValue
@@ -457,6 +475,9 @@ export type IntegrationSpec = {
   use_source_permissions?: boolean
 }
 
+/** A local, authenticated Agena surface. Reaching one requires the instance token, so every author arriving through one is an instance operator. */
+export type LocalSurface = 'web' | 'tui' | 'cli' | 'api'
+
 export type MemoryKind = 'fact' | 'preference' | 'episode' | 'procedure' | 'task'
 
 export type MemoryMetadata = {
@@ -500,6 +521,15 @@ export type MemorySource = {
 }
 
 export type MemoryStatus = 'active' | 'archived' | 'superseded'
+
+/** Where a message came from: a local surface, or an installed chat platform. */
+export type Platform = {
+  surface: LocalSurface
+  transport: 'local'
+} | {
+  platform: ChatPlatform
+  transport: 'chat'
+}
 
 export type PlatformAccount = {
   account: string
@@ -555,6 +585,9 @@ export type ReminderSpec = {
 
 export type ReminderState = 'active' | 'paused' | 'delivering' | 'completed' | 'cancelled'
 
+/** A system-produced author. These never carry external authority. */
+export type SystemAuthorKind = 'automation_report' | 'shared_chat' | 'subagent' | 'integration' | 'bot'
+
 export type UiAction = {
   key: string
   type: 'set'
@@ -606,6 +639,21 @@ export type UiStateField = {
 }
 
 export type UiStateKind = 'boolean' | 'number' | 'text' | 'choice' | 'selection'
+
+/** The sender of one message. `display_name` is presentation only and must never be consulted for authorization: a user can rename themselves on most platforms. */
+export type MessageAuthor = {
+  kind: AuthorKind
+  display_name?: string | null
+  id: string
+}
+
+/** Where a message physically arrived: platform, exact external conversation, and optional thread. `conversation` is the adapter's own stable identifier for the room. Together with the binding it selects exactly one session, so a group, a private chat and a channel never share a transcript. */
+export type MessageOrigin = {
+  kind: ConversationKind
+  conversation: string
+  platform: Platform
+  thread?: string | null
+}
 
 export type BotSession = {
   bot_id: string

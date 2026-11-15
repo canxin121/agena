@@ -1,3 +1,4 @@
+import { normalizeMessageIdentity } from '@/lib/messageIdentity'
 import { activityEquals, activityIsActive, type SessionActivity } from '@/types/activity'
 import { defineStore } from 'pinia'
 import { useUiStore } from './ui'
@@ -2440,6 +2441,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
                 revision: readNumber(part.revision) ?? 0,
                 updatedAt: readNumber(part.updated_at_ms) ?? 0,
                 ...(runState ? { runState } : {}),
+                ...normalizeMessageIdentity(part),
                 runContent: content,
                 ...(isRunTerminal(runState) ? { finish: runState } : {}),
                 time: { created: readNumber(part.created_at_ms) ?? Date.now() },

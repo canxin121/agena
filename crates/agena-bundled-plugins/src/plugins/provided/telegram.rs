@@ -766,17 +766,28 @@ impl TelegramPlugin {
         if occurred_at_ms < request.not_before_ms {
             return None;
         }
-        let from = message.get("from");
-        // A channel post has no author: Telegram publishes it as the channel
-        // itself, so the room is the only identity the platform discloses.
-        let (actor, sender_name, sender_is_bot) = match (from, channel_post) {
-            (Some(from), _) => (
+        // sender_chat is the disclosed identity when an anonymous administrator
+        // or linked channel posts on behalf of a chat. Telegram can also include
+        // a compatibility "from" user; it must never acquire that user's grant.
+        // Channel posts always belong to the publishing channel.
+        let sender_chat = if channel_post {
+            Some(chat)
+        } else {
+            message.get("sender_chat")
+        };
+        let (actor, sender_name, sender_is_bot) = if let Some(sender) = sender_chat {
+            (
+                format!("channel:{}", sender.get("id").and_then(Value::as_i64)?),
+                display_name(sender),
+                false,
+            )
+        } else {
+            let from = message.get("from")?;
+            (
                 from.get("id").and_then(Value::as_i64)?.to_string(),
                 display_name(from),
                 from.get("is_bot").and_then(Value::as_bool).unwrap_or(false),
-            ),
-            (None, true) => (format!("channel:{chat_id}"), None, false),
-            (None, false) => return None,
+            )
         };
         let text = message_text(message)?;
         let thread = match kind {
@@ -800,6 +811,7 @@ impl TelegramPlugin {
             event_type: "message".into(),
             resource: chat_id.to_string(),
             actor: actor.clone(),
+            actor_display_name: sender_name.clone(),
             thread,
             bot: sender_is_bot,
             occurred_at_ms,
@@ -869,6 +881,7 @@ fn revocation_event(
         event_type: "membership.revoked".into(),
         resource: chat_id.to_string(),
         actor,
+        actor_display_name: display_name(user),
         thread: None,
         bot: false,
         occurred_at_ms,
@@ -1014,13 +1027,27 @@ fn display_name(user: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return user
-            .get("username")
-            .and_then(Value::as_str)
-            .map(bounded_text);
+    let name = if parts.is_empty() {
+        user.get("title")
+            .or_else(|| user.get("username"))
+            .and_then(Value::as_str)?
+            .trim()
+            .to_owned()
+    } else {
+        parts.join(" ")
+    };
+    // Names are labels, never prompt syntax. Normalize controls and bound the
+    // UTF-8 bytes independently of the much larger message text allowance.
+    let name = name.chars().filter(|c| !c.is_control()).collect::<String>();
+    let name = name.trim();
+    if name.is_empty() {
+        return None;
     }
-    Some(bounded_text(&parts.join(" ")))
+    let mut end = name.len().min(256);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(name[..end].to_owned())
 }
 
 /// Trim provider text to the host's 24 KiB event body without splitting a

@@ -103,12 +103,15 @@ class WebhookChat:
                         self.respond(401, {"error": "invalid signature"})
                         return
                     event = json.loads(body)
-                    allowed = {"id", "event_type", "resource", "actor", "thread", "bot", "occurred_at_ms", "text", "data", "channel"}
+                    allowed = {"id", "event_type", "resource", "actor", "actor_display_name", "thread", "bot", "occurred_at_ms", "text", "data", "channel"}
                     if not isinstance(event, dict) or set(event) - allowed or event.get("event_type") not in {"message", "membership.revoked"}:
                         raise ValueError("invalid normalized message")
                     for key in ("id", "resource", "actor"):
                         if not isinstance(event.get(key), str) or not 0 < len(event[key].encode()) <= 256 or any(unicodedata.category(c) == "Cc" for c in event[key]):
                             raise ValueError("invalid message identity")
+                    name = event.get("actor_display_name")
+                    if name is not None and (not isinstance(name, str) or not name.strip() or len(name.encode()) > 256 or any(unicodedata.category(c) == "Cc" for c in name)):
+                        raise ValueError("invalid sender display name")
                     if event["actor"] in {"@service", "@shared", "@unattributed", "*"} or any(c.isspace() for c in event["actor"]):
                         raise ValueError("reserved or invalid sender identity")
                     if not isinstance(event.get("text"), str) or not event["text"].strip() or not 0 < len(event["text"].encode()) <= 24576:

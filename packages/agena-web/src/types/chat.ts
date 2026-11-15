@@ -16,6 +16,8 @@ import type {
   SessionState,
   SessionStateKind,
   AgentStatus,
+  MessageAuthor,
+  MessageOrigin,
   WorkflowState,
 } from '../generated/agenaState'
 
@@ -33,6 +35,8 @@ export type {
   SessionState,
   SessionStateKind,
   AgentStatus,
+  MessageAuthor,
+  MessageOrigin,
   WorkflowState,
 }
 
@@ -208,6 +212,8 @@ export type MessageInfo = {
   id: string
   sessionID: string
   role: 'user' | 'assistant' | 'system' | 'tool' | 'runtime' | string
+  author?: MessageAuthor
+  origin?: MessageOrigin
   time?: { created?: number; completed?: number }
   finish?: string
   modelID?: string

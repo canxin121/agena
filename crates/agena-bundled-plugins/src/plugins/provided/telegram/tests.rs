@@ -225,6 +225,7 @@ fn a_group_message_requiring_a_mention_is_reported_with_verified_evidence_only()
     assert_eq!(event.id, "telegram:-1001234567890:11");
     assert_eq!(event.resource, "-1001234567890");
     assert_eq!(event.actor, "77");
+    assert_eq!(event.actor_display_name.as_deref(), Some("Ann Lee"));
     assert_eq!(event.event_type, "message");
     assert_eq!(event.thread, None);
     let channel = event.channel.expect("identity evidence is mandatory");
@@ -553,4 +554,64 @@ fn utf16_offsets_slice_a_mention_out_of_a_plane_one_message() {
         .message_event(&message, &config(), &bot(), &request(), false)
         .expect("an event");
     assert!(event.channel.unwrap().addressed_to_bot);
+}
+
+#[test]
+fn sender_names_preserve_private_and_group_users_with_stable_id_fallbacks() {
+    let plugin = TelegramPlugin::new();
+    for (from, expected) in [
+        (
+            json!({"id": 77, "first_name": "Ann", "last_name": "Lee", "username": "ann"}),
+            Some("Ann Lee"),
+        ),
+        (json!({"id": 88, "username": "canxin"}), Some("canxin")),
+        (json!({"id": 99}), None),
+    ] {
+        for chat_type in ["private", "supergroup"] {
+            let mut message = group_message("hello");
+            message["from"] = from.clone();
+            message["chat"]["type"] = json!(chat_type);
+            let event = plugin
+                .message_event(&message, &config(), &bot(), &request(), false)
+                .unwrap();
+            assert_eq!(event.actor, from["id"].as_i64().unwrap().to_string());
+            assert_eq!(event.actor_display_name.as_deref(), expected);
+            event.validate().unwrap();
+        }
+    }
+}
+
+#[test]
+fn display_names_are_single_line_bounded_utf8_labels() {
+    assert_eq!(
+        display_name(&json!({"first_name": "Ann\n", "last_name": " Lee\t"})).as_deref(),
+        Some("Ann Lee")
+    );
+    assert_eq!(display_name(&json!({"username": "   "})), None);
+    let name = display_name(&json!({"first_name": "名".repeat(200)})).unwrap();
+    assert!(name.len() <= 256);
+    assert!(!name.is_empty());
+}
+
+#[test]
+fn anonymous_chat_and_channel_posts_never_borrow_the_compatibility_from_user() {
+    let plugin = TelegramPlugin::new();
+    let mut message = group_message("hello");
+    message["sender_chat"] = json!({"id": -44, "type": "supergroup", "title": "Anonymous team"});
+    let event = plugin
+        .message_event(&message, &config(), &bot(), &request(), false)
+        .unwrap();
+    assert_eq!(event.actor, "channel:-44");
+    assert_eq!(event.actor_display_name.as_deref(), Some("Anonymous team"));
+    assert_ne!(
+        event.actor,
+        message["from"]["id"].as_i64().unwrap().to_string()
+    );
+
+    message["chat"] = json!({"id": -1009, "type": "channel", "title": "Announcements"});
+    let event = plugin
+        .message_event(&message, &config(), &bot(), &request(), true)
+        .unwrap();
+    assert_eq!(event.actor, "channel:-1009");
+    assert_eq!(event.actor_display_name.as_deref(), Some("Announcements"));
 }

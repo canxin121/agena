@@ -252,6 +252,8 @@ fn literal_enums() -> Vec<LiteralEnum> {
 /// their payload shapes). Referenced types are emitted once, by name.
 fn structured_roots() -> Vec<(&'static str, Value)> {
     vec![
+        ("MessageAuthor", schema_of::<agena_domain::MessageAuthor>()),
+        ("MessageOrigin", schema_of::<agena_domain::MessageOrigin>()),
         ("BotSession", schema_of::<agena_api::bot::BotSession>()),
         ("BotPersona", schema_of::<agena_api::bot::BotPersona>()),
         ("BotProfile", schema_of::<agena_api::bot::BotProfile>()),

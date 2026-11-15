@@ -19,6 +19,8 @@ fn entry(role: RunRole, content: TranscriptPartContent<'static>) -> TranscriptEn
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(1),
         reply_id: None,
+        author: None,
+        origin: None,
         role: Some(role),
         state: RunStatus::Completed,
         created_at: chrono::Utc::now(),
@@ -256,5 +258,50 @@ fn question_buttons_and_summary_copy_follow_the_compact_columns() {
             assert!(button_rows > 0);
             assert_eq!(summary_rows > 0, page == 1);
         }
+    }
+}
+
+#[test]
+fn channel_user_headers_render_each_persisted_name_and_legacy_id() {
+    use agena_api::part::PartResource;
+    use agena_domain::{ChannelRole, ConversationKind, MessageAuthor, MessageOrigin, Platform};
+    let origin = MessageOrigin {
+        platform: Platform::chat("telegram", "agena_bot"),
+        conversation: "-100".into(),
+        kind: ConversationKind::Group,
+        thread: None,
+    };
+    let parts: Vec<_> = [("77", Some("Ann Lee")), ("88", Some("陈星")), ("99", None)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (id, name))| PartResource {
+            part_id: index as i64 + 1,
+            run_id: Some(index as i64 + 1),
+            message_boundary: true,
+            role: "user".into(),
+            author: Some(Box::new(MessageAuthor::channel_member(
+                id,
+                ChannelRole::Member,
+                name.map(str::to_owned),
+            ))),
+            origin: Some(Box::new(origin.clone())),
+            kind: "text".into(),
+            state: "completed".into(),
+            content: json!({"text": "hello"}),
+            ..Default::default()
+        })
+        .collect();
+    let entries = agena_tui_transcript::parts_entries(&parts);
+    assert_eq!(entries.len(), 3);
+    for (entry, label) in entries.iter().zip(["Ann Lee", "陈星", "99"]) {
+        assert_eq!(entry.origin.as_ref(), Some(&origin));
+        let rendered = render_entry_detailed(
+            entry,
+            60,
+            &I18n::english(),
+            &Default::default(),
+            &Default::default(),
+        );
+        assert_eq!(rendered.lines[0].text, label);
     }
 }

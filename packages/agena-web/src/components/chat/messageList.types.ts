@@ -1,4 +1,4 @@
-import type { MessageFold } from '@/types/chat'
+import type { MessageAuthor, MessageFold, MessageOrigin } from '@/types/chat'
 import type { JsonValue } from '@/types/json'
 
 export type MessagePartLike = {
@@ -33,6 +33,8 @@ export type MessageLike = {
   info: {
     id?: string
     role?: string
+    author?: MessageAuthor
+    origin?: MessageOrigin
     time?: { created?: number; completed?: number }
     finish?: string
     modelID?: string

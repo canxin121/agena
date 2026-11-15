@@ -265,6 +265,8 @@ fn run_marker_entry(marker: &PartResource) -> TranscriptEntry<'static> {
     TranscriptEntry {
         id: TranscriptEntryId::StoredMessage(marker.part_id),
         role: role_from_string(&marker.role),
+        author: marker.author.as_deref().cloned(),
+        origin: marker.origin.as_deref().cloned(),
         state: message_status_from_string(marker.run_state.as_deref().unwrap_or(&marker.state)),
         created_at: timestamp(marker.created_at_ms),
         reply_id: string_field(&marker.content, "reply_id")

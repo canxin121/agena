@@ -166,3 +166,42 @@ test('opening a live tail immediately reconciles a snapshot without waiting for 
   expect(list.mock.calls[0]![0]).toBe('6')
   release()
 })
+
+test('live user-message updates retain the sender name and channel identity', () => {
+  const chat = useChatStoreUnscoped(pinia)
+  const release = chat.retainSession('6')
+  const author = { id: '77', display_name: 'Ann Lee', kind: { kind: 'channel_member', role: 'member' } }
+  const origin = {
+    platform: { transport: 'chat', platform: { id: 'telegram', account: 'agena_bot' } },
+    conversation: '-100',
+    kind: 'group',
+  }
+  connections[0]!.options.onEvent({
+    type: 'session_changed',
+    properties: {
+      kind: 'part_updated',
+      session_id: 6,
+      part: {
+        part_id: 18,
+        run_id: 18,
+        message_id: 18,
+        message_boundary: true,
+        role: 'user',
+        kind: 'text',
+        state: 'completed',
+        run_state: 'completed',
+        author,
+        origin,
+        content: { text: 'hello' },
+        sections: [],
+        revision: 1,
+        created_at_ms: 1,
+        updated_at_ms: 2,
+      },
+    },
+  })
+  const message = chat.getMessagesForSession('6')[0]
+  expect(message?.info.author).toEqual(author)
+  expect(message?.info.origin).toEqual(origin)
+  release()
+})

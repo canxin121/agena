@@ -152,13 +152,15 @@ https://docs.github.com/en/rest/about-the-rest-api/api-versions
   "event_type": "message",
   "resource": "tenant:account:conversation",
   "actor": "verified-sender-id",
+  "actor_display_name": "Ann Lee",
   "thread": null,
   "bot": false,
   "occurred_at_ms": 0,
   "text": "请检查这个项目的测试",
   "data": null,
   "channel": {
-    "identity": {"tenant":"tenant-id","account":"bot-account-id","kind":"group"},
+    "identity": {"tenant":"tenant-id","account":"bot-account-id"},
+    "kind": "group",
     "actor_verified": true,
     "is_member": true,
     "addressed_to_bot": true,
@@ -175,6 +177,8 @@ signature = "sha256=" + HMAC_SHA256(
     timestamp.encode() + b"\n" + raw_request_body
 ).hexdigest()
 ```
+
+可选的 `actor_display_name` 由适配器提供平台上的用户姓名或用户名，最多 256 个 UTF-8 字节且不含控制字符。宿主将名字、稳定的 `actor` ID 和来源会话分别保存；Web/TUI 消息标题显示名字，缺少名字时显示 ID，模型上下文同时包含名字与 ID。授权始终使用稳定 ID 和宿主策略。
 
 签名覆盖原始请求字节，时间窗口为五分钟。重复消息返回原接收结果；同一消息身份的不同正文返回冲突；成功应答发生在 SQLite 提交之后。`actor` 必须由可信平台适配器得到，不能直接相信未验证客户端自己填写的用户名。
 

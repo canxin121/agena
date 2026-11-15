@@ -39,6 +39,7 @@ import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useNearViewport } from '@/composables/useNearViewport'
 import { afterPaint } from '@/lib/afterPaint'
 import { useConversationReadOnly } from '@/pages/chat/conversationReadOnly'
+import { messageSenderLabel, messageSenderDetails } from '@/lib/messageIdentity'
 
 const props = defineProps<{
   message: MessageLike
@@ -93,6 +94,8 @@ watch(nearViewport, (near) => {
 })
 onBeforeUnmount(() => cancelActionsMount?.())
 const role = computed(() => String(props.message.info.role || 'assistant'))
+const senderLabel = computed(() => messageSenderLabel(props.message.info))
+const senderDetails = computed(() => messageSenderDetails(props.message.info))
 const messageId = computed(() => String(props.message.info.id || ''))
 const messageNodeKey = computed(() => `message:${messageId.value}`)
 const runStatus = computed(() =>
@@ -366,13 +369,14 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
   >
     <header class="flex min-h-5 items-center gap-2 px-1 text-[11px] text-muted-foreground">
       <span
-        class="font-semibold"
+        class="min-w-0 max-w-[60%] truncate font-semibold"
+        :title="senderDetails || undefined"
         :class="{
           'text-primary': role === 'user',
           'text-emerald-700 dark:text-emerald-300': role === 'assistant',
           'text-amber-700 dark:text-amber-300': role === 'system' || role === 'runtime',
         }"
-        >{{ role }}</span
+        >{{ senderLabel }}</span
       >
       <span
         v-if="runStatus.label && runStatus.tone !== 'success'"

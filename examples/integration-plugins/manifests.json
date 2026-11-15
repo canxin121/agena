@@ -323,6 +323,17 @@
                           },
                           {
                             "constraints": {},
+                            "description": "Platform-supplied name for presentation. Authority always follows the\nstable actor id and host policy, never this changeable display label.",
+                            "id": "actor_display_name",
+                            "kind": "text",
+                            "path": "/events/*/actor_display_name",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Actor Display Name"
+                          },
+                          {
+                            "constraints": {},
                             "default": false,
                             "id": "bot",
                             "kind": "boolean",
@@ -942,6 +953,17 @@
                             "secret": false,
                             "sensitive": false,
                             "title": "Actor"
+                          },
+                          {
+                            "constraints": {},
+                            "description": "Platform-supplied name for presentation. Authority always follows the\nstable actor id and host policy, never this changeable display label.",
+                            "id": "actor_display_name",
+                            "kind": "text",
+                            "path": "/events/*/actor_display_name",
+                            "required": false,
+                            "secret": false,
+                            "sensitive": false,
+                            "title": "Actor Display Name"
                           },
                           {
                             "constraints": {},

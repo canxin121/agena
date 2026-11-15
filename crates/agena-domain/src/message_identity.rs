@@ -275,6 +275,16 @@ impl MessageAuthor {
         }
     }
 
+    /// Human-readable label, with the stable id as the fallback for legacy
+    /// entries and platforms that do not supply a name.
+    pub fn display_label(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&self.id)
+    }
+
     /// True when this author holds instance-level authority.
     pub fn is_instance_operator(&self) -> bool {
         self.kind.is_instance_operator()

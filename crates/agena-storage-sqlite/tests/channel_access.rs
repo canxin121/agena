@@ -63,6 +63,7 @@ fn event(id: &str, actor: &str) -> ExternalEvent {
         event_type: "message".into(),
         resource: "room".into(),
         actor: actor.into(),
+        actor_display_name: None,
         thread: Some("thread-1".into()),
         bot: false,
         occurred_at_ms: 2000,

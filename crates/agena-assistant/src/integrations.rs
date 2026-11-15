@@ -66,6 +66,10 @@ pub struct ExternalEvent {
     /// Exact repository/account-conversation identity selected by the grant.
     pub resource: String,
     pub actor: String,
+    /// Platform-supplied name for presentation. Authority always follows the
+    /// stable actor id and host policy, never this changeable display label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_display_name: Option<String>,
     #[serde(default)]
     pub thread: Option<String>,
     #[serde(default)]
@@ -86,6 +90,13 @@ impl ExternalEvent {
                     "external event identities must contain 1–256 non-control bytes",
                 ));
             }
+        }
+        if self.actor_display_name.as_ref().is_some_and(|name| {
+            name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control)
+        }) {
+            return Err(Error::Invalid(
+                "external actor display names must contain 1–256 non-control bytes",
+            ));
         }
         if self.text.trim().is_empty()
             || self.text.len() > 24 * 1024
@@ -1061,6 +1072,7 @@ mod tests {
             event_type: "issue.opened".into(),
             resource: "owner/repo".into(),
             actor: "stranger".into(),
+            actor_display_name: None,
             thread: None,
             bot: false,
             occurred_at_ms: 2500,
@@ -1211,5 +1223,24 @@ mod tests {
                 .unwrap();
         let inventory = PlatformInventory::build(&[source], &[], &BTreeMap::new());
         assert!(inventory.platforms.is_empty());
+    }
+    #[test]
+    fn external_actor_names_are_optional_and_do_not_change_authority() {
+        let legacy = serde_json::json!({
+            "id": "one", "event_type": "message", "resource": "room", "actor": "77",
+            "occurred_at_ms": 2000, "text": "hello"
+        });
+        let mut event: ExternalEvent = serde_json::from_value(legacy).unwrap();
+        assert_eq!(event.actor_display_name, None);
+        assert!(event.validate().is_ok());
+        event.actor_display_name = Some("Ann Lee".into());
+        assert!(event.validate().is_ok());
+        let encoded = serde_json::to_value(&event).unwrap();
+        assert_eq!(encoded["actor"], "77");
+        assert_eq!(encoded["actor_display_name"], "Ann Lee");
+        for invalid in ["", "  ", "Ann\nOwner", &"x".repeat(257)] {
+            event.actor_display_name = Some(invalid.to_owned());
+            assert!(event.validate().is_err());
+        }
     }
 }

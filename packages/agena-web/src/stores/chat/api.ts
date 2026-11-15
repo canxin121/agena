@@ -21,11 +21,14 @@ import {
 } from './sessionMutationSync'
 import { isRunInFlight, isRunTerminal } from '../../lib/chatRunState'
 import { toolInputRecord } from '../../lib/toolInput'
+import { normalizeMessageIdentity } from '@/lib/messageIdentity'
 import { toolFailurePresentation } from '../../lib/toolFailures'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PromptLayer, PromptResolution } from '@/lib/promptLayers'
 import type {
+  MessageAuthor,
+  MessageOrigin,
   MessageEntry,
   MessageFold,
   MessageInfo,
@@ -75,6 +78,8 @@ export type AgenaPart = {
   message_boundary?: boolean
   kind: string
   role: string
+  author?: MessageAuthor
+  origin?: MessageOrigin
   state: string
   content: JsonValue
   sections: Array<{ section: ToolDetailSection; revision: number }>
@@ -317,6 +322,7 @@ function entriesFromParts(
         id: partIdStr,
         sessionID: sessionId,
         role,
+        ...normalizeMessageIdentity(part),
         runId: partId,
         ...(typeof part.message_id === 'number' ? { messageId: part.message_id } : {}),
         revision: typeof part.revision === 'number' ? part.revision : 0,

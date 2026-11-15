@@ -390,7 +390,13 @@ pub(crate) async fn project_kernel_entry(
         ..PartResource::default()
     };
     match &entry.payload {
-        EntryPayload::User { document, .. } => {
+        EntryPayload::User {
+            document,
+            author,
+            origin,
+        } => {
+            part.author = author.clone().map(Box::new);
+            part.origin = origin.clone().map(Box::new);
             part.kind = "text".into();
             part.role = "user".into();
             part.run_id = Some(entry.id.get());
@@ -2608,5 +2614,77 @@ mod tool_input_projection_tests {
                 .as_deref(),
             Some(continuation)
         );
+    }
+    #[tokio::test]
+    async fn user_identity_survives_storage_and_public_transcript_projection() {
+        use agena_domain::{ChannelRole, ConversationKind, MessageAuthor, MessageOrigin, Platform};
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/message-identity-tests")
+            .await
+            .unwrap();
+        let session = runtime
+            .ports
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                workspace,
+                "Identity".into(),
+                Default::default(),
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let author =
+            MessageAuthor::channel_member("77", ChannelRole::Member, Some("Ann Lee".into()));
+        let origin = MessageOrigin {
+            platform: Platform::chat("telegram", "agena_bot"),
+            conversation: "-100".into(),
+            kind: ConversationKind::Group,
+            thread: Some("42".into()),
+        };
+        for named in [true, false] {
+            let execution = runtime
+                .ports
+                .sessions
+                .send_with_blobs_as(
+                    RequestId::new(),
+                    session,
+                    ComposerDocument(vec![ComposerNode::Text {
+                        text: "hello".into(),
+                    }]),
+                    &[],
+                    named.then(|| author.clone()),
+                    named.then(|| origin.clone()),
+                )
+                .await
+                .unwrap()
+                .value;
+            let entry = runtime
+                .ports
+                .reader
+                .entry(session, execution.message_id)
+                .await
+                .unwrap();
+            let part = project_kernel_entry(&runtime.ports.reader, session, &entry)
+                .await
+                .unwrap();
+            assert_eq!(part.author.as_deref(), named.then_some(&author));
+            assert_eq!(part.origin.as_deref(), named.then_some(&origin));
+            assert_eq!(part.content["text"], "hello");
+            assert_eq!(part.role, "user");
+            let json = serde_json::to_value(&part).unwrap();
+            if named {
+                assert_eq!(json["author"]["display_name"], "Ann Lee");
+                assert_eq!(json["author"]["id"], "77");
+            } else {
+                assert!(json.get("author").is_none());
+                assert!(json.get("origin").is_none());
+            }
+        }
     }
 }

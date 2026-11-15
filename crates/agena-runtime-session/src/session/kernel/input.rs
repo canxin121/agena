@@ -807,8 +807,13 @@ pub(crate) fn message_source_line(
 
 /// `<display name or id> (<authority label>)`.
 fn sender_label(author: &agena_domain::MessageAuthor) -> String {
-    let name = author.display_name.as_deref().unwrap_or(&author.id);
-    format!("{name} ({})", author_kind_label(&author.kind))
+    let name = author.display_label();
+    let identity = if name == author.id {
+        name.to_owned()
+    } else {
+        format!("{name} [id:{}]", author.id)
+    };
+    format!("{identity} ({})", author_kind_label(&author.kind))
 }
 
 fn author_kind_label(kind: &agena_domain::AuthorKind) -> String {
@@ -1119,7 +1124,7 @@ mod message_source_tests {
              platform: chat:feishu/app-1\n\
              conversation: oc_123 (group)\n\
              thread: t-9\n\
-             sender: Ann (channel_member:operator)\n\
+             sender: Ann [id:u-7] (channel_member:operator)\n\
              --- message ---\n"
         );
     }
@@ -1153,7 +1158,7 @@ mod message_source_tests {
         };
         assert_eq!(
             message_source_line(Some(&author), Some(&origin)).unwrap(),
-            "source: chat:telegram/bot-1 conversation chat-9 (broadcast); sender: Ann (channel_member:member)"
+            "source: chat:telegram/bot-1 conversation chat-9 (broadcast); sender: Ann [id:u-7] (channel_member:member)"
         );
     }
 }

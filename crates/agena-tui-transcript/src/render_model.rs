@@ -468,6 +468,8 @@ pub struct TranscriptEntry<'a> {
     /// Message role when this entry is a Turn/Response. Session-owned
     /// activities are top-level Activity entries and therefore have no role.
     pub role: Option<RunRole>,
+    pub author: Option<agena_domain::MessageAuthor>,
+    pub origin: Option<agena_domain::MessageOrigin>,
     pub state: RunStatus,
     pub created_at: DateTime<Utc>,
     pub parts: Vec<TranscriptEntryPart<'a>>,
@@ -478,6 +480,8 @@ impl<'a> From<&TranscriptRun> for TranscriptEntry<'a> {
         Self {
             id: TranscriptEntryId::StoredMessage(message.id),
             role: Some(message.role),
+            author: None,
+            origin: None,
             state: message.state,
             created_at: message.created_at,
             // This typed run projection carries no marker content, so a

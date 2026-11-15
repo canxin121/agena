@@ -106,9 +106,9 @@ class GitHubContract(unittest.TestCase):
             request["cursor"]["next"] = "https://example.invalid/steal-token"
             with self.assertRaises(ValueError): adapter.poll(request)
 
-IDENTITY={"tenant":"fixture-tenant","account":"fixture-bot","kind":"group"}
+IDENTITY={"tenant":"fixture-tenant","account":"fixture-bot"}
 def channel_context():
-    return {"identity":dict(IDENTITY),"actor_verified":True,"is_member":True,"addressed_to_bot":True,"verified_at_ms":int(time.time()*1000)}
+    return {"identity":dict(IDENTITY),"kind":"group","actor_verified":True,"is_member":True,"addressed_to_bot":True,"verified_at_ms":int(time.time()*1000)}
 
 class ChatContract(unittest.TestCase):
     def setUp(self):
@@ -149,6 +149,19 @@ class ChatContract(unittest.TestCase):
         batch = self.adapter.poll(request)
         self.assertEqual(len(batch["events"]), 1)
         self.assertEqual(self.adapter.poll({**request, "cursor": batch["cursor"]})["events"], [])
+    def test_signed_sender_display_name_is_preserved_and_bounded(self):
+        event = self.event("named-sender")
+        event["actor_display_name"] = "Ann Lee"
+        self.assertEqual(self.post(event)[0], 202)
+        request = {"config":{"conversation":"account:room"},"cursor":None,"limit":32,"channel_identity":dict(IDENTITY)}
+        delivered = self.adapter.poll(request)["events"][0]
+        self.assertEqual(delivered["actor"], "operator")
+        self.assertEqual(delivered["actor_display_name"], "Ann Lee")
+        for index, name in enumerate(["", "  ", "Ann\nOwner", "名" * 100, {"name": "Ann"}]):
+            invalid = self.event("invalid-name-" + str(index))
+            invalid["actor_display_name"] = name
+            self.assertEqual(self.post(invalid)[0], 400)
+
     def test_namespaced_identity_prevents_message_id_collisions_and_cursor_reuse(self):
         first = self.event("same-id", "group one")
         second = self.event("same-id", "group two")
@@ -188,7 +201,7 @@ class ChatContract(unittest.TestCase):
         self.assertFalse(batch["events"][0]["channel"]["is_member"])
 
     def test_channel_destination_is_pinned_and_send_receipts_are_idempotent(self):
-        request = {"binding_id": "b", "config": {"conversation": "account:room"}, "resource": "account:room", "thread": None, "delivery_id": "stable-key", "text": "reply", "channel":dict(IDENTITY)}
+        request = {"binding_id": "b", "config": {"conversation": "account:room"}, "resource": "account:room", "thread": None, "delivery_id": "stable-key", "text": "reply", "channel":dict(IDENTITY), "kind":"group"}
         first = self.adapter.send(request)
         self.assertEqual(self.adapter.send(request), first)
         self.assertEqual(first["remote_id"], "spool:stable-key")

@@ -757,7 +757,7 @@ impl AssistantRuntime {
                     let author = agena_domain::MessageAuthor::channel_member(
                         event.event.actor.clone(),
                         scope.authority.role,
-                        None,
+                        event.event.actor_display_name.clone(),
                     );
                     let origin = agena_domain::MessageOrigin {
                         platform: agena_domain::Platform::chat(

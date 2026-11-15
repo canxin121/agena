@@ -1,11 +1,10 @@
 //! Helpers for projecting permission rules into presentation state.
 
 use agena_domain::{
-    NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
-    PermissionMode, ToolPermissionConfig, ToolPermissionRules,
+    NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PathPermissionMode,
+    PermissionConfig, PermissionMode, ToolPermissionConfig, ToolPermissionRules,
 };
 use agena_tui::i18n::I18n;
-use agena_tui_components::join_inline_segments;
 
 use crate::PermissionStudioModeTarget;
 
@@ -14,26 +13,9 @@ pub fn permission_studio_mode_target_value(
     target: &PermissionStudioModeTarget,
 ) -> Option<PermissionMode> {
     match target {
-        PermissionStudioModeTarget::PathWorkspaceRead => permission
-            .path
-            .as_ref()
-            .and_then(|path| path.workspace.as_ref())
-            .and_then(|modes| modes.read),
-        PermissionStudioModeTarget::PathWorkspaceWrite => permission
-            .path
-            .as_ref()
-            .and_then(|path| path.workspace.as_ref())
-            .and_then(|modes| modes.write),
-        PermissionStudioModeTarget::PathExternalRead => permission
-            .path
-            .as_ref()
-            .and_then(|path| path.external.as_ref())
-            .and_then(|modes| modes.read),
-        PermissionStudioModeTarget::PathExternalWrite => permission
-            .path
-            .as_ref()
-            .and_then(|path| path.external.as_ref())
-            .and_then(|modes| modes.write),
+        PermissionStudioModeTarget::PathWorkspace
+        | PermissionStudioModeTarget::PathExternal
+        | PermissionStudioModeTarget::PathRule { .. } => None,
         PermissionStudioModeTarget::NetworkInternet => permission
             .network
             .as_ref()
@@ -49,16 +31,6 @@ pub fn permission_studio_mode_target_value(
         PermissionStudioModeTarget::ToolDefault => {
             permission.tools.as_ref().and_then(|tools| tools.default)
         }
-        PermissionStudioModeTarget::PathRuleRead { pattern } => permission
-            .path
-            .as_ref()
-            .and_then(|path| path.rules.get(pattern.as_str()))
-            .and_then(|modes| modes.read),
-        PermissionStudioModeTarget::PathRuleWrite { pattern } => permission
-            .path
-            .as_ref()
-            .and_then(|path| path.rules.get(pattern.as_str()))
-            .and_then(|modes| modes.write),
         PermissionStudioModeTarget::NetworkRule { target } => permission
             .network
             .as_ref()
@@ -132,8 +104,7 @@ pub fn permission_mode_token(mode: PermissionMode) -> &'static str {
 pub fn set_path_default_mode(
     permission: &mut PermissionConfig,
     external: bool,
-    read: bool,
-    mode: Option<PermissionMode>,
+    mode: Option<PathPermissionMode>,
 ) {
     let path = permission.path.get_or_insert_with(Default::default);
     let target = if external {
@@ -141,15 +112,7 @@ pub fn set_path_default_mode(
     } else {
         &mut path.workspace
     };
-    let modes = target.get_or_insert_with(Default::default);
-    if read {
-        modes.read = mode;
-    } else {
-        modes.write = mode;
-    }
-    if modes.read.is_none() && modes.write.is_none() {
-        *target = None;
-    }
+    *target = mode.map(PathAccessModes::from_mode);
 }
 
 pub fn rename_path_rule(permission: &mut PermissionConfig, from: &str, to: &str) {
@@ -171,8 +134,8 @@ pub fn rename_network_rule(permission: &mut PermissionConfig, from: &str, to: &s
     let Some(network) = permission.network.as_mut() else {
         return;
     };
-    if let Some(mode) = network.rules.shift_remove(from) {
-        network.rules.insert(to.to_string(), mode);
+    if let Some((index, _, mode)) = network.rules.shift_remove_full(from) {
+        network.rules.shift_insert(index, to.to_string(), mode);
     }
 }
 
@@ -237,26 +200,52 @@ pub fn path_access_modes_summary(i18n: &I18n, modes: Option<&PathAccessModes>) -
     let Some(modes) = modes else {
         return i18n.text("value-unset");
     };
-    match (modes.read, modes.write) {
-        (Some(read), Some(write)) if read == write => permission_mode_label(i18n, read),
-        (read, write) => join_inline_segments(vec![
-            i18n.text_args(
-                "permission-studio-mode-read",
-                &agena_tui::fl_args!(
-                    "value" => read
-                        .map(|mode| permission_mode_label(i18n, mode))
-                        .unwrap_or_else(|| i18n.text("value-unset"))
-                ),
-            ),
-            i18n.text_args(
-                "permission-studio-mode-write",
-                &agena_tui::fl_args!(
-                    "value" => write
-                        .map(|mode| permission_mode_label(i18n, mode))
-                        .unwrap_or_else(|| i18n.text("value-unset"))
-                ),
-            ),
-        ]),
+    match modes.sandbox_mode() {
+        Ok(mode) => path_permission_mode_label(i18n, mode),
+        Err(_) => i18n.text("permission-studio-path-invalid-mode"),
+    }
+}
+
+pub fn permission_studio_path_target_value(
+    permission: &PermissionConfig,
+    target: &PermissionStudioModeTarget,
+) -> Option<PathPermissionMode> {
+    let path = permission.path.as_ref()?;
+    let modes = match target {
+        PermissionStudioModeTarget::PathWorkspace => path.workspace.as_ref(),
+        PermissionStudioModeTarget::PathExternal => path.external.as_ref(),
+        PermissionStudioModeTarget::PathRule { pattern } => path.rules.get(pattern),
+        _ => None,
+    }?;
+    modes.sandbox_mode().ok()
+}
+
+pub fn path_permission_mode_token(mode: PathPermissionMode) -> &'static str {
+    match mode {
+        PathPermissionMode::Readonly => "readonly",
+        PathPermissionMode::Readwrite => "readwrite",
+        PathPermissionMode::Deny => "deny",
+    }
+}
+
+pub fn path_permission_mode_label(i18n: &I18n, mode: PathPermissionMode) -> String {
+    i18n.text(match mode {
+        PathPermissionMode::Readonly => "permission-studio-path-readonly",
+        PathPermissionMode::Readwrite => "permission-studio-path-readwrite",
+        PathPermissionMode::Deny => "value-deny",
+    })
+}
+
+pub fn parse_permission_studio_optional_path_mode_input(
+    i18n: &I18n,
+    input: &str,
+) -> Result<Option<PathPermissionMode>, String> {
+    match input.trim().to_ascii_lowercase().as_str() {
+        "" | "clear" | "unset" => Ok(None),
+        "readonly" => Ok(Some(PathPermissionMode::Readonly)),
+        "readwrite" => Ok(Some(PathPermissionMode::Readwrite)),
+        "deny" => Ok(Some(PathPermissionMode::Deny)),
+        _ => Err(i18n.text("permission-studio-path-invalid-mode")),
     }
 }
 
@@ -267,5 +256,86 @@ fn parse_permission_mode_token(i18n: &I18n, token: &str) -> Result<PermissionMod
         "ask" => Ok(PermissionMode::Ask),
         "deny" => Ok(PermissionMode::Deny),
         _ => Err(i18n.text("permission-rule-error-invalid-mode")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_rule_rename_preserves_later_restrictions() {
+        let mut permission = PermissionConfig::default();
+        let network = permission.network.get_or_insert_with(Default::default);
+        network
+            .rules
+            .insert("10.0.0.0/8".to_string(), PermissionMode::Allow);
+        network
+            .rules
+            .insert("10.0.0.1:443".to_string(), PermissionMode::Deny);
+
+        rename_network_rule(&mut permission, "10.0.0.0/8", "10.0.0.0/16");
+
+        let rules = &permission.network.as_ref().unwrap().rules;
+        assert_eq!(
+            rules.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["10.0.0.0/16", "10.0.0.1:443"]
+        );
+        assert_eq!(rules["10.0.0.1:443"], PermissionMode::Deny);
+    }
+
+    #[test]
+    fn path_editor_accepts_only_mxc_modes_and_clear() {
+        let i18n = I18n::english();
+        for (input, mode) in [
+            ("readonly", PathPermissionMode::Readonly),
+            ("readwrite", PathPermissionMode::Readwrite),
+            ("deny", PathPermissionMode::Deny),
+        ] {
+            assert_eq!(
+                parse_permission_studio_optional_path_mode_input(&i18n, input).unwrap(),
+                Some(mode)
+            );
+        }
+        assert_eq!(
+            parse_permission_studio_optional_path_mode_input(&i18n, "clear").unwrap(),
+            None
+        );
+        for input in ["allow", "write", "ask", "auto", "read_only"] {
+            assert!(parse_permission_studio_optional_path_mode_input(&i18n, input).is_err());
+        }
+    }
+
+    #[test]
+    fn path_default_changes_the_whole_access_mode() {
+        let mut config = PermissionConfig::default();
+        set_path_default_mode(&mut config, false, Some(PathPermissionMode::Readwrite));
+        assert_eq!(
+            permission_studio_path_target_value(
+                &config,
+                &PermissionStudioModeTarget::PathWorkspace
+            ),
+            Some(PathPermissionMode::Readwrite)
+        );
+        set_path_default_mode(&mut config, false, Some(PathPermissionMode::Readonly));
+        let mode = config.path.as_ref().unwrap().workspace.as_ref().unwrap();
+        assert_eq!(mode.read, Some(PermissionMode::Allow));
+        assert_eq!(mode.write, Some(PermissionMode::Deny));
+        set_path_default_mode(&mut config, false, None);
+        assert!(config.path.as_ref().unwrap().workspace.is_none());
+    }
+
+    #[test]
+    fn readwrite_is_displayed_as_resource_access_not_approval_allow() {
+        let i18n = I18n::english();
+        let mode = PathAccessModes::from_mode(PathPermissionMode::Readwrite);
+        assert_eq!(
+            path_access_modes_summary(&i18n, Some(&mode)),
+            "Read and write"
+        );
+        assert_eq!(
+            path_permission_mode_token(PathPermissionMode::Readwrite),
+            "readwrite"
+        );
     }
 }

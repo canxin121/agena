@@ -1,8 +1,10 @@
 use super::{
     normalize_permission_config, parse_permission_studio_key_input,
-    parse_permission_studio_optional_mode_input, permission_mode_input_text, permission_mode_label,
-    permission_mode_token_text, permission_studio_mode_target_value, rename_network_rule,
-    rename_path_rule, rename_tool_name, rename_tool_rule, set_path_default_mode,
+    parse_permission_studio_optional_mode_input, parse_permission_studio_optional_path_mode_input,
+    path_access_modes_summary, path_permission_mode_token, permission_mode_input_text,
+    permission_mode_label, permission_mode_token_text, permission_studio_mode_target_value,
+    permission_studio_path_target_value, rename_network_rule, rename_path_rule, rename_tool_name,
+    rename_tool_rule, set_path_default_mode,
 };
 
 pub(crate) fn permission_studio_sections(
@@ -15,63 +17,31 @@ pub(crate) fn permission_studio_sections(
             label: ui_text::t(i18n, "permission-studio-page-path-defaults"),
             items: vec![
                 PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-path-workspace-read"),
-                    value: permission_mode_input_text(
+                    label: ui_text::t(i18n, "permission-studio-path-workspace"),
+                    value: path_access_modes_summary(
+                        i18n,
                         dialog
                             .permission
                             .path
                             .as_ref()
-                            .and_then(|path| path.workspace.as_ref())
-                            .and_then(|modes| modes.read),
-                        i18n,
+                            .and_then(|path| path.workspace.as_ref()),
                     ),
                     action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathWorkspaceRead,
+                        PermissionStudioModeTarget::PathWorkspace,
                     ),
                 },
                 PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-path-workspace-write"),
-                    value: permission_mode_input_text(
+                    label: ui_text::t(i18n, "permission-studio-path-external"),
+                    value: path_access_modes_summary(
+                        i18n,
                         dialog
                             .permission
                             .path
                             .as_ref()
-                            .and_then(|path| path.workspace.as_ref())
-                            .and_then(|modes| modes.write),
-                        i18n,
+                            .and_then(|path| path.external.as_ref()),
                     ),
                     action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathWorkspaceWrite,
-                    ),
-                },
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-path-external-read"),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.external.as_ref())
-                            .and_then(|modes| modes.read),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathExternalRead,
-                    ),
-                },
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-path-external-write"),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.external.as_ref())
-                            .and_then(|modes| modes.write),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathExternalWrite,
+                        PermissionStudioModeTarget::PathExternal,
                     ),
                 },
             ],
@@ -86,43 +56,19 @@ pub(crate) fn permission_studio_sections(
             rules.sort();
             let mut rule_items = rules
                 .into_iter()
-                .flat_map(|pattern| {
+                .map(|pattern| {
                     let modes = dialog
                         .permission
                         .path
                         .as_ref()
-                        .and_then(|path| path.rules.get(pattern.as_str()))
-                        .cloned();
-                    vec![
-                        PermissionStudioItem {
-                            label: i18n.text_args(
-                                "permission-studio-access-read",
-                                &agena_tui::fl_args!("pattern" => pattern.clone()),
-                            ),
-                            value: permission_mode_input_text(
-                                modes.as_ref().and_then(|modes| modes.read),
-                                i18n,
-                            ),
-                            action: PermissionStudioAction::EditMode(
-                                PermissionStudioModeTarget::PathRuleRead {
-                                    pattern: pattern.clone(),
-                                },
-                            ),
-                        },
-                        PermissionStudioItem {
-                            label: i18n.text_args(
-                                "permission-studio-access-write",
-                                &agena_tui::fl_args!("pattern" => pattern.clone()),
-                            ),
-                            value: permission_mode_input_text(
-                                modes.as_ref().and_then(|modes| modes.write),
-                                i18n,
-                            ),
-                            action: PermissionStudioAction::EditMode(
-                                PermissionStudioModeTarget::PathRuleWrite { pattern },
-                            ),
-                        },
-                    ]
+                        .and_then(|path| path.rules.get(pattern.as_str()));
+                    PermissionStudioItem {
+                        label: pattern.clone(),
+                        value: path_access_modes_summary(i18n, modes),
+                        action: PermissionStudioAction::EditMode(
+                            PermissionStudioModeTarget::PathRule { pattern },
+                        ),
+                    }
                 })
                 .collect::<Vec<_>>();
             rule_items.insert(0, permission_studio_new_rule_item(i18n));
@@ -389,22 +335,13 @@ pub(crate) fn permission_studio_mode_target_label(
     ui_text::t(
         i18n,
         match target {
-            PermissionStudioModeTarget::PathWorkspaceRead => {
-                "permission-studio-path-workspace-read"
-            }
-            PermissionStudioModeTarget::PathWorkspaceWrite => {
-                "permission-studio-path-workspace-write"
-            }
-            PermissionStudioModeTarget::PathExternalRead => "permission-studio-path-external-read",
-            PermissionStudioModeTarget::PathExternalWrite => {
-                "permission-studio-path-external-write"
-            }
+            PermissionStudioModeTarget::PathWorkspace => "permission-studio-path-workspace",
+            PermissionStudioModeTarget::PathExternal => "permission-studio-path-external",
             PermissionStudioModeTarget::NetworkInternet => "permission-studio-network-internet",
             PermissionStudioModeTarget::NetworkPrivate => "permission-studio-network-private",
             PermissionStudioModeTarget::NetworkLoopback => "permission-studio-network-loopback",
             PermissionStudioModeTarget::ToolDefault => "permission-studio-tool-default",
-            PermissionStudioModeTarget::PathRuleRead { .. } => "permission-studio-rule-pattern",
-            PermissionStudioModeTarget::PathRuleWrite { .. } => "permission-studio-rule-pattern",
+            PermissionStudioModeTarget::PathRule { .. } => "permission-studio-rule-path",
             PermissionStudioModeTarget::NetworkRule { .. } => "permission-studio-rule-target",
             PermissionStudioModeTarget::ToolName { .. }
             | PermissionStudioModeTarget::ToolRule { .. }
@@ -417,6 +354,12 @@ pub(crate) fn permission_studio_mode_target_input_text(
     dialog: &PermissionStudioOverlay,
     target: &PermissionStudioModeTarget,
 ) -> String {
+    if target.is_path() {
+        return permission_studio_path_target_value(&dialog.permission, target)
+            .map(path_permission_mode_token)
+            .unwrap_or_default()
+            .to_owned();
+    }
     permission_mode_token_text(permission_studio_mode_target_value(
         &dialog.permission,
         target,
@@ -430,7 +373,7 @@ pub(crate) fn permission_studio_text_target_label(
     ui_text::t(
         i18n,
         match target {
-            PermissionStudioTextTarget::PathRulePattern { .. } => "permission-studio-rule-pattern",
+            PermissionStudioTextTarget::PathRulePattern { .. } => "permission-studio-rule-path",
             PermissionStudioTextTarget::NetworkRuleTarget { .. } => "permission-studio-rule-target",
             PermissionStudioTextTarget::ToolNameKey { .. }
             | PermissionStudioTextTarget::ToolRuleName { .. } => "permission-studio-rule-key",
@@ -459,7 +402,7 @@ pub(crate) fn permission_studio_creator_spec(
                 i18n,
                 ui_text::t(i18n, "permission-studio-add-path-rule").as_str(),
             ),
-            String::new(),
+            i18n.text("permission-studio-path-help"),
         ),
         PermissionStudioEditorAction::AddNetworkRule => (
             settings_edit_title(
@@ -509,21 +452,36 @@ pub(crate) fn apply_permission_studio_mode_input(
     target: &PermissionStudioModeTarget,
     input: &str,
 ) -> UiResult<()> {
+    if target.is_path() {
+        let mode = parse_permission_studio_optional_path_mode_input(i18n, input)
+            .map_err(crate::UiFailure::message)?;
+        match target {
+            PermissionStudioModeTarget::PathWorkspace => {
+                set_path_default_mode(permission, false, mode)
+            }
+            PermissionStudioModeTarget::PathExternal => {
+                set_path_default_mode(permission, true, mode)
+            }
+            PermissionStudioModeTarget::PathRule { pattern } => {
+                let path = permission.path.get_or_insert_with(Default::default);
+                if let Some(mode) = mode {
+                    path.rules
+                        .insert(pattern.clone(), PathAccessModes::from_mode(mode));
+                } else {
+                    path.rules.shift_remove(pattern);
+                }
+            }
+            _ => unreachable!("path target was checked"),
+        }
+        normalize_permission_config(permission);
+        return Ok(());
+    }
     let mode = parse_permission_studio_optional_mode_input(i18n, input)
         .map_err(crate::UiFailure::message)?;
     match target {
-        PermissionStudioModeTarget::PathWorkspaceRead => {
-            set_path_default_mode(permission, false, true, mode);
-        }
-        PermissionStudioModeTarget::PathWorkspaceWrite => {
-            set_path_default_mode(permission, false, false, mode);
-        }
-        PermissionStudioModeTarget::PathExternalRead => {
-            set_path_default_mode(permission, true, true, mode);
-        }
-        PermissionStudioModeTarget::PathExternalWrite => {
-            set_path_default_mode(permission, true, false, mode);
-        }
+        PermissionStudioModeTarget::PathWorkspace
+        | PermissionStudioModeTarget::PathExternal
+        | PermissionStudioModeTarget::PathRule { .. } => unreachable!("path modes handled above"),
         PermissionStudioModeTarget::NetworkInternet => {
             permission
                 .network
@@ -547,30 +505,6 @@ pub(crate) fn apply_permission_studio_mode_input(
                 .tools
                 .get_or_insert_with(Default::default)
                 .default = mode;
-        }
-        PermissionStudioModeTarget::PathRuleRead { pattern }
-        | PermissionStudioModeTarget::PathRuleWrite { pattern } => {
-            let read = matches!(target, PermissionStudioModeTarget::PathRuleRead { .. });
-            let current = permission
-                .path
-                .as_ref()
-                .and_then(|path| path.rules.get(pattern.as_str()))
-                .cloned()
-                .unwrap_or(PathAccessModes {
-                    read: Some(PermissionMode::Auto),
-                    write: Some(PermissionMode::Auto),
-                });
-            let mut next = current;
-            if read {
-                next.read = mode;
-            } else {
-                next.write = mode;
-            }
-            permission
-                .path
-                .get_or_insert_with(Default::default)
-                .rules
-                .insert(pattern.clone(), next);
         }
         PermissionStudioModeTarget::NetworkRule { target } => {
             if let Some(mode) = mode {
@@ -652,18 +586,60 @@ pub(crate) fn apply_permission_studio_text_input(
     .map_err(crate::UiFailure::message)?;
     let page = match target {
         PermissionStudioTextTarget::PathRulePattern { pattern } => {
+            let value = agena_domain::canonical_permission_path(&value)
+                .map_err(crate::UiFailure::message)?;
+            if pattern != &value
+                && permission
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| path.rules.contains_key(&value))
+            {
+                return Err(crate::UiFailure::message(
+                    i18n.text("permission-studio-path-duplicate"),
+                ));
+            }
             rename_path_rule(permission, pattern.as_str(), value.as_str());
             PermissionStudioPage::PathRules
         }
         PermissionStudioTextTarget::NetworkRuleTarget { target } => {
+            if target != &value
+                && permission
+                    .network
+                    .as_ref()
+                    .is_some_and(|network| network.rules.contains_key(&value))
+            {
+                return Err(crate::UiFailure::message(
+                    i18n.text("permission-studio-rule-duplicate"),
+                ));
+            }
             rename_network_rule(permission, target.as_str(), value.as_str());
             PermissionStudioPage::NetworkRules
         }
         PermissionStudioTextTarget::ToolNameKey { key } => {
+            if key != &value
+                && permission
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.names.contains_key(&value))
+            {
+                return Err(crate::UiFailure::message(
+                    i18n.text("permission-studio-rule-duplicate"),
+                ));
+            }
             rename_tool_name(permission, key.as_str(), value.as_str());
             PermissionStudioPage::ToolNames
         }
         PermissionStudioTextTarget::ToolRuleName { tool_name } => {
+            if tool_name != &value
+                && permission
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| tools.rules.contains_key(&value))
+            {
+                return Err(crate::UiFailure::message(
+                    i18n.text("permission-studio-rule-duplicate"),
+                ));
+            }
             rename_tool_rule(permission, tool_name.as_str(), value.as_str());
             PermissionStudioPage::ToolCommandRules
         }
@@ -672,9 +648,64 @@ pub(crate) fn apply_permission_studio_text_input(
     Ok(page)
 }
 use crate::{
-    I18n, PathAccessModes, PermissionConfig, PermissionMode, PermissionStudioAction,
-    PermissionStudioEditorAction, PermissionStudioItem, PermissionStudioModeTarget,
-    PermissionStudioOverlay, PermissionStudioPage, PermissionStudioSection,
-    PermissionStudioSectionId, PermissionStudioTextTarget, ToolPermissionRules, UiResult,
-    settings_edit_title, ui_text,
+    I18n, PathAccessModes, PermissionConfig, PermissionStudioAction, PermissionStudioEditorAction,
+    PermissionStudioItem, PermissionStudioModeTarget, PermissionStudioOverlay,
+    PermissionStudioPage, PermissionStudioSection, PermissionStudioSectionId,
+    PermissionStudioTextTarget, ToolPermissionRules, UiResult, settings_edit_title, ui_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::PermissionMode;
+
+    #[test]
+    fn duplicate_rule_rename_keeps_permission_draft() {
+        let i18n = I18n::english();
+        let mut permission = PermissionConfig::default();
+        let network = permission.network.get_or_insert_with(Default::default);
+        network
+            .rules
+            .insert("example.com".to_string(), PermissionMode::Allow);
+        network
+            .rules
+            .insert("private.example.com".to_string(), PermissionMode::Deny);
+        let tools = permission.tools.get_or_insert_with(Default::default);
+        for (name, mode) in [
+            ("agena.shell.exec", PermissionMode::Allow),
+            ("agena.shell.spawn", PermissionMode::Deny),
+        ] {
+            tools.names.insert(name.to_string(), mode);
+            tools
+                .rules
+                .insert(name.to_string(), ToolPermissionRules::Mode(mode));
+        }
+        let original = permission.clone();
+
+        for (target, input) in [
+            (
+                PermissionStudioTextTarget::NetworkRuleTarget {
+                    target: "example.com".to_string(),
+                },
+                "private.example.com",
+            ),
+            (
+                PermissionStudioTextTarget::ToolNameKey {
+                    key: "agena.shell.exec".to_string(),
+                },
+                "agena.shell.spawn",
+            ),
+            (
+                PermissionStudioTextTarget::ToolRuleName {
+                    tool_name: "agena.shell.exec".to_string(),
+                },
+                "agena.shell.spawn",
+            ),
+        ] {
+            let error = apply_permission_studio_text_input(&i18n, &mut permission, &target, input)
+                .unwrap_err();
+            assert!(error.to_string().contains("Rule already exists"));
+            assert_eq!(permission, original);
+        }
+    }
+}

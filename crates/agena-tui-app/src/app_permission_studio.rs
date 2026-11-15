@@ -145,12 +145,9 @@ impl App {
             }
             PermissionStudioPage::PathRules => {
                 let Some(pattern) = selected_action.and_then(|action| match action {
-                    PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathRuleRead { pattern },
-                    )
-                    | PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathRuleWrite { pattern },
-                    ) => Some(pattern),
+                    PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule {
+                        pattern,
+                    }) => Some(pattern),
                     _ => None,
                 }) else {
                     self.flash_warning(ui_text::t(

@@ -3430,3 +3430,14 @@ bot-edit-title = Bot bearbeiten
 
 bot-instructions = Zusätzliche Systemanweisungen
 bot-instructions-empty = Keine zusätzlichen Systemanweisungen
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = Standardzugriff im Arbeitsbereich
+permission-studio-path-external = Standardzugriff auf externe Pfade
+permission-studio-path-readonly = Nur lesen
+permission-studio-path-readwrite = Lesen und schreiben
+permission-studio-path-invalid-mode = Wählen Sie readonly, readwrite oder deny. Genehmigungen werden in den Werkzeugberechtigungen eingerichtet.
+permission-studio-path-help = Geben Sie eine konkrete Datei oder ein Verzeichnis an. Verzeichnisrechte gelten für den gesamten Unterbaum; Platzhalter in Dateinamen werden nicht unterstützt.
+permission-studio-rule-path = Pfad
+permission-studio-path-duplicate = Für diesen Pfad besteht bereits eine Regel.
+permission-studio-rule-duplicate = Die Regel besteht bereits.

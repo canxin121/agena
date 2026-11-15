@@ -3335,3 +3335,14 @@ bot-edit-title = 編輯 Bot
 
 bot-instructions = 附加系統指令
 bot-instructions-empty = 未設定附加系統指令
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = 工作區預設權限
+permission-studio-path-external = 外部路徑預設權限
+permission-studio-path-readonly = 唯讀
+permission-studio-path-readwrite = 讀寫
+permission-studio-path-invalid-mode = 請選擇 readonly、readwrite 或 deny。審批請在工具權限中設定。
+permission-studio-path-help = 填寫具體檔案或目錄。目錄權限涵蓋整個子樹，不支援檔名萬用字元。
+permission-studio-rule-path = 路徑
+permission-studio-path-duplicate = 此路徑已有規則。
+permission-studio-rule-duplicate = 此規則已存在。

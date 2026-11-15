@@ -152,6 +152,7 @@ impl App {
             scope_label,
             editable,
             permission,
+            save_request: None,
             nav: SelectableListState::new(Vec::new(), 0),
             pane_focus: PermissionStudioPaneFocus::Navigation,
             page,
@@ -214,12 +215,17 @@ impl App {
                 permission_studio_read_only_message(&self.i18n, &dialog.source),
             ));
         }
+        if let Some(path) = permission.path.as_ref() {
+            path.validate().map_err(crate::UiFailure::message)?;
+        }
         let source = dialog.source.clone();
         let completion_source = source.clone();
         let permission_value = (!permission.is_empty())
             .then(|| serde_json::to_value(&permission).map_err(crate::UiFailure::internal))
             .transpose()?;
         let cleared = permission_value.is_none();
+        dialog.save_request = Some(uuid::Uuid::new_v4());
+        let failed_dialog = dialog.clone();
         self.dispatch_backend_operation(
             move |application| async move {
                 match source {
@@ -279,7 +285,21 @@ impl App {
                     }
                     PermissionStudioSource::EffectiveSession { .. } => {}
                 },
-                Err(error) => app.flash_error(error),
+                Err(error) => {
+                    // Backend validation is authoritative. Restore a submitted
+                    // text draft only while the same untouched page is open;
+                    // never replace a newer edit or a different scope.
+                    if let Route::PermissionStudio(current) = &mut app.current_route
+                        && current.source == failed_dialog.source
+                        && current.page == failed_dialog.page
+                        && current.permission == failed_dialog.permission
+                        && current.save_request == failed_dialog.save_request
+                        && current.editor.is_none()
+                    {
+                        current.editor = failed_dialog.editor;
+                    }
+                    app.flash_error(error);
+                }
             },
         );
         Ok(())

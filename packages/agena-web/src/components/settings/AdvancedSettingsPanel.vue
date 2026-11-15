@@ -20,6 +20,7 @@ import {
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { parsePermissionConfig, permissionConfigErrorMessage } from '@/lib/permissionConfig'
 
 const COMMON_PATHS = computed(() => [
   {
@@ -103,10 +104,11 @@ function jsonText(value: JsonValue): string {
 function parseDraft(): JsonValue {
   try {
     const value = JSON.parse(draftText.value) as JsonValue
+    const validated = normalizedPath.value === 'permission' ? (parsePermissionConfig(value) as JsonValue) : value
     parseError.value = ''
-    return value
+    return validated
   } catch (reason) {
-    const message = reason instanceof Error ? reason.message : String(reason)
+    const message = permissionConfigErrorMessage(reason, st)
     parseError.value = message
     throw new Error(message)
   }

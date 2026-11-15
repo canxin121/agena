@@ -2971,3 +2971,14 @@ bot-edit-title = Edit Bot
 
 bot-instructions = Additional system instructions
 bot-instructions-empty = No additional system instructions
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = Workspace default
+permission-studio-path-external = External default
+permission-studio-path-readonly = Read-only
+permission-studio-path-readwrite = Read and write
+permission-studio-path-invalid-mode = Choose readonly, readwrite, or deny. Configure approvals on the tool.
+permission-studio-path-help = Enter a specific file or directory. Directory permissions include the whole subtree; filename wildcards are not supported.
+permission-studio-rule-path = Path
+permission-studio-path-duplicate = A rule already exists for this path.
+permission-studio-rule-duplicate = Rule already exists.

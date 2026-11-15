@@ -2971,3 +2971,14 @@ bot-edit-title = 编辑 Bot
 
 bot-instructions = 附加系统指令
 bot-instructions-empty = 未设置附加系统指令
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = 工作区默认权限
+permission-studio-path-external = 外部路径默认权限
+permission-studio-path-readonly = 只读
+permission-studio-path-readwrite = 读写
+permission-studio-path-invalid-mode = 请选择 readonly、readwrite 或 deny。审批请在工具权限中配置。
+permission-studio-path-help = 填写具体文件或目录。目录权限覆盖整个子树，不支持文件名通配符。
+permission-studio-rule-path = 路径
+permission-studio-path-duplicate = 此路径已有规则。
+permission-studio-rule-duplicate = 该规则已存在。

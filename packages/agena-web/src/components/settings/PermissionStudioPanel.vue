@@ -35,30 +35,19 @@ import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
-type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
+import {
+  canonicalPermissionPath,
+  isPathPermissionMode,
+  parsePermissionConfig,
+  permissionConfigErrorMessage,
+  renamePermissionRule,
+  type PathPermissionMode,
+  type PermissionConfig,
+  type PermissionMode,
+} from '@/lib/permissionConfig'
+
 type PermissionSource = 'global' | 'workspace' | 'session' | 'effective'
 type PermissionSection = 'path' | 'network' | 'tools'
-type AccessModes = { read?: PermissionMode; write?: PermissionMode }
-type PermissionConfig = {
-  path?: {
-    workspace?: AccessModes
-    external?: AccessModes
-    rules?: Record<string, AccessModes>
-  }
-  network?: {
-    internet?: PermissionMode
-    private?: PermissionMode
-    loopback?: PermissionMode
-    rules?: Record<string, PermissionMode>
-  }
-  tools?: {
-    default?: PermissionMode
-    names?: Record<string, PermissionMode>
-    rules?: Record<string, PermissionMode | Record<string, PermissionMode>>
-  }
-  approval_model?: JsonValue
-}
-
 type SettingsResponse = { value?: JsonValue; config_found?: boolean; config_path?: string }
 type SessionStateResponse = {
   execution?: {
@@ -107,8 +96,7 @@ const rawJson = ref('{}')
 const rawJsonError = ref('')
 const toolCatalog = ref<Array<{ name: string; summary: string }>>([])
 const newPath = ref('')
-const newPathReadMode = ref<PermissionMode>('auto')
-const newPathWriteMode = ref<PermissionMode>('auto')
+const newPathMode = ref<PathPermissionMode>('readonly')
 const newNetworkRule = ref('')
 const newNetworkRuleMode = ref<PermissionMode>('auto')
 const newToolName = ref('')
@@ -120,8 +108,7 @@ const selectedPathRuleKeys = ref<Set<string>>(new Set())
 const selectedNetworkRuleKeys = ref<Set<string>>(new Set())
 const selectedToolNameRuleKeys = ref<Set<string>>(new Set())
 const selectedCommandRuleKeys = ref<Set<string>>(new Set())
-const bulkPathReadMode = ref<PermissionMode | ''>('auto')
-const bulkPathWriteMode = ref<PermissionMode | ''>('auto')
+const bulkPathMode = ref<PathPermissionMode>('readonly')
 const bulkNetworkMode = ref<PermissionMode>('auto')
 const bulkToolNameMode = ref<PermissionMode>('auto')
 const bulkCommandMode = ref<PermissionMode>('ask')
@@ -144,6 +131,11 @@ const modeOptions = computed(() => [
   { value: 'auto', label: st('Auto'), description: st('Let the approval model decide.') },
   { value: 'ask', label: st('Ask'), description: st('Ask before matching access.') },
   { value: 'deny', label: st('Deny'), description: st('Always block matching access.') },
+])
+const pathModeOptions = computed(() => [
+  { value: 'readonly', label: st('Read only'), description: st('Read files without changing them.') },
+  { value: 'readwrite', label: st('Read and write'), description: st('Read, create, change, and delete files.') },
+  { value: 'deny', label: st('Deny'), description: st('Block access to this file or directory tree.') },
 ])
 const shellToolOptions = SHELL_CAPABLE_TOOLS.map((value) => ({ value, label: value }))
 const toolOptions = computed(() =>
@@ -334,11 +326,8 @@ function clearToolNameRuleSelection() {
 function clearCommandRuleSelection() {
   clearSelection(selectedCommandRuleKeys)
 }
-function applySelectedPathReadMode() {
-  setSelectedPathMode('read', bulkPathReadMode.value)
-}
-function applySelectedPathWriteMode() {
-  setSelectedPathMode('write', bulkPathWriteMode.value)
+function applySelectedPathMode() {
+  setSelectedPathMode(bulkPathMode.value)
 }
 function clearAllRuleSelections() {
   clearSelection(selectedPathRuleKeys)
@@ -393,7 +382,12 @@ function clone<T>(value: T): T {
 
 function asConfig(value: unknown): PermissionConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  return clone(value as PermissionConfig)
+  try {
+    return parsePermissionConfig(value)
+  } catch {
+    // Keep invalid legacy values visible in the raw editor so they can be repaired.
+    return clone(value as PermissionConfig)
+  }
 }
 
 function syncRaw() {
@@ -401,26 +395,37 @@ function syncRaw() {
   rawJsonError.value = ''
 }
 
-function mutate(mutator: (next: PermissionConfig) => void) {
-  if (editingDisabled.value) return
-  if (rawPending.value && !applyRawJson()) return
+function mutate(mutator: (next: PermissionConfig) => void): boolean {
+  if (editingDisabled.value) return false
+  if (rawPending.value && !applyRawJson()) return false
   const next = clone(config.value)
   mutator(next)
-  config.value = next
-  syncRaw()
+  try {
+    config.value = parsePermissionConfig(next)
+    syncRaw()
+    error.value = ''
+    return true
+  } catch (reason) {
+    // Invalid intermediate edits stay local so several legacy rules can be
+    // repaired one by one. Save always validates the complete draft again.
+    config.value = next
+    syncRaw()
+    error.value = permissionConfigErrorMessage(reason, st)
+    rawJsonError.value = error.value
+    return true
+  }
 }
 
-function modeAt(scope: 'workspace' | 'external', access: 'read' | 'write'): PermissionMode | '' {
-  return config.value.path?.[scope]?.[access] || ''
+function modeAt(scope: 'workspace' | 'external'): PathPermissionMode | '' {
+  const mode = config.value.path?.[scope]
+  return isPathPermissionMode(mode) ? mode : ''
 }
 
-function setPathDefault(scope: 'workspace' | 'external', access: 'read' | 'write', value: string) {
+function setPathDefault(scope: 'workspace' | 'external', value: string) {
   mutate((next) => {
     next.path ||= {}
-    next.path[scope] ||= {}
-    if (isMode(value)) next.path[scope]![access] = value
-    else delete next.path[scope]![access]
-    if (!next.path[scope]?.read && !next.path[scope]?.write) delete next.path[scope]
+    if (isPathPermissionMode(value)) next.path[scope] = value
+    else delete next.path[scope]
     if (isEmptyPathSection(next.path)) delete next.path
   })
 }
@@ -435,20 +440,15 @@ function isEmptyToolSection(tools: PermissionConfig['tools']): boolean {
   return !tools?.default && !Object.keys(tools?.names || {}).length && !Object.keys(tools?.rules || {}).length
 }
 
-// A path rule is always the explicit read/write object form; there is no
-// shorthand string form, on the wire or in the editor.
-function pathRuleMode(rule: AccessModes, access: 'read' | 'write'): PermissionMode | '' {
-  return rule?.[access] || ''
+function pathRuleMode(rule: unknown): PathPermissionMode | '' {
+  return isPathPermissionMode(rule) ? rule : ''
 }
 
-function setPathRuleMode(path: string, access: 'read' | 'write', value: string) {
+function setPathRuleMode(path: string, value: string) {
   mutate((next) => {
     next.path ||= {}
     next.path.rules ||= {}
-    const modes: AccessModes = { ...(next.path.rules[path] || {}) }
-    if (isMode(value)) modes[access] = value
-    else delete modes[access]
-    if (modes.read || modes.write) next.path.rules[path] = modes
+    if (isPathPermissionMode(value)) next.path.rules[path] = value
     else delete next.path.rules[path]
     if (isEmptyPathSection(next.path)) delete next.path
   })
@@ -461,18 +461,13 @@ function removePathRule(path: string) {
   })
 }
 
-function setSelectedPathMode(access: 'read' | 'write', value: string) {
+function setSelectedPathMode(value: string) {
   const paths = selectedPathRules.value.map(([path]) => path)
-  if (!paths.length) return
+  if (!paths.length || !isPathPermissionMode(value)) return
   mutate((next) => {
     for (const path of paths) {
-      const rule = next.path?.rules?.[path]
-      if (!rule) continue
-      if (isMode(value)) rule[access] = value
-      else delete rule[access]
-      if (!rule.read && !rule.write) delete next.path!.rules![path]
+      if (next.path?.rules?.[path]) next.path.rules[path] = value
     }
-    if (isEmptyPathSection(next.path)) delete next.path
   })
 }
 
@@ -490,8 +485,15 @@ function removeSelectedPathRules() {
 
 function renamePathRule(path: string, event: Event) {
   const input = event.target as HTMLInputElement
-  const nextPath = input.value.trim()
-  if (!nextPath || nextPath === path) {
+  let nextPath: string
+  try {
+    nextPath = canonicalPermissionPath(input.value)
+  } catch (reason) {
+    error.value = permissionConfigErrorMessage(reason, st)
+    input.value = path
+    return
+  }
+  if (nextPath === path) {
     input.value = path
     return
   }
@@ -507,7 +509,6 @@ function renamePathRule(path: string, event: Event) {
     delete rules[path]
     rules[nextPath] = value
   })
-  error.value = ''
   input.value = nextPath
 }
 
@@ -598,9 +599,7 @@ function renameNetworkRule(target: string, event: Event) {
   mutate((next) => {
     const rules = next.network?.rules
     if (!rules || !Object.prototype.hasOwnProperty.call(rules, target)) return
-    const value = rules[target]
-    delete rules[target]
-    rules[nextTarget] = value
+    next.network!.rules = renamePermissionRule(rules, target, nextTarget)
   })
   error.value = ''
   input.value = nextTarget
@@ -749,30 +748,31 @@ function renameCommandRule(tool: string, command: string, event: Event) {
       : raw && typeof raw === 'object' && !Array.isArray(raw)
         ? ({ ...raw } as Record<string, PermissionMode>)
         : {}
-    const value = nextRules[command]
-    if (!value) return
-    delete nextRules[command]
-    nextRules[nextCommand] = value
-    next.tools!.rules![tool] = nextRules
+    if (!nextRules[command]) return
+    next.tools!.rules![tool] = renamePermissionRule(nextRules, command, nextCommand)
   })
   error.value = ''
   input.value = nextCommand
 }
 
 function addPathRule() {
-  const path = newPath.value.trim()
-  if (!path) return
+  let path: string
+  try {
+    path = canonicalPermissionPath(newPath.value)
+  } catch (reason) {
+    error.value = permissionConfigErrorMessage(reason, st)
+    return
+  }
   if (Object.prototype.hasOwnProperty.call(config.value.path?.rules || {}, path)) {
     error.value = st('Path rule already exists: {path}', { path: path })
     return
   }
-  mutate((next) => {
+  const accepted = mutate((next) => {
     next.path ||= {}
     next.path.rules ||= {}
-    next.path.rules[path] = { read: newPathReadMode.value, write: newPathWriteMode.value }
+    next.path.rules[path] = newPathMode.value
   })
-  error.value = ''
-  newPath.value = ''
+  if (accepted) newPath.value = ''
 }
 
 function addNetworkRule() {
@@ -830,11 +830,11 @@ function applyRawJson(): boolean {
     const parsed = JSON.parse(rawJson.value) as JsonValue
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
       throw new Error(st('Permission config must be a JSON object.'))
-    config.value = asConfig(parsed)
+    config.value = parsePermissionConfig(parsed)
     syncRaw()
     return true
   } catch (reason) {
-    rawJsonError.value = reason instanceof Error ? reason.message : String(reason)
+    rawJsonError.value = permissionConfigErrorMessage(reason, st)
     rawEditorOpen.value = true
     return false
   }
@@ -922,6 +922,12 @@ async function load() {
       syncRaw()
     }
     loaded.value = true
+    try {
+      parsePermissionConfig(config.value)
+    } catch (reason) {
+      rawJsonError.value = permissionConfigErrorMessage(reason, st)
+      rawEditorOpen.value = true
+    }
   } catch (reason) {
     if (generation === loadGeneration && key === contextKey.value && !controller.signal.aborted)
       error.value = reason instanceof Error ? reason.message : String(reason)
@@ -946,7 +952,15 @@ async function save() {
   const key = contextKey.value
   const source = selectedSource.value
   const sessionId = activeSessionId.value
-  const snapshot = clone(config.value)
+  let snapshot: PermissionConfig
+  try {
+    snapshot = parsePermissionConfig(config.value)
+  } catch (reason) {
+    saveError.value = permissionConfigErrorMessage(reason, st)
+    rawJsonError.value = saveError.value
+    rawEditorOpen.value = true
+    return
+  }
   const scopeLabel = findSettingsScope('permissions', props.section, selectedSource.value)?.label || st('Permission')
   saving.value = true
   error.value = ''
@@ -1099,7 +1113,7 @@ onBeforeUnmount(() => {
       <template v-if="selectedSection === 'path'">
         <PermissionSettingsCard
           :title="$st('Path Defaults')"
-          :description="$st('Set separate read and write decisions for workspace and external paths.')"
+          :description="$st('Choose readonly, readwrite, or deny for workspace and external paths.')"
           :icon="RiFolderLine"
         >
           <div class="policy-grid">
@@ -1108,34 +1122,27 @@ onBeforeUnmount(() => {
                 <h3 class="text-sm font-medium">{{ scope.label }}</h3>
                 <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ scope.description }}</p>
               </div>
-              <div class="grid grid-cols-2 gap-3">
-                <label class="permission-control"
-                  ><span>{{ $st('Read') }}</span
-                  ><OptionPicker
-                    :model-value="modeAt(scope.id, 'read')"
-                    :options="modeOptions"
-                    :empty-label="$st('Inherit')"
-                    :title="$st('Path read mode')"
-                    :disabled="formDisabled"
-                    @update:model-value="setPathDefault(scope.id, 'read', $event)"
-                /></label>
-                <label class="permission-control"
-                  ><span>{{ $st('Write') }}</span
-                  ><OptionPicker
-                    :model-value="modeAt(scope.id, 'write')"
-                    :options="modeOptions"
-                    :empty-label="$st('Inherit')"
-                    :title="$st('Path write mode')"
-                    :disabled="formDisabled"
-                    @update:model-value="setPathDefault(scope.id, 'write', $event)"
-                /></label>
-              </div>
+              <label class="permission-control">
+                <span>{{ $st('Access') }}</span>
+                <OptionPicker
+                  :model-value="modeAt(scope.id)"
+                  :options="pathModeOptions"
+                  :empty-label="$st('Inherit')"
+                  :title="$st('Path access mode')"
+                  :disabled="formDisabled"
+                  @update:model-value="setPathDefault(scope.id, $event)"
+                />
+              </label>
             </div>
           </div>
         </PermissionSettingsCard>
         <PermissionRuleCard
           :title="$st('Path Rules')"
-          :description="$st('Override access for matching paths. The last matching rule wins.')"
+          :description="
+            $st(
+              'Use concrete files or directories. Directories include all descendants; denied paths cannot be reopened.',
+            )
+          "
           :icon="RiFolderLine"
           :count="pathRules.length"
           :visible-count="visiblePathRules.length"
@@ -1149,34 +1156,18 @@ onBeforeUnmount(() => {
         >
           <template #bulk>
             <div class="flex flex-wrap items-center gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Read') }}</span>
-              <div class="w-28">
+              <span class="text-xs text-muted-foreground">{{ $st('Access') }}</span>
+              <div class="w-36">
                 <OptionPicker
-                  v-model="bulkPathReadMode"
-                  :options="modeOptions"
-                  :empty-label="$st('Inherit')"
-                  :title="$st('Path rule read mode')"
+                  v-model="bulkPathMode"
+                  :options="pathModeOptions"
+                  :include-empty="false"
+                  :title="$st('Path access mode')"
                   size="sm"
                   :disabled="formDisabled"
                 />
               </div>
-              <Button variant="outline" size="sm" :disabled="formDisabled" @click="applySelectedPathReadMode">{{
-                $st('Apply')
-              }}</Button>
-            </div>
-            <div class="flex flex-wrap items-center gap-1.5">
-              <span class="text-xs text-muted-foreground">{{ $st('Write') }}</span>
-              <div class="w-28">
-                <OptionPicker
-                  v-model="bulkPathWriteMode"
-                  :options="modeOptions"
-                  :empty-label="$st('Inherit')"
-                  :title="$st('Path rule write mode')"
-                  size="sm"
-                  :disabled="formDisabled"
-                />
-              </div>
-              <Button variant="outline" size="sm" :disabled="formDisabled" @click="applySelectedPathWriteMode">{{
+              <Button variant="outline" size="sm" :disabled="formDisabled" @click="applySelectedPathMode">{{
                 $st('Apply')
               }}</Button>
             </div>
@@ -1191,9 +1182,8 @@ onBeforeUnmount(() => {
           </template>
           <div class="permission-rule-labels" aria-hidden="true">
             <span class="rule-target">{{ $st('Path') }}</span>
-            <div class="rule-modes">
-              <span>{{ $st('Read') }}</span
-              ><span>{{ $st('Write') }}</span>
+            <div class="rule-modes" data-single-mode>
+              <span>{{ $st('Access') }}</span>
             </div>
           </div>
           <fieldset
@@ -1221,27 +1211,18 @@ onBeforeUnmount(() => {
                 @change="renamePathRule(path, $event)"
               />
             </div>
-            <div class="rule-modes">
-              <label class="permission-control"
-                ><span>{{ $st('Read') }}</span
-                ><OptionPicker
-                  :model-value="pathRuleMode(rule, 'read')"
-                  :options="modeOptions"
-                  :empty-label="$st('Inherit')"
-                  :title="$st('Path rule read mode')"
+            <div class="rule-modes" data-single-mode>
+              <label class="permission-control">
+                <span>{{ $st('Access') }}</span>
+                <OptionPicker
+                  :model-value="pathRuleMode(rule)"
+                  :options="pathModeOptions"
+                  :include-empty="false"
+                  :title="$st('Path access mode')"
                   :disabled="formDisabled"
-                  @update:model-value="setPathRuleMode(path, 'read', $event)"
-              /></label>
-              <label class="permission-control"
-                ><span>{{ $st('Write') }}</span
-                ><OptionPicker
-                  :model-value="pathRuleMode(rule, 'write')"
-                  :options="modeOptions"
-                  :empty-label="$st('Inherit')"
-                  :title="$st('Path rule write mode')"
-                  :disabled="formDisabled"
-                  @update:model-value="setPathRuleMode(path, 'write', $event)"
-              /></label>
+                  @update:model-value="setPathRuleMode(path, $event)"
+                />
+              </label>
             </div>
             <div v-if="canEdit" class="rule-remove">
               <IconButton
@@ -1257,33 +1238,25 @@ onBeforeUnmount(() => {
           </fieldset>
           <template #create>
             <form class="rule-create" @submit.prevent="addPathRule">
-              <label class="permission-control"
-                ><span>{{ $st('Path') }}</span
-                ><Input
+              <label class="permission-control">
+                <span>{{ $st('Path') }}</span>
+                <Input
                   v-model="newPath"
                   class="font-mono text-xs"
-                  placeholder="/path or relative/path"
+                  :placeholder="$st('Exact file or directory')"
                   :aria-label="$st('Path')"
-              /></label>
-              <div class="grid grid-cols-2 gap-2">
-                <label class="permission-control"
-                  ><span>{{ $st('Read') }}</span
-                  ><OptionPicker
-                    v-model="newPathReadMode"
-                    :options="modeOptions"
-                    :include-empty="false"
-                    :title="$st('New path read mode')"
-                    :disabled="formDisabled" /></label
-                ><label class="permission-control"
-                  ><span>{{ $st('Write') }}</span
-                  ><OptionPicker
-                    v-model="newPathWriteMode"
-                    :options="modeOptions"
-                    :include-empty="false"
-                    :title="$st('New path write mode')"
-                    :disabled="formDisabled"
-                /></label>
-              </div>
+                />
+              </label>
+              <label class="permission-control">
+                <span>{{ $st('Access') }}</span>
+                <OptionPicker
+                  v-model="newPathMode"
+                  :options="pathModeOptions"
+                  :include-empty="false"
+                  :title="$st('New path access mode')"
+                  :disabled="formDisabled"
+                />
+              </label>
               <Button type="submit" variant="outline" size="sm" class="h-9" :disabled="formDisabled || !newPath.trim()"
                 ><RiAddLine class="mr-1.5 h-4 w-4" />{{ $st('Add path rule') }}</Button
               >
@@ -1316,7 +1289,11 @@ onBeforeUnmount(() => {
         </PermissionSettingsCard>
         <PermissionRuleCard
           :title="$st('Domain Rules')"
-          :description="$st('Set exceptions for a domain, IP address, or host and port.')"
+          :description="
+            $st(
+              'Use a concrete domain, IP, or CIDR, optionally with a port from 1 to 65535. Wildcards and URLs are unsupported.',
+            )
+          "
           :icon="RiGlobalLine"
           :count="networkRules.length"
           :visible-count="visibleNetworkRules.length"
@@ -1417,7 +1394,7 @@ onBeforeUnmount(() => {
                 ><Input
                   v-model="newNetworkRule"
                   class="font-mono text-xs"
-                  placeholder="example.com or 127.0.0.1:8080"
+                  placeholder="api.example.com:443 · 10.0.0.0/8"
                   :aria-label="$st('Domain or host')"
               /></label>
               <label class="permission-control"
@@ -1614,7 +1591,11 @@ onBeforeUnmount(() => {
         </PermissionRuleCard>
         <PermissionRuleCard
           :title="$st('Command Rules')"
-          :description="$st('Match shell commands with patterns such as git push *. The last matching rule wins.')"
+          :description="
+            $st(
+              'Match shell commands with patterns such as git push *. The last matching command rule wins; a denied tool stays denied.',
+            )
+          "
           :icon="RiTerminalBoxLine"
           :count="customCommandRules.length"
           :visible-count="visibleCommandRules.length"

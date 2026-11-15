@@ -3299,3 +3299,14 @@ bot-edit-title = Editar Bot
 
 bot-instructions = Instrucciones adicionales del sistema
 bot-instructions-empty = Sin instrucciones adicionales del sistema
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = Acceso predeterminado al espacio de trabajo
+permission-studio-path-external = Acceso predeterminado a rutas externas
+permission-studio-path-readonly = Solo lectura
+permission-studio-path-readwrite = Lectura y escritura
+permission-studio-path-invalid-mode = Elige readonly, readwrite o deny. Configura las aprobaciones en los permisos de la herramienta.
+permission-studio-path-help = Introduce un archivo o directorio concreto. Los permisos del directorio incluyen todo su árbol; no se admiten comodines de nombre de archivo.
+permission-studio-rule-path = Ruta
+permission-studio-path-duplicate = Ya existe una regla para esta ruta.
+permission-studio-rule-duplicate = La regla ya existe.

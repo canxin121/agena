@@ -31,7 +31,7 @@ pub(crate) struct SettingsStudioOverlay {
     pub(crate) state: SettingsStudioPresentation<SettingsPickerAction>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionStudioSource {
     GlobalConfig,
     WorkspaceConfig,
@@ -49,6 +49,7 @@ pub(crate) struct PermissionStudioOverlay {
     pub(crate) scope_label: String,
     pub(crate) editable: bool,
     pub(crate) permission: PermissionConfig,
+    pub(crate) save_request: Option<uuid::Uuid>,
     pub(crate) nav: SelectableListState<PermissionStudioNavItem>,
     pub(crate) pane_focus: PermissionStudioPaneFocus,
     pub(crate) page: PermissionStudioPage,

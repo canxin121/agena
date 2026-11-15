@@ -9,25 +9,13 @@ import { settingsText as st } from '@/i18n/settingsText'
 import Button from '@/components/ui/Button.vue'
 import SettingsCard from './SettingsCard.vue'
 
-type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
-type PermissionConfig = {
-  path?: {
-    workspace?: { read?: PermissionMode; write?: PermissionMode }
-    external?: { read?: PermissionMode; write?: PermissionMode }
-    rules?: Record<string, unknown>
-  }
-  network?: {
-    internet?: PermissionMode
-    private?: PermissionMode
-    loopback?: PermissionMode
-    rules?: Record<string, unknown>
-  }
-  tools?: {
-    default?: PermissionMode
-    names?: Record<string, unknown>
-    rules?: Record<string, unknown>
-  }
-}
+import {
+  parsePermissionConfig,
+  permissionConfigErrorMessage,
+  type PermissionConfig,
+  type PermissionMode,
+  type PathPermissionMode,
+} from '@/lib/permissionConfig'
 type SettingsResponse = { value?: unknown }
 type SessionStateResponse = {
   execution?: {
@@ -51,7 +39,7 @@ const sessionId = computed(() => {
 let controller: AbortController | undefined
 
 function asPolicy(value: unknown): PermissionConfig {
-  return value && typeof value === 'object' && !Array.isArray(value) ? (value as PermissionConfig) : {}
+  return value == null ? {} : parsePermissionConfig(value)
 }
 
 async function refresh() {
@@ -83,7 +71,7 @@ async function refresh() {
     permission.value = effective
   } catch (reason) {
     if (controller !== current || current.signal.aborted) return
-    error.value = reason instanceof Error ? reason.message : String(reason)
+    error.value = permissionConfigErrorMessage(reason, st)
   } finally {
     if (controller === current) busy.value = false
   }
@@ -98,10 +86,8 @@ const cards = computed(() => {
       icon: RiFolderLine,
       count: Object.keys(policy.path?.rules || {}).length,
       rows: [
-        { label: `${st('Workspace files')} · ${st('Read')}`, mode: policy.path?.workspace?.read },
-        { label: `${st('Workspace files')} · ${st('Write')}`, mode: policy.path?.workspace?.write },
-        { label: `${st('External files')} · ${st('Read')}`, mode: policy.path?.external?.read },
-        { label: `${st('External files')} · ${st('Write')}`, mode: policy.path?.external?.write },
+        { label: st('Workspace files'), mode: policy.path?.workspace },
+        { label: st('External files'), mode: policy.path?.external },
       ],
     },
     {
@@ -125,7 +111,9 @@ const cards = computed(() => {
   ]
 })
 
-function modeLabel(mode: PermissionMode | undefined): string {
+function modeLabel(mode: PermissionMode | PathPermissionMode | undefined): string {
+  if (mode === 'readonly') return st('Read only')
+  if (mode === 'readwrite') return st('Read and write')
   if (mode === 'allow') return st('Allow')
   if (mode === 'auto') return st('Auto')
   if (mode === 'ask') return st('Ask')

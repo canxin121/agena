@@ -77,7 +77,11 @@ impl App {
             ),
             String::new(),
             current_value,
-            permission_mode_choice_items(&self.i18n),
+            if target.is_path() {
+                path_permission_mode_choice_items(&self.i18n)
+            } else {
+                permission_mode_choice_items(&self.i18n)
+            },
             ChoiceOverlayAction::PermissionStudioMode(target),
             true,
             agena_tui::choice::ChoicePresentationStyle::SelectOnly,
@@ -121,12 +125,9 @@ impl App {
             return;
         };
         let target = match action {
-            PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleRead {
-                pattern,
-            })
-            | PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleWrite {
-                pattern,
-            }) => PermissionStudioTextTarget::PathRulePattern { pattern },
+            PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule { pattern }) => {
+                PermissionStudioTextTarget::PathRulePattern { pattern }
+            }
             PermissionStudioAction::EditMode(PermissionStudioModeTarget::NetworkRule {
                 target,
             }) => PermissionStudioTextTarget::NetworkRuleTarget { target },
@@ -205,22 +206,30 @@ impl App {
                     input.as_str(),
                 )
                 .map_err(crate::UiFailure::message)?;
-                let mut permission = dialog.permission.clone();
-                let rule = PathAccessModes {
-                    read: Some(PermissionMode::Auto),
-                    write: Some(PermissionMode::Auto),
-                };
-                permission
+                let pattern = agena_domain::canonical_permission_path(&pattern)
+                    .map_err(crate::UiFailure::message)?;
+                if dialog
+                    .permission
                     .path
-                    .get_or_insert_with(Default::default)
-                    .rules
-                    .insert(pattern.clone(), rule);
-                self.persist_permission_studio(dialog, permission)?;
+                    .as_ref()
+                    .is_some_and(|path| path.rules.contains_key(&pattern))
+                {
+                    return Err(crate::UiFailure::message(
+                        self.i18n.text("permission-studio-path-duplicate"),
+                    ));
+                }
                 self.set_permission_studio_page_with_section(
                     dialog,
                     PermissionStudioPage::PathRules,
                     Some(PermissionStudioSectionId::PathRules),
                     PermissionStudioFocus::Items,
+                );
+                // Choose the resource mode before the first write. A temporary
+                // deny rule is unsupported on some hosts and must not block
+                // creating a valid readonly/readwrite rule there.
+                self.open_permission_studio_mode_overlay(
+                    dialog,
+                    PermissionStudioModeTarget::PathRule { pattern },
                 );
             }
             PermissionStudioEditorAction::AddNetworkRule => {
@@ -230,18 +239,15 @@ impl App {
                     input.as_str(),
                 )
                 .map_err(crate::UiFailure::message)?;
-                let mut permission = dialog.permission.clone();
-                permission
-                    .network
-                    .get_or_insert_with(Default::default)
-                    .rules
-                    .insert(target.clone(), PermissionMode::Auto);
-                self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
                     PermissionStudioPage::NetworkRules,
                     Some(PermissionStudioSectionId::NetworkRules),
                     PermissionStudioFocus::Items,
+                );
+                self.open_permission_studio_mode_overlay(
+                    dialog,
+                    PermissionStudioModeTarget::NetworkRule { target },
                 );
             }
             PermissionStudioEditorAction::AddToolName => {
@@ -335,15 +341,15 @@ impl App {
     }
 }
 use crate::{
-    App, ChoiceOverlayAction, Editor, PathAccessModes, PermissionMode, PermissionStudioAction,
+    App, ChoiceOverlayAction, Editor, PermissionMode, PermissionStudioAction,
     PermissionStudioCatalogKind, PermissionStudioEditor, PermissionStudioEditorAction,
     PermissionStudioFocus, PermissionStudioModeTarget, PermissionStudioOverlay,
     PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
     PermissionStudioTextTarget, ToolPermissionRules, UiResult, apply_permission_studio_text_input,
-    editor_save_footer, parse_permission_studio_key_input, permission_mode_choice_items,
-    permission_studio_creator_input_text, permission_studio_creator_spec,
-    permission_studio_mode_target_input_text, permission_studio_mode_target_label,
-    permission_studio_read_only_message, permission_studio_text_target_input_text,
-    permission_studio_text_target_label, set_permission_studio_pane_focus, settings_edit_title,
-    ui_text,
+    editor_save_footer, parse_permission_studio_key_input, path_permission_mode_choice_items,
+    permission_mode_choice_items, permission_studio_creator_input_text,
+    permission_studio_creator_spec, permission_studio_mode_target_input_text,
+    permission_studio_mode_target_label, permission_studio_read_only_message,
+    permission_studio_text_target_input_text, permission_studio_text_target_label,
+    set_permission_studio_pane_focus, settings_edit_title, ui_text,
 };

@@ -7,41 +7,20 @@ pub(crate) fn permission_studio_table_label(
         return item.label.clone();
     }
 
-    let (pattern, access) = match &item.action {
-        PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleRead { pattern }) => {
-            (pattern.as_str(), "read")
-        }
-        PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRuleWrite { pattern }) => {
-            (pattern.as_str(), "write")
+    let pattern = match &item.action {
+        PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule { pattern }) => {
+            pattern
         }
         _ => return item.label.clone(),
     };
-    compact_permission_path_rule_label(pattern, access, max_width)
-}
-
-pub(crate) fn compact_permission_path_rule_label(
-    pattern: &str,
-    access: &str,
-    max_width: usize,
-) -> String {
-    let suffix = format!(" · {access}");
-    let suffix_width = UnicodeWidthStr::width(suffix.as_str());
-    if max_width <= suffix_width {
-        return truncate_display_text(suffix.as_str(), max_width);
-    }
-    let path_budget = max_width.saturating_sub(suffix_width);
-    format!(
-        "{}{}",
-        compact_permission_path_pattern(pattern, path_budget),
-        suffix
-    )
+    compact_permission_path_pattern(pattern, max_width)
 }
 
 /// Keeps the right-most path components visible because those usually identify a rule.
 ///
 /// A normal left truncation turns paths beneath one workspace into indistinguishable rows.
 /// This preserves a meaningful root marker when it fits and replaces only the shared middle
-/// with an ellipsis: `/…/generated/client/**` or `<workspace>/…/src/**`.
+/// with an ellipsis: `/…/generated/client` or `<workspace>/…/src`.
 pub(crate) fn compact_permission_path_pattern(pattern: &str, max_width: usize) -> String {
     let pattern = sanitize_display_text(pattern);
     if UnicodeWidthStr::width(pattern.as_str()) <= max_width {
@@ -161,6 +140,6 @@ use super::{
     PermissionStudioSectionId, ProviderDraftSecretSourceKind, ProviderStudioField,
     ProviderStudioOverlay, UnicodeWidthChar, UnicodeWidthStr, provider_draft_auth_mode_label,
     provider_draft_auth_subtype_label, provider_studio_auth_login_kind_label,
-    provider_studio_main_field_value, sanitize_display_text, truncate_display_text,
+    provider_studio_main_field_value, sanitize_display_text,
 };
 use crate::ui_text;

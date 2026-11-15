@@ -303,6 +303,34 @@ impl App {
                     ));
                     return true;
                 };
+                let new_rule = match &target {
+                    crate::PermissionStudioModeTarget::PathRule { pattern }
+                        if !parent
+                            .permission
+                            .path
+                            .as_ref()
+                            .is_some_and(|path| path.rules.contains_key(pattern)) =>
+                    {
+                        Some((PermissionStudioEditorAction::AddPathRule, pattern.clone()))
+                    }
+                    crate::PermissionStudioModeTarget::NetworkRule { target }
+                        if !parent
+                            .permission
+                            .network
+                            .as_ref()
+                            .is_some_and(|network| network.rules.contains_key(target)) =>
+                    {
+                        Some((PermissionStudioEditorAction::AddNetworkRule, target.clone()))
+                    }
+                    _ => None,
+                };
+                let creating_rule = new_rule.is_some();
+                if let Some((action, input)) = new_rule {
+                    self.open_permission_studio_creator(&mut parent, action);
+                    if let Some(editor) = parent.editor.as_mut() {
+                        editor.input = Editor::from_text(input);
+                    }
+                }
                 let mut permission = parent.permission.clone();
                 let result = apply_permission_studio_mode_input(
                     &self.i18n,
@@ -313,6 +341,11 @@ impl App {
                 .and_then(|_| self.persist_permission_studio(&mut parent, permission));
                 match result {
                     Ok(()) => {
+                        if creating_rule {
+                            // The async save keeps this draft for an error;
+                            // show the list while the request is in flight.
+                            parent.editor = None;
+                        }
                         self.restore_permission_studio_dialog(host, parent);
                         true
                     }

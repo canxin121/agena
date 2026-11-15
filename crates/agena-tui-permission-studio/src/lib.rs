@@ -13,10 +13,11 @@ pub mod permission_studio;
 
 pub use permission_helpers::{
     normalize_permission_config, parse_permission_studio_key_input,
-    parse_permission_studio_optional_mode_input, path_access_modes_summary, path_rule_summary,
-    permission_mode_label, permission_mode_token, permission_studio_mode_target_value,
-    rename_network_rule, rename_path_rule, rename_tool_name, rename_tool_rule,
-    set_path_default_mode,
+    parse_permission_studio_optional_mode_input, parse_permission_studio_optional_path_mode_input,
+    path_access_modes_summary, path_permission_mode_label, path_permission_mode_token,
+    path_rule_summary, permission_mode_label, permission_mode_token,
+    permission_studio_mode_target_value, permission_studio_path_target_value, rename_network_rule,
+    rename_path_rule, rename_tool_name, rename_tool_rule, set_path_default_mode,
 };
 pub use permission_rule_studio::{
     PermissionRuleStudioEffect, PermissionRuleStudioItem, PermissionRuleStudioPresentation,
@@ -31,20 +32,26 @@ pub use permission_studio::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Target of a permission studio mode.
 pub enum PermissionStudioModeTarget {
-    PathWorkspaceRead,
-    PathWorkspaceWrite,
-    PathExternalRead,
-    PathExternalWrite,
+    PathWorkspace,
+    PathExternal,
     NetworkInternet,
     NetworkPrivate,
     NetworkLoopback,
     ToolDefault,
-    PathRuleRead { pattern: String },
-    PathRuleWrite { pattern: String },
+    PathRule { pattern: String },
     NetworkRule { target: String },
     ToolName { key: String },
     ToolRule { tool_name: String },
     ToolCommandPattern { tool_name: String, pattern: String },
+}
+
+impl PermissionStudioModeTarget {
+    pub fn is_path(&self) -> bool {
+        matches!(
+            self,
+            Self::PathWorkspace | Self::PathExternal | Self::PathRule { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

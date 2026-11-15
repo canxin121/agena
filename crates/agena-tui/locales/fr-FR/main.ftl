@@ -3283,3 +3283,14 @@ bot-edit-title = Modifier le Bot
 
 bot-instructions = Instructions système supplémentaires
 bot-instructions-empty = Aucune instruction système supplémentaire
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = Accès par défaut à l’espace de travail
+permission-studio-path-external = Accès par défaut aux chemins externes
+permission-studio-path-readonly = Lecture seule
+permission-studio-path-readwrite = Lecture et écriture
+permission-studio-path-invalid-mode = Choisissez readonly, readwrite ou deny. Configurez les approbations dans les permissions de l’outil.
+permission-studio-path-help = Saisissez un fichier ou dossier précis. Les permissions d’un dossier couvrent toute son arborescence ; les jokers de nom de fichier ne sont pas pris en charge.
+permission-studio-rule-path = Chemin
+permission-studio-path-duplicate = Une règle existe déjà pour ce chemin.
+permission-studio-rule-duplicate = Cette règle existe déjà.

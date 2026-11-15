@@ -26,6 +26,29 @@ pub(crate) fn permission_mode_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
     .collect()
 }
 
+pub(crate) fn path_permission_mode_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
+    use agena_domain::PathPermissionMode;
+    use agena_tui_permission_studio::{path_permission_mode_label, path_permission_mode_token};
+    [
+        PathPermissionMode::Readonly,
+        PathPermissionMode::Readwrite,
+        PathPermissionMode::Deny,
+    ]
+    .into_iter()
+    .map(|mode| ChoiceItem {
+        label: path_permission_mode_label(i18n, mode),
+        detail: String::new(),
+        value: path_permission_mode_token(mode).to_owned(),
+        search_text: format!(
+            "{} {}",
+            path_permission_mode_label(i18n, mode),
+            path_permission_mode_token(mode)
+        ),
+        current: false,
+    })
+    .collect()
+}
+
 pub(crate) fn settings_studio_provider_workbench_item(
     i18n: &I18n,
     providers: &[ProviderSummaryResource],

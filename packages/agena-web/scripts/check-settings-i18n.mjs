@@ -15,6 +15,7 @@ const rootFiles = [
   // settings usage report does, so both catalogs are checked together.
   'src/components/chat/ContextUsageChip.vue',
   'src/lib/mcpConnections.ts',
+  'src/lib/permissionConfig.ts',
 ].sort()
 const vueFiles = rootFiles.filter((file) => file.endsWith('.vue'))
 const catalogFiles = globSync('src/i18n/settings-text/*.json').sort()
@@ -44,7 +45,7 @@ const technicalTemplateLiterals = new Set([
   'Top K',
   'Top P',
   'agena:tools',
-  'example.com or 127.0.0.1:8080',
+  'api.example.com:443 · 10.0.0.0/8',
   'git push *',
   'npm version or semver',
   'openai',
@@ -214,15 +215,15 @@ for (const file of rootFiles) {
   for (const match of source.matchAll(sourcePattern)) {
     referenced.add(match[1].replaceAll("\\'", "'").replaceAll('\\\\', '\\'))
   }
-  if (file === 'src/lib/mcpConnections.ts') {
-    // This pure helper returns validation messages and import errors. Its UI
-    // callers translate those messages with st(problem) or st(error.message).
+  if (file === 'src/lib/mcpConnections.ts' || file === 'src/lib/permissionConfig.ts') {
+    // These pure helpers return validation messages and import errors. Their UI
+    // callers translate message keys before displaying them.
     const ast = parse(source, { sourceType: 'module', plugins: ['typescript'] })
     function collectMcpMessages(node) {
       if (!node || typeof node !== 'object') return
       if (
         (node.type === 'CallExpression' && memberName(node.callee) === 'problems.push') ||
-        (node.type === 'NewExpression' && memberName(node.callee) === 'Error')
+        (node.type === 'NewExpression' && ['Error', 'PermissionConfigError'].includes(memberName(node.callee)))
       ) {
         for (const argument of node.arguments || []) {
           if (argument.type === 'StringLiteral') referenced.add(argument.value)

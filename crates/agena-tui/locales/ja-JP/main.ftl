@@ -3284,3 +3284,14 @@ bot-edit-title = Bot を編集
 
 bot-instructions = 追加システム指示
 bot-instructions-empty = 追加システム指示は未設定
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = ワークスペースの既定権限
+permission-studio-path-external = 外部パスの既定権限
+permission-studio-path-readonly = 読み取り専用
+permission-studio-path-readwrite = 読み書き
+permission-studio-path-invalid-mode = readonly、readwrite、deny のいずれかを選択してください。承認はツールの権限で設定します。
+permission-studio-path-help = 具体的なファイルまたはディレクトリを入力してください。ディレクトリの権限は配下全体に適用されます。ファイル名のワイルドカードは使えません。
+permission-studio-rule-path = パス
+permission-studio-path-duplicate = このパスのルールは既に存在します。
+permission-studio-rule-duplicate = このルールは既に存在します。

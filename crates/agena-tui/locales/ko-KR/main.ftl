@@ -3280,3 +3280,14 @@ bot-edit-title = Bot 편집
 
 bot-instructions = 추가 시스템 지침
 bot-instructions-empty = 추가 시스템 지침이 없습니다
+
+# Concrete filesystem permissions
+permission-studio-path-workspace = 작업 공간 기본 권한
+permission-studio-path-external = 외부 경로 기본 권한
+permission-studio-path-readonly = 읽기 전용
+permission-studio-path-readwrite = 읽기 및 쓰기
+permission-studio-path-invalid-mode = readonly, readwrite, deny 중 하나를 선택하세요. 승인은 도구 권한에서 설정하세요.
+permission-studio-path-help = 구체적인 파일 또는 디렉터리를 입력하세요. 디렉터리 권한은 하위 전체에 적용되며 파일 이름 와일드카드는 지원하지 않습니다.
+permission-studio-rule-path = 경로
+permission-studio-path-duplicate = 이 경로의 규칙이 이미 있습니다.
+permission-studio-rule-duplicate = 이 규칙이 이미 있습니다.

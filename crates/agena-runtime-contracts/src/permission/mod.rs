@@ -1,5 +1,12 @@
 //! Runtime-neutral permission types shared across layers.
 
+mod sandbox;
+pub use sandbox::{
+    SandboxFilesystemRestrictions, SandboxNetworkPolicy, SandboxNetworkRule, SandboxPathAccess,
+    SandboxPathPattern, SandboxPathPolicy, SandboxPathRule, SandboxPermissionSnapshot,
+    SandboxPersistedRule, SandboxPolicyError,
+};
+
 use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
@@ -736,6 +743,7 @@ impl NetworkPermissionPolicy {
 
 #[derive(Debug, Clone)]
 struct NetworkPermissionRule {
+    pattern: String,
     mode: PermissionMode,
     matcher: NetworkRuleMatcher,
     description: String,
@@ -749,6 +757,7 @@ impl NetworkPermissionRule {
         let pattern = pattern.into();
         let matcher = NetworkRuleMatcher::new(pattern.as_str())?;
         Ok(Self {
+            pattern: pattern.clone(),
             mode,
             matcher,
             description: format!("matched network rule: {pattern}"),
@@ -908,6 +917,9 @@ fn classify_network_target(target: &NetworkTarget) -> NetworkClass {
 
 fn classify_ip_addr(addr: IpAddr) -> NetworkClass {
     match addr {
+        IpAddr::V6(addr) if addr.to_ipv4_mapped().is_some() => {
+            classify_ip_addr(IpAddr::V4(addr.to_ipv4_mapped().expect("mapped IPv4 checked")))
+        }
         IpAddr::V4(addr) if addr.is_loopback() => NetworkClass::Loopback,
         IpAddr::V6(addr) if addr.is_loopback() => NetworkClass::Loopback,
         IpAddr::V4(addr)

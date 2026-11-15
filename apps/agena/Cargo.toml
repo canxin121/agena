@@ -33,6 +33,8 @@ agena-tui-app = { workspace = true }
 agena-tui-platform = { workspace = true }
 agena-web = { workspace = true }
 agena-process = { workspace = true }
+agena-runtime-tools = { workspace = true }
+agena-bundled-plugins = { workspace = true }
 anyhow = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
@@ -79,7 +81,6 @@ web-push = { version = "0.11.0", default-features = false }
 cc = "1.4.3"
 
 [dev-dependencies]
-agena-bundled-plugins = { workspace = true }
 agena-plugin-sdk = { workspace = true, features = ["http"] }
 agena-storage-sqlite = { workspace = true }
 agena-testkit = { workspace = true }

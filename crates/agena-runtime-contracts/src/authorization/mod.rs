@@ -14,6 +14,11 @@ use crate::command_class::CommandClass;
 use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
+pub use crate::permission::{
+    SandboxFilesystemRestrictions, SandboxNetworkPolicy, SandboxNetworkRule, SandboxPathAccess,
+    SandboxPathPattern, SandboxPathPolicy, SandboxPathRule, SandboxPermissionSnapshot,
+    SandboxPersistedRule, SandboxPolicyError,
+};
 
 pub fn apply_to_permission_policy(
     config: &PermissionConfig,
@@ -239,6 +244,17 @@ pub struct ExecutionPrincipal {
 }
 
 impl ExecutionPrincipal {
+    /// Capture every authority layer and resolve host path aliases before a
+    /// child process receives its restricted environment.
+    pub fn sandbox_permission_snapshot(&self, workspace_root: &Path) -> SandboxPermissionSnapshot {
+        SandboxPermissionSnapshot::from_policies(
+            self.blocked,
+            workspace_root,
+            std::iter::once(&self.permission_policy).chain(self.permission_ceiling_policy.iter()),
+            std::iter::once(&self.network_policy).chain(self.network_ceiling_policy.iter()),
+        )
+    }
+
     pub fn new(permission_policy: PermissionPolicy, tool_policy: ToolPermissionPolicy) -> Self {
         Self {
             blocked: false,

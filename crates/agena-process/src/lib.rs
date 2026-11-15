@@ -10,6 +10,8 @@ use std::time::Duration;
 
 pub mod blocking;
 pub mod pty;
+pub mod sandbox;
+mod sandbox_proxy;
 pub mod shell;
 #[cfg(unix)]
 mod unix;

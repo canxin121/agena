@@ -10,6 +10,7 @@ portable-atomic = { workspace = true }
 agena-failure = { workspace = true }
 agena-plugin-sdk = { workspace = true, features = ["cdylib", "stdio", "http", "schema-validation"] }
 agena-process = { workspace = true }
+tempfile = { workspace = true }
 agena-stdio-codec = { workspace = true }
 abi_stable = { workspace = true }
 async-trait = { workspace = true }
@@ -31,12 +32,12 @@ wasmtime-wasi = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true, optional = true }
-which = { workspace = true, optional = true }
+which = { workspace = true }
 
 [features]
 default = []
 wasm = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:sha2", "dep:hex"]
-signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek", "dep:which"]
+signing = ["dep:sha2", "dep:hex", "dep:ed25519-dalek"]
 
 [lints]
 workspace = true

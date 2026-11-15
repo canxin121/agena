@@ -1,0 +1,2087 @@
+//! Native MXC execution shared by shell, terminal and tool subprocesses.
+//!
+//! Permission decisions belong to the caller. This module transports an already
+//! approved policy to a short-lived launcher, so existing Tokio pipes, PTYs and
+//! process-tree ownership continue to work. Launch failures never run the command
+//! outside the sandbox.
+
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::io;
+use std::net::IpAddr;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use mxc_sdk::v1::{
+    ContainerRequest, FilesystemPolicy, NetworkAction, NetworkEgressPolicy, NetworkIngressPolicy,
+    NetworkPeerPolicy, NetworkPolicy, NetworkPortPolicy, NetworkRulePolicy, NetworkRuntimeConfig,
+    SpawnExtendedOptions, SpawnStdio, UiPolicy, WaitResult,
+};
+use serde::{Deserialize, Serialize};
+
+const LAUNCH_ARGUMENT: &str = "--agena-sandbox-launch";
+const PAYLOAD_ARGUMENT: &str = "--agena-sandbox-payload";
+const PAYLOAD_ENV_PREFIX: &str = "AGENA_SANDBOX_PAYLOAD_ENV_";
+const LAUNCH_FAILURE: i32 = 125;
+static LAUNCHER_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// Concrete permissions for one process tree. Values are supplied by trusted
+/// runtime code after the normal permission/approval flow.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxPolicy {
+    #[serde(default)]
+    pub readonly_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub readwrite_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub denied_paths: Vec<PathBuf>,
+    /// Additional installation files required by a configured tool or language server.
+    #[serde(default)]
+    pub runtime_paths: Vec<PathBuf>,
+    /// Existing temporary directories owned by this trusted caller. This only
+    /// permits grants into reserved scratch namespaces; it grants no access by
+    /// itself and must never be filled from a tool's resource declaration.
+    #[serde(default)]
+    pub private_paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub network: SandboxNetwork,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Language-server build products stay in its private scratch directory.
+    #[serde(default)]
+    pub private_build_cache: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SandboxNetwork {
+    #[default]
+    Disabled,
+    /// An independently managed, trusted loopback transport endpoint. Usually
+    /// an HTTP proxy; trusted adapters can use the injected endpoint to reach
+    /// one already-owned local control socket instead.
+    Proxy { url: String },
+    /// Agena's per-invocation authenticated HTTP proxy. Addresses have already
+    /// passed both hostname and IP checks in every permission ceiling.
+    HttpProxy { targets: Vec<ProxyTarget> },
+    /// Explicit IP/CIDR permissions only; hostname policies use HttpProxy.
+    Direct { allow: Vec<NetworkEndpoint> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProxyTarget {
+    pub host: String,
+    pub port: Option<u16>,
+    pub addresses: Vec<IpAddr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkEndpoint {
+    pub cidr: String,
+    pub protocol: NetworkProtocol,
+    pub port: Option<u16>,
+    pub end_port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkProtocol {
+    Tcp,
+    Udp,
+    Icmp,
+    Any,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LauncherRequest {
+    argv: Vec<String>,
+    cwd: PathBuf,
+    temporary_root: PathBuf,
+    #[serde(skip)]
+    environment: HashMap<String, String>,
+    environment_keys: Vec<String>,
+    policy: SandboxPolicy,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkloadPayload {
+    argv: Vec<String>,
+    cwd: PathBuf,
+    environment: HashMap<String, String>,
+    proxy_credentials: Option<ProxyCredentials>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProxyCredentials {
+    username: String,
+    password: Option<String>,
+}
+
+/// Set a trusted launcher executable for embedders and integration-test helpers.
+/// The executable must call try_run_launcher before its ordinary argument parser.
+/// There is deliberately no environment variable which disables the sandbox.
+pub fn configure_launcher(path: impl Into<PathBuf>) -> io::Result<()> {
+    let path = path.into();
+    if !path.is_absolute() || !path.is_file() {
+        return Err(invalid(
+            "sandbox launcher must be an existing absolute executable path",
+        ));
+    }
+    if let Some(existing) = LAUNCHER_PATH.get() {
+        return if existing == &path {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "sandbox launcher is already configured",
+            ))
+        };
+    }
+    LAUNCHER_PATH.set(path).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "sandbox launcher is already configured",
+        )
+    })
+}
+
+/// Resolve the trusted launcher used for sandbox and application worker modes.
+pub fn launcher_executable() -> io::Result<PathBuf> {
+    LAUNCHER_PATH
+        .get()
+        .cloned()
+        .map(Ok)
+        .unwrap_or_else(std::env::current_exe)
+}
+
+/// Retain terminal, locale and installed-runtime discovery settings, without
+/// copying ambient API credentials, agents, preload hooks or proxy credentials.
+/// Explicit overrides added by trusted callers of wrap_tokio_command are retained.
+pub fn sanitize_environment(environment: &HashMap<String, String>) -> HashMap<String, String> {
+    environment
+        .iter()
+        .filter(|(name, _)| safe_environment_name(name))
+        .map(|(name, value)| (environment_key(name), value.clone()))
+        .collect()
+}
+
+fn environment_key(name: &str) -> String {
+    if cfg!(windows) {
+        name.to_ascii_uppercase()
+    } else {
+        name.to_owned()
+    }
+}
+
+fn safe_environment_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper.starts_with("LC_")
+        || matches!(
+            upper.as_str(),
+            "PATH"
+                | "PATHEXT"
+                | "SYSTEMROOT"
+                | "WINDIR"
+                | "COMSPEC"
+                | "LANG"
+                | "LANGUAGE"
+                | "TERM"
+                | "COLORTERM"
+                | "NO_COLOR"
+                | "FORCE_COLOR"
+                | "NUMBER_OF_PROCESSORS"
+                | "PROCESSOR_ARCHITECTURE"
+                | "RUSTUP_HOME"
+                | "RUSTUP_TOOLCHAIN"
+                | "JAVA_HOME"
+                | "GOROOT"
+                | "DOTNET_ROOT"
+                | "VIRTUAL_ENV"
+                | "CONDA_PREFIX"
+        )
+}
+
+/// Replace an argv with the sandbox launcher argv. The environment is reduced to
+/// safe runtime settings; the launcher gives the workload a private home/cache/tmp.
+pub fn wrap_argv(
+    argv: &[String],
+    cwd: &Path,
+    environment: &mut HashMap<String, String>,
+    policy: &SandboxPolicy,
+) -> io::Result<Vec<String>> {
+    let mut safe = sanitize_environment(environment);
+    // Rustup's shims find installed toolchains through RUSTUP_HOME even though
+    // the workload's HOME and CARGO_HOME are private.
+    capture_rustup_home(environment, &mut safe);
+    let (wrapped, launcher_environment) = launcher_argv(argv, cwd, &safe, policy)?;
+    *environment = launcher_environment;
+    Ok(wrapped)
+}
+
+/// Construct a sandboxed Tokio command. Set stdio on the returned command.
+pub fn command(
+    program: &str,
+    args: &[String],
+    cwd: &Path,
+    environment: &HashMap<String, String>,
+    policy: &SandboxPolicy,
+) -> io::Result<tokio::process::Command> {
+    let mut argv = vec![program.to_owned()];
+    argv.extend_from_slice(args);
+    let mut environment = environment.clone();
+    let argv = wrap_argv(&argv, cwd, &mut environment, policy)?;
+    let mut command = tokio::process::Command::new(&argv[0]);
+    command
+        .args(&argv[1..])
+        .current_dir(cwd)
+        .env_clear()
+        .envs(environment);
+    Ok(command)
+}
+
+/// Wrap an existing command BEFORE configuring stdin/stdout/stderr or platform
+/// creation flags. Rust exposes no way to transfer those opaque settings when
+/// replacing the executable. Prefer command or wrap_argv for new call sites.
+pub fn wrap_tokio_command(
+    command: &mut tokio::process::Command,
+    policy: &SandboxPolicy,
+) -> io::Result<()> {
+    let captured = capture_command(command.as_std(), policy)?;
+    let (argv, launcher_environment) = launcher_argv(
+        &captured.argv,
+        &captured.cwd,
+        &captured.environment,
+        &captured.policy,
+    )?;
+    let mut wrapped = tokio::process::Command::new(&argv[0]);
+    wrapped
+        .args(&argv[1..])
+        .current_dir(&captured.cwd)
+        .env_clear()
+        .envs(launcher_environment);
+    *command = wrapped;
+    Ok(())
+}
+
+/// Synchronous counterpart with the same before-stdio requirement.
+pub fn wrap_std_command(
+    command: &mut std::process::Command,
+    policy: &SandboxPolicy,
+) -> io::Result<()> {
+    let captured = capture_command(command, policy)?;
+    let (argv, launcher_environment) = launcher_argv(
+        &captured.argv,
+        &captured.cwd,
+        &captured.environment,
+        &captured.policy,
+    )?;
+    let mut wrapped = std::process::Command::new(&argv[0]);
+    wrapped
+        .args(&argv[1..])
+        .current_dir(&captured.cwd)
+        .env_clear()
+        .envs(launcher_environment);
+    *command = wrapped;
+    Ok(())
+}
+
+fn capture_command(
+    command: &std::process::Command,
+    policy: &SandboxPolicy,
+) -> io::Result<LauncherRequest> {
+    let mut argv = vec![utf8(command.get_program(), "program")?.to_owned()];
+    for argument in command.get_args() {
+        argv.push(utf8(argument, "argument")?.to_owned());
+    }
+    let cwd = command
+        .get_current_dir()
+        .map(Path::to_path_buf)
+        .map(Ok)
+        .unwrap_or_else(std::env::current_dir)?;
+    let ambient = ambient_environment();
+    let mut environment = sanitize_environment(&ambient);
+    capture_rustup_home(&ambient, &mut environment);
+    for (name, value) in command.get_envs() {
+        let name = environment_key(utf8(name, "environment name")?);
+        match value {
+            Some(value) => {
+                reject_loader_environment(&name)?;
+                environment.insert(name, utf8(value, "environment value")?.to_owned());
+            }
+            None => {
+                environment.remove(&name);
+            }
+        }
+    }
+    Ok(LauncherRequest {
+        argv,
+        cwd,
+        temporary_root: capture_temporary_root()?,
+        environment_keys: environment.keys().cloned().collect(),
+        environment,
+        policy: policy.clone(),
+    })
+}
+
+fn launcher_argv(
+    argv: &[String],
+    cwd: &Path,
+    environment: &HashMap<String, String>,
+    policy: &SandboxPolicy,
+) -> io::Result<(Vec<String>, HashMap<String, String>)> {
+    validate_policy(policy)?;
+    if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|s| s.contains('\0')) {
+        return Err(invalid(
+            "sandbox requires a nonempty program and NUL-free arguments",
+        ));
+    }
+    if !cwd.is_absolute() {
+        return Err(invalid("sandbox working directory must be absolute"));
+    }
+    let request = LauncherRequest {
+        argv: argv.to_vec(),
+        cwd: cwd.to_path_buf(),
+        temporary_root: capture_temporary_root()?,
+        environment_keys: environment.keys().cloned().collect(),
+        environment: environment.clone(),
+        policy: policy.clone(),
+    };
+    let bytes = serde_json::to_vec(&request).map_err(invalid)?;
+    let encoded = URL_SAFE_NO_PAD.encode(bytes);
+    // CreateProcess has a 32,767 UTF-16 command-line limit. Fail before spawn
+    // instead of truncating a policy or silently dropping arguments.
+    #[cfg(windows)]
+    if encoded.len() > 28_000 {
+        return Err(invalid(
+            "sandbox launch request exceeds the Windows command-line limit",
+        ));
+    }
+    #[cfg(not(windows))]
+    if encoded.len() > 120_000 {
+        return Err(invalid(
+            "sandbox launch request is too large for one command-line argument",
+        ));
+    }
+    let executable = launcher_executable()?;
+    let mut launcher_environment = trusted_launcher_environment();
+    reject_writable_launcher_paths(policy, &executable, cwd, &launcher_environment)?;
+    for (index, name) in request.environment_keys.iter().enumerate() {
+        reject_loader_environment(name)?;
+        launcher_environment.insert(
+            format!("{PAYLOAD_ENV_PREFIX}{index}"),
+            environment[name].clone(),
+        );
+    }
+    Ok((
+        vec![
+            utf8(executable.as_os_str(), "launcher path")?.to_owned(),
+            LAUNCH_ARGUMENT.to_owned(),
+            encoded,
+        ],
+        launcher_environment,
+    ))
+}
+
+// A readonly bind of one executable does not protect its host parent directory
+// from replacement. Keep every writable task resource outside the native
+// launcher's executable and backend lookup paths, including symlink spellings.
+fn reject_writable_launcher_paths(
+    policy: &SandboxPolicy,
+    launcher: &Path,
+    cwd: &Path,
+    native_environment: &HashMap<String, String>,
+) -> io::Result<()> {
+    if policy.readwrite_paths.is_empty() {
+        return Ok(());
+    }
+    let mut protected = vec![
+        (launcher.to_path_buf(), false),
+        (std::env::current_exe()?, false),
+    ];
+    let path = native_environment.get("PATH");
+    if let Some(path) = path {
+        for directory in std::env::split_paths(path) {
+            let directory = if directory.is_absolute() {
+                directory
+            } else {
+                cwd.join(directory)
+            };
+            // Also prevent planting a backend executable earlier in PATH.
+            protected.push((directory, true));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    for name in [
+        "bwrap",
+        "unshare",
+        "sh",
+        "slirp4netns",
+        "nsenter",
+        "ip",
+        "iptables",
+        "ip6tables",
+        "iptables-restore",
+        "ip6tables-restore",
+        "sleep",
+    ] {
+        if let Ok(executable) = which::which_in(name, path, cwd) {
+            protected.push((executable, false));
+        }
+    }
+    #[cfg(unix)]
+    protected.push((PathBuf::from("/bin/sh"), false));
+    #[cfg(target_os = "macos")]
+    protected.push((PathBuf::from("/usr/bin/sandbox-exec"), false));
+    #[cfg(windows)]
+    {
+        if let Some(shell) = native_environment.get("COMSPEC") {
+            protected.push((PathBuf::from(shell), false));
+        }
+        if let Some(system) = native_environment.get("SYSTEMROOT") {
+            protected.push((PathBuf::from(system), true));
+        }
+        // Windows additionally searches the executable directory for DLLs.
+        if let Some(directory) = launcher.parent() {
+            protected.push((directory.to_path_buf(), true));
+        }
+    }
+
+    let writes: Vec<_> = policy
+        .readwrite_paths
+        .iter()
+        .map(|grant| Ok((grant, policy_path_identity(grant)?)))
+        .collect::<io::Result<_>>()?;
+    for (protected_path, is_search_directory) in protected {
+        let mut identities = vec![
+            protected_path.clone(),
+            policy_path_identity(&protected_path)?,
+        ];
+        if let (Some(parent), Some(name)) = (protected_path.parent(), protected_path.file_name()) {
+            // Canonicalizing only the parent retains a replaceable symlink's
+            // own directory entry, not just the file it currently points to.
+            identities.push(policy_path_identity(parent)?.join(name));
+        }
+        for (grant, canonical_grant) in &writes {
+            let conflicts = identities.iter().any(|protected| {
+                [grant.as_path(), canonical_grant.as_path()]
+                    .iter()
+                    .any(|write| {
+                        identity_within(protected, write)
+                            || (is_search_directory && identity_within(write, protected))
+                    })
+            });
+            if conflicts {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "sandbox writable resource {} overlaps trusted sandbox launcher/backend path {}; install Agena and backend tools outside writable task trees",
+                        grant.display(),
+                        protected_path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ambient_environment() -> HashMap<String, String> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+fn trusted_launcher_environment() -> HashMap<String, String> {
+    let ambient = ambient_environment();
+    let mut environment = sanitize_environment(&ambient);
+    // These paths belong only to MXC's trusted setup process. The workload
+    // receives independent private directories in its payload environment.
+    for (name, value) in ambient {
+        if matches!(
+            name.to_ascii_uppercase().as_str(),
+            "HOME"
+                | "USERPROFILE"
+                | "HOMEDRIVE"
+                | "HOMEPATH"
+                | "APPDATA"
+                | "LOCALAPPDATA"
+                | "TMPDIR"
+                | "TMP"
+                | "TEMP"
+        ) {
+            environment.insert(environment_key(&name), value);
+        }
+    }
+    environment
+}
+
+fn reject_loader_environment(name: &str) -> io::Result<()> {
+    let upper = name.to_ascii_uppercase();
+    if upper.starts_with("LD_")
+        || upper.starts_with("DYLD_")
+        || matches!(
+            upper.as_str(),
+            "GLIBC_TUNABLES" | "GCONV_PATH" | "LIBPATH" | "SHLIB_PATH"
+        )
+    {
+        return Err(invalid(format!(
+            "sandbox environment variable {name} controls dynamic loading and cannot be accepted; use a trusted runtime installation instead"
+        )));
+    }
+    Ok(())
+}
+
+/// Handle the internal launcher before parsing application arguments or opening
+/// application state. None means ordinary application startup should continue.
+pub fn try_run_launcher() -> Option<i32> {
+    let mut args = std::env::args_os().skip(1);
+    let argument = args.next();
+    let is_payload = argument.as_deref() == Some(OsStr::new(PAYLOAD_ARGUMENT));
+    if !is_payload && argument.as_deref() != Some(OsStr::new(LAUNCH_ARGUMENT)) {
+        return None;
+    }
+    let result = (|| {
+        let encoded = args
+            .next()
+            .ok_or_else(|| invalid("missing sandbox launch request"))?;
+        if args.next().is_some() {
+            return Err(invalid("unexpected sandbox launcher arguments"));
+        }
+        if is_payload {
+            return run_workload_payload(Path::new(&encoded));
+        }
+        let decoded = URL_SAFE_NO_PAD
+            .decode(utf8(&encoded, "sandbox launch request")?)
+            .map_err(invalid)?;
+        let request: LauncherRequest = serde_json::from_slice(&decoded).map_err(invalid)?;
+        run_launcher(request)
+    })();
+    Some(match result {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("Agena sandbox: {error}");
+            LAUNCH_FAILURE
+        }
+    })
+}
+
+// This entry point runs inside MXC. Its file is created privately by the parent
+// launcher, so proxy credentials and trusted environment values never become
+// bwrap --setenv command-line arguments visible through /proc/*/cmdline.
+fn run_workload_payload(path: &Path) -> io::Result<i32> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(4 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err(invalid("sandbox workload payload is too large"));
+    }
+    let mut payload: WorkloadPayload = serde_json::from_slice(&bytes).map_err(invalid)?;
+    let (program, args) = payload
+        .argv
+        .split_first()
+        .ok_or_else(|| invalid("empty sandbox workload argv"))?;
+    if let Some(credentials) = payload.proxy_credentials {
+        // Bubblewrap rewrites a host-loopback proxy to its private namespace
+        // gateway. Preserve that endpoint and restore only the private auth.
+        let endpoint = std::env::var("HTTP_PROXY")
+            .or_else(|_| std::env::var("http_proxy"))
+            .map_err(|_| invalid("MXC did not provide its sandbox-visible proxy endpoint"))?;
+        let mut url = url::Url::parse(&endpoint).map_err(invalid)?;
+        url.set_username(&credentials.username)
+            .map_err(|_| invalid("invalid sandbox proxy username"))?;
+        url.set_password(credentials.password.as_deref())
+            .map_err(|_| invalid("invalid sandbox proxy password"))?;
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "FTP_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+            "ftp_proxy",
+        ] {
+            payload.environment.insert(key.to_owned(), url.to_string());
+        }
+        payload
+            .environment
+            .insert("NO_PROXY".to_owned(), String::new());
+        payload
+            .environment
+            .insert("no_proxy".to_owned(), String::new());
+    }
+    let mut command = std::process::Command::new(program);
+    command
+        .args(args)
+        .current_dir(&payload.cwd)
+        .env_clear()
+        .envs(payload.environment);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        Err(command.exec())
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(command.status()?.code().unwrap_or(1))
+    }
+}
+
+fn run_launcher(mut payload: LauncherRequest) -> io::Result<i32> {
+    validate_policy_for_root(&payload.policy, &payload.temporary_root)?;
+    // Values use inert transport names. Workload PATH, SystemRoot, COMSPEC,
+    // and other settings cannot alter this launcher's native environment.
+    payload.environment = payload
+        .environment_keys
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            reject_loader_environment(name)?;
+            let value = std::env::var(format!("{PAYLOAD_ENV_PREFIX}{index}"))
+                .map_err(|_| invalid("sandbox payload environment transport is incomplete"))?;
+            Ok((name.clone(), value))
+        })
+        .collect::<io::Result<HashMap<_, _>>>()?;
+    #[cfg(windows)]
+    if matches!(
+        payload.policy.network,
+        SandboxNetwork::Proxy { .. } | SandboxNetwork::HttpProxy { .. }
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows sandbox proxy requires an identity-bound AppContainer proxy; unrestricted host-loopback fallback is disabled",
+        ));
+    }
+    let scratch = tempfile::Builder::new()
+        .prefix("agena-sandbox-")
+        .tempdir_in(&payload.temporary_root)?;
+    let broker = match &payload.policy.network {
+        SandboxNetwork::HttpProxy { targets } => {
+            Some(crate::sandbox_proxy::ProxyBroker::start(targets)?)
+        }
+        _ => None,
+    };
+    let proxy = broker.as_ref().map(|broker| broker.url());
+    let request = mxc_request(&payload, scratch.path(), proxy)?;
+    let mut options = SpawnExtendedOptions::default();
+    options.stdio = SpawnStdio::Inherit;
+    install_termination_handlers()?;
+    #[cfg(unix)]
+    let parent = unsafe { libc::getppid() };
+    let started = Instant::now();
+    let mut process =
+        mxc_sdk::v1::spawn_with_extended_options(request, options).map_err(|error| {
+            io::Error::other(format!(
+                "MXC could not start the command: {error}. {}",
+                prerequisite_hint()
+            ))
+        })?;
+    let result = loop {
+        match process.try_wait() {
+            Ok(Some(_)) => break process.wait().map(wait_exit_code),
+            Ok(None) => {}
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => break Ok(124),
+            Err(error) => break Err(error),
+        }
+        if let Some(milliseconds) = payload.policy.timeout_ms
+            && started.elapsed() >= Duration::from_millis(milliseconds)
+        {
+            process.kill_for_timeout()?;
+            let _ = process.wait()?;
+            break Ok(124);
+        }
+        #[cfg(unix)]
+        {
+            let signal = TERMINATION_SIGNAL.load(std::sync::atomic::Ordering::Relaxed);
+            if signal != 0 || unsafe { libc::getppid() } != parent {
+                process.kill()?;
+                let _ = process.wait()?;
+                break Ok(if signal != 0 { 128 + signal } else { 143 });
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    // MXC's drop path tears down remaining descendants before the proxy and
+    // private filesystem disappear, including descendants retaining stdio.
+    for warning in process.warnings() {
+        eprintln!("Agena sandbox: {warning}");
+    }
+    drop(process);
+    drop(broker);
+    drop(scratch);
+    result
+}
+
+fn wait_exit_code(outcome: WaitResult) -> i32 {
+    match outcome {
+        WaitResult::Exited(code) if code >= 0 => code,
+        WaitResult::Exited(_) => 1,
+        WaitResult::TimedOut => 124,
+    }
+}
+
+fn mxc_request(
+    payload: &LauncherRequest,
+    scratch: &Path,
+    proxy: Option<&str>,
+) -> io::Result<ContainerRequest> {
+    let mut readonly_paths = payload.policy.readonly_paths.clone();
+    readonly_paths.extend(payload.policy.runtime_paths.iter().cloned());
+    readonly_paths.extend(runtime_paths(
+        &payload.argv,
+        &payload.cwd,
+        &payload.environment,
+    )?);
+    let bootstrap = std::env::current_exe()?;
+    add_executable_paths(&bootstrap, &mut readonly_paths)?;
+    reject_shared_temporary_grants(
+        &readonly_paths,
+        &payload.temporary_root,
+        &payload.policy.private_paths,
+    )?;
+    reject_denied_runtime(&payload.policy, &readonly_paths)?;
+    reject_denied_runtime(&payload.policy, &[scratch.to_path_buf()])?;
+    let mut environment = payload.environment.clone();
+    private_environment(&mut environment, scratch)?;
+    if payload.policy.private_build_cache {
+        environment.retain(|name, _| !name.eq_ignore_ascii_case("CARGO_TARGET_DIR"));
+        let target = scratch.join("cache").join("cargo-target");
+        std::fs::create_dir_all(&target)?;
+        environment.insert(
+            "CARGO_TARGET_DIR".to_owned(),
+            utf8(target.as_os_str(), "private build directory")?.to_owned(),
+        );
+    }
+    // MXC's initial environment is intentionally free of private overrides.
+    // The bootstrap restores those from a mode-0600 file after isolation.
+    let mut bootstrap_environment = sanitize_environment(&environment);
+    private_environment(&mut bootstrap_environment, scratch)?;
+    let proxy_url = proxy.or_else(|| match &payload.policy.network {
+        SandboxNetwork::Proxy { url } => Some(url.as_str()),
+        _ => None,
+    });
+    let proxy_credentials = proxy_url
+        .map(|value| {
+            let url = url::Url::parse(value).map_err(invalid)?;
+            Ok::<_, io::Error>(ProxyCredentials {
+                username: url.username().to_owned(),
+                password: url.password().map(str::to_owned),
+            })
+        })
+        .transpose()?;
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "FTP_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "ftp_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ] {
+        environment.remove(key);
+    }
+    let workload = WorkloadPayload {
+        argv: payload.argv.clone(),
+        cwd: payload.cwd.clone(),
+        environment,
+        proxy_credentials,
+    };
+    let payload_path = scratch.join("workload.json");
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    serde_json::to_writer(options.open(&payload_path)?, &workload).map_err(invalid)?;
+    let bootstrap_argv = vec![
+        utf8(bootstrap.as_os_str(), "bootstrap path")?.to_owned(),
+        PAYLOAD_ARGUMENT.to_owned(),
+        utf8(payload_path.as_os_str(), "payload path")?.to_owned(),
+    ];
+    let mut readwrite_paths = payload.policy.readwrite_paths.clone();
+    readwrite_paths.push(scratch.to_path_buf());
+    let mut request = ContainerRequest::new(command_line(&bootstrap_argv)?);
+    request.filesystem = Some(FilesystemPolicy {
+        readonly_paths: path_strings(readonly_paths)?,
+        readwrite_paths: path_strings(readwrite_paths)?,
+        denied_paths: path_strings(payload.policy.denied_paths.clone())?,
+        clear_policy_on_exit: Some(true),
+    });
+    request.network = Some(network_policy(&payload.policy.network, proxy)?);
+    request.ui = Some(UiPolicy::default());
+    request.working_directory =
+        Some(utf8(payload.cwd.as_os_str(), "working directory")?.to_owned());
+    request.environment = Some(bootstrap_environment.into_iter().collect());
+    request.inherit_default_environment = Some(false);
+    request.timeout_ms = payload
+        .policy
+        .timeout_ms
+        .map(u32::try_from)
+        .transpose()
+        .map_err(invalid)?;
+    Ok(request)
+}
+
+fn capture_temporary_root() -> io::Result<PathBuf> {
+    std::env::temp_dir().canonicalize()
+}
+
+/// Check untrusted resource declarations before a trusted host broker reads or
+/// copies them. Otherwise copying a reserved private file to an owned scratch
+/// directory would erase the original path before the final mount validation.
+/// Internal temporary-directory ownership is intentionally not accepted here.
+pub fn validate_resource_paths(paths: &[PathBuf]) -> io::Result<()> {
+    for path in paths {
+        if !path.is_absolute() {
+            return Err(invalid("sandbox resource path must be absolute"));
+        }
+    }
+    reject_shared_temporary_grants(paths, &capture_temporary_root()?, &[])
+}
+
+const PRIVATE_TEMP_PREFIXES: &[&str] = &[
+    "agena-sandbox-",
+    "agena-tool-worker-",
+    "agena-media-worker-",
+];
+
+fn reserved_temporary_child(path: &Path, root: &Path) -> bool {
+    identity_within(path, root)
+        && path
+            .components()
+            .nth(root.components().count())
+            .and_then(|component| component.as_os_str().to_str())
+            .is_some_and(|name| {
+                let name = name.to_ascii_lowercase();
+                PRIVATE_TEMP_PREFIXES
+                    .iter()
+                    .any(|prefix| name.starts_with(prefix))
+            })
+}
+
+fn reject_shared_temporary_grants(
+    grants: &[PathBuf],
+    temporary_root: &Path,
+    private_paths: &[PathBuf],
+) -> io::Result<()> {
+    let shared_roots = vec![temporary_root.to_path_buf()];
+    #[cfg(unix)]
+    let shared_roots = {
+        let mut roots = shared_roots;
+        roots.extend([
+            PathBuf::from("/tmp"),
+            PathBuf::from("/var/tmp"),
+            PathBuf::from("/private/tmp"),
+        ]);
+        roots
+    };
+    let mut roots = shared_roots.clone();
+    roots.extend(
+        shared_roots
+            .iter()
+            .map(|root| policy_path_identity(root))
+            .collect::<io::Result<Vec<_>>>()?,
+    );
+    let mut owned = Vec::new();
+    for path in private_paths {
+        let identity = path.canonicalize()?;
+        if !identity.is_dir()
+            || !roots.iter().any(|root| {
+                reserved_temporary_child(&identity, root)
+                    && identity.components().count() == root.components().count() + 1
+            })
+        {
+            return Err(invalid(
+                "private_paths must name an existing reserved task directory directly inside a temporary root",
+            ));
+        }
+        owned.push(identity);
+    }
+    for grant in grants {
+        let identity = policy_path_identity(grant)?;
+        if roots
+            .iter()
+            .any(|root| identity_within(root, &identity) || identity_within(root, grant))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "sandbox grant covers a shared temporary root: {}; use a task-specific subdirectory so other jobs' private files remain isolated",
+                    grant.display()
+                ),
+            ));
+        }
+        let reserved = roots.iter().any(|root| {
+            reserved_temporary_child(&identity, root) || reserved_temporary_child(grant, root)
+        });
+        if reserved && !owned.iter().any(|root| identity_within(&identity, root)) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "sandbox grant targets another task's private directory: {}; use an ordinary task directory or trusted private_paths ownership",
+                    grant.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_policy(policy: &SandboxPolicy) -> io::Result<()> {
+    validate_policy_for_root(policy, &capture_temporary_root()?)
+}
+
+fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io::Result<()> {
+    if !temporary_root.is_absolute() {
+        return Err(invalid("sandbox temporary root must be absolute"));
+    }
+    if let Some(timeout) = policy.timeout_ms
+        && (timeout == 0 || timeout > u64::from(u32::MAX))
+    {
+        return Err(invalid(
+            "sandbox timeout must be between 1 and 4294967295 milliseconds",
+        ));
+    }
+    for path in policy
+        .readonly_paths
+        .iter()
+        .chain(&policy.readwrite_paths)
+        .chain(&policy.denied_paths)
+        .chain(&policy.runtime_paths)
+        .chain(&policy.private_paths)
+    {
+        if !path.is_absolute() || path.as_os_str().is_empty() {
+            return Err(invalid(format!(
+                "sandbox path must be absolute: {}",
+                path.display()
+            )));
+        }
+        utf8(path.as_os_str(), "policy path")?;
+    }
+    let granted = policy
+        .readonly_paths
+        .iter()
+        .chain(&policy.readwrite_paths)
+        .chain(&policy.runtime_paths)
+        .cloned()
+        .collect::<Vec<_>>();
+    reject_shared_temporary_grants(&granted, temporary_root, &policy.private_paths)?;
+    // A granted child below a denied parent has different semantics on the
+    // supported OSes. Refuse it instead of accidentally re-exposing the child.
+    for granted in policy
+        .readonly_paths
+        .iter()
+        .chain(&policy.readwrite_paths)
+        .chain(&policy.runtime_paths)
+    {
+        if policy
+            .denied_paths
+            .iter()
+            .any(|denied| granted.starts_with(denied))
+        {
+            return Err(invalid(format!(
+                "sandbox grant is inside a denied path: {}",
+                granted.display()
+            )));
+        }
+    }
+    match &policy.network {
+        SandboxNetwork::Direct { allow } => {
+            for endpoint in allow {
+                endpoint_rule(endpoint)?;
+            }
+        }
+        SandboxNetwork::Proxy { url } => {
+            validate_proxy_url(url)?;
+            let parsed = url::Url::parse(url).map_err(invalid)?;
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                return Err(invalid(
+                    "external proxy URLs must not include credentials; use Agena's authenticated HttpProxy broker",
+                ));
+            }
+        }
+        SandboxNetwork::HttpProxy { targets } => {
+            if targets.is_empty()
+                || targets.iter().any(|target| {
+                    target.host.is_empty() || target.addresses.is_empty() || target.port == Some(0)
+                })
+            {
+                return Err(invalid(
+                    "sandbox HTTP proxy requires nonempty hosts and approved fixed IP addresses",
+                ));
+            }
+        }
+        SandboxNetwork::Disabled => {}
+    }
+    Ok(())
+}
+
+fn reject_denied_runtime(policy: &SandboxPolicy, granted: &[PathBuf]) -> io::Result<()> {
+    let denied = policy
+        .denied_paths
+        .iter()
+        .map(|path| policy_path_identity(path))
+        .collect::<io::Result<Vec<_>>>()?;
+    for path in granted {
+        let identity = policy_path_identity(path)?;
+        if denied
+            .iter()
+            .any(|denied| identity_within(&identity, denied))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "sandbox grant resolves inside a denied path: {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+// MXC resolves aliases before constructing mounts. Compare the same identity
+// here so a more-specific grant through a symlink cannot reopen a denied tree
+// on Bubblewrap or ProcessContainer. Retain original spellings for MXC's alias
+// reconstruction; this helper is only for validation.
+fn policy_path_identity(path: &Path) -> io::Result<PathBuf> {
+    let mut current = path.to_path_buf();
+    let mut missing = Vec::new();
+    loop {
+        match current.canonicalize() {
+            Ok(mut canonical) => {
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                let mut normalized = PathBuf::new();
+                for component in canonical.components() {
+                    match component {
+                        std::path::Component::CurDir => {}
+                        std::path::Component::ParentDir => {
+                            normalized.pop();
+                        }
+                        component => normalized.push(component.as_os_str()),
+                    }
+                }
+                return Ok(normalized);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                let Some(name) = current.file_name().map(OsStr::to_os_string) else {
+                    return Err(error);
+                };
+                let Some(parent) = current.parent() else {
+                    return Err(error);
+                };
+                missing.push(name);
+                current = parent.to_path_buf();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn identity_within(path: &Path, parent: &Path) -> bool {
+    #[cfg(not(windows))]
+    {
+        path.starts_with(parent)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
+        let mut components = path.components();
+        parent.components().all(|expected| {
+            let Some(actual) = components.next() else {
+                return false;
+            };
+            let actual: Vec<u16> = actual.as_os_str().encode_wide().collect();
+            let expected: Vec<u16> = expected.as_os_str().encode_wide().collect();
+            let (Ok(actual_len), Ok(expected_len)) =
+                (i32::try_from(actual.len()), i32::try_from(expected.len()))
+            else {
+                return false;
+            };
+            // Paths are normalized, and Windows object names use ordinal,
+            // case-insensitive comparison rather than locale-sensitive casing.
+            unsafe {
+                CompareStringOrdinal(
+                    actual.as_ptr(),
+                    actual_len,
+                    expected.as_ptr(),
+                    expected_len,
+                    1,
+                ) == CSTR_EQUAL
+            }
+        })
+    }
+}
+
+fn path_strings(paths: Vec<PathBuf>) -> io::Result<Vec<String>> {
+    let mut paths: Vec<_> = paths
+        .iter()
+        .map(|path| utf8(path.as_os_str(), "policy path").map(str::to_owned))
+        .collect::<io::Result<_>>()?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn network_policy(network: &SandboxNetwork, broker_url: Option<&str>) -> io::Result<NetworkPolicy> {
+    let mut policy = NetworkPolicy {
+        egress: Some(NetworkEgressPolicy {
+            default: Some(NetworkAction::Deny),
+            ..Default::default()
+        }),
+        ingress: Some(NetworkIngressPolicy {
+            default: Some(NetworkAction::Deny),
+            host_loopback: Some(NetworkAction::Deny),
+        }),
+        runtime_config: None,
+    };
+    match network {
+        SandboxNetwork::Disabled => {}
+        SandboxNetwork::Proxy { url } => {
+            validate_proxy_url(url)?;
+            policy.runtime_config = Some(NetworkRuntimeConfig {
+                network_proxy: Some(proxy_endpoint(url)?),
+            });
+        }
+        SandboxNetwork::HttpProxy { .. } => {
+            let url = broker_url.ok_or_else(|| invalid("sandbox proxy was not started"))?;
+            validate_proxy_url(url)?;
+            policy.runtime_config = Some(NetworkRuntimeConfig {
+                network_proxy: Some(proxy_endpoint(url)?),
+            });
+        }
+        SandboxNetwork::Direct { allow } => {
+            let rules = allow
+                .iter()
+                .map(endpoint_rule)
+                .collect::<io::Result<Vec<_>>>()?;
+            policy.egress.as_mut().expect("egress was set").allow = Some(rules);
+            if allow.iter().any(|endpoint| {
+                parse_cidr(&endpoint.cidr).is_ok_and(|cidr| {
+                    cidr.contains(&IpAddr::from([127, 0, 0, 1]))
+                        || cidr.contains(&IpAddr::V6(std::net::Ipv6Addr::LOCALHOST))
+                })
+            }) {
+                policy
+                    .ingress
+                    .as_mut()
+                    .expect("ingress was set")
+                    .host_loopback = Some(NetworkAction::Allow);
+            }
+        }
+    }
+    Ok(policy)
+}
+
+fn proxy_endpoint(value: &str) -> io::Result<String> {
+    let mut url = url::Url::parse(value).map_err(invalid)?;
+    url.set_username("")
+        .map_err(|_| invalid("invalid proxy URL"))?;
+    url.set_password(None)
+        .map_err(|_| invalid("invalid proxy URL"))?;
+    Ok(url.to_string())
+}
+
+fn validate_proxy_url(value: &str) -> io::Result<()> {
+    let url = url::Url::parse(value).map_err(invalid)?;
+    let local = match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if !local
+        || !matches!(url.scheme(), "http" | "https")
+        || url.port_or_known_default().is_none_or(|port| port == 0)
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid("sandbox proxy must be an HTTP/S loopback origin"));
+    }
+    Ok(())
+}
+
+fn parse_cidr(value: &str) -> io::Result<ipnet::IpNet> {
+    if let Ok(ip) = value.parse::<IpAddr>() {
+        Ok(ipnet::IpNet::from(ip))
+    } else {
+        value.parse::<ipnet::IpNet>().map_err(|_| invalid("direct sandbox networking requires a literal IP or CIDR; use the HTTP proxy for hostnames"))
+    }
+}
+
+fn endpoint_rule(endpoint: &NetworkEndpoint) -> io::Result<NetworkRulePolicy> {
+    let cidr = parse_cidr(&endpoint.cidr)?;
+    if endpoint.port == Some(0)
+        || endpoint
+            .end_port
+            .is_some_and(|end| endpoint.port.is_none_or(|start| end < start))
+        || (matches!(
+            endpoint.protocol,
+            NetworkProtocol::Any | NetworkProtocol::Icmp
+        ) && endpoint.port.is_some())
+    {
+        return Err(invalid("invalid sandbox protocol/port range"));
+    }
+    let protocol = match endpoint.protocol {
+        NetworkProtocol::Tcp => mxc_sdk::v1::NetworkProtocol::Tcp,
+        NetworkProtocol::Udp => mxc_sdk::v1::NetworkProtocol::Udp,
+        NetworkProtocol::Icmp => mxc_sdk::v1::NetworkProtocol::Icmp,
+        NetworkProtocol::Any => mxc_sdk::v1::NetworkProtocol::Any,
+    };
+    Ok(NetworkRulePolicy {
+        to: Some(vec![NetworkPeerPolicy {
+            cidr: cidr.to_string(),
+            except: None,
+        }]),
+        ports: Some(vec![NetworkPortPolicy {
+            protocol: Some(protocol),
+            port: endpoint.port,
+            end_port: endpoint.end_port,
+        }]),
+    })
+}
+
+fn private_environment(
+    environment: &mut HashMap<String, String>,
+    scratch: &Path,
+) -> io::Result<()> {
+    // Windows environment names are case-insensitive. Remove aliases before
+    // installing private values so HashMap iteration cannot restore host paths.
+    environment.retain(|name, _| {
+        !matches!(
+            name.to_ascii_uppercase().as_str(),
+            "HOME"
+                | "USERPROFILE"
+                | "XDG_CACHE_HOME"
+                | "XDG_CONFIG_HOME"
+                | "XDG_DATA_HOME"
+                | "XDG_STATE_HOME"
+                | "TMPDIR"
+                | "TMP"
+                | "TEMP"
+                | "CARGO_HOME"
+                | "APPDATA"
+                | "LOCALAPPDATA"
+                | "PYTHONDONTWRITEBYTECODE"
+                | "HTTP_PROXY"
+                | "HTTPS_PROXY"
+                | "ALL_PROXY"
+                | "FTP_PROXY"
+                | "NO_PROXY"
+        )
+    });
+    for (name, directory) in [
+        ("HOME", "home"),
+        ("USERPROFILE", "home"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "data"),
+        ("XDG_STATE_HOME", "state"),
+        ("TMPDIR", "tmp"),
+        ("TMP", "tmp"),
+        ("TEMP", "tmp"),
+        ("CARGO_HOME", "cargo"),
+        ("APPDATA", "config"),
+        ("LOCALAPPDATA", "data"),
+    ] {
+        let path = scratch.join(directory);
+        std::fs::create_dir_all(&path)?;
+        environment.insert(
+            name.to_owned(),
+            utf8(path.as_os_str(), "private directory")?.to_owned(),
+        );
+    }
+    environment.insert("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned());
+    Ok(())
+}
+
+fn capture_rustup_home(source: &HashMap<String, String>, target: &mut HashMap<String, String>) {
+    if target.contains_key("RUSTUP_HOME") {
+        return;
+    }
+    let home = source.get("HOME").or_else(|| source.get("USERPROFILE"));
+    if let Some(home) = home {
+        let rustup = Path::new(home).join(".rustup");
+        if rustup.join("toolchains").is_dir()
+            && let Some(value) = rustup.to_str()
+        {
+            target.insert("RUSTUP_HOME".to_owned(), value.to_owned());
+        }
+    }
+}
+
+/// Discover executable files and installation subdirectories, never whole home
+/// directories. Data paths in argv are intentionally not inferred as permissions.
+fn runtime_paths(
+    argv: &[String],
+    cwd: &Path,
+    environment: &HashMap<String, String>,
+) -> io::Result<Vec<PathBuf>> {
+    let program = argv.first().ok_or_else(|| invalid("empty sandbox argv"))?;
+    let path = environment.get("PATH").or_else(|| environment.get("Path"));
+    let executable = which::which_in(program, path, cwd).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("sandbox executable {program:?} was not found: {error}"),
+        )
+    })?;
+    let mut paths = Vec::new();
+    add_executable_paths(&executable, &mut paths)?;
+    if let Some(path) = path {
+        for directory in std::env::split_paths(path) {
+            if directory.is_absolute() && is_system_runtime_directory(&directory) {
+                paths.push(directory.clone());
+                add_installation_libraries(&directory, &mut paths);
+            }
+        }
+    }
+    for name in ["VIRTUAL_ENV", "CONDA_PREFIX"] {
+        if let Some(value) = environment.get(name) {
+            let prefix = Path::new(value);
+            if prefix.is_absolute() && prefix.parent().is_some() && prefix.is_dir() {
+                for name in ["bin/python", "Scripts/python.exe", "python.exe"] {
+                    let executable = prefix.join(name);
+                    if executable.is_file() {
+                        add_executable_paths(&executable, &mut paths)?;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if let Some(value) = environment.get("RUSTUP_HOME") {
+        let prefix = Path::new(value);
+        for child in ["settings.toml", "toolchains"] {
+            let path = prefix.join(child);
+            if prefix.is_absolute() && path.exists() {
+                paths.push(path);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn add_executable_paths(executable: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
+    paths.push(executable.to_path_buf());
+    let canonical = executable.canonicalize()?;
+    paths.push(canonical.clone());
+    for executable in [executable, canonical.as_path()] {
+        if let Some(directory) = executable.parent() {
+            add_installation_libraries(directory, paths);
+            add_python_libraries(executable, paths)?;
+            #[cfg(windows)]
+            {
+                // DLLs beside a configured executable are runtime files. Do not
+                // turn its arbitrary parent into a blanket readable directory.
+                for entry in std::fs::read_dir(directory)? {
+                    let path = entry?.path();
+                    if path
+                        .extension()
+                        .and_then(OsStr::to_str)
+                        .is_some_and(|extension| {
+                            matches!(
+                                extension.to_ascii_lowercase().as_str(),
+                                "dll" | "pyd" | "manifest"
+                            )
+                        })
+                    {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn add_installation_libraries(directory: &Path, paths: &mut Vec<PathBuf>) {
+    if !is_system_runtime_directory(directory) {
+        return;
+    }
+    let Some(prefix) = directory.parent() else {
+        return;
+    };
+    for child in ["lib", "lib64", "libexec", "share", "include"] {
+        let path = prefix.join(child);
+        if path.exists() {
+            paths.push(path);
+        }
+    }
+}
+
+// A directory being named "bin" says nothing about its parent's data. In
+// particular, ~/.local/share contains application stores, not just runtimes.
+fn is_system_runtime_directory(directory: &Path) -> bool {
+    let Ok(directory) = directory.canonicalize() else {
+        return false;
+    };
+    [
+        "/bin",
+        "/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/usr/local/bin",
+        "/usr/local/sbin",
+        "/opt/homebrew/bin",
+        "/opt/homebrew/sbin",
+    ]
+    .iter()
+    .any(|known| directory == Path::new(known))
+}
+
+// Recognize the interpreter's own versioned standard-library/site-packages
+// tree. Arbitrary adjacent lib/share/include folders require runtime_paths.
+fn add_python_libraries(executable: &Path, paths: &mut Vec<PathBuf>) -> io::Result<()> {
+    let Some(name) = executable.file_stem().and_then(OsStr::to_str) else {
+        return Ok(());
+    };
+    let name = name.to_ascii_lowercase();
+    let Some(version) = name
+        .strip_prefix("python")
+        .or_else(|| name.strip_prefix("pypy"))
+    else {
+        return Ok(());
+    };
+    if !version
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.' || character == 'w')
+    {
+        return Ok(());
+    }
+    let Some(directory) = executable.parent() else {
+        return Ok(());
+    };
+    let prefix = if matches!(
+        directory.file_name().and_then(OsStr::to_str),
+        Some("bin" | "Scripts")
+    ) {
+        directory.parent().unwrap_or(directory)
+    } else {
+        directory
+    };
+    let configuration = prefix.join("pyvenv.cfg");
+    // A user shim may point at a system interpreter. Its unrelated sibling
+    // lib directory is not part of that interpreter; venvs identify themselves.
+    if executable.canonicalize()? != executable && !configuration.is_file() {
+        return Ok(());
+    }
+    if configuration.is_file() {
+        paths.push(configuration);
+    }
+    for name in ["lib", "lib64"] {
+        let directory = prefix.join(name);
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            let Some(version) = name.strip_prefix("python") else {
+                continue;
+            };
+            if !version.is_empty()
+                && version
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == '.')
+                && path.is_dir()
+                && (path.join("os.py").is_file() || path.join("site-packages").is_dir())
+            {
+                paths.push(path);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let library = prefix.join("Lib");
+        if library.join("os.py").is_file() {
+            paths.push(library);
+            let extensions = prefix.join("DLLs");
+            if extensions.is_dir() {
+                paths.push(extensions);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn command_line(argv: &[String]) -> io::Result<String> {
+    if argv.is_empty() || argv.iter().any(|argument| argument.contains('\0')) {
+        return Err(invalid("sandbox argv must be nonempty and NUL-free"));
+    }
+    #[cfg(windows)]
+    {
+        Ok(argv
+            .iter()
+            .map(|argument| quote_windows(argument))
+            .collect::<Vec<_>>()
+            .join(" "))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(format!(
+            "exec {}",
+            argv.iter()
+                .map(|argument| quote_posix(argument))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ))
+    }
+}
+
+#[cfg(any(not(windows), test))]
+fn quote_posix(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(any(windows, test))]
+fn quote_windows(value: &str) -> String {
+    let mut result = String::from("\"");
+    let mut slashes = 0;
+    for character in value.chars() {
+        match character {
+            '\\' => slashes += 1,
+            '"' => {
+                result.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+                result.push('"');
+                slashes = 0;
+            }
+            _ => {
+                result.extend(std::iter::repeat_n('\\', slashes));
+                result.push(character);
+                slashes = 0;
+            }
+        }
+    }
+    result.extend(std::iter::repeat_n('\\', slashes * 2));
+    result.push('"');
+    result
+}
+
+fn prerequisite_hint() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "Linux needs working unprivileged user namespaces and bubblewrap; network-enabled policies additionally need slirp4netns, iproute2 and iptables"
+    } else if cfg!(target_os = "macos") {
+        "The Seatbelt backend requires a supported macOS version"
+    } else if cfg!(windows) {
+        "Windows needs a supported PSEC ProcessContainer implementation with the requested filesystem/network capabilities"
+    } else {
+        "This platform does not have a supported native MXC process backend"
+    }
+}
+
+fn utf8<'a>(value: &'a OsStr, kind: &str) -> io::Result<&'a str> {
+    value
+        .to_str()
+        .ok_or_else(|| invalid(format!("sandbox {kind} is not valid UTF-8")))
+}
+
+fn invalid(error: impl std::fmt::Display) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, error.to_string())
+}
+
+#[cfg(unix)]
+static TERMINATION_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+#[cfg(unix)]
+extern "C" fn termination_signal(signal: libc::c_int) {
+    if signal != libc::SIGINT {
+        TERMINATION_SIGNAL.store(signal, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+fn install_termination_handlers() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        for signal in [libc::SIGTERM, libc::SIGHUP, libc::SIGINT] {
+            // Only atomic stores occur in the handler. A caught disposition is
+            // reset on exec, so the workload receives normal terminal signals.
+            let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+            action.sa_sigaction = termination_signal as *const () as usize;
+            unsafe { libc::sigemptyset(&mut action.sa_mask) };
+            if unsafe { libc::sigaction(signal, &action, std::ptr::null_mut()) } == -1 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parent_credentials_and_proxy_overrides_are_not_inherited() {
+        let input = HashMap::from([
+            ("PATH".into(), "/usr/bin".into()),
+            ("LANG".into(), "en_US.UTF-8".into()),
+            ("OPENAI_API_KEY".into(), "secret".into()),
+            ("AWS_SESSION_TOKEN".into(), "secret".into()),
+            ("SSH_AUTH_SOCK".into(), "/tmp/agent.sock".into()),
+            ("HTTP_PROXY".into(), "http://secret-proxy".into()),
+            ("LD_PRELOAD".into(), "/tmp/inject.so".into()),
+        ]);
+        let safe = sanitize_environment(&input);
+        assert_eq!(safe.len(), 2);
+        assert_eq!(safe.get("PATH").unwrap(), "/usr/bin");
+    }
+
+    #[test]
+    fn explicit_loader_injection_is_rejected_before_a_process_can_start() {
+        for name in [
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "DYLD_INSERT_LIBRARIES",
+            "GLIBC_TUNABLES",
+        ] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.env(name, "loader-secret-value");
+            let error = wrap_std_command(&mut command, &SandboxPolicy::default()).unwrap_err();
+            assert!(error.to_string().contains(name));
+            assert!(!error.to_string().contains("loader-secret-value"));
+        }
+    }
+
+    #[test]
+    fn workload_native_settings_are_inert_until_the_mxc_payload() {
+        let directory = tempfile::tempdir().unwrap();
+        let trusted = trusted_launcher_environment();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.current_dir(directory.path());
+        for name in [
+            "PATH",
+            "SystemRoot",
+            "COMSPEC",
+            "PATHEXT",
+            "MXC_BWRAP_PATH",
+            "EXPLICIT_API_TOKEN",
+        ] {
+            command.env(name, format!("workload-value-{name}"));
+        }
+        wrap_std_command(&mut command, &SandboxPolicy::default()).unwrap();
+        let environment: HashMap<_, _> = command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                Some((name.to_str()?.to_owned(), value?.to_str()?.to_owned()))
+            })
+            .collect();
+        for name in [
+            "PATH",
+            "SystemRoot",
+            "COMSPEC",
+            "PATHEXT",
+            "MXC_BWRAP_PATH",
+            "EXPLICIT_API_TOKEN",
+        ] {
+            let key = environment_key(name);
+            assert_eq!(environment.get(&key), trusted.get(&key), "{name}");
+            assert!(
+                environment
+                    .iter()
+                    .any(|(key, value)| key.starts_with(PAYLOAD_ENV_PREFIX)
+                        && value == &format!("workload-value-{name}"))
+            );
+        }
+        let encoded = command.get_args().nth(1).unwrap().to_str().unwrap();
+        let bytes = URL_SAFE_NO_PAD.decode(encoded).unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("workload-value-"));
+    }
+
+    #[test]
+    fn writable_resources_cannot_replace_launcher_or_backend_lookup_paths() {
+        let executable = launcher_executable().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        let mut policy = SandboxPolicy {
+            readwrite_paths: vec![executable.parent().unwrap().to_path_buf()],
+            ..Default::default()
+        };
+        let mut environment = HashMap::new();
+        let error = wrap_argv(
+            &["unused-program".to_owned()],
+            &cwd,
+            &mut environment,
+            &policy,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            error
+                .to_string()
+                .contains("trusted sandbox launcher/backend")
+        );
+
+        let root = tempfile::tempdir().unwrap();
+        let backend = root.path().join("backend-bin");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&backend).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let native = HashMap::from([("PATH".to_owned(), backend.to_str().unwrap().to_owned())]);
+        for grant in [&backend, &backend.join("bwrap")] {
+            policy.readwrite_paths = vec![grant.to_path_buf()];
+            assert!(reject_writable_launcher_paths(&policy, &executable, &cwd, &native).is_err());
+        }
+        #[cfg(unix)]
+        {
+            let alias = root.path().join("launcher-directory");
+            std::os::unix::fs::symlink(executable.parent().unwrap(), &alias).unwrap();
+            policy.readwrite_paths = vec![alias];
+            assert!(reject_writable_launcher_paths(&policy, &executable, &cwd, &native).is_err());
+        }
+        policy.readonly_paths = vec![executable.parent().unwrap().to_path_buf(), backend];
+        policy.readwrite_paths = vec![workspace];
+        reject_writable_launcher_paths(&policy, &executable, &cwd, &native).unwrap();
+    }
+
+    #[test]
+    fn timeout_and_cross_platform_deny_conflicts_fail_before_spawn() {
+        let mut policy = SandboxPolicy {
+            timeout_ms: Some(u64::from(u32::MAX) + 1),
+            ..Default::default()
+        };
+        assert!(validate_policy(&policy).is_err());
+        policy.timeout_ms = None;
+        let root = std::env::temp_dir();
+        policy.denied_paths = vec![root.join("secret")];
+        policy.readonly_paths = vec![root.join("secret/child")];
+        assert!(validate_policy(&policy).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_symlink_alias_cannot_regrant_a_denied_directory() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let secret = root.path().join("secret");
+        std::fs::create_dir_all(secret.join("bin")).unwrap();
+        let alias = root.path().join("runtime");
+        symlink(&secret, &alias).unwrap();
+        let policy = SandboxPolicy {
+            denied_paths: vec![secret],
+            ..Default::default()
+        };
+        assert!(reject_denied_runtime(&policy, &[alias.join("bin")]).is_err());
+        assert!(reject_denied_runtime(&policy, &[alias.join("not-created")]).is_err());
+    }
+
+    #[test]
+    fn direct_network_rejects_domains_and_invalid_port_ranges() {
+        let mut endpoint = NetworkEndpoint {
+            cidr: "example.com".into(),
+            protocol: NetworkProtocol::Tcp,
+            port: Some(443),
+            end_port: None,
+        };
+        assert!(endpoint_rule(&endpoint).is_err());
+        endpoint.cidr = "192.0.2.1".into();
+        assert!(endpoint_rule(&endpoint).is_ok());
+        endpoint.end_port = Some(80);
+        assert!(endpoint_rule(&endpoint).is_err());
+    }
+
+    #[test]
+    fn user_runtime_layout_does_not_expose_application_data_or_the_repository() {
+        let directory = tempfile::tempdir().unwrap();
+        let prefix = directory.path().join(".local");
+        let binary = prefix.join("bin/python3");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::write(&binary, b"test executable").unwrap();
+        for name in ["share/agena", "include", "lib/private"] {
+            std::fs::create_dir_all(prefix.join(name)).unwrap();
+        }
+        let mut granted = Vec::new();
+        add_executable_paths(&binary, &mut granted).unwrap();
+        let private_data = prefix.join("share/agena/credentials");
+        assert!(!granted.iter().any(|path| private_data.starts_with(path)));
+        assert!(!granted.contains(&prefix.join("lib")));
+        assert!(!granted.contains(&prefix.join("include")));
+        let build = directory.path().join("repository/target/debug/agena");
+        std::fs::create_dir_all(build.parent().unwrap()).unwrap();
+        std::fs::write(&build, b"test executable").unwrap();
+        granted.clear();
+        add_executable_paths(&build, &mut granted).unwrap();
+        assert!(
+            granted
+                .iter()
+                .all(|path| path == &build || path == &build.canonicalize().unwrap())
+        );
+        let environment = HashMap::from([(
+            "PATH".to_owned(),
+            binary.parent().unwrap().display().to_string(),
+        )]);
+        let granted = runtime_paths(
+            &[std::env::current_exe().unwrap().display().to_string()],
+            directory.path(),
+            &environment,
+        )
+        .unwrap();
+        assert!(!granted.contains(&prefix.join("bin")));
+        assert!(!granted.iter().any(|path| private_data.starts_with(path)));
+    }
+
+    #[test]
+    fn reserved_temporary_directories_require_trusted_ownership() {
+        let root = capture_temporary_root().unwrap();
+        for prefix in PRIVATE_TEMP_PREFIXES {
+            let directory = tempfile::Builder::new()
+                .prefix(prefix)
+                .tempdir_in(&root)
+                .unwrap();
+            let file = directory.path().join("workload.json");
+            std::fs::write(&file, b"private").unwrap();
+            let mut policy = SandboxPolicy {
+                readonly_paths: vec![file.clone()],
+                ..Default::default()
+            };
+            assert_eq!(
+                validate_policy(&policy).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+            policy.private_paths.push(directory.path().to_path_buf());
+            validate_policy(&policy).unwrap();
+            policy.readonly_paths = vec![root.clone()];
+            assert_eq!(
+                validate_policy(&policy).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reserved_temporary_paths_and_their_symlink_aliases_stay_private() {
+        use std::os::unix::fs::symlink;
+        let root = capture_temporary_root().unwrap();
+        let private = tempfile::Builder::new()
+            .prefix("agena-sandbox-")
+            .tempdir_in(&root)
+            .unwrap();
+        let ordinary = tempfile::tempdir_in(&root).unwrap();
+        let alias = ordinary.path().join("alias");
+        symlink(private.path(), &alias).unwrap();
+        let policy = SandboxPolicy {
+            readonly_paths: vec![alias],
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_policy(&policy).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        let reserved_alias = private.path().join("redirect");
+        symlink(ordinary.path(), &reserved_alias).unwrap();
+        let policy = SandboxPolicy {
+            readonly_paths: vec![reserved_alias],
+            ..Default::default()
+        };
+        assert_eq!(
+            validate_policy(&policy).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reserved_temporary_namespace_comparison_ignores_windows_case() {
+        assert!(reserved_temporary_child(
+            Path::new(r"C:\TEMP\AGENA-SANDBOX-TEST\workload.json"),
+            Path::new(r"c:\temp"),
+        ));
+    }
+
+    #[test]
+    fn proxy_url_must_be_a_loopback_origin() {
+        assert!(validate_proxy_url("http://user:token@127.0.0.1:1234").is_ok());
+        assert!(validate_proxy_url("http://example.com:1234").is_err());
+        assert!(validate_proxy_url("http://127.0.0.1:0").is_err());
+        assert!(validate_proxy_url("http://127.0.0.1:1234/path").is_err());
+    }
+
+    #[test]
+    fn credentials_cross_the_mxc_boundary_only_in_a_private_payload_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let environment = HashMap::from([
+            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+            (
+                "EXPLICIT_API_TOKEN".into(),
+                "trusted-override-secret".into(),
+            ),
+        ]);
+        let payload = LauncherRequest {
+            argv: vec![std::env::current_exe().unwrap().display().to_string()],
+            cwd: directory.path().to_path_buf(),
+            temporary_root: capture_temporary_root().unwrap(),
+            environment_keys: environment.keys().cloned().collect(),
+            environment,
+            policy: SandboxPolicy {
+                private_build_cache: true,
+                network: SandboxNetwork::HttpProxy {
+                    targets: vec![ProxyTarget {
+                        host: "example.com".into(),
+                        port: Some(443),
+                        addresses: vec![IpAddr::from([192, 0, 2, 1])],
+                    }],
+                },
+                ..Default::default()
+            },
+        };
+        let transported = serde_json::to_string(&payload).unwrap();
+        assert!(!transported.contains("trusted-override-secret"));
+        let request = mxc_request(
+            &payload,
+            directory.path(),
+            Some("http://agena:broker-secret@127.0.0.1:1234"),
+        )
+        .unwrap();
+        assert!(!request.command.contains("broker-secret"));
+        assert!(!request.command.contains("trusted-override-secret"));
+        for (_, value) in request.environment.unwrap() {
+            assert!(!value.contains("broker-secret"));
+            assert!(!value.contains("trusted-override-secret"));
+        }
+        let endpoint = request
+            .network
+            .unwrap()
+            .runtime_config
+            .unwrap()
+            .network_proxy
+            .unwrap();
+        assert_eq!(endpoint, "http://127.0.0.1:1234/");
+        let file = directory.path().join("workload.json");
+        let workload: WorkloadPayload =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(
+            workload.environment["EXPLICIT_API_TOKEN"],
+            "trusted-override-secret"
+        );
+        assert_eq!(
+            Path::new(&workload.environment["CARGO_TARGET_DIR"]),
+            directory.path().join("cache/cargo-target")
+        );
+        assert_eq!(
+            workload.proxy_credentials.unwrap().password.as_deref(),
+            Some("broker-secret")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(file).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[test]
+    fn shared_temporary_roots_are_rejected_but_task_subdirectories_are_allowed() {
+        let root = capture_temporary_root().unwrap();
+        let directory = tempfile::tempdir_in(&root).unwrap();
+        for policy in [
+            SandboxPolicy {
+                readonly_paths: vec![root.clone()],
+                ..Default::default()
+            },
+            SandboxPolicy {
+                readwrite_paths: vec![root.clone()],
+                ..Default::default()
+            },
+            SandboxPolicy {
+                runtime_paths: vec![root.clone()],
+                ..Default::default()
+            },
+        ] {
+            assert_eq!(
+                validate_policy(&policy).unwrap_err().kind(),
+                io::ErrorKind::PermissionDenied
+            );
+        }
+        validate_policy(&SandboxPolicy {
+            readonly_paths: vec![directory.path().to_path_buf()],
+            readwrite_paths: vec![directory.path().to_path_buf()],
+            runtime_paths: vec![directory.path().to_path_buf()],
+            ..Default::default()
+        })
+        .unwrap();
+        let parent = root.parent().unwrap();
+        assert!(reject_shared_temporary_grants(&[parent.to_path_buf()], &root, &[]).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn posix_argv_survives_shell_metacharacters_without_evaluation() {
+        let arguments = [
+            "",
+            "a'b",
+            "two words",
+            "$(printf injected)",
+            "x; printf injected",
+            "line\nbreak",
+            r"C:\a\b",
+        ];
+        let mut argv = vec!["printf".to_owned(), "%s\\0".to_owned()];
+        argv.extend(arguments.iter().map(|value| (*value).to_owned()));
+        let output = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command_line(&argv).unwrap())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let expected: Vec<u8> = arguments
+            .iter()
+            .flat_map(|value| value.bytes().chain(std::iter::once(0)))
+            .collect();
+        assert_eq!(output.stdout, expected);
+    }
+
+    #[test]
+    fn windows_argv_quotes_empty_arguments_quotes_and_trailing_backslashes() {
+        assert_eq!(quote_windows(""), "\"\"");
+        assert_eq!(quote_windows("a b"), "\"a b\"");
+        assert_eq!(quote_windows("a\"b"), "\"a\\\"b\"");
+        assert_eq!(quote_windows("a\\"), "\"a\\\\\"");
+    }
+
+    #[test]
+    fn private_environment_cannot_reuse_the_host_home_or_temp() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut environment = HashMap::from([
+            ("HOME".into(), "/secret/home".into()),
+            ("TMPDIR".into(), "/shared/tmp".into()),
+            ("Home".into(), "/secret/home".into()),
+            ("Temp".into(), "/shared/tmp".into()),
+            ("Http_Proxy".into(), "http://secret-proxy".into()),
+        ]);
+        private_environment(&mut environment, directory.path()).unwrap();
+        assert!(!environment.contains_key("Home"));
+        assert!(!environment.contains_key("Temp"));
+        assert!(!environment.contains_key("Http_Proxy"));
+        assert!(Path::new(&environment["HOME"]).starts_with(directory.path()));
+        assert!(Path::new(&environment["TMPDIR"]).starts_with(directory.path()));
+        assert!(Path::new(&environment["CARGO_HOME"]).starts_with(directory.path()));
+    }
+}

@@ -64,6 +64,7 @@ async fn channel(
     owner.surface = kind.into();
     owner.scope_key = Some(format!("channel-{}", kind.as_str()));
     let authority = agena_domain::ChannelAuthority {
+        source_admin: false,
         binding_id: "bot-management-channel".into(),
         epoch: 1,
         actor: "member".into(),
@@ -236,6 +237,45 @@ async fn bot_owned_channels_dispatch_and_manage_project_sessions_from_member_inp
             .for_session_context_async(&ungranted)
             .await;
         assert!(unavailable.detailed_tools_async().await.is_empty());
+        // A locally configured source administrator has the source Bot's
+        // catalog even when the ordinary channel grant is empty.
+        let mut administrator = ungranted.clone();
+        let authority = administrator.channel_authority.as_mut().unwrap();
+        authority.source_admin = true;
+        authority.role = agena_domain::ChannelRole::Administrator;
+        authority.session_mode = agena_domain::ChannelSessionMode::PerActor;
+        let full = manager
+            .tool_executor()
+            .for_session_context_async(&administrator)
+            .await;
+        assert!(
+            full.detailed_tools_async()
+                .await
+                .iter()
+                .any(|tool| tool.canonical_name() == "agena.bot.sessions")
+        );
+        let invocation = agena_domain::ToolInvocation::new("bot.sessions", Default::default());
+        full.prepare_invocation(&invocation, source.get(), 1)
+            .await
+            .unwrap();
+        // Source restrictions are still inherited, and cached executors
+        // re-check revocation before invoking any tool.
+        let mut restricted = administrator.clone();
+        restricted
+            .capability_denied_tool_names
+            .insert("bot.sessions".into());
+        let restricted = manager
+            .tool_executor()
+            .for_session_context_async(&restricted)
+            .await;
+        assert!(restricted.detailed_tools_async().await.is_empty());
+        verifier.revoked.store(true, Ordering::SeqCst);
+        assert!(
+            full.prepare_invocation(&invocation, source.get(), 1)
+                .await
+                .is_err()
+        );
+        verifier.revoked.store(false, Ordering::SeqCst);
         let scoped = manager
             .tool_executor()
             .for_session_context_async(&context)

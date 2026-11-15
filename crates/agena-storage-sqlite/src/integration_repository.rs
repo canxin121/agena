@@ -102,6 +102,24 @@ impl IntegrationRepository for SqliteIntegrationRepository {
     ) -> Result<IntegrationBinding> {
         self.channel_policy_write(id, r, actor, now).await
     }
+    async fn review_channel_binding(
+        &self,
+        binding: IntegrationBinding,
+        expected_revision: i64,
+        actor: &str,
+        now: i64,
+    ) -> Result<IntegrationBinding> {
+        self.channel_review_write(binding, expected_revision, actor, now)
+            .await
+    }
+    async fn recover_channel_session(
+        &self,
+        expected: ChannelSessionRecord,
+        current: ChannelSessionRecord,
+        now: i64,
+    ) -> Result<ChannelSessionRecord> {
+        self.channel_session_recover(expected, current, now).await
+    }
     async fn channel_audit(&self, id: Uuid) -> Result<Vec<ChannelAccessAudit>> {
         self.channel_audit_read(id).await
     }

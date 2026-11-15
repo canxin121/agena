@@ -23,6 +23,7 @@ fn scripts() -> PathBuf {
 }
 fn channel_policy() -> ChannelAccessPolicy {
     ChannelAccessPolicy {
+        administrator_actors: Default::default(),
         identity: ChannelIdentity {
             tenant: "fixture-tenant".into(),
             account: "fixture-bot".into(),

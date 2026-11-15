@@ -27,6 +27,7 @@ use tokio_util::sync::CancellationToken;
 mod agents;
 mod auxiliary;
 mod bot;
+mod channel_recovery;
 mod commands;
 mod deliveries;
 mod execution;

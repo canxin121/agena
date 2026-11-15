@@ -76,6 +76,176 @@ impl SqliteIntegrationRepository {
         tx.commit().await.map_err(error)?;
         Ok(b)
     }
+    pub(super) async fn channel_review_write(
+        &self,
+        binding: IntegrationBinding,
+        expected_revision: i64,
+        actor: &str,
+        now: i64,
+    ) -> Result<IntegrationBinding> {
+        if actor != "instance_operator" {
+            return Err(Error::Invalid(
+                "channel history review requires the local operator",
+            ));
+        }
+        let _permit = crate::acquire_write_permit(&self.database)
+            .await
+            .map_err(error)?;
+        let tx = self.database.begin().await.map_err(error)?;
+        let previous = read_binding(&tx, binding.id).await?;
+        if previous.revision != expected_revision
+            || binding.revision != expected_revision + 1
+            || binding.epoch != previous.epoch + 1
+            || binding.state != BindingState::Enabled
+            || binding.spec.mode != IntegrationMode::Channel
+            || serde_json::to_value(&binding.spec).map_err(error)?
+                != serde_json::to_value(&previous.spec).map_err(error)?
+            || binding.source_session_id != previous.source_session_id
+            || binding.owner_bot_id != previous.owner_bot_id
+            || binding.workspace_id != previous.workspace_id
+            || binding.permission_fingerprint != previous.permission_fingerprint
+        {
+            return Err(Error::Conflict(
+                "channel review no longer matches the inspected boundary",
+            ));
+        }
+        let policy = binding
+            .spec
+            .channel_policy
+            .clone()
+            .ok_or(Error::Invalid("channel policy required"))?;
+        policy.validate(now).map_err(Error::Policy)?;
+        let request_key = format!("review:{expected_revision}");
+        let audit = ChannelAccessAudit {
+            binding_id: binding.id,
+            request_key: request_key.clone(),
+            actor: actor.into(),
+            revision: binding.revision,
+            epoch: binding.epoch,
+            at_ms: now,
+            before: previous.spec.channel_policy,
+            after: policy,
+        };
+        let input = json(
+            &serde_json::json!({"operation":"review","expected_revision":expected_revision,"provider_fingerprint":binding.provider_fingerprint,"permission_fingerprint":binding.permission_fingerprint}),
+        )?;
+        put_binding(&tx, &binding, expected_revision).await?;
+        tx.execute(statement("INSERT INTO agena_channel_access_audit(binding_id,request_key,input_json,result_json,audit_json,at_ms) VALUES(?,?,?,?,?,?)",
+            vec![binding.id.to_string().into(), request_key.into(), input.into(), json(&binding)?.into(), json(&audit)?.into(), now.into()])).await.map_err(error)?;
+        tx.commit().await.map_err(error)?;
+        Ok(binding)
+    }
+
+    pub(super) async fn channel_session_recover(
+        &self,
+        expected: ChannelSessionRecord,
+        current: ChannelSessionRecord,
+        now: i64,
+    ) -> Result<ChannelSessionRecord> {
+        if expected.binding_id != current.binding_id
+            || expected.session_id != current.session_id
+            || expected.created_at_ms != current.created_at_ms
+            || current.scope_key.is_empty()
+        {
+            return Err(Error::Invalid(
+                "channel recovery must preserve its session and binding",
+            ));
+        }
+        let mut immutable = expected.authority.clone();
+        immutable.epoch = current.authority.epoch;
+        immutable.role = current.authority.role;
+        immutable.revoked = current.authority.revoked;
+        if immutable != current.authority
+            || current.authority.epoch <= expected.authority.epoch
+            || current.authority.revoked
+            || !expected.authority.active_at(now)
+        {
+            return Err(Error::Conflict(
+                "channel recovery cannot change an existing conversation capability or expiry",
+            ));
+        }
+        let _permit = crate::acquire_write_permit(&self.database)
+            .await
+            .map_err(error)?;
+        let tx = self.database.begin().await.map_err(error)?;
+        let binding = read_binding(&tx, current.binding_id).await?;
+        if !binding.authorizes_scope(&current.authority, now) {
+            return Err(Error::Conflict(
+                "reviewed channel authority is no longer active",
+            ));
+        }
+        let row = tx
+            .query_one(statement(
+                "SELECT record_json FROM agena_channel_sessions WHERE session_id=?",
+                vec![current.session_id.into()],
+            ))
+            .await
+            .map_err(error)?
+            .ok_or(Error::NotFound)?;
+        let stored: ChannelSessionRecord = decode(row, "record_json")?;
+        // A retried completed recovery must not suppress executions submitted
+        // after the first successful review.
+        if json(&stored)? == json(&current)? {
+            return Ok(current);
+        }
+        if json(&stored)? != json(&expected)? {
+            return Err(Error::Conflict("channel session changed during recovery"));
+        }
+        // Suppress every pre-review execution generation, including a provider
+        // that is still acknowledging cancellation. Its later terminal output
+        // must never be exported under the restored authority.
+        let executions = tx.query_all(statement("SELECT e.id AS execution,a.generation FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation WHERE e.session_id=?", vec![current.session_id.into()])).await.map_err(error)?;
+        for row in executions {
+            let execution: String = row.try_get("", "execution").map_err(error)?;
+            let generation: i64 = row.try_get("", "generation").map_err(error)?;
+            let delivery = IntegrationDelivery {
+                id: format!("{}:{execution}:{generation}", current.binding_id),
+                binding_id: current.binding_id,
+                text: String::new(),
+                state: "skipped".into(),
+                attempts: 0,
+                next_attempt_ms: 0,
+                remote_id: None,
+                created_at_ms: now,
+                error: Some("execution predates compatible channel recovery".into()),
+                route: Some(ChannelOutputRoute::from_authority(
+                    &expected.authority,
+                    expected.session_id,
+                )),
+            };
+            tx.execute(statement("INSERT OR IGNORE INTO agena_integration_outbox(id,binding_id,state,attempts,next_attempt_ms,created_at_ms,delivery_json) VALUES(?,?,?,?,?,?,?)",
+                vec![delivery.id.clone().into(), current.binding_id.to_string().into(), delivery.state.clone().into(), 0.into(), 0.into(), now.into(), json(&delivery)?.into()])).await.map_err(error)?;
+        }
+        let deliveries = tx.query_all(statement("SELECT delivery_json FROM agena_integration_outbox WHERE binding_id=? AND state IN ('queued','uncertain')", vec![current.binding_id.to_string().into()])).await.map_err(error)?;
+        for row in deliveries {
+            let mut delivery: IntegrationDelivery = decode(row, "delivery_json")?;
+            if delivery.route.as_ref().is_some_and(|route| {
+                route.session_id == Some(current.session_id)
+                    && route.epoch < current.authority.epoch
+            }) {
+                delivery.state = "skipped".into();
+                delivery.error = Some("delivery predates compatible channel recovery".into());
+                tx.execute(statement(
+                    "UPDATE agena_integration_outbox SET state=?,delivery_json=? WHERE id=?",
+                    vec![
+                        delivery.state.clone().into(),
+                        json(&delivery)?.into(),
+                        delivery.id.into(),
+                    ],
+                ))
+                .await
+                .map_err(error)?;
+            }
+        }
+        let updated = tx.execute(statement("UPDATE agena_channel_sessions SET scope_key=?,epoch=?,actor=?,record_json=? WHERE session_id=? AND binding_id=? AND scope_key=? AND epoch=?",
+            vec![current.scope_key.clone().into(), current.authority.epoch.into(), current.authority.actor.clone().into(), json(&current)?.into(), current.session_id.into(), current.binding_id.to_string().into(), expected.scope_key.into(), expected.authority.epoch.into()])).await.map_err(error)?;
+        if updated.rows_affected() != 1 {
+            return Err(Error::Conflict("channel session changed during recovery"));
+        }
+        tx.commit().await.map_err(error)?;
+        Ok(current)
+    }
+
     pub(super) async fn channel_audit_read(&self, id: Uuid) -> Result<Vec<ChannelAccessAudit>> {
         self.database.query_all(statement("SELECT audit_json FROM agena_channel_access_audit WHERE binding_id=? ORDER BY at_ms DESC,request_key LIMIT 100",vec![id.to_string().into()])).await.map_err(error)?.into_iter().map(|r|decode(r,"audit_json")).collect()
     }

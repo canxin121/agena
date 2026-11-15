@@ -165,6 +165,7 @@ async fn operator_and_target_guards_reject_subagents_side_conversations_and_chan
         .workspace_id
         .expect("ordinary project workspace");
     let channel = agena_domain::ChannelAuthority {
+        source_admin: false,
         binding_id: "bot-guard-channel".into(),
         epoch: 1,
         actor: "member".into(),

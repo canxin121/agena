@@ -108,6 +108,48 @@ pub struct SessionConfigurationChange {
     pub effective_workspace_root: Option<Option<PathBuf>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
 }
+/// Host-reviewed recovery of an unchanged channel privacy and capability scope.
+/// The runtime drains the old epoch first; the writer checks both versions and
+/// the old authority again before resuming this same transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelAuthorityRecovery {
+    pub metadata_version: i64,
+    pub control_version: i64,
+    pub expected: agena_domain::ChannelAuthority,
+    pub current: agena_domain::ChannelAuthority,
+    pub scope_key: String,
+}
+
+impl ChannelAuthorityRecovery {
+    pub fn validate(&self, now: i64) -> Result<()> {
+        if self.current.epoch <= self.expected.epoch
+            || !self.expected.active_at(now)
+            || !self.current.active_at(now)
+            || self.expected.role == agena_domain::ChannelRole::Blocked
+            || self.current.role == agena_domain::ChannelRole::Blocked
+            || self.scope_key.is_empty()
+            || self.scope_key.len() > 256
+        {
+            return Err(KernelError::Conflict(
+                "channel recovery requires an active, unblocked authority and a newer epoch".into(),
+            ));
+        }
+        self.current
+            .grant
+            .validate()
+            .map_err(KernelError::Invalid)?;
+        let mut compatible = self.expected.clone();
+        compatible.epoch = self.current.epoch;
+        compatible.role = self.current.role;
+        if compatible != self.current {
+            return Err(KernelError::Conflict(
+                "channel privacy, capabilities and expiry must remain unchanged during recovery"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
 /// Retained isolation facts for a live target and its bounded native ancestry.
 /// Soft deletion of an ordinary parent does not strand a surviving fork, and
 /// deleting a private parent never erases its inherited scope restrictions.
@@ -399,6 +441,33 @@ impl SessionCommands {
         match r.value {
             Mutation::Configuration(value) => Ok(CommitReceipt {
                 position: r.position,
+                value: *value,
+            }),
+            _ => Err(unexpected()),
+        }
+    }
+    /// Internal host capability; ordinary configuration cannot replace channel
+    /// authority. Live provider, source and membership review belongs to the
+    /// caller, while the writer enforces compatibility, idleness and the CAS.
+    pub async fn recover_channel_authority(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        recovery: ChannelAuthorityRecovery,
+    ) -> Result<CommitReceipt<SessionConfiguration>> {
+        let receipt = self
+            .0
+            .command(
+                request,
+                Command::RecoverChannelAuthority {
+                    session,
+                    recovery: Box::new(recovery),
+                },
+            )
+            .await?;
+        match receipt.value {
+            Mutation::Configuration(value) => Ok(CommitReceipt {
+                position: receipt.position,
                 value: *value,
             }),
             _ => Err(unexpected()),

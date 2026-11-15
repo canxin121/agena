@@ -40,7 +40,7 @@
     "test:inline-ui:live": "node ./scripts/probe-stateful-ui.cjs",
     "test:inline-ui:layout": "node ./scripts/probe-inline-ui-layout.cjs",
     "test:assistant:browser": "node ./scripts/probe-assistant.cjs",
-    "test:telegram": "bun test ./tests/telegramManagerModel.test.ts ./tests/integrations.test.ts ./tests/pluginWorkspaceIdentity.test.ts",
+    "test:telegram": "bun test ./tests/telegramManagerModel.test.ts ./tests/telegramReconnect.test.ts ./tests/integrations.test.ts ./tests/pluginWorkspaceIdentity.test.ts",
     "test:telegram:browser": "node ./scripts/probe-telegram.cjs"
   },
   "dependencies": {

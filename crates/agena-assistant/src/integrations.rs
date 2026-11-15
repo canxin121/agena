@@ -625,6 +625,8 @@ pub enum IntegrationControlAction {
     Enable,
     Pause,
     PollNow,
+    /// Locally review a compatible boundary and resume existing channel history.
+    Review,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -874,6 +876,22 @@ pub trait IntegrationRepository: Send + Sync {
         actor: &str,
         now: i64,
     ) -> Result<IntegrationBinding>;
+    /// Persist an operator review and its unchanged policy in one CAS/audit transaction.
+    async fn review_channel_binding(
+        &self,
+        binding: IntegrationBinding,
+        expected_revision: i64,
+        actor: &str,
+        now: i64,
+    ) -> Result<IntegrationBinding>;
+    /// Rebase one existing session record after its kernel authority was restored.
+    /// Existing execution generations are suppressed from future channel export.
+    async fn recover_channel_session(
+        &self,
+        expected: ChannelSessionRecord,
+        current: ChannelSessionRecord,
+        now: i64,
+    ) -> Result<ChannelSessionRecord>;
     async fn channel_audit(&self, id: Uuid) -> Result<Vec<ChannelAccessAudit>>;
     async fn channel_execution_actor(&self, id: Uuid, execution: &str) -> Result<Option<String>>;
     async fn channel_sessions(&self, id: Uuid) -> Result<Vec<ChannelSessionRecord>>;
@@ -1103,6 +1121,7 @@ mod tests {
             max_execution_seconds: 60,
             use_source_permissions: true,
             channel_policy: Some(ChannelAccessPolicy {
+                administrator_actors: Default::default(),
                 identity: ChannelIdentity {
                     tenant: "t".into(),
                     account: "a".into(),
@@ -1136,6 +1155,7 @@ mod tests {
             scope_key: format!("{resource}-{session}"),
             session_id: session,
             authority: ChannelAuthority {
+                source_admin: false,
                 binding_id: binding.to_string(),
                 epoch: 1,
                 actor: "@shared".into(),

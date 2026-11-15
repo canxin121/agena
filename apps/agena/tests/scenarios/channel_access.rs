@@ -35,6 +35,7 @@ fn channel_fixture(replies: Replies) -> TestAgenaBuilder {
 fn policy(kind: ConversationKind) -> ChannelAccessPolicy {
     let direct = kind == ConversationKind::Direct;
     ChannelAccessPolicy {
+        administrator_actors: Default::default(),
         identity: ChannelIdentity {
             tenant: "tenant-a".into(),
             account: "bot-a".into(),
@@ -529,6 +530,239 @@ async fn member_has_no_tools_admin_cannot_escalate_and_revocation_stops_held_exe
                     .then_some(()))
             })
             .await?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn source_administrator_gets_bot_tools_in_an_isolated_session_and_revocation_takes_effect()
+-> TestResult {
+    let replies: Replies = Default::default();
+    channel_fixture(replies.clone())
+        .seed_file(
+            "workspace/admin-source.txt",
+            b"SOURCE-ADMIN-READ-CONTENT".to_vec(),
+        )
+        .run(move |case| async move {
+            let bot = case.client().await.ensure_bot_session().await?;
+            let source = case.user().attach_session(bot.session_id).await?;
+            let file = case.workspace().join("admin-source.txt");
+            super::path_permission(&source, &file, "deny").await?;
+            let model = case.model();
+            let mut p = policy(ConversationKind::Group);
+            p.administrator_actors.insert("admin".into());
+            ensure!(
+                !p.grant.has_effects(),
+                "ordinary members start without tool grants"
+            );
+            let binding = bind(&source, "source-administrator", p.clone()).await?;
+
+            let member = model
+                .expect(RequestMatch::user_text("member-cannot-read-source"))
+                .reply(Reply::tool_call(
+                    "member-source-read",
+                    "fs.read",
+                    json!({"file_path":file}),
+                ));
+            model
+                .expect(RequestMatch::tool_output("member-source-read"))
+                .after(&member)
+                .check_tool_output_contains("member-source-read", "failed")
+                .check(|request| {
+                    ensure!(
+                        !request
+                            .tool_output_text("member-source-read")
+                            .unwrap_or_default()
+                            .contains("SOURCE-ADMIN-READ-CONTENT")
+                    );
+                    Ok(())
+                })
+                .reply(Reply::text("member-source-read-denied"));
+            message(
+                &case,
+                &p,
+                "member-read",
+                "alice",
+                Some("same-room"),
+                "member-cannot-read-source",
+            )
+            .await?;
+            reply(&replies, "member-source-read-denied").await?;
+
+            let help = model
+                .expect(
+                    RequestMatch::user_text("admin-read-source").declares_function("tools_help"),
+                )
+                .check(|request| {
+                    ensure!(
+                        !request.user_text().contains("member-cannot-read-source"),
+                        "administrator inherited the member transcript"
+                    );
+                    Ok(())
+                })
+                .reply(Reply::function_call(
+                    "admin-read-help",
+                    "tools_help",
+                    json!({"tool":"fs.read"}),
+                ));
+            let read = model
+                .expect(RequestMatch::tool_output("admin-read-help"))
+                .after(&help)
+                .check_tool_output_contains("admin-read-help", "file_path")
+                .reply(Reply::tool_call(
+                    "admin-source-read",
+                    "fs.read",
+                    json!({"file_path":file}),
+                ));
+            model
+                .expect(RequestMatch::tool_output("admin-source-read"))
+                .after(&read)
+                .check_tool_output_contains("admin-source-read", "SOURCE-ADMIN-READ-CONTENT")
+                .reply(Reply::text("admin-source-read-succeeded"));
+            message(
+                &case,
+                &p,
+                "admin-read",
+                "admin",
+                Some("same-room"),
+                "admin-read-source",
+            )
+            .await?;
+            reply(&replies, "admin-source-read-succeeded").await?;
+
+            let detail = source
+                .client()
+                .integration_detail(source.id(), binding.id)
+                .await?;
+            let ordinary = detail
+                .channel_sessions
+                .iter()
+                .find(|scope| !scope.authority.source_admin)
+                .context("ordinary member scope")?;
+            let administrator = detail
+                .channel_sessions
+                .iter()
+                .find(|scope| scope.authority.source_admin)
+                .context("source administrator scope")?;
+            ensure!(
+                administrator.session_id != ordinary.session_id,
+                "source administrator shared a member's execution session"
+            );
+            ensure!(administrator.authority.actor == "admin");
+            ensure!(administrator.authority.session_mode == ChannelSessionMode::PerActor);
+            ensure!(ordinary.authority.session_mode == ChannelSessionMode::PerConversation);
+            ensure!(
+                !ordinary.authority.grant.has_effects()
+                    && !administrator.authority.grant.has_effects()
+            );
+            let old_session_id = administrator.session_id;
+            let old_authority = administrator.authority.clone();
+            let administrator_summary: Value = case
+                .http()
+                .await
+                .get(&format!("/api/v1/sessions/{old_session_id}"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                administrator_summary["workspace_id"].is_null(),
+                "source administrator lost the local Bot's global scope"
+            );
+            ensure!(administrator_summary["owner_bot_id"] == bot.bot_id.to_string());
+            ensure!(administrator_summary["owner_surface"] == "group");
+            ensure!(
+                source
+                    .client()
+                    .ensure_named_bot_session(bot.bot_id)
+                    .await?
+                    .session_id
+                    == source.id(),
+                "remote administrator session replaced the Bot's one local conversation"
+            );
+            let held = model
+                .expect(RequestMatch::user_text("admin-held-before-local-removal"))
+                .reply(Reply::text("ADMIN-RESULT-MUST-NOT-LEAVE-AFTER-REMOVAL").held());
+            message(
+                &case,
+                &p,
+                "admin-held",
+                "admin",
+                Some("same-room"),
+                "admin-held-before-local-removal",
+            )
+            .await?;
+            held.observed().await?;
+
+            // Remove only the local source grant. The actor remains a channel
+            // administrator, so the test cannot pass merely by blocking chat.
+            p.administrator_actors.clear();
+            let updated = source
+                .client()
+                .update_channel_access(
+                    source.id(),
+                    binding.id,
+                    &ChannelPolicyUpdate {
+                        expected_revision: detail.binding.revision,
+                        request_key: "remove-source-administrator".into(),
+                        policy: p.clone(),
+                    },
+                )
+                .await?;
+            held.disconnected().await?;
+            ensure!(!updated.authorizes_scope(&old_authority, Utc::now().timestamp_millis()));
+            let old_session = case.user().attach_session(old_session_id).await?;
+            if let Ok(turn) = old_session
+                .send("old-admin-session-must-not-reach-model")
+                .await
+            {
+                ensure!(
+                    turn.wait_settled().await?.assert_succeeded().is_err(),
+                    "removed source authority still admitted execution"
+                );
+            }
+
+            let after = model
+                .expect(RequestMatch::user_text("admin-after-local-removal"))
+                .reply(Reply::tool_call(
+                    "removed-admin-read",
+                    "fs.read",
+                    json!({"file_path":file}),
+                ));
+            model
+                .expect(RequestMatch::tool_output("removed-admin-read"))
+                .after(&after)
+                .check_tool_output_contains("removed-admin-read", "failed")
+                .reply(Reply::text("removed-admin-read-denied"));
+            message(
+                &case,
+                &p,
+                "admin-after-removal",
+                "admin",
+                Some("same-room"),
+                "admin-after-local-removal",
+            )
+            .await?;
+            reply(&replies, "removed-admin-read-denied").await?;
+            let detail = source
+                .client()
+                .integration_detail(source.id(), binding.id)
+                .await?;
+            let replacement = detail
+                .channel_sessions
+                .iter()
+                .find(|scope| scope.authority.epoch == updated.epoch)
+                .context("replacement member scope")?;
+            ensure!(replacement.session_id != old_session_id);
+            ensure!(
+                !replacement.authority.source_admin && !replacement.authority.grant.has_effects()
+            );
+            ensure!(replacement.authority.role == ChannelRole::Administrator);
+            ensure!(!replies.lock().unwrap().iter().any(|value| {
+                value["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("ADMIN-RESULT-MUST-NOT-LEAVE-AFTER-REMOVAL"))
+            }));
             Ok(())
         })
         .await

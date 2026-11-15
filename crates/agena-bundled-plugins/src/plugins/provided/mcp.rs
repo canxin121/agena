@@ -512,7 +512,7 @@ impl McpPlugin {
                 .into_iter()
                 .filter_map(|(server, tool)| {
                     if channel.as_ref().is_some_and(|authority| {
-                        !authority.grant.allows_mcp_tool(&server, &tool.name)
+                        !authority.allows_mcp_tool(&server, &tool.name, chrono::Utc::now().timestamp_millis())
                     }) {
                         return None;
                     }

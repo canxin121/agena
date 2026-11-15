@@ -23,6 +23,7 @@ pub(super) async fn apply(
         | Command::EnsureLocalBotSession { .. }
         | Command::DetachGlobal { .. }
         | Command::Configure { .. }
+        | Command::RecoverChannelAuthority { .. }
         | Command::FinishAgent { .. }
         | Command::Fork { .. }
         | Command::Withdraw { .. }

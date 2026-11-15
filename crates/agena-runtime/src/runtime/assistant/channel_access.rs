@@ -39,29 +39,101 @@ impl agena_runtime_contracts::ChannelAccessVerifier for ChannelVerifier {
             .binding(id)
             .await
             .map_err(|_| "channel authorization state unavailable; access denied".to_owned())?;
-        if service
-            .provider_identity(&binding.spec.provider)
-            .ok()
-            .as_deref()
-            != Some(binding.provider_fingerprint.as_str())
-            || service
-                .source_permission_identity(binding.source_session_id)
-                .await
-                .ok()
-                .as_deref()
-                != Some(binding.permission_fingerprint.as_str())
-        {
-            return Err(
-                "channel provider or source permissions changed; explicit review is required"
-                    .into(),
-            );
-        }
+        service
+            .verify_integration_boundary(&binding)
+            .await
+            .map_err(|error| error.to_string())?;
         if !binding.authorizes_scope(authority, Utc::now().timestamp_millis()) {
             return Err("channel access revoked, expired or changed; no tool or execution is authorized by this old session".into());
         }
         Ok(())
     }
 }
+fn channel_scope_keys(
+    binding: &IntegrationBinding,
+    resource: &str,
+    actor: &str,
+    kind: agena_domain::ConversationKind,
+    thread: Option<&str>,
+    session_mode: ChannelSessionMode,
+    source_admin: bool,
+) -> Result<(String, String)> {
+    let policy = binding
+        .spec
+        .channel_policy
+        .as_ref()
+        .ok_or(Error::Invalid("channel policy required"))?;
+    let speaker = (session_mode == ChannelSessionMode::PerActor).then_some(actor);
+    let mut privacy = json!({"binding":binding.id,"provider":binding.spec.provider,"identity":policy.identity,"kind":kind,"resource":resource,"thread":thread,"speaker":speaker});
+    if source_admin {
+        privacy["source_admin"] = json!(true);
+    }
+    let privacy_key = hash(&privacy)?;
+    let scope_key = hash(&json!({"private_scope":privacy_key,"epoch":binding.epoch}))?;
+    Ok((privacy_key, scope_key))
+}
+
+fn compatible_channel_recovery(
+    binding: &IntegrationBinding,
+    previous: &ChannelSessionRecord,
+    now: i64,
+) -> Result<ChannelSessionRecord> {
+    let policy = binding
+        .spec
+        .channel_policy
+        .as_ref()
+        .ok_or(Error::Invalid("channel policy required"))?;
+    let old = &previous.authority;
+    if previous.binding_id != binding.id
+        || old.binding_id != binding.id.to_string()
+        || !old.active_at(now)
+    {
+        return Err(Error::Conflict(
+            "the historical channel authority is expired or does not belong to this binding",
+        ));
+    }
+    let (role, grant, expiry) = match old.actor.as_str() {
+        "@service" if policy.allow_automated_reports => {
+            (ChannelRole::Operator, &policy.service_grant, None)
+        }
+        "@shared" => (ChannelRole::Member, &policy.grant, None),
+        actor => {
+            let (role, expiry) = policy.member(actor, now).map_err(Error::Invalid)?;
+            (role, &policy.grant, expiry)
+        }
+    };
+    if old.grant != *grant
+        || old.identity != policy.identity
+        || old.session_mode != policy.session_mode_for(&old.actor, now)
+        || old.source_admin != policy.is_source_administrator(&old.actor, now)
+        || old.expires_at_ms != binding.spec.authority_expires_at(expiry)
+    {
+        return Err(Error::Conflict(
+            "channel scope, tools, administrator capability or expiry changed; the old conversation cannot inherit the new authority",
+        ));
+    }
+    let mut current = previous.clone();
+    current.authority.epoch = binding.epoch;
+    current.authority.role = role;
+    current.authority.revoked = false;
+    if !binding.authorizes_scope(&current.authority, now) {
+        return Err(Error::Conflict(
+            "the current channel policy no longer admits this historical conversation",
+        ));
+    }
+    current.scope_key = channel_scope_keys(
+        binding,
+        &old.resource,
+        &old.actor,
+        old.kind,
+        old.thread.as_deref(),
+        old.session_mode,
+        old.source_admin,
+    )?
+    .1;
+    Ok(current)
+}
+
 fn access_reply(text: String) -> String {
     const PREVIEW_BYTES: usize = 16 * 1024;
     if text.len() <= PREVIEW_BYTES {
@@ -114,16 +186,19 @@ impl AssistantRuntime {
             let (role, expiry) = policy.member(actor, now).map_err(Error::Invalid)?;
             (actor.to_owned(), role, policy.grant.clone(), expiry)
         };
-        // One conversation is one session. The speaker is not part of the
-        // scope key, so a group's members share a transcript; `PerActor`
-        // opts back into per-speaker transcripts explicitly.
-        let speaker_key =
-            (policy.session_mode == ChannelSessionMode::PerActor).then_some(principal.as_str());
-        let privacy_key = hash(
-            &json!({"binding":b.id,"provider":b.spec.provider,"identity":policy.identity,"kind":kind,"resource":resource,"thread":thread,"speaker":speaker_key}),
+        let source_admin = policy.is_source_administrator(actor, now);
+        let session_mode = policy.session_mode_for(actor, now);
+        // Ordinary members may share a room; source administrators never read
+        // that shared transcript with their wider tool authority.
+        let (privacy_key, scope_key) = channel_scope_keys(
+            b,
+            resource,
+            &principal,
+            kind,
+            thread.as_deref(),
+            session_mode,
+            source_admin,
         )?;
-        // Capabilities are one per binding, so they cannot split a scope.
-        let scope_key = hash(&json!({"private_scope":privacy_key,"epoch":b.epoch}))?;
         let manager = self.manager()?;
         if let Some(record) = self.integrations.channel_session(b.id, &scope_key).await? {
             if !b.authorizes_scope(&record.authority, now) {
@@ -165,7 +240,7 @@ impl AssistantRuntime {
             .join(&principal);
         let memory = agena_storage::MemoryDir::from_workspace(&speaker_root);
         let mut private_paths = BTreeSet::from([private_root.clone(), speaker_root.clone()]);
-        if grant.private_memory {
+        if source_admin || grant.private_memory {
             private_paths.insert(memory.path().to_path_buf());
             private_paths.insert(memory.index_dir());
         }
@@ -178,8 +253,9 @@ impl AssistantRuntime {
             resource: resource.to_owned(),
             kind,
             thread,
-            session_mode: policy.session_mode,
+            session_mode,
             grant,
+            source_admin,
             expires_at_ms: b.spec.authority_expires_at(expiry),
             memory_workspace_root: speaker_root,
             private_paths,
@@ -232,6 +308,156 @@ impl AssistantRuntime {
         }
         Ok(b)
     }
+    /// Resume only a locally reviewed, identical transport/permission boundary.
+    /// The admission gate is held by control_integration throughout this method.
+    pub(super) async fn review_channel_connection(
+        &self,
+        mut binding: IntegrationBinding,
+        provider: IntegrationProvider,
+        now: i64,
+    ) -> Result<IntegrationBinding> {
+        if binding.spec.mode != IntegrationMode::Channel {
+            return Err(Error::Invalid(
+                "history review applies to channel connections only",
+            ));
+        }
+        let identity =
+            self.provider_identity_check(&binding.spec.provider, &binding.provider_fingerprint)?;
+        if !identity.kind.is_compatible() {
+            return Err(Error::Conflict(
+                "the provider transport or connection identity changed; the existing conversation cannot be resumed under a different boundary",
+            ));
+        }
+        let permission = self
+            .source_permission_identity(binding.source_session_id)
+            .await?;
+        if permission != binding.permission_fingerprint {
+            return Err(Error::Conflict(
+                "the source permission boundary changed; review cannot reuse this conversation under different capabilities",
+            ));
+        }
+        if provider.adapter.kind != AdapterKind::Channel
+            || provider.adapter.channel_context_version != Some(1)
+            || binding.spec.poll_seconds < provider.adapter.minimum_poll_seconds
+        {
+            return Err(Error::Invalid(
+                "the current provider no longer satisfies the verified channel contract",
+            ));
+        }
+        if binding.spec.expired_at(now) || binding.spec.total_budget_exhausted(binding.admitted) {
+            return Err(Error::Conflict(
+                "the channel grant expired or exhausted its budget",
+            ));
+        }
+        let policy = binding
+            .spec
+            .channel_policy
+            .as_ref()
+            .ok_or(Error::Invalid("channel policy required"))?;
+        policy.validate(now).map_err(Error::Policy)?;
+        let source = self
+            .manager()?
+            .get_session(binding.source_session_id)
+            .await
+            .map_err(runtime_error)?;
+        if source.execution.channel_authority.is_some() {
+            return Err(Error::Invalid(
+                "channel history review requires a local source conversation",
+            ));
+        }
+        let expected_revision = binding.revision;
+        binding.provider_fingerprint = identity.fingerprint;
+        binding.state = BindingState::Enabled;
+        binding.epoch += 1;
+        binding.revision += 1;
+        binding.updated_at_ms = now;
+        binding.next_poll_ms = now;
+        binding.last_error = None;
+        let records = self.integrations.channel_sessions(binding.id).await?;
+        let manager = self.manager()?;
+        let mut recoveries = Vec::new();
+        let mut scope_keys = BTreeSet::new();
+        for record in records {
+            if !manager
+                .session_exists(record.session_id)
+                .await
+                .map_err(runtime_error)?
+            {
+                continue;
+            }
+            let current = compatible_channel_recovery(&binding, &record, now)?;
+            if !scope_keys.insert(current.scope_key.clone()) {
+                return Err(Error::Conflict(
+                    "multiple historical conversations claim the same channel scope; select the conversation to restore before reviewing",
+                ));
+            }
+            recoveries.push((record, current));
+        }
+        // Publish the reviewed boundary first so the kernel's live verifier can
+        // check each new authority. Old records still have the old epoch and
+        // cannot dispatch or export while recovery is in progress.
+        let binding = self
+            .integrations
+            .review_channel_binding(binding, expected_revision, "instance_operator", now)
+            .await?;
+        for (previous, current) in recoveries {
+            let recovery = async {
+                let scope_key = current.scope_key.clone();
+                manager
+                    .recover_channel_session_authority(
+                        previous.session_id,
+                        previous.authority.clone(),
+                        current.authority.clone(),
+                        &scope_key,
+                        || async {
+                            if let Err(error) = self
+                                .integrations
+                                .recover_channel_session(previous, current, now)
+                                .await
+                            {
+                                let mut failed = binding.clone();
+                                failed.state = BindingState::Faulted;
+                                failed.revision += 1;
+                                failed.last_error = Some(format!(
+                                    "compatible channel recovery did not complete: {error}"
+                                ));
+                                self.integrations
+                                    .save_binding(failed, binding.revision)
+                                    .await
+                                    .map_err(|error| {
+                                        crate::AppError::PersistenceConflict(error.to_string())
+                                    })?;
+                                return Err(crate::AppError::PersistenceConflict(
+                                    error.to_string(),
+                                ));
+                            }
+                            Ok(())
+                        },
+                    )
+                    .await
+                    .map_err(runtime_error)?;
+                Ok::<(), Error>(())
+            }
+            .await;
+            if let Err(error) = recovery {
+                let mut failed = binding.clone();
+                failed.state = BindingState::Faulted;
+                failed.revision += 1;
+                failed.last_error = Some(format!(
+                    "compatible channel recovery did not complete: {error}"
+                ));
+                let _ = self
+                    .integrations
+                    .save_binding(failed, binding.revision)
+                    .await;
+                return Err(error);
+            }
+        }
+        self.reconcile_integration_executions(&binding).await?;
+        self.wake.notify_one();
+        Ok(binding)
+    }
+
     pub(super) async fn revoke_old_channel_runs(&self, b: &IntegrationBinding) -> Result<()> {
         let manager = self.manager()?;
         let now = Utc::now().timestamp_millis();
@@ -286,10 +512,16 @@ impl AssistantRuntime {
             .member(&event.event.actor, now)
             .map_err(Error::Invalid)?;
         let grant = &policy.grant;
+        let source_admin = policy.is_source_administrator(&event.event.actor, now);
+        let tools = if source_admin {
+            "source Bot catalog".to_owned()
+        } else {
+            grant.allowed_tools().len().to_string()
+        };
         let words = text.split_whitespace().collect::<Vec<_>>();
         let mut current = b.clone();
         let response=match words.as_slice(){
-            ["/access"]|["/access","whoami"]=>format!("Scope: {}/{}/{} · {:?} · thread {:?}\nUser: {} · local role: {}\nTools: {} · private memory: {}\nPlatform administrator labels do not grant instance privileges.",policy.identity.tenant,policy.identity.account,b.spec.resource.display(),event.event.channel.as_ref().map(|c| c.kind.as_str()).unwrap_or("unknown"),event.event.thread,event.event.actor,role.as_str(),grant.tools.len(),grant.private_memory),
+            ["/access"]|["/access","whoami"]=>format!("Scope: {}/{}/{} · {:?} · thread {:?}\nUser: {} · local role: {}\nTools: {} · private memory: {}\nPlatform administrator labels do not grant instance privileges.",policy.identity.tenant,policy.identity.account,b.spec.resource.display(),event.event.channel.as_ref().map(|c| c.kind.as_str()).unwrap_or("unknown"),event.event.thread,event.event.actor,role.as_str(),tools,source_admin || grant.private_memory),
             ["/access","members"] if role.can_manage()=>policy.members.iter().map(|m|format!("{}: {}{}",m.actor,m.role.as_str(),if m.expires_at_ms.is_some_and(|expiry|now>=expiry){" (expired)"}else{""})).collect::<Vec<_>>().join("\n"),
             ["/access","set",target,requested]=>{
                 let assigned=ChannelRole::parse(requested);
@@ -349,7 +581,158 @@ impl AssistantRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::access_reply;
+    use super::*;
+    fn recovery_fixture() -> (IntegrationBinding, ChannelSessionRecord) {
+        let policy = ChannelAccessPolicy {
+            identity: ChannelIdentity {
+                tenant: "telegram".into(),
+                account: "bot".into(),
+            },
+            kinds: [agena_domain::ConversationKind::Direct].into(),
+            session_mode: ChannelSessionMode::PerActor,
+            thread_mode: ChannelThreadMode::Exact,
+            trigger: ChannelTrigger::DirectOrMention,
+            members: vec![ChannelMember {
+                actor: "42".into(),
+                role: ChannelRole::Owner,
+                expires_at_ms: None,
+            }],
+            administrator_actors: Default::default(),
+            allow_unlisted_chat: false,
+            grant: Default::default(),
+            per_user_daily_limit: 0,
+            allow_automated_reports: false,
+            service_grant: Default::default(),
+        };
+        let spec = IntegrationSpec {
+            title: "Existing direct chat".into(),
+            provider: "agena.telegram".into(),
+            mode: IntegrationMode::Channel,
+            config: json!({"bot_id":"telegram-bot"}),
+            resource: "42".into(),
+            thread: None,
+            event_types: vec!["message".into()],
+            actors: vec![],
+            instruction: String::new(),
+            poll_seconds: 10,
+            expires_at_ms: 1_000_000,
+            daily_limit: 100,
+            total_limit: 1000,
+            max_execution_seconds: 60,
+            use_source_permissions: true,
+            channel_policy: Some(policy.clone()),
+        };
+        let mut binding = IntegrationBinding::new(
+            Some(1),
+            None,
+            9,
+            "original".into(),
+            spec,
+            "legacy".into(),
+            1000,
+        )
+        .unwrap();
+        binding.state = BindingState::Enabled;
+        binding.epoch = 4;
+        binding.revision = 5;
+        let authority = ChannelAuthority {
+            binding_id: binding.id.to_string(),
+            epoch: 1,
+            actor: "42".into(),
+            role: ChannelRole::Member,
+            identity: policy.identity,
+            resource: "42".into(),
+            kind: agena_domain::ConversationKind::Direct,
+            thread: None,
+            session_mode: ChannelSessionMode::PerActor,
+            grant: Default::default(),
+            source_admin: false,
+            expires_at_ms: 1_000_000,
+            memory_workspace_root: "/private/original".into(),
+            private_paths: ["/private/original".into()].into(),
+            revoked: false,
+        };
+        let record = ChannelSessionRecord {
+            binding_id: binding.id,
+            scope_key: "old-scope".into(),
+            session_id: 11,
+            authority,
+            created_at_ms: 1000,
+        };
+        (binding, record)
+    }
+    #[test]
+    fn compatible_recovery_preserves_original_scope_and_session_when_only_role_and_epoch_change() {
+        let (binding, previous) = recovery_fixture();
+        let current = compatible_channel_recovery(&binding, &previous, 2000).unwrap();
+        assert_eq!(current.session_id, 11);
+        assert_eq!(current.created_at_ms, previous.created_at_ms);
+        assert_eq!(current.authority.epoch, 4);
+        assert_eq!(current.authority.role, ChannelRole::Owner);
+        assert_eq!(current.authority.grant, previous.authority.grant);
+        assert_eq!(
+            current.authority.memory_workspace_root,
+            previous.authority.memory_workspace_root
+        );
+        assert_eq!(
+            current.authority.private_paths,
+            previous.authority.private_paths
+        );
+        assert_ne!(current.scope_key, previous.scope_key);
+        assert!(binding.authorizes_scope(&current.authority, 2000));
+        assert_eq!(
+            current.scope_key,
+            channel_scope_keys(
+                &binding,
+                "42",
+                "42",
+                agena_domain::ConversationKind::Direct,
+                None,
+                ChannelSessionMode::PerActor,
+                false
+            )
+            .unwrap()
+            .1
+        );
+    }
+    #[test]
+    fn compatible_recovery_rejects_changed_capabilities_expiry_and_conversation_scope() {
+        let changes: &[fn(&mut IntegrationBinding)] = &[
+            |b| {
+                b.spec
+                    .channel_policy
+                    .as_mut()
+                    .unwrap()
+                    .grant
+                    .tools
+                    .insert("agena.fs.read".into());
+            },
+            |b| {
+                b.spec
+                    .channel_policy
+                    .as_mut()
+                    .unwrap()
+                    .administrator_actors
+                    .insert("42".into());
+            },
+            |b| b.spec.channel_policy.as_mut().unwrap().members[0].role = ChannelRole::Blocked,
+            |b| b.spec.channel_policy.as_mut().unwrap().members[0].expires_at_ms = Some(10_000),
+            |b| b.spec.expires_at_ms = 2_000_000,
+            |b| b.spec.resource = "another-chat".into(),
+            |b| b.spec.channel_policy.as_mut().unwrap().identity.account = "another-bot".into(),
+            |b| {
+                b.spec.channel_policy.as_mut().unwrap().session_mode =
+                    ChannelSessionMode::PerConversation
+            },
+            |b| b.spec.thread = Some("another-topic".into()),
+        ];
+        for change in changes {
+            let (mut binding, previous) = recovery_fixture();
+            change(&mut binding);
+            assert!(compatible_channel_recovery(&binding, &previous, 2000).is_err());
+        }
+    }
+
     #[test]
     fn long_member_list_fits_outbox_without_splitting_unicode() {
         let reply = access_reply("用户身份: administrator\n".repeat(1024));

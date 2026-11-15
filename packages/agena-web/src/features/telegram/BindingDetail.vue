@@ -4,14 +4,24 @@ import Button from '@/components/ui/Button.vue'
 import ChannelAccessPanel from '@/features/integrations/ChannelAccessPanel.vue'
 import type { IntegrationBinding, IntegrationControlAction, IntegrationDetail } from '@/generated/agenaState'
 import { useTelegramCopy } from './copy'
-const props = defineProps<{ detail: IntegrationDetail; source: number; busy: boolean; botEnabled: boolean }>()
+import { telegramBindingNeedsReview } from './reconnect'
+const props = defineProps<{
+  detail: IntegrationDetail
+  source: number
+  busy: boolean
+  botEnabled: boolean
+  rebuildPending?: boolean
+}>()
 const emit = defineEmits<{
   control: [binding: IntegrationBinding, action: IntegrationControlAction]
+  rebuild: [binding: IntegrationBinding]
   changed: [binding: IntegrationBinding]
   editing: [value: boolean]
   openSession: [id: number]
 }>()
 const { tx, stateLabel, date } = useTelegramCopy()
+const requiresReview = computed(() => telegramBindingNeedsReview(props.detail.binding))
+const requiresRebuild = computed(() => props.rebuildPending || requiresReview.value)
 const tab = ref<'events' | 'deliveries' | 'access'>('events')
 const search = ref('')
 const events = computed(() =>
@@ -76,8 +86,27 @@ const deliveries = computed(() =>
         }}</span>
       </div>
     </div>
+    <p v-if="requiresReview" class="text-xs leading-relaxed text-muted-foreground">{{ tx('reviewHint') }}</p>
     <div class="flex flex-wrap gap-2">
       <Button
+        v-if="requiresReview"
+        size="sm"
+        :disabled="busy || !botEnabled"
+        data-testid="telegram-review"
+        @click="emit('control', detail.binding, 'review')"
+        >{{ tx('reviewBinding') }}</Button
+      >
+      <Button
+        v-if="requiresRebuild"
+        variant="outline"
+        size="sm"
+        :disabled="busy || !botEnabled"
+        data-testid="telegram-rebuild"
+        @click="emit('rebuild', detail.binding)"
+        >{{ tx('rebuild') }}</Button
+      >
+      <Button
+        v-else
         size="sm"
         :disabled="busy || !botEnabled || detail.binding.state === 'enabled'"
         data-testid="telegram-enable"

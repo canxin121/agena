@@ -951,6 +951,7 @@ async fn private_channel_learning_uses_its_authorized_store_and_rechecks_revocat
         ));
         let private_store = MemoryStore::for_workspace(&private_root);
         let authority = agena_domain::ChannelAuthority {
+            source_admin: false,
             binding_id: "memory-channel-test".into(),
             epoch: 1,
             actor: "member".into(),

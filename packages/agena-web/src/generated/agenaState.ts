@@ -187,6 +187,7 @@ export type ChannelAccessAudit = {
 }
 
 export type ChannelAccessPolicy = {
+  administrator_actors?: string[]
   allow_automated_reports?: boolean
   allow_unlisted_chat?: boolean
   grant?: ChannelGrant
@@ -215,6 +216,7 @@ export type ChannelAuthority = {
   revoked?: boolean
   role: ChannelRole
   session_mode: ChannelSessionMode
+  source_admin?: boolean
   thread?: string | null
 }
 
@@ -421,7 +423,7 @@ export type IntegrationBinding = {
   workspace_id?: number | null
 }
 
-export type IntegrationControlAction = 'enable' | 'pause' | 'poll_now'
+export type IntegrationControlAction = 'enable' | 'pause' | 'poll_now' | 'review'
 
 export type IntegrationDelivery = {
   attempts: number

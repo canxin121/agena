@@ -1,10 +1,10 @@
 //! Local AI Bot ownership, chat admission and background binding reconciliation.
 use super::*;
 use agena_assistant::{
-    BindingState, ChannelAccessPolicy, ChannelGrant, ChannelMember, ChannelRole,
-    ChannelSessionMode, ChannelThreadMode, ChannelTrigger, CreateIntegration, IntegrationBinding,
-    IntegrationControl, IntegrationControlAction, IntegrationMode, IntegrationSpec,
-    IntegrationsSnapshot,
+    BindingState, ChannelAccessPolicy, ChannelGrant, ChannelMember, ChannelPolicyUpdate,
+    ChannelRole, ChannelSessionMode, ChannelThreadMode, ChannelTrigger, CreateIntegration,
+    IntegrationBinding, IntegrationControl, IntegrationControlAction, IntegrationMode,
+    IntegrationSpec, IntegrationsSnapshot,
     bot::{BotList, BotProfile, BotSession},
 };
 use agena_plugin_sdk::HostClientExt;
@@ -84,6 +84,8 @@ struct RoutingState {
     #[serde(default)]
     paused_by_policy: BTreeMap<String, i64>,
     #[serde(default)]
+    applied_administrators: BTreeMap<String, BTreeSet<String>>,
+    #[serde(default)]
     last_error: Option<String>,
     #[serde(default)]
     last_reconciled_ms: i64,
@@ -151,6 +153,77 @@ fn numeric_chat_id(value: &str) -> Result<String> {
         .filter(|id| *id != 0)
         .map(|id| id.to_string())
         .ok_or_else(|| invalid("Enter the numeric Telegram chat ID"))
+}
+
+pub(super) fn normalize_administrator_user_ids(ids: &BTreeSet<String>) -> Result<BTreeSet<String>> {
+    if ids.len() > 64 {
+        return Err(invalid("Select at most 64 Telegram administrator user IDs"));
+    }
+    ids.iter()
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty() || !value.bytes().all(|c| c.is_ascii_digit()) {
+                return Err(invalid("Telegram administrators require positive numeric user IDs, not usernames or chat IDs"));
+            }
+            value.parse::<i64>().ok().filter(|id| *id > 0)
+                .map(|id| id.to_string())
+                .ok_or_else(|| invalid("Telegram administrators require positive numeric user IDs"))
+        })
+        .collect()
+}
+
+/// Apply only the Bot manager's explicit administrator selection. An ordinary
+/// member grant stays unchanged; broadcast/anonymous senders never inherit a
+/// numeric user's authority. Existing non-manager assignments are preserved.
+fn apply_administrators(
+    policy: &mut ChannelAccessPolicy,
+    ids: &BTreeSet<String>,
+    resource: &str,
+) -> Result<bool> {
+    let selected: BTreeSet<String> = ids
+        .iter()
+        .filter(|id| {
+            policy.serves(ConversationKind::Group)
+                || (policy.serves(ConversationKind::Direct) && id.as_str() == resource)
+        })
+        .cloned()
+        .collect();
+    if policy.administrator_actors == selected {
+        return Ok(false);
+    }
+    for member in &mut policy.members {
+        if policy.administrator_actors.contains(&member.actor)
+            && !selected.contains(&member.actor)
+            && member.role == ChannelRole::Administrator
+        {
+            member.role = ChannelRole::Member;
+        }
+    }
+    for actor in &selected {
+        if let Some(member) = policy
+            .members
+            .iter_mut()
+            .find(|member| &member.actor == actor)
+        {
+            if member.role != ChannelRole::Owner {
+                member.role = ChannelRole::Administrator;
+            }
+            member.expires_at_ms = None;
+        } else {
+            if policy.members.len() >= 128 {
+                return Err(invalid(
+                    "This channel has reached its 128-member assignment limit",
+                ));
+            }
+            policy.members.push(ChannelMember {
+                actor: actor.clone(),
+                role: ChannelRole::Administrator,
+                expires_at_ms: None,
+            });
+        }
+    }
+    policy.administrator_actors = selected;
+    Ok(true)
 }
 
 fn room_kind(room: &Room) -> Option<ConversationKind> {
@@ -483,6 +556,8 @@ impl TelegramPlugin {
             .collect::<Vec<_>>();
 
         for binding in &mut bindings {
+            self.sync_binding_administrators(&resolved, source, binding, state)
+                .await?;
             let Some(chat_id) = binding.spec.resource.single() else {
                 continue;
             };
@@ -580,9 +655,60 @@ impl TelegramPlugin {
             } else {
                 binding
             };
+            state.applied_administrators.insert(
+                binding.id.to_string(),
+                resolved.administrator_user_ids.clone(),
+            );
             bindings.push(binding);
             created += 1;
         }
+        Ok(())
+    }
+
+    async fn sync_binding_administrators(
+        &self,
+        bot: &ResolvedBot,
+        source: i64,
+        binding: &mut IntegrationBinding,
+        state: &mut RoutingState,
+    ) -> Result<()> {
+        let key = binding.id.to_string();
+        // Once applied, leave later channel membership revocations intact.
+        // A new local selection is required before authority can be restored.
+        if state.applied_administrators.get(&key) == Some(&bot.administrator_user_ids) {
+            return Ok(());
+        }
+        let Some(mut policy) = binding.spec.channel_policy.clone() else {
+            return Ok(());
+        };
+        let Some(resource) = binding.spec.resource.single() else {
+            return Ok(());
+        };
+        if !apply_administrators(&mut policy, &bot.administrator_user_ids, resource)? {
+            state
+                .applied_administrators
+                .insert(key, bot.administrator_user_ids.clone());
+            return Ok(());
+        }
+        let paused_by_policy = state.paused_by_policy.get(&key) == Some(&binding.revision);
+        *binding = self
+            .host()?
+            .command_as(BusinessCommand::UpdateChannelAccess {
+                session_id: source,
+                binding_id: binding.id,
+                request: ChannelPolicyUpdate {
+                    expected_revision: binding.revision,
+                    request_key: format!("telegram-admin:{}:{}", binding.id, binding.revision),
+                    policy,
+                },
+            })
+            .await?;
+        if paused_by_policy {
+            state.paused_by_policy.insert(key.clone(), binding.revision);
+        }
+        state
+            .applied_administrators
+            .insert(key, bot.administrator_user_ids.clone());
         Ok(())
     }
 
@@ -693,7 +819,7 @@ pub(super) fn default_binding(
         });
     }
     let request_key = managed_request_key(bot, &room.chat_id)?;
-    Ok(CreateIntegration {
+    let mut request = CreateIntegration {
         request_key,
         spec: IntegrationSpec {
             title: if room.title.trim().is_empty() {
@@ -733,6 +859,7 @@ pub(super) fn default_binding(
                     ChannelTrigger::EveryMessage
                 },
                 members,
+                administrator_actors: BTreeSet::new(),
                 allow_unlisted_chat: kind == ConversationKind::Group,
                 grant: ChannelGrant::default(),
                 per_user_daily_limit: 0,
@@ -740,7 +867,11 @@ pub(super) fn default_binding(
                 service_grant: ChannelGrant::default(),
             }),
         },
-    })
+    };
+    if let Some(policy) = &mut request.spec.channel_policy {
+        apply_administrators(policy, &bot.administrator_user_ids, &room.chat_id)?;
+    }
+    Ok(request)
 }
 
 #[cfg(test)]
@@ -766,6 +897,36 @@ mod tests {
         assert!(access.allows("-8", ConversationKind::Group));
         access.group_enabled = false;
         assert!(!access.allows("-8", ConversationKind::Group));
+    }
+
+    #[test]
+    fn administrator_ids_are_positive_stable_user_ids() {
+        assert_eq!(
+            normalize_administrator_user_ids(&BTreeSet::from([
+                " 00077 ".into(),
+                "77".into(),
+                "9007199254740993".into()
+            ]))
+            .unwrap(),
+            BTreeSet::from(["77".into(), "9007199254740993".into()])
+        );
+        for invalid_id in [
+            "0",
+            "-10077",
+            "@admin",
+            "channel:77",
+            "+77",
+            "1.5",
+            "1e3",
+            "9223372036854775808",
+        ] {
+            assert!(
+                normalize_administrator_user_ids(&BTreeSet::from([invalid_id.into()])).is_err()
+            );
+        }
+        assert!(
+            normalize_administrator_user_ids(&(1..=65).map(|id| id.to_string()).collect()).is_err()
+        );
     }
 
     #[test]

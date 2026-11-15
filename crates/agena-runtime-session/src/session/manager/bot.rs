@@ -716,6 +716,8 @@ impl SessionManager {
 }
 
 #[cfg(test)]
+mod channel_recovery_tests;
+#[cfg(test)]
 mod channel_tests;
 #[cfg(test)]
 mod tests;

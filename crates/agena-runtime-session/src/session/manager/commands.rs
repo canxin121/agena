@@ -547,6 +547,25 @@ impl SessionManager {
         id: i64,
         preserve_queue: bool,
     ) -> Result<CancellationOutcome, AppError> {
+        self.cancel_session_tree_inner(id, preserve_queue, false)
+            .await
+    }
+
+    /// The channel recovery caller holds the root submission lock until its
+    /// authority CAS is complete. Descendants still take their own locks.
+    pub(super) async fn cancel_channel_tree_with_locked_root(
+        &self,
+        id: i64,
+    ) -> Result<CancellationOutcome, AppError> {
+        self.cancel_session_tree_inner(id, false, true).await
+    }
+
+    async fn cancel_session_tree_inner(
+        &self,
+        id: i64,
+        preserve_queue: bool,
+        root_submission_held: bool,
+    ) -> Result<CancellationOutcome, AppError> {
         let root = session_id(id)?;
         let mut sessions = std::collections::VecDeque::from([root]);
         let mut visited = std::collections::BTreeSet::new();
@@ -563,7 +582,11 @@ impl SessionManager {
             // Fence all future claims before signalling a running task. Its
             // completion/cancellation can otherwise release the next input.
             let dispatch = self.session_dispatch(session);
-            let _submission = dispatch.submission.lock().await;
+            let _submission = if root_submission_held && session == root {
+                None
+            } else {
+                Some(dispatch.submission.lock().await)
+            };
             let was_paused = self
                 .kernel()
                 .reader
@@ -607,6 +630,7 @@ impl SessionManager {
                     .reader
                     .query_summaries(SummaryQuery {
                         parent_id: Some(session),
+                        include_global: true,
                         before,
                         limit: 200,
                         ..Default::default()

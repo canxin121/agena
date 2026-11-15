@@ -87,12 +87,16 @@ class Chrome {
     )
   }
   async click(selector) {
+    // Native selects elsewhere in this probe are updated without moving the
+    // pointer. Leave any previous toast hover so its normal dismissal timer
+    // can finish before hit-testing a covered sticky action.
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 })
     const point = await until(
       () =>
         this.evaluate(
-          '(() => {const n=[...document.querySelectorAll(' +
+          '(async () => {const n=[...document.querySelectorAll(' +
             JSON.stringify(selector) +
-            ")].find(n=>n.getClientRects().length && !n.disabled);if(!n)return null;n.scrollIntoView({block:'center',behavior:'instant'});const r=n.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return n.contains(document.elementFromPoint(x,y))?{x,y}:null})()",
+            ")].find(n=>n.getClientRects().length && !n.disabled);if(!n)return null;n.scrollIntoView({block:'center',behavior:'instant'});await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));const r=n.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;return n.contains(document.elementFromPoint(x,y))?{x,y}:null})()",
         ),
       Boolean,
       'click ' + selector,
@@ -305,6 +309,35 @@ async function main() {
       bindings.find((binding) => String(binding.spec.resource) === String(chatId) && binding.state === state),
     )
   }
+  async function patchIsolatedBinding(id, patch) {
+    // Persist a previous-version/fault fixture only in this probe's private DB.
+    const child = spawn(
+      'python3',
+      [
+        '-c',
+        `
+import json, sqlite3, sys
+connection = sqlite3.connect(sys.argv[1], timeout=30)
+connection.execute('BEGIN IMMEDIATE')
+row = connection.execute('SELECT binding_json FROM agena_integration_bindings WHERE id=?', (sys.argv[2],)).fetchone()
+binding = json.loads(row[0])
+binding.update(json.loads(sys.argv[3]))
+binding['revision'] += 1
+connection.execute('UPDATE agena_integration_bindings SET revision=?,state=?,binding_json=? WHERE id=?', (binding['revision'], binding['state'], json.dumps(binding), sys.argv[2]))
+connection.commit()
+`,
+        path.join(data, 'agena.db'),
+        id,
+        JSON.stringify(patch),
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] },
+    )
+    let error = ''
+    child.stderr.on('data', (chunk) => {
+      error += chunk
+    })
+    assert.equal((await once(child, 'exit'))[0], 0, error)
+  }
   async function start() {
     server = spawn(
       process.env.AGENA_BIN || path.join(repo, 'target/debug/agena'),
@@ -458,7 +491,10 @@ async function main() {
       'saved chat access',
     )
     await until(
-      () => browser.evaluate('document.querySelector("[data-testid=telegram-save-access]")?.disabled'),
+      () =>
+        browser.evaluate(
+          '(() => { const bar = document.querySelector("[data-testid=telegram-access-savebar]"); return bar?.getAttribute("data-saving") === "false" && bar?.getAttribute("data-dirty") === "false" })()',
+        ),
       Boolean,
       'saved policy UI settles',
     )
@@ -503,6 +539,13 @@ async function main() {
     })
   }
   const chatCheck = (id) => '[data-telegram-chat-check="' + id + '"]'
+  const administratorInput = '[data-testid="telegram-administrator-ids"]'
+  const administratorIds = () =>
+    browser.evaluate(
+      'document.querySelector(' +
+        JSON.stringify(administratorInput) +
+        ').value.split(/[\\s,，]+/).filter(Boolean).sort()',
+    )
   const noOverflow = () =>
     browser.evaluate(
       'document.documentElement.scrollWidth <= innerWidth + 1 && [...document.querySelectorAll("[role=dialog]")].filter(n=>n.getClientRects().length).every(n=>n.getBoundingClientRect().left>=-1 && n.getBoundingClientRect().right<=innerWidth+1)',
@@ -626,6 +669,59 @@ async function main() {
     await browser.check('[data-testid="telegram-channel-enabled"]')
     await saveAccess(work.id, (bot) => bot.chat_access.channel_enabled)
     const channel = await waitBinding(work.source_session_id, work.id, -100456)
+
+    await browser.waitVisible(administratorInput)
+    await browser.waitVisible('[data-telegram-administrator="77"]')
+    const administratorRevision = (await command('list_bots')).revision
+    await browser.fill(administratorInput, '@alice')
+    await browser.click('[data-testid="telegram-save-access"]')
+    await until(
+      () =>
+        browser.evaluate(
+          '[...document.querySelectorAll("[role=alert]")].some(node => node.textContent.includes("64"))',
+        ),
+      Boolean,
+      'invalid administrator username rejected in the manager',
+    )
+    assert.equal((await command('list_bots')).revision, administratorRevision)
+    await browser.fill(administratorInput, '00077, 88')
+    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77","88"]')
+    const adminGroup = await waitBinding(work.source_session_id, work.id, -100123)
+    const adminDirect = await waitBinding(work.source_session_id, work.id, 77)
+    assert.deepEqual(adminGroup.spec.channel_policy.administrator_actors, ['77', '88'])
+    assert.deepEqual(adminDirect.spec.channel_policy.administrator_actors, ['77'])
+    assert.deepEqual(
+      (await waitBinding(work.source_session_id, work.id, -100456)).spec.channel_policy.administrator_actors,
+      [],
+    )
+    assert.deepEqual(adminGroup.spec.channel_policy.grant.tools, [])
+    assert.ok(adminGroup.epoch > group.epoch)
+    assert.equal(adminGroup.spec.channel_policy.members.find((member) => member.actor === '77').role, 'administrator')
+    pass(
+      'administrator UI rejects usernames and applies exact user IDs to existing private/group routes without granting ordinary members',
+    )
+
+    await browser.click('[data-telegram-administrator="77"]')
+    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["88"]')
+    const revokedDirect = await waitBinding(work.source_session_id, work.id, 77)
+    assert.deepEqual(revokedDirect.spec.channel_policy.administrator_actors, [])
+    assert.ok(revokedDirect.epoch > adminDirect.epoch)
+    await browser.click('[data-telegram-administrator="77"]')
+    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77","88"]')
+    await openBot(home.id)
+    assert.deepEqual(await administratorIds(), [])
+    await openBot(work.id)
+    assert.deepEqual(await administratorIds(), ['77', '88'])
+    assert.equal(
+      await browser.evaluate(
+        'document.querySelector(' +
+          JSON.stringify('[data-telegram-administrator="77"]') +
+          ').getAttribute("aria-pressed")',
+      ),
+      'true',
+    )
+    pass('known sender buttons grant and revoke administrators; reopening preserves each bot’s independent selection')
+
     for (const [kind, field, chatId, original] of [
       ['private', 'private_enabled', 77, direct],
       ['group', 'group_enabled', -100123, group],
@@ -728,6 +824,10 @@ async function main() {
     await openBot(work.id)
     assert.ok(await noOverflow())
     await browser.screenshot(path.join(tmp, 'chats-desktop.png'))
+    await browser.evaluate(
+      'document.querySelector("[data-testid=telegram-administrators]").scrollIntoView({block:"center"})',
+    )
+    await browser.screenshot(path.join(tmp, 'administrators-desktop.png'))
     await browser.evaluate("document.documentElement.classList.add('dark')")
     await browser.screenshot(path.join(tmp, 'chats-dark.png'))
     await browser.send('Emulation.setDeviceMetricsOverride', {
@@ -738,6 +838,17 @@ async function main() {
     })
     assert.ok(await noOverflow(), 'mobile chat policy must fit the viewport')
     await browser.screenshot(path.join(tmp, 'chats-mobile.png'))
+    await browser.fill(administratorInput, '77')
+    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77"]')
+    await browser.fill(administratorInput, '77\n88')
+    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77","88"]')
+    await browser.evaluate(
+      'document.querySelector("[data-testid=telegram-administrators]").scrollIntoView({block:"center"})',
+    )
+    assert.ok(await noOverflow(), 'mobile administrator controls must fit the viewport')
+    assert.deepEqual(await administratorIds(), ['77', '88'])
+    await browser.screenshot(path.join(tmp, 'administrators-mobile.png'))
+    pass('administrator controls fit desktop and 390px mobile layouts and support saving on mobile')
     await browser.click('[data-testid="telegram-edit-bot"]')
     await browser.waitVisible('[data-testid="telegram-bot-editor"]')
     assert.ok(await noOverflow(), 'mobile bot editor must fit the viewport')
@@ -758,6 +869,134 @@ async function main() {
     })
     pass('desktop, dark and 390px mobile screens and both dialogs fit without horizontal overflow')
 
+    const compatibleRoute = await waitBinding(work.source_session_id, work.id, -100888)
+    const previousIds = (await integrations(work.source_session_id, work.id)).map((binding) => binding.id).sort()
+    const inspection = await request('GET', '/api/v1/plugins/agena.telegram')
+    assert.ok(inspection.ok, 'the local provider inspection is available')
+    // Legacy Rust hashing preserves schema floats such as 0.0. Pass the raw
+    // response to Python: parsing it in JavaScript first would turn 0.0 into 0.
+    const hasher = spawn(
+      'python3',
+      [
+        '-c',
+        `
+import hashlib, json, sys
+plugin = json.load(sys.stdin)['plugin']
+assert plugin['manifest'] and plugin['configured_plugin']
+payload = {'manifest': plugin['manifest'], 'configuration': plugin['configured_plugin']}
+print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+`,
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    )
+    let legacyFingerprint = '',
+      hashError = ''
+    hasher.stdout.on('data', (chunk) => {
+      legacyFingerprint += chunk
+    })
+    hasher.stderr.on('data', (chunk) => {
+      hashError += chunk
+    })
+    hasher.stdin.end(await inspection.text())
+    assert.equal((await once(hasher, 'exit'))[0], 0, hashError)
+    legacyFingerprint = legacyFingerprint.trim()
+    assert.match(legacyFingerprint, /^[a-f0-9]{64}$/)
+    await patchIsolatedBinding(compatibleRoute.id, {
+      state: 'faulted',
+      last_error: null,
+      provider_fingerprint: legacyFingerprint,
+    })
+    await command('sync_chats', { bot_id: work.id })
+    const reviewable = await waitBinding(work.source_session_id, work.id, -100888, 'faulted')
+    assert.equal(reviewable.id, compatibleRoute.id)
+    assert.equal(reviewable.last_error, null)
+    await openBot(work.id)
+    await browser.click('[data-telegram-room="-100888"] button')
+    await browser.waitVisible('[data-testid="telegram-review"]')
+    await browser.evaluate('document.querySelector("[data-testid=telegram-review]").scrollIntoView({block:"center"})')
+    await browser.screenshot(path.join(tmp, 'review-compatible-desktop.png'))
+    await browser.send('Emulation.setDeviceMetricsOverride', {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: true,
+    })
+    assert.ok(await noOverflow(), 'review and rebuild controls must fit the mobile viewport')
+    await browser.evaluate('document.querySelector("[data-testid=telegram-review]").scrollIntoView({block:"center"})')
+    await browser.screenshot(path.join(tmp, 'review-compatible-mobile.png'))
+    await browser.click('[data-testid="telegram-review"]')
+    const resumed = await waitBinding(work.source_session_id, work.id, -100888)
+    await browser.waitVisible('[data-testid="telegram-review"]', false)
+    assert.equal(resumed.id, compatibleRoute.id)
+    assert.deepEqual(resumed.spec, compatibleRoute.spec)
+    assert.equal(resumed.activated_at_ms, compatibleRoute.activated_at_ms)
+    assert.ok(resumed.epoch > reviewable.epoch)
+    assert.ok(resumed.provider_fingerprint.startsWith('integration-provider:v2:'))
+    assert.deepEqual(
+      (await integrations(work.source_session_id, work.id)).map((binding) => binding.id).sort(),
+      previousIds,
+    )
+    pass(
+      'the real Review button restores a compatible legacy fingerprint with no error text, keeps the original binding and refreshes its controls',
+    )
+
+    await browser.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 1000,
+      deviceScaleFactor: 1,
+      mobile: false,
+    })
+    const previousRoute = resumed
+    await patchIsolatedBinding(previousRoute.id, { provider_fingerprint: 'unknown-telegram-transport' })
+    await waitBinding(work.source_session_id, work.id, -100888, 'faulted')
+    await command('sync_chats', { bot_id: work.id })
+    assert.equal((await waitBinding(work.source_session_id, work.id, -100888, 'faulted')).id, previousRoute.id)
+    await openBot(work.id)
+    await browser.click('[data-telegram-room="-100888"] button')
+    await browser.waitVisible('[data-testid="telegram-review"]')
+    await browser.click('[data-testid="telegram-review"]')
+    await until(
+      () =>
+        browser.evaluate(
+          'Array.from(document.querySelectorAll("[role=alert]")).map((node) => node.textContent).join("\\n")',
+        ),
+      (text) => text.includes('the provider transport or connection identity changed'),
+      'incompatible provider review is refused with a specific explanation',
+    )
+    const rejected = (
+      await api('GET', '/api/v1/sessions/' + work.source_session_id + '/integrations/' + previousRoute.id)
+    ).binding
+    assert.equal(rejected.state, 'faulted')
+    assert.equal(rejected.provider_fingerprint, 'unknown-telegram-transport')
+    await browser.waitVisible('[data-testid="telegram-rebuild"]')
+    await until(
+      () => browser.evaluate('document.querySelector("[data-testid=telegram-rebuild]")?.disabled === false'),
+      Boolean,
+      'review rejection finishes before rebuilding',
+    )
+    pass('the real Review button rejects an unknown transport fingerprint and keeps the existing connection stopped')
+    const reviewAt = Date.now()
+    await browser.click('[data-testid="telegram-rebuild"]')
+    await browser.waitVisible('[role="dialog"]')
+    await browser.click('[role="dialog"] button:last-of-type')
+    const replacementRoute = await waitBinding(work.source_session_id, work.id, -100888)
+    assert.notEqual(replacementRoute.id, previousRoute.id)
+    assert.deepEqual(replacementRoute.spec, previousRoute.spec)
+    assert.ok(replacementRoute.activated_at_ms >= reviewAt)
+    assert.equal(
+      (await api('GET', '/api/v1/sessions/' + work.source_session_id + '/integrations/' + previousRoute.id)).binding
+        .state,
+      'paused',
+    )
+    const duplicateReplacement = await api('POST', '/api/v1/sessions/' + work.source_session_id + '/integrations', {
+      request_key: 'telegram-reconnect:' + previousRoute.id,
+      spec: previousRoute.spec,
+    })
+    assert.equal(duplicateReplacement.id, replacementRoute.id)
+    pass(
+      'upgraded fingerprints stay stopped until explicit review; rebuilding preserves policy and old records, starts fresh context and is idempotent',
+    )
+
     const savedCatalog = await command('list_bots')
     await stop(server)
     await start()
@@ -775,7 +1014,15 @@ async function main() {
     assert.equal((await waitBinding(work.source_session_id, work.id, 77)).id, direct.id)
     await openBot(work.id)
     assert.equal(await browser.evaluate('document.querySelector("[data-testid=telegram-ai-bot]").value'), atlas.id)
-    pass('server restart preserves tokens, AI assignment, policy, discovered rooms and stable routing bindings')
+    assert.deepEqual(await administratorIds(), ['77', '88'])
+    assert.deepEqual((await catalogBot(work.id)).administrator_user_ids, ['77', '88'])
+    assert.deepEqual(
+      (await waitBinding(work.source_session_id, work.id, 77)).spec.channel_policy.administrator_actors,
+      ['77'],
+    )
+    pass(
+      'server restart preserves tokens, AI assignment, policy, administrators, discovered rooms and stable routing bindings',
+    )
 
     await browser.click('[data-testid="telegram-toggle-bot"]')
     await until(
@@ -848,7 +1095,11 @@ async function main() {
       await fs.writeFile(
         path.join(tmp, 'failure.json'),
         JSON.stringify(
-          await browser.evaluate('({url:location.href,text:document.body.innerText})').catch(() => ({})),
+          await browser
+            .evaluate(
+              '({url:location.href,text:document.body.innerText,administratorInput:document.querySelector(\"[data-testid=telegram-administrator-ids]\")?.value,saveBar:document.querySelector(\"[data-testid=telegram-access-savebar]\")?.outerHTML})',
+            )
+            .catch(() => ({})),
           null,
           2,
         ),

@@ -121,6 +121,7 @@ fn template(p: &IntegrationProvider) -> IntegrationSpec {
         use_source_permissions: false,
         channel_policy: if channel {
             Some(ChannelAccessPolicy {
+                administrator_actors: Default::default(),
                 identity: ChannelIdentity {
                     tenant: "tenant-id".into(),
                     account: "bot-account-id".into(),

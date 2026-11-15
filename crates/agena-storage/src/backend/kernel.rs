@@ -90,6 +90,10 @@ pub enum Command {
         session: SessionId,
         change: SessionConfigurationChange,
     },
+    RecoverChannelAuthority {
+        session: SessionId,
+        recovery: Box<ChannelAuthorityRecovery>,
+    },
     /// Atomically publish an agent outcome and its durable parent handoff.
     FinishAgent {
         session: SessionId,

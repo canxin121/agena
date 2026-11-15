@@ -1,0 +1,1771 @@
+{
+  "schema_version": 1,
+  "namespace": "agena",
+  "name": "telegram",
+  "version": "0.1.0",
+  "summary": "Telegram channel adapter: direct chats, groups and channels over the official Bot API.",
+  "help": "Connect multiple BotFather tokens to local AI Bots. The Telegram manager discovers chats through one durable collector per token and applies private/group/channel switches plus chat allow or deny lists. Per-room tool grants remain available in advanced channel settings.",
+  "translations": {
+    "ar-SA": {
+      "summary": "محوّل قناة Telegram: المحادثات الفردية والمجموعات والقنوات عبر واجهة البوت الرسمية.",
+      "settings": {
+        "Allow Loopback HTTP": "السماح بـ HTTP المحلي",
+        "Bot API Base URL": "عنوان URL الأساسي لواجهة البوت",
+        "Bot Token Environment Variable": "متغير بيئة رمز البوت",
+        "Bot Username": "اسم مستخدم البوت",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "جذر HTTPS لواجهة البوت. غيّره فقط لخادم واجهة بوت مستضاف ذاتيًا.",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "المدة التي يمكن أن يبقي فيها getUpdates الطلب مفتوحًا. الصفر يعيد الرد فورًا.",
+        "Long Poll Seconds": "ثواني الاستقصاء الطويل",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "اسم متغير بيئة الخادم المحتوي على رمز واجهة البوت، وليس الرمز نفسه.",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "السماح باستخدام api_base عبر HTTP غير مشفّر على مضيف محلي، لاختبار محلي فقط.",
+        "Telegram Plugin Config": "إعدادات إضافة Telegram",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "اسم مستخدم البوت نفسه دون «@». يُرفض رمز يخص بوتًا آخر بدل خدمة محادثاته."
+      }
+    },
+    "de-DE": {
+      "summary": "Telegram-Kanaladapter: Einzelchats, Gruppen und Kanäle über die offizielle Bot-API.",
+      "settings": {
+        "Allow Loopback HTTP": "Loopback-HTTP erlauben",
+        "Bot API Base URL": "Bot-API-Basis-URL",
+        "Bot Token Environment Variable": "Umgebungsvariable für das Bot-Token",
+        "Bot Username": "Bot-Benutzername",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "HTTPS-Wurzel der Bot-API. Nur für einen selbst gehosteten Bot-API-Server ändern.",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "Wie lange getUpdates die Anfrage offen halten darf. Null antwortet sofort.",
+        "Long Poll Seconds": "Sekunden für Langabfrage",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Name der Server-Umgebungsvariable mit dem Bot-API-Token, niemals das Token selbst.",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "Erlaubt ein Klartext-HTTP-api_base auf einem Loopback-Host, nur für eine lokale Testumgebung.",
+        "Telegram Plugin Config": "Telegram-Plugin-Konfiguration",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "Der Benutzername des Bots ohne „@“. Ein Token eines anderen Bots wird abgelehnt, statt dessen Chats zu bedienen."
+      }
+    },
+    "es-ES": {
+      "summary": "Adaptador de canal de Telegram: chats privados, grupos y canales mediante la API oficial de bots.",
+      "settings": {
+        "Allow Loopback HTTP": "Permitir HTTP en bucle local",
+        "Bot API Base URL": "URL base de la API de bots",
+        "Bot Token Environment Variable": "Variable de entorno del token del bot",
+        "Bot Username": "Nombre de usuario del bot",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "Raíz HTTPS de la API de bots. Cámbiala solo para un servidor de API de bots autoalojado.",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "Cuánto tiempo puede getUpdates mantener abierta la solicitud. Cero responde de inmediato.",
+        "Long Poll Seconds": "Segundos de sondeo largo",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Nombre de la variable de entorno del servidor que contiene el token de la API de bots, nunca el token en sí.",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "Permite un api_base en HTTP sin cifrar en un host de bucle local, solo para pruebas locales.",
+        "Telegram Plugin Config": "Configuración del complemento Telegram",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "El nombre de usuario del propio bot sin «@». Un token de otro bot se rechaza en lugar de atender sus chats."
+      }
+    },
+    "fr-FR": {
+      "summary": "Adaptateur de canal Telegram : conversations privées, groupes et canaux via l’API Bot officielle.",
+      "settings": {
+        "Allow Loopback HTTP": "Autoriser le HTTP en boucle locale",
+        "Bot API Base URL": "URL de base de l’API Bot",
+        "Bot Token Environment Variable": "Variable d’environnement du jeton de bot",
+        "Bot Username": "Nom d’utilisateur du bot",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "Racine HTTPS de l’API Bot. À modifier uniquement pour un serveur d’API Bot auto-hébergé.",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "Durée maximale pendant laquelle getUpdates peut garder la requête ouverte. Zéro répond immédiatement.",
+        "Long Poll Seconds": "Secondes d’interrogation longue",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Nom de la variable d’environnement serveur contenant le jeton de l’API Bot, jamais le jeton lui-même.",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "Autoriser un api_base en HTTP clair sur un hôte de boucle locale, uniquement pour un test local.",
+        "Telegram Plugin Config": "Configuration du greffon Telegram",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "Le nom d’utilisateur du bot sans « @ ». Un jeton appartenant à un autre bot est refusé au lieu de servir ses conversations."
+      }
+    },
+    "hi-IN": {
+      "summary": "Telegram चैनल अनुकूलक: आधिकारिक Bot API से निजी चैट, समूह और चैनल जोड़ता है।",
+      "settings": {
+        "Allow Loopback HTTP": "लूपबैक HTTP की अनुमति",
+        "Bot API Base URL": "Bot API आधार URL",
+        "Bot Token Environment Variable": "बॉट टोकन पर्यावरण चर",
+        "Bot Username": "बॉट उपयोक्तानाम",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "HTTPS Bot API रूट। केवल स्व-होस्टेड Bot API सर्वर के लिए बदलें।",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "getUpdates अनुरोध को कितनी देर खुला रख सकता है। शून्य तुरंत उत्तर देता है।",
+        "Long Poll Seconds": "लंबे पोल के सेकंड",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Bot API टोकन रखने वाले सर्वर पर्यावरण चर का नाम, स्वयं टोकन नहीं।",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "लूपबैक होस्ट पर सादे HTTP api_base की अनुमति दें, केवल स्थानीय परीक्षण के लिए।",
+        "Telegram Plugin Config": "Telegram प्लगइन कॉन्फ़िग",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "बॉट का अपना उपयोक्तानाम, '@' के बिना। किसी दूसरे बॉट का टोकन अस्वीकार कर दिया जाता है, उसकी चैट सेवा नहीं की जाती।"
+      }
+    },
+    "ja-JP": {
+      "summary": "Telegram チャネルアダプター：公式 Bot API で個人チャット・グループ・チャンネルを接続します。",
+      "settings": {
+        "Allow Loopback HTTP": "ループバック HTTP を許可",
+        "Bot API Base URL": "Bot API ベース URL",
+        "Bot Token Environment Variable": "ボットトークンの環境変数",
+        "Bot Username": "ボットのユーザー名",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "HTTPS の Bot API ルート。自前の Bot API サーバーを使う場合のみ変更してください。",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "getUpdates がリクエストを保持できる最大時間。0 は即時応答です。",
+        "Long Poll Seconds": "ロングポーリング秒数",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Bot API トークンを保持するサーバー環境変数の名前。トークンそのものは指定しません。",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "ループバックホストでの平文 HTTP の api_base を許可します。ローカルでのテスト専用です。",
+        "Telegram Plugin Config": "Telegram プラグイン設定",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "ボット自身のユーザー名（'@' なし）。別のボットのトークンは拒否され、そのチャットを処理しません。"
+      }
+    },
+    "ko-KR": {
+      "summary": "Telegram 채널 어댑터: 공식 Bot API로 개인 채팅, 그룹, 채널을 연결합니다.",
+      "settings": {
+        "Allow Loopback HTTP": "루프백 HTTP 허용",
+        "Bot API Base URL": "Bot API 기본 URL",
+        "Bot Token Environment Variable": "봇 토큰 환경 변수",
+        "Bot Username": "봇 사용자 이름",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "HTTPS Bot API 루트입니다. 자체 호스팅 Bot API 서버를 쓸 때만 변경하세요.",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "getUpdates가 요청을 열어 둘 수 있는 최대 시간입니다. 0이면 즉시 반환합니다.",
+        "Long Poll Seconds": "롱 폴링 초",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Bot API 토큰이 담긴 서버 환경 변수 이름이며 토큰 자체가 아닙니다.",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "루프백 호스트에서 평문 HTTP api_base를 허용합니다. 로컬 테스트 전용입니다.",
+        "Telegram Plugin Config": "Telegram 플러그인 설정",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "봇 자신의 사용자 이름('@' 없이). 다른 봇의 토큰은 거부되며 그 봇의 채팅을 처리하지 않습니다."
+      }
+    },
+    "pt-BR": {
+      "summary": "Adaptador de canal do Telegram: conversas privadas, grupos e canais pela API oficial de bots.",
+      "settings": {
+        "Allow Loopback HTTP": "Permitir HTTP em loopback",
+        "Bot API Base URL": "URL base da API de bots",
+        "Bot Token Environment Variable": "Variável de ambiente do token do bot",
+        "Bot Username": "Nome de usuário do bot",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "Raiz HTTPS da API de bots. Altere apenas para um servidor de API de bots auto-hospedado.",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "Por quanto tempo o getUpdates pode manter a solicitação aberta. Zero responde imediatamente.",
+        "Long Poll Seconds": "Segundos de consulta longa",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "Nome da variável de ambiente do servidor que guarda o token da API de bots, nunca o próprio token.",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "Permite um api_base em HTTP sem criptografia em um host de loopback, somente para teste local.",
+        "Telegram Plugin Config": "Configuração do plug-in Telegram",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "O nome de usuário do próprio bot, sem «@». Um token de outro bot é recusado em vez de atender as conversas dele."
+      }
+    },
+    "zh-CN": {
+      "summary": "Telegram 渠道适配器：通过官方 Bot API 接入私聊、群聊和频道。",
+      "settings": {
+        "Allow Loopback HTTP": "允许回环 HTTP",
+        "Bot API Base URL": "Bot API 基础 URL",
+        "Bot Token Environment Variable": "Bot 令牌环境变量",
+        "Bot Username": "Bot 用户名",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "HTTPS 的 Bot API 根地址。仅在使用自建 Bot API 服务器时才需要修改。",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "getUpdates 请求最长保持打开的时间。为 0 时立即返回。",
+        "Long Poll Seconds": "长轮询秒数",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "保存 Bot API 令牌的服务器环境变量名称，而不是令牌本身。",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "允许在回环主机上使用明文 HTTP 的 api_base，仅供本地测试使用。",
+        "Telegram Plugin Config": "Telegram 插件配置",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "机器人自己的用户名，不带 '@'。属于其他机器人的令牌会被拒绝，而不是去服务它的聊天。"
+      }
+    },
+    "zh-TW": {
+      "summary": "Telegram 渠道轉接器：透過官方 Bot API 接入私聊、群組與頻道。",
+      "settings": {
+        "Allow Loopback HTTP": "允許回送 HTTP",
+        "Bot API Base URL": "Bot API 基底 URL",
+        "Bot Token Environment Variable": "Bot 權杖環境變數",
+        "Bot Username": "Bot 使用者名稱",
+        "HTTPS Bot API root. Change it only for a self-hosted Bot API server.": "HTTPS 的 Bot API 根位址。僅在改用自架 Bot API 伺服器時才需要變更。",
+        "How long getUpdates may hold the request open. Zero returns immediately.": "getUpdates 請求最長保持開啟的時間。為 0 時立即返回。",
+        "Long Poll Seconds": "長輪詢秒數",
+        "Name of the server environment variable holding the Bot API token, never the token itself.": "儲存 Bot API 權杖的伺服器環境變數名稱，而非權杖本身。",
+        "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.": "允許在回送主機上使用明文 HTTP 的 api_base，僅供本機測試使用。",
+        "Telegram Plugin Config": "Telegram 外掛設定",
+        "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.": "機器人本身的使用者名稱，不含 '@'。屬於其他機器人的權杖會被拒絕，而不會去服務它的聊天。"
+      }
+    }
+  },
+  "transports": [],
+  "hooks": [
+    "init",
+    "application.ready",
+    "shutdown"
+  ],
+  "hook_handlers": [
+    {
+      "id": "init",
+      "event": "init",
+      "summary": "Initialize Telegram bot storage",
+      "help": "Connect private bot configuration, credential storage and the durable per-bot inbox.",
+      "translations": {
+        "ar-SA": {
+          "summary": "تهيئة تخزين Telegram",
+          "help": "يربط إعدادات البوت الخاصة وبيانات الاعتماد وصندوق الوارد الدائم لكل بوت."
+        },
+        "de-DE": {
+          "summary": "Telegram-Speicher initialisieren",
+          "help": "Verbindet private Bot-Konfiguration, Zugangsdaten und den dauerhaften Posteingang jedes Bots."
+        },
+        "es-ES": {
+          "summary": "Inicializar el almacenamiento de Telegram",
+          "help": "Conecta la configuración privada, las credenciales y la bandeja persistente de cada bot."
+        },
+        "fr-FR": {
+          "summary": "Initialiser le stockage Telegram",
+          "help": "Connecte la configuration privée, les identifiants et la boîte de réception durable de chaque bot."
+        },
+        "hi-IN": {
+          "summary": "Telegram संग्रहण प्रारंभ करें",
+          "help": "निजी बॉट कॉन्फ़िगरेशन, क्रेडेंशियल संग्रहण और प्रत्येक बॉट की स्थायी इनबॉक्स जोड़ता है।"
+        },
+        "ja-JP": {
+          "summary": "Telegram ストレージを初期化",
+          "help": "各ボットの非公開設定、認証情報、永続的な受信キューを接続します。"
+        },
+        "ko-KR": {
+          "summary": "Telegram 저장소 초기화",
+          "help": "각 봇의 비공개 설정, 자격 증명 및 영구 수신 큐를 연결합니다."
+        },
+        "pt-BR": {
+          "summary": "Inicializar o armazenamento do Telegram",
+          "help": "Conecta a configuração privada, as credenciais e a caixa persistente de cada bot."
+        },
+        "zh-CN": {
+          "summary": "初始化 Telegram 存储",
+          "help": "连接机器人私有配置、凭据存储和各机器人的持久收件队列。"
+        },
+        "zh-TW": {
+          "summary": "初始化 Telegram 儲存",
+          "help": "連接機器人私有設定、憑證儲存和各機器人的持久收件佇列。"
+        }
+      },
+      "priority": 0,
+      "filters": {},
+      "is_async": true
+    },
+    {
+      "id": "application_ready",
+      "event": "application.ready",
+      "summary": "Start Telegram discovery and routing",
+      "help": "Starts the shared per-bot collector after application queries and commands are available.",
+      "priority": 0,
+      "filters": {},
+      "is_async": true
+    },
+    {
+      "id": "shutdown",
+      "event": "shutdown",
+      "summary": "Stop Telegram discovery",
+      "help": "Stops background collection before the plugin is unloaded.",
+      "priority": 0,
+      "filters": {},
+      "is_async": true
+    }
+  ],
+  "commands": [
+    {
+      "id": "list_ai_bots",
+      "title": "List local AI Bots",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": ""
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Input",
+          "required": true,
+          "default": {},
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": []
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "list_ai_bots"
+      }
+    },
+    {
+      "id": "add_chat",
+      "title": "Add a Telegram chat by ID",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"bot_id\":\"<bot_id>\",\"chat_id\":\"<chat_id>\",\"kind\":\"direct\"}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot_id",
+              "path": "/bot_id",
+              "title": "Bot ID",
+              "required": true,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            },
+            {
+              "id": "chat_id",
+              "path": "/chat_id",
+              "title": "Chat ID",
+              "required": true,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            },
+            {
+              "id": "kind",
+              "path": "/kind",
+              "title": "Kind",
+              "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
+              "required": true,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "choice",
+              "options": [
+                {
+                  "id": "direct",
+                  "title": "Direct",
+                  "value": "direct"
+                },
+                {
+                  "id": "group",
+                  "title": "Group",
+                  "value": "group"
+                },
+                {
+                  "id": "broadcast",
+                  "title": "Broadcast",
+                  "value": "broadcast"
+                }
+              ]
+            },
+            {
+              "id": "title",
+              "path": "/title",
+              "title": "Title",
+              "required": false,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "add_chat"
+      }
+    },
+    {
+      "id": "check_connection",
+      "title": "Verify Telegram bot connection",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"bot_id\":null}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot_id",
+              "path": "/bot_id",
+              "title": "Bot ID",
+              "required": false,
+              "default": null,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "check_connection"
+      }
+    },
+    {
+      "id": "list_bots",
+      "title": "List configured Telegram bots",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": ""
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Input",
+          "required": true,
+          "default": {},
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": []
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "list_bots"
+      }
+    },
+    {
+      "id": "save_bot",
+      "title": "Save Telegram bot configuration",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"expected_revision\":1,\"bot\":{\"ai_bot_id\":null,\"chat_access\":{\"channel_enabled\":false,\"chat_ids\":[],\"group_enabled\":false,\"mode\":\"whitelist\",\"private_enabled\":false},\"connection\":{\"account\":\"\",\"allow_loopback_http\":false,\"api_base\":\"https://api.telegram.org\",\"bot_token_env\":\"AGENA_TELEGRAM_BOT_TOKEN\",\"long_poll_seconds\":0},\"credential_kind\":\"<credential_kind>\",\"enabled\":false,\"id\":\"<id>\",\"name\":\"<name>\"}}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot",
+              "path": "/bot",
+              "title": "Bot",
+              "required": true,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "object",
+              "fields": [
+                {
+                  "id": "ai_bot_id",
+                  "path": "/bot/ai_bot_id",
+                  "title": "Ai Bot ID",
+                  "required": false,
+                  "default": null,
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "text"
+                },
+                {
+                  "id": "chat_access",
+                  "path": "/bot/chat_access",
+                  "title": "Chat Access",
+                  "required": false,
+                  "default": {
+                    "channel_enabled": false,
+                    "chat_ids": [],
+                    "group_enabled": false,
+                    "mode": "whitelist",
+                    "private_enabled": false
+                  },
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "object",
+                  "fields": [
+                    {
+                      "id": "channel_enabled",
+                      "path": "/bot/chat_access/channel_enabled",
+                      "title": "Channel Enabled",
+                      "required": false,
+                      "default": false,
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "boolean"
+                    },
+                    {
+                      "id": "chat_ids",
+                      "path": "/bot/chat_access/chat_ids",
+                      "title": "Chat Ids",
+                      "required": false,
+                      "default": [],
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "list",
+                      "item": {
+                        "id": "chat_ids_item",
+                        "path": "/bot/chat_access/chat_ids/*",
+                        "title": "Chat Ids Item",
+                        "required": true,
+                        "constraints": {},
+                        "sensitive": false,
+                        "secret": false,
+                        "kind": "text"
+                      }
+                    },
+                    {
+                      "id": "group_enabled",
+                      "path": "/bot/chat_access/group_enabled",
+                      "title": "Group Enabled",
+                      "required": false,
+                      "default": false,
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "boolean"
+                    },
+                    {
+                      "id": "mode",
+                      "path": "/bot/chat_access/mode",
+                      "title": "Mode",
+                      "required": false,
+                      "default": "whitelist",
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "choice",
+                      "options": [
+                        {
+                          "id": "whitelist",
+                          "title": "Whitelist",
+                          "value": "whitelist"
+                        },
+                        {
+                          "id": "blacklist",
+                          "title": "Blacklist",
+                          "value": "blacklist"
+                        }
+                      ]
+                    },
+                    {
+                      "id": "private_enabled",
+                      "path": "/bot/chat_access/private_enabled",
+                      "title": "Private Enabled",
+                      "required": false,
+                      "default": false,
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "boolean"
+                    }
+                  ]
+                },
+                {
+                  "id": "connection",
+                  "path": "/bot/connection",
+                  "title": "Connection",
+                  "description": "Settings for one Telegram bot connection.",
+                  "required": true,
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "object",
+                  "fields": [
+                    {
+                      "id": "account",
+                      "path": "/bot/connection/account",
+                      "title": "Account",
+                      "description": "The bot's own username without `@`, as set in BotFather. Verified\nagainst `getMe` before any message is accepted.",
+                      "required": false,
+                      "default": "",
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "text"
+                    },
+                    {
+                      "id": "allow_loopback_http",
+                      "path": "/bot/connection/allow_loopback_http",
+                      "title": "Allow Loopback HTTP",
+                      "description": "Permit plain-HTTP `api_base`. Only a loopback host qualifies.",
+                      "required": false,
+                      "default": false,
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "boolean"
+                    },
+                    {
+                      "id": "api_base",
+                      "path": "/bot/connection/api_base",
+                      "title": "API Base",
+                      "description": "Bot API root: the public endpoint, or a self-hosted Bot API server.",
+                      "required": false,
+                      "default": "https://api.telegram.org",
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "text"
+                    },
+                    {
+                      "id": "bot_token_env",
+                      "path": "/bot/connection/bot_token_env",
+                      "title": "Bot Token Env",
+                      "description": "Name of the environment variable holding the Bot API token, never the\ntoken itself: connection settings are stored in the database.",
+                      "required": false,
+                      "default": "AGENA_TELEGRAM_BOT_TOKEN",
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "text"
+                    },
+                    {
+                      "id": "long_poll_seconds",
+                      "path": "/bot/connection/long_poll_seconds",
+                      "title": "Long Poll Seconds",
+                      "description": "Bounded long-poll window in seconds. Zero answers immediately, which\nsuits the host's own polling cadence.",
+                      "required": false,
+                      "default": 0,
+                      "constraints": {
+                        "minimum": 0.0
+                      },
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "integer"
+                    }
+                  ]
+                },
+                {
+                  "id": "credential_kind",
+                  "path": "/bot/credential_kind",
+                  "title": "Credential Kind",
+                  "description": "`environment` reads the named server variable. `vault` uses a write-only\ntoken stored separately through the host plugin secret store.",
+                  "required": true,
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "text"
+                },
+                {
+                  "id": "enabled",
+                  "path": "/bot/enabled",
+                  "title": "Enabled",
+                  "required": true,
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "boolean"
+                },
+                {
+                  "id": "id",
+                  "path": "/bot/id",
+                  "title": "ID",
+                  "required": true,
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "text"
+                },
+                {
+                  "id": "name",
+                  "path": "/bot/name",
+                  "title": "Name",
+                  "required": true,
+                  "constraints": {},
+                  "sensitive": false,
+                  "secret": false,
+                  "kind": "text"
+                }
+              ]
+            },
+            {
+              "id": "expected_revision",
+              "path": "/expected_revision",
+              "title": "Expected Revision",
+              "required": true,
+              "constraints": {
+                "minimum": 0.0
+              },
+              "sensitive": false,
+              "secret": false,
+              "kind": "integer"
+            },
+            {
+              "id": "token",
+              "path": "/token",
+              "title": "Token",
+              "required": false,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "save_bot"
+      }
+    },
+    {
+      "id": "remove_bot",
+      "title": "Remove a disabled Telegram bot",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"expected_revision\":1,\"bot_id\":\"<bot_id>\"}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot_id",
+              "path": "/bot_id",
+              "title": "Bot ID",
+              "required": true,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            },
+            {
+              "id": "expected_revision",
+              "path": "/expected_revision",
+              "title": "Expected Revision",
+              "required": true,
+              "constraints": {
+                "minimum": 0.0
+              },
+              "sensitive": false,
+              "secret": false,
+              "kind": "integer"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "remove_bot"
+      }
+    },
+    {
+      "id": "bot_inventory",
+      "title": "Inspect Telegram bot chats and inbox",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"bot_id\":null}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot_id",
+              "path": "/bot_id",
+              "title": "Bot ID",
+              "required": false,
+              "default": null,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "bot_inventory"
+      }
+    },
+    {
+      "id": "sync_chats",
+      "title": "Synchronize Telegram received chats",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"bot_id\":null}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot_id",
+              "path": "/bot_id",
+              "title": "Bot ID",
+              "required": false,
+              "default": null,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "sync_chats"
+      }
+    },
+    {
+      "id": "inspect_chat",
+      "title": "Inspect Telegram chat and bot membership",
+      "group": "command_palette",
+      "category": "Plugin",
+      "docs": {
+        "summary": "",
+        "examples": [
+          "{\"chat_id\":\"<chat_id>\"}"
+        ]
+      },
+      "input": {
+        "version": 1,
+        "root": {
+          "id": "root",
+          "path": "",
+          "title": "Root",
+          "required": true,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "object",
+          "fields": [
+            {
+              "id": "bot_id",
+              "path": "/bot_id",
+              "title": "Bot ID",
+              "required": false,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            },
+            {
+              "id": "chat_id",
+              "path": "/chat_id",
+              "title": "Chat ID",
+              "required": true,
+              "constraints": {},
+              "sensitive": false,
+              "secret": false,
+              "kind": "text"
+            }
+          ]
+        }
+      },
+      "target": {
+        "kind": "method",
+        "handler": "inspect_chat"
+      }
+    }
+  ],
+  "services": {
+    "exports": [
+      {
+        "id": "agena.integration",
+        "api_version": 1,
+        "methods": [
+          {
+            "id": "describe",
+            "input": {
+              "version": 1,
+              "root": {
+                "id": "root",
+                "path": "",
+                "title": "No input",
+                "required": true,
+                "default": {},
+                "constraints": {},
+                "sensitive": false,
+                "secret": false,
+                "kind": "object",
+                "fields": []
+              }
+            },
+            "output": {
+              "version": 1,
+              "root": {
+                "id": "root",
+                "path": "",
+                "title": "Adapter Description",
+                "required": true,
+                "constraints": {},
+                "sensitive": false,
+                "secret": false,
+                "kind": "object",
+                "fields": [
+                  {
+                    "id": "channel_context_version",
+                    "path": "/channel_context_version",
+                    "title": "Channel Context Version",
+                    "required": false,
+                    "constraints": {
+                      "minimum": 0.0
+                    },
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  },
+                  {
+                    "id": "config_schema",
+                    "path": "/config_schema",
+                    "title": "Config Schema",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "json",
+                    "max_bytes": 32768,
+                    "max_depth": 12
+                  },
+                  {
+                    "id": "description",
+                    "path": "/description",
+                    "title": "Description",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "idempotent_send",
+                    "path": "/idempotent_send",
+                    "title": "Idempotent Send",
+                    "description": "False means a lost send acknowledgement is not automatically retried.",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "boolean"
+                  },
+                  {
+                    "id": "kind",
+                    "path": "/kind",
+                    "title": "Kind",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "choice",
+                    "options": [
+                      {
+                        "id": "channel",
+                        "title": "Channel",
+                        "value": "channel"
+                      },
+                      {
+                        "id": "event_source",
+                        "title": "Event Source",
+                        "value": "event_source"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "minimum_poll_seconds",
+                    "path": "/minimum_poll_seconds",
+                    "title": "Minimum Poll Seconds",
+                    "required": true,
+                    "constraints": {
+                      "minimum": 0.0
+                    },
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  },
+                  {
+                    "id": "title",
+                    "path": "/title",
+                    "title": "Title",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "poll",
+            "input": {
+              "version": 1,
+              "root": {
+                "id": "root",
+                "path": "",
+                "title": "Adapter Poll Request",
+                "required": true,
+                "constraints": {},
+                "sensitive": false,
+                "secret": false,
+                "kind": "object",
+                "fields": [
+                  {
+                    "id": "binding_id",
+                    "path": "/binding_id",
+                    "title": "Binding ID",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "channel_identity",
+                    "path": "/channel_identity",
+                    "title": "Channel Identity",
+                    "description": "The chat transport identity: tenant plus account. No room shape here.",
+                    "required": false,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "object",
+                    "fields": [
+                      {
+                        "id": "account",
+                        "path": "/channel_identity/account",
+                        "title": "Account",
+                        "required": true,
+                        "constraints": {},
+                        "sensitive": false,
+                        "secret": false,
+                        "kind": "text"
+                      },
+                      {
+                        "id": "tenant",
+                        "path": "/channel_identity/tenant",
+                        "title": "Tenant",
+                        "required": true,
+                        "constraints": {},
+                        "sensitive": false,
+                        "secret": false,
+                        "kind": "text"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "channel_kinds",
+                    "path": "/channel_kinds",
+                    "title": "Channel Kinds",
+                    "description": "Room shapes the binding authorizes. Empty means every shape; an adapter\nmay use it to narrow what it reports, but the host rechecks each event.",
+                    "required": false,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "list",
+                    "item": {
+                      "id": "channel_kinds_item",
+                      "path": "/channel_kinds/*",
+                      "title": "Channel Kinds Item",
+                      "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
+                      "required": true,
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "choice",
+                      "options": [
+                        {
+                          "id": "direct",
+                          "title": "Direct",
+                          "value": "direct"
+                        },
+                        {
+                          "id": "group",
+                          "title": "Group",
+                          "value": "group"
+                        },
+                        {
+                          "id": "broadcast",
+                          "title": "Broadcast",
+                          "value": "broadcast"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "id": "config",
+                    "path": "/config",
+                    "title": "Config",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "json",
+                    "max_bytes": 32768,
+                    "max_depth": 12
+                  },
+                  {
+                    "id": "cursor",
+                    "path": "/cursor",
+                    "title": "Cursor",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "json",
+                    "max_bytes": 32768,
+                    "max_depth": 12
+                  },
+                  {
+                    "id": "limit",
+                    "path": "/limit",
+                    "title": "Limit",
+                    "required": true,
+                    "constraints": {
+                      "minimum": 0.0
+                    },
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  },
+                  {
+                    "id": "not_before_ms",
+                    "path": "/not_before_ms",
+                    "title": "Not Before Ms",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  },
+                  {
+                    "id": "now_ms",
+                    "path": "/now_ms",
+                    "title": "Now Ms",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  }
+                ]
+              }
+            },
+            "output": {
+              "version": 1,
+              "root": {
+                "id": "root",
+                "path": "",
+                "title": "Adapter Batch",
+                "required": true,
+                "constraints": {},
+                "sensitive": false,
+                "secret": false,
+                "kind": "object",
+                "fields": [
+                  {
+                    "id": "cursor",
+                    "path": "/cursor",
+                    "title": "Cursor",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "json",
+                    "max_bytes": 32768,
+                    "max_depth": 12
+                  },
+                  {
+                    "id": "events",
+                    "path": "/events",
+                    "title": "Events",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "list",
+                    "item": {
+                      "id": "events_item",
+                      "path": "/events/*",
+                      "title": "Events Item",
+                      "required": true,
+                      "constraints": {},
+                      "sensitive": false,
+                      "secret": false,
+                      "kind": "object",
+                      "fields": [
+                        {
+                          "id": "actor",
+                          "path": "/events/*/actor",
+                          "title": "Actor",
+                          "required": true,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "text"
+                        },
+                        {
+                          "id": "bot",
+                          "path": "/events/*/bot",
+                          "title": "Bot",
+                          "required": false,
+                          "default": false,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "boolean"
+                        },
+                        {
+                          "id": "channel",
+                          "path": "/events/*/channel",
+                          "title": "Channel",
+                          "required": false,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "object",
+                          "fields": [
+                            {
+                              "id": "actor_verified",
+                              "path": "/events/*/channel/actor_verified",
+                              "title": "Actor Verified",
+                              "description": "The installed adapter verifies these facts with its platform. A user\ncannot obtain membership just by putting an ID/role in message text.",
+                              "required": true,
+                              "constraints": {},
+                              "sensitive": false,
+                              "secret": false,
+                              "kind": "boolean"
+                            },
+                            {
+                              "id": "addressed_to_bot",
+                              "path": "/events/*/channel/addressed_to_bot",
+                              "title": "Addressed To Bot",
+                              "required": true,
+                              "constraints": {},
+                              "sensitive": false,
+                              "secret": false,
+                              "kind": "boolean"
+                            },
+                            {
+                              "id": "identity",
+                              "path": "/events/*/channel/identity",
+                              "title": "Identity",
+                              "description": "The chat transport identity: tenant plus account. No room shape here.",
+                              "required": true,
+                              "constraints": {},
+                              "sensitive": false,
+                              "secret": false,
+                              "kind": "object",
+                              "fields": [
+                                {
+                                  "id": "account",
+                                  "path": "/events/*/channel/identity/account",
+                                  "title": "Account",
+                                  "required": true,
+                                  "constraints": {},
+                                  "sensitive": false,
+                                  "secret": false,
+                                  "kind": "text"
+                                },
+                                {
+                                  "id": "tenant",
+                                  "path": "/events/*/channel/identity/tenant",
+                                  "title": "Tenant",
+                                  "required": true,
+                                  "constraints": {},
+                                  "sensitive": false,
+                                  "secret": false,
+                                  "kind": "text"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "is_member",
+                              "path": "/events/*/channel/is_member",
+                              "title": "Is Member",
+                              "required": true,
+                              "constraints": {},
+                              "sensitive": false,
+                              "secret": false,
+                              "kind": "boolean"
+                            },
+                            {
+                              "id": "kind",
+                              "path": "/events/*/channel/kind",
+                              "title": "Kind",
+                              "description": "The shape of the room this specific message arrived in. It lives on the\nmessage, not on the account: one account serves direct chats, groups and\nbroadcast channels at once.",
+                              "required": true,
+                              "constraints": {},
+                              "sensitive": false,
+                              "secret": false,
+                              "kind": "choice",
+                              "options": [
+                                {
+                                  "id": "direct",
+                                  "title": "Direct",
+                                  "value": "direct"
+                                },
+                                {
+                                  "id": "group",
+                                  "title": "Group",
+                                  "value": "group"
+                                },
+                                {
+                                  "id": "broadcast",
+                                  "title": "Broadcast",
+                                  "value": "broadcast"
+                                }
+                              ]
+                            },
+                            {
+                              "id": "verified_at_ms",
+                              "path": "/events/*/channel/verified_at_ms",
+                              "title": "Verified At Ms",
+                              "required": true,
+                              "constraints": {},
+                              "sensitive": false,
+                              "secret": false,
+                              "kind": "integer"
+                            }
+                          ]
+                        },
+                        {
+                          "id": "data",
+                          "path": "/events/*/data",
+                          "title": "Data",
+                          "required": false,
+                          "default": null,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "json",
+                          "max_bytes": 32768,
+                          "max_depth": 12
+                        },
+                        {
+                          "id": "event_type",
+                          "path": "/events/*/event_type",
+                          "title": "Event Type",
+                          "required": true,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "text"
+                        },
+                        {
+                          "id": "id",
+                          "path": "/events/*/id",
+                          "title": "ID",
+                          "description": "Stable PROVIDER event identity; a replay must keep identical content.",
+                          "required": true,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "text"
+                        },
+                        {
+                          "id": "occurred_at_ms",
+                          "path": "/events/*/occurred_at_ms",
+                          "title": "Occurred At Ms",
+                          "required": true,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "integer"
+                        },
+                        {
+                          "id": "resource",
+                          "path": "/events/*/resource",
+                          "title": "Resource",
+                          "description": "Exact repository/account-conversation identity selected by the grant.",
+                          "required": true,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "text"
+                        },
+                        {
+                          "id": "text",
+                          "path": "/events/*/text",
+                          "title": "Text",
+                          "required": true,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "text"
+                        },
+                        {
+                          "id": "thread",
+                          "path": "/events/*/thread",
+                          "title": "Thread",
+                          "required": false,
+                          "default": null,
+                          "constraints": {},
+                          "sensitive": false,
+                          "secret": false,
+                          "kind": "text"
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "id": "retry_after_seconds",
+                    "path": "/retry_after_seconds",
+                    "title": "Retry After Seconds",
+                    "description": "Provider backoff wins over the configured poll interval.",
+                    "required": false,
+                    "default": null,
+                    "constraints": {
+                      "minimum": 0.0
+                    },
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "id": "send",
+            "input": {
+              "version": 1,
+              "root": {
+                "id": "root",
+                "path": "",
+                "title": "Channel Delivery",
+                "required": true,
+                "constraints": {},
+                "sensitive": false,
+                "secret": false,
+                "kind": "object",
+                "fields": [
+                  {
+                    "id": "binding_id",
+                    "path": "/binding_id",
+                    "title": "Binding ID",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "channel",
+                    "path": "/channel",
+                    "title": "Channel",
+                    "description": "The chat transport identity: tenant plus account. No room shape here.",
+                    "required": false,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "object",
+                    "fields": [
+                      {
+                        "id": "account",
+                        "path": "/channel/account",
+                        "title": "Account",
+                        "required": true,
+                        "constraints": {},
+                        "sensitive": false,
+                        "secret": false,
+                        "kind": "text"
+                      },
+                      {
+                        "id": "tenant",
+                        "path": "/channel/tenant",
+                        "title": "Tenant",
+                        "required": true,
+                        "constraints": {},
+                        "sensitive": false,
+                        "secret": false,
+                        "kind": "text"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "config",
+                    "path": "/config",
+                    "title": "Config",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "json",
+                    "max_bytes": 32768,
+                    "max_depth": 12
+                  },
+                  {
+                    "id": "delivery_id",
+                    "path": "/delivery_id",
+                    "title": "Delivery ID",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "kind",
+                    "path": "/kind",
+                    "title": "Kind",
+                    "description": "Room shape of the conversation this reply belongs to. It lets an adapter\npick the right platform surface when one account serves several.",
+                    "required": false,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "choice",
+                    "options": [
+                      {
+                        "id": "direct",
+                        "title": "Direct",
+                        "value": "direct"
+                      },
+                      {
+                        "id": "group",
+                        "title": "Group",
+                        "value": "group"
+                      },
+                      {
+                        "id": "broadcast",
+                        "title": "Broadcast",
+                        "value": "broadcast"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "resource",
+                    "path": "/resource",
+                    "title": "Resource",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "text",
+                    "path": "/text",
+                    "title": "Text",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "thread",
+                    "path": "/thread",
+                    "title": "Thread",
+                    "required": false,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  }
+                ]
+              }
+            },
+            "output": {
+              "version": 1,
+              "root": {
+                "id": "root",
+                "path": "",
+                "title": "Channel Receipt",
+                "required": true,
+                "constraints": {},
+                "sensitive": false,
+                "secret": false,
+                "kind": "object",
+                "fields": [
+                  {
+                    "id": "disposition",
+                    "path": "/disposition",
+                    "title": "Disposition",
+                    "required": true,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "choice",
+                    "options": [
+                      {
+                        "id": "sent",
+                        "title": "Sent",
+                        "value": "sent"
+                      },
+                      {
+                        "id": "rejected",
+                        "title": "Rejected",
+                        "value": "rejected"
+                      },
+                      {
+                        "id": "retryable",
+                        "title": "Retryable",
+                        "value": "retryable"
+                      },
+                      {
+                        "id": "uncertain",
+                        "title": "Uncertain",
+                        "value": "uncertain"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "remote_id",
+                    "path": "/remote_id",
+                    "title": "Remote ID",
+                    "required": false,
+                    "default": null,
+                    "constraints": {},
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "text"
+                  },
+                  {
+                    "id": "retry_after_seconds",
+                    "path": "/retry_after_seconds",
+                    "title": "Retry After Seconds",
+                    "required": false,
+                    "default": null,
+                    "constraints": {
+                      "minimum": 0.0
+                    },
+                    "sensitive": false,
+                    "secret": false,
+                    "kind": "integer"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "settings": {
+    "version": 1,
+    "root": {
+      "id": "root",
+      "path": "",
+      "title": "Telegram Plugin Config",
+      "description": "Default environment-backed connection. The Telegram manager stores multiple BotFather credentials privately and binds each connection to a local AI Bot.",
+      "required": true,
+      "default": {
+        "account": "",
+        "allow_loopback_http": false,
+        "api_base": "https://api.telegram.org",
+        "bot_token_env": "AGENA_TELEGRAM_BOT_TOKEN",
+        "long_poll_seconds": 0
+      },
+      "constraints": {},
+      "sensitive": false,
+      "secret": false,
+      "kind": "object",
+      "fields": [
+        {
+          "id": "account",
+          "path": "/account",
+          "title": "Bot Username",
+          "description": "The bot's own username without '@'. A token belonging to another bot is refused instead of serving its chats.",
+          "required": false,
+          "default": "",
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "text"
+        },
+        {
+          "id": "allow_loopback_http",
+          "path": "/allow_loopback_http",
+          "title": "Allow Loopback HTTP",
+          "description": "Permit a plain-HTTP api_base on a loopback host, for a local test fixture only.",
+          "required": false,
+          "default": false,
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "boolean"
+        },
+        {
+          "id": "api_base",
+          "path": "/api_base",
+          "title": "Bot API Base URL",
+          "description": "HTTPS Bot API root. Change it only for a self-hosted Bot API server.",
+          "required": false,
+          "default": "https://api.telegram.org",
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "text"
+        },
+        {
+          "id": "bot_token_env",
+          "path": "/bot_token_env",
+          "title": "Bot Token Environment Variable",
+          "description": "Name of the server environment variable holding the Bot API token, never the token itself.",
+          "required": false,
+          "default": "AGENA_TELEGRAM_BOT_TOKEN",
+          "constraints": {},
+          "sensitive": false,
+          "secret": false,
+          "kind": "text"
+        },
+        {
+          "id": "long_poll_seconds",
+          "path": "/long_poll_seconds",
+          "title": "Long Poll Seconds",
+          "description": "How long getUpdates may hold the request open. Zero returns immediately.",
+          "required": false,
+          "default": 0,
+          "constraints": {
+            "minimum": 0.0
+          },
+          "sensitive": false,
+          "secret": false,
+          "kind": "integer"
+        }
+      ]
+    }
+  }
+}

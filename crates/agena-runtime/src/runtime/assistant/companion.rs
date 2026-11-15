@@ -425,7 +425,7 @@ impl AssistantRuntime {
             .map_err(runtime_error)?
             .execution
             .channel_authority;
-        if channel.as_ref().is_some_and(|a| !a.grant.private_memory) {
+        if channel.as_ref().is_some_and(|a| !a.allows_private_memory()) {
             profile.preferences.memory_enabled = false;
         }
 
@@ -488,7 +488,7 @@ impl AssistantRuntime {
             .map_err(runtime_error)?
             .execution
             .channel_authority;
-        if channel.as_ref().is_some_and(|a| !a.grant.private_memory) {
+        if channel.as_ref().is_some_and(|a| !a.allows_private_memory()) {
             profile.preferences.memory_enabled = false;
         }
         let scope = if bot.is_some() { "bot" } else { "workspace" };

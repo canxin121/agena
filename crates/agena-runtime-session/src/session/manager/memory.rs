@@ -285,7 +285,7 @@ impl SessionManager {
                 .configuration
                 .channel_authority
                 .as_ref()
-                .is_some_and(|authority| !authority.grant.private_memory)
+                .is_some_and(|authority| !authority.allows_private_memory())
             || control
                 .configuration
                 .capability_denied_tool_names

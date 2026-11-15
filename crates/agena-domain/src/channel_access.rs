@@ -264,18 +264,19 @@ pub struct ChannelAccessPolicy {
     /// Explicit local assignments override the open-member option, including
     /// a Blocked entry. Remote platform administrator claims are ignored.
     pub members: Vec<ChannelMember>,
+    /// Locally trusted actors who may use the source session's capabilities.
+    /// Roles alone never grant this access. These actors use separate
+    /// per-speaker conversations, even when ordinary members share a room.
+    #[serde(default)]
+    pub administrator_actors: BTreeSet<String>,
     /// Unlisted platform members can only get chat-only Member access. This
     /// option never confers the binding capability grant.
     #[serde(default)]
     pub allow_unlisted_chat: bool,
     /// Capabilities available to every admitted member of this binding.
     ///
-    /// This is deliberately one grant per binding rather than one per role.
-    /// A conversation's transcript is shared by everyone speaking in it, so
-    /// letting two roles hold different tools would let a low-privilege
-    /// message drive a tool whose output the whole room then reads. One grant
-    /// makes that leak structurally impossible; roles continue to govern
-    /// membership management only.
+    /// Ordinary members share one grant and may share a transcript. Locally
+    /// trusted source administrators have isolated per-speaker transcripts.
     #[serde(default)]
     pub grant: ChannelGrant,
     #[serde(default = "daily")]
@@ -298,6 +299,24 @@ pub fn valid_channel_id(value: &str) -> bool {
         && !matches!(value, "*" | "@service" | "@shared" | "@unattributed")
 }
 impl ChannelAccessPolicy {
+    /// Source access requires both an explicit local grant and a current
+    /// administrative membership. Platform labels and role promotions
+    /// cannot create a new source administrator.
+    pub fn is_source_administrator(&self, actor: &str, now: i64) -> bool {
+        self.administrator_actors.contains(actor)
+            && self
+                .member(actor, now)
+                .is_ok_and(|(role, _)| role.can_manage())
+    }
+
+    pub fn session_mode_for(&self, actor: &str, now: i64) -> ChannelSessionMode {
+        if self.is_source_administrator(actor, now) {
+            ChannelSessionMode::PerActor
+        } else {
+            self.session_mode
+        }
+    }
+
     /// True when this binding may serve the given room shape.
     pub fn serves(&self, kind: crate::ConversationKind) -> bool {
         self.kinds.is_empty() || self.kinds.contains(&kind)
@@ -320,6 +339,14 @@ impl ChannelAccessPolicy {
             return Err(
                 "channel policy needs 1–128 assignments and a daily user limit of 0–1000 (0 means no limit)".into(),
             );
+        }
+        if self.administrator_actors.len() > 128
+            || self
+                .administrator_actors
+                .iter()
+                .any(|actor| !valid_channel_id(actor))
+        {
+            return Err("source administrators require at most 128 exact member IDs".into());
         }
         let mut seen = BTreeSet::new();
         let mut owner = false;
@@ -400,6 +427,9 @@ impl ChannelAccessPolicy {
             return Err("peer_or_higher_role_denied");
         }
         let mut next = self.clone();
+        // Remote membership changes can revoke source access but cannot
+        // recreate it through a later role promotion.
+        next.administrator_actors.remove(target);
         if let Some(member) = next.members.iter_mut().find(|m| m.actor == target) {
             member.role = new_role;
         } else {
@@ -463,6 +493,9 @@ pub struct ChannelAuthority {
     pub thread: Option<String>,
     pub session_mode: ChannelSessionMode,
     pub grant: ChannelGrant,
+    /// Host-derived source access, checked against the live local policy.
+    #[serde(default)]
+    pub source_admin: bool,
     /// 0 means no expiry. Finite membership expiries still bound the token.
     pub expires_at_ms: i64,
     pub memory_workspace_root: PathBuf,
@@ -495,6 +528,7 @@ impl ChannelAuthority {
             thread: scope.thread.clone(),
             session_mode,
             grant,
+            source_admin: false,
             expires_at_ms,
             memory_workspace_root: scope.memory_workspace_root.clone(),
             private_paths: scope.private_paths.clone(),
@@ -519,9 +553,18 @@ impl ChannelAuthority {
         !self.revoked && (self.expires_at_ms == 0 || now < self.expires_at_ms)
     }
     pub fn allows_tool(&self, canonical: &str, now: i64) -> bool {
-        self.active_at(now) && self.grant.allowed_tools().contains(canonical)
+        self.active_at(now) && (self.source_admin || self.grant.allowed_tools().contains(canonical))
+    }
+    pub fn allows_mcp_tool(&self, server: &str, tool: &str, now: i64) -> bool {
+        self.active_at(now) && (self.source_admin || self.grant.allows_mcp_tool(server, tool))
+    }
+    pub fn allows_private_memory(&self) -> bool {
+        self.source_admin || self.grant.private_memory
     }
     pub fn permission_fence(&self) -> crate::PermissionConfig {
+        if self.source_admin {
+            return crate::PermissionConfig::default();
+        }
         permission_fence(
             &self.private_paths,
             &BTreeSet::new(),
@@ -589,6 +632,7 @@ mod tests {
     use super::*;
     fn policy() -> ChannelAccessPolicy {
         ChannelAccessPolicy {
+            administrator_actors: Default::default(),
             identity: ChannelIdentity {
                 tenant: "tenant-a".into(),
                 account: "bot-a".into(),
@@ -621,6 +665,81 @@ mod tests {
             service_grant: Default::default(),
         }
     }
+    #[test]
+    fn source_administrators_require_local_grants_and_isolated_sessions() {
+        let mut p = policy();
+        assert!(!p.is_source_administrator("admin", 1));
+        p.administrator_actors.insert("admin".into());
+        p.administrator_actors.insert("member".into());
+        assert!(p.is_source_administrator("admin", 1));
+        assert!(!p.is_source_administrator("member", 1));
+        assert_eq!(p.session_mode_for("admin", 1), ChannelSessionMode::PerActor);
+        assert_eq!(
+            p.session_mode_for("member", 1),
+            ChannelSessionMode::PerConversation
+        );
+        p.members
+            .iter_mut()
+            .find(|m| m.actor == "admin")
+            .unwrap()
+            .expires_at_ms = Some(10);
+        assert!(!p.is_source_administrator("admin", 10));
+
+        let mut p = policy();
+        p.administrator_actors.insert("admin".into());
+        let revoked = p
+            .remote_assignment("owner", "admin", ChannelRole::Member, 1)
+            .unwrap();
+        let promoted = revoked
+            .remote_assignment("owner", "admin", ChannelRole::Administrator, 1)
+            .unwrap();
+        assert!(!promoted.is_source_administrator("admin", 1));
+    }
+
+    #[test]
+    fn source_authority_allows_catalog_and_mcp_but_expires_and_defaults_to_restricted() {
+        let scope = SessionChannelScope {
+            binding_id: "binding".into(),
+            identity: policy().identity.account(),
+            resource: "group".into(),
+            thread: None,
+            kind: crate::ConversationKind::Group,
+            memory_workspace_root: PathBuf::from("/private/admin"),
+            private_paths: BTreeSet::from([PathBuf::from("/private/admin")]),
+        };
+        let mut authority = ChannelAuthority::for_speaker(
+            &scope,
+            1,
+            "admin",
+            ChannelRole::Administrator,
+            ChannelGrant::default(),
+            ChannelSessionMode::PerActor,
+            100,
+        );
+        assert!(!authority.allows_tool("agena.fs.read", 1));
+        assert!(!authority.allows_mcp_tool("server", "tool", 1));
+        authority.source_admin = true;
+        assert!(authority.allows_tool("agena.fs.read", 1));
+        assert!(authority.allows_mcp_tool("server", "tool", 1));
+        assert!(authority.allows_private_memory());
+        assert!(authority.permission_fence().is_empty());
+        assert!(!authority.allows_tool("agena.fs.read", 100));
+        assert!(!authority.allows_mcp_tool("server", "tool", 100));
+        authority.revoked = true;
+        assert!(!authority.allows_tool("agena.fs.read", 1));
+        let mut legacy = serde_json::to_value(&authority).unwrap();
+        legacy.as_object_mut().unwrap().remove("source_admin");
+        let legacy: ChannelAuthority = serde_json::from_value(legacy).unwrap();
+        assert!(!legacy.source_admin);
+        let mut legacy = serde_json::to_value(policy()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("administrator_actors");
+        let legacy: ChannelAccessPolicy = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.administrator_actors.is_empty());
+    }
+
     #[test]
     fn admins_cannot_promote_self_or_peer_or_grant_owner() {
         let p = policy();

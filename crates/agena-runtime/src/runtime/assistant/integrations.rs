@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod provider_fingerprint;
+pub(super) use provider_fingerprint::{ProviderFingerprintMatch, ProviderIdentityCheck};
+
 fn digest(value: &impl serde::Serialize) -> Result<String> {
     let bytes = serde_json::to_vec(value).map_err(|e| Error::Storage(e.to_string()))?;
     Ok(Sha256::digest(bytes)
@@ -206,14 +209,27 @@ impl AssistantRuntime {
             owner_bot_id: Some(owner.id),
         })
     }
-    pub(super) fn provider_identity(&self, provider: &str) -> Result<String> {
+    pub(super) fn provider_identity_check(
+        &self,
+        provider: &str,
+        stored: &str,
+    ) -> Result<ProviderIdentityCheck> {
         let host = self.integration_host()?;
+        self.provider_identity_check_on_host(&host, provider, stored)
+    }
+
+    fn provider_identity_check_on_host(
+        &self,
+        host: &agena_plugin_host::PluginHost,
+        provider: &str,
+        stored: &str,
+    ) -> Result<ProviderIdentityCheck> {
         let plugin = host
             .plugins()
             .iter()
-            .find(|p| p.key().to_string() == provider)
+            .find(|plugin| plugin.key().to_string() == provider)
             .ok_or(Error::Unavailable("integration provider is not active"))?;
-        digest(&json!({"manifest":plugin.manifest,"configuration":plugin.configured_plugin}))
+        provider_fingerprint::check(plugin, stored)
     }
     pub(super) async fn source_permission_identity(&self, source: i64) -> Result<String> {
         let manager = self.manager()?;
@@ -233,6 +249,38 @@ impl AssistantRuntime {
         }))
     }
 
+    /// Validate the provider and source independently so a missing session or
+    /// unavailable plugin is not reported as a changed permission grant.
+    pub(super) async fn verify_integration_boundary(
+        &self,
+        binding: &IntegrationBinding,
+    ) -> Result<()> {
+        let provider = self
+            .provider_identity_check(&binding.spec.provider, &binding.provider_fingerprint)
+            .map_err(|error| {
+                Error::Policy(format!("channel provider identity unavailable: {error}"))
+            })?;
+        if provider.kind == ProviderFingerprintMatch::Mismatch {
+            return Err(Error::Conflict(
+                "channel provider transport or configuration changed; explicit review is required",
+            ));
+        }
+        let permissions = self
+            .source_permission_identity(binding.source_session_id)
+            .await
+            .map_err(|error| {
+                Error::Policy(format!(
+                    "channel source permission identity unavailable: {error}"
+                ))
+            })?;
+        if permissions != binding.permission_fingerprint {
+            return Err(Error::Conflict(
+                "channel source permissions changed; explicit review is required",
+            ));
+        }
+        Ok(())
+    }
+
     async fn adapter(&self, provider: &str) -> Result<IntegrationProvider> {
         self.adapter_on_host(self.integration_host()?, provider)
             .await
@@ -247,8 +295,7 @@ impl AssistantRuntime {
             .iter()
             .find(|p| p.key().to_string() == provider)
             .ok_or(Error::Unavailable("integration plugin is not active"))?;
-        let fingerprint =
-            digest(&json!({"manifest":plugin.manifest,"configuration":plugin.configured_plugin}))?;
+        let fingerprint = provider_fingerprint::identity(plugin)?;
         let adapter: AdapterDescription = decode(
             host.invoke_integration_service(provider, "describe", json!({}))
                 .await
@@ -444,7 +491,10 @@ impl AssistantRuntime {
         // Provider I/O happens before the admission lock; pause is not blocked
         // behind another adapter's slow poll. Re-read under the lock below.
         let original = self.scoped_binding(source, id).await?;
-        let provider = if matches!(request.action, IntegrationControlAction::Enable) {
+        let provider = if matches!(
+            request.action,
+            IntegrationControlAction::Enable | IntegrationControlAction::Review
+        ) {
             Some(self.adapter(&original.spec.provider).await?)
         } else {
             None
@@ -460,6 +510,15 @@ impl AssistantRuntime {
         let expected = b.revision;
         let now = Utc::now().timestamp_millis();
         match request.action {
+            IntegrationControlAction::Review => {
+                return self
+                    .review_channel_connection(
+                        b,
+                        provider.ok_or(Error::Unavailable("provider not available"))?,
+                        now,
+                    )
+                    .await;
+            }
             IntegrationControlAction::Pause => {
                 b.state = BindingState::Paused;
                 b.epoch += 1;
@@ -504,7 +563,10 @@ impl AssistantRuntime {
                     self.source_permission_identity(b.source_session_id).await?;
                 if b.spec.mode == IntegrationMode::Channel
                     && b.activated_at_ms.is_some()
-                    && (b.provider_fingerprint != provider.fingerprint
+                    && (!self
+                        .provider_identity_check(&b.spec.provider, &b.provider_fingerprint)?
+                        .kind
+                        .is_compatible()
                         || b.permission_fingerprint != permission_fingerprint)
                 {
                     return Err(Error::Conflict(
@@ -661,17 +723,19 @@ impl AssistantRuntime {
         // generation. A reload must not substitute a new transport/config
         // between checking the grant fingerprint and sending user content.
         let host = self.integration_host()?;
-        let provider = self.adapter_on_host(host.clone(), &b.spec.provider).await?;
-        if provider.fingerprint != b.provider_fingerprint {
+        let identity =
+            self.provider_identity_check_on_host(&host, &b.spec.provider, &b.provider_fingerprint)?;
+        if !identity.kind.is_compatible() {
             self.integration_fault(
                 b.id,
                 b.revision,
-                "plugin identity/configuration changed; review and explicitly re-enable the grant",
+                "plugin transport/configuration changed; review and explicitly re-enable the grant",
                 true,
             )
             .await?;
             return Ok(());
         }
+        self.adapter_on_host(host.clone(), &b.spec.provider).await?;
         let request = AdapterPollRequest {
             binding_id: b.id.to_string(),
             config: b.spec.config.clone(),
@@ -705,20 +769,12 @@ impl AssistantRuntime {
         let _lock = self.integration_gate.lock().await;
         let now = Utc::now().timestamp_millis();
         let mut b = self.integrations.binding(id).await?;
-        if self.provider_identity(&b.spec.provider).ok().as_deref()
-            != Some(b.provider_fingerprint.as_str())
-            || self
-                .source_permission_identity(b.source_session_id)
-                .await
-                .ok()
-                .as_deref()
-                != Some(b.permission_fingerprint.as_str())
-        {
+        if let Err(error) = self.verify_integration_boundary(&b).await {
             let revision = b.revision;
             b.state = BindingState::Faulted;
             b.epoch += 1;
             b.revision += 1;
-            b.last_error=Some("adapter or source permission boundary changed; new work is stopped until explicit review".into());
+            b.last_error = Some(error.to_string());
             self.integrations.save_binding(b, revision).await?;
             return Ok(());
         }
@@ -831,19 +887,15 @@ impl AssistantRuntime {
         self.integrations.finish_event(event).await
     }
 
-    async fn reconcile_integration_executions(&self, b: &IntegrationBinding) -> Result<()> {
+    pub(super) async fn reconcile_integration_executions(
+        &self,
+        b: &IntegrationBinding,
+    ) -> Result<()> {
         let manager = self.manager()?;
         let now = Utc::now().timestamp_millis();
         let authority_valid = b.state == BindingState::Enabled
             && !b.spec.expired_at(now)
-            && self.provider_identity(&b.spec.provider).ok().as_deref()
-                == Some(b.provider_fingerprint.as_str())
-            && self
-                .source_permission_identity(b.source_session_id)
-                .await
-                .ok()
-                .as_deref()
-                == Some(b.permission_fingerprint.as_str());
+            && self.verify_integration_boundary(b).await.is_ok();
         for (mut event, admitted_at) in self.integrations.execution_events(b.id).await? {
             let (Some(session), Some(execution), Some(generation)) = (
                 event.session_id,
@@ -963,10 +1015,12 @@ impl AssistantRuntime {
         // generation. A reload must not substitute a new transport/config
         // between checking the grant fingerprint and sending user content.
         let host = self.integration_host()?;
-        let provider = self.adapter_on_host(host.clone(), &b.spec.provider).await?;
-        if provider.fingerprint != b.provider_fingerprint {
-            return self.integration_fault(b.id,b.revision,"channel adapter changed; outbound delivery stopped until explicit reauthorization",true).await;
+        let identity =
+            self.provider_identity_check_on_host(&host, &b.spec.provider, &b.provider_fingerprint)?;
+        if !identity.kind.is_compatible() {
+            return self.integration_fault(b.id,b.revision,"channel adapter transport/configuration changed; outbound delivery stopped until explicit reauthorization",true).await;
         }
+        let provider = self.adapter_on_host(host.clone(), &b.spec.provider).await?;
         if provider.adapter.idempotent_send {
             for mut d in self
                 .integrations

@@ -231,6 +231,75 @@ async fn configure(
     }
     Ok(Mutation::Configuration(Box::new(next)))
 }
+async fn recover_channel_authority(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    recovery: &ChannelAuthorityRecovery,
+) -> Result<Mutation> {
+    recovery.validate(now_ms())?;
+    let mut configuration = configuration(connection, session).await?;
+    let metadata = reads::metadata(connection, session).await?;
+    let control: i64 = sqlx::query_scalar("SELECT control_version FROM agena_sessions WHERE id=?")
+        .bind(session.get())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    if configuration.channel_authority.as_ref() != Some(&recovery.expected)
+        || metadata.metadata_version.get() != recovery.metadata_version
+        || control != recovery.control_version
+    {
+        return Err(KernelError::Conflict(
+            "channel session changed during recovery; inspect its current authority".into(),
+        ));
+    }
+    if configuration.parent_session_id.is_some()
+        || configuration.relation_kind != SessionRelationKind::Root
+        || !configuration.message_queue_paused
+        || configuration.owner.as_ref().is_some_and(|owner| {
+            owner.surface != agena_domain::SessionSurface::from(recovery.current.kind)
+        })
+    {
+        return Err(KernelError::Conflict(
+            "channel recovery requires a paused channel root with unchanged ownership".into(),
+        ));
+    }
+    let busy: bool = sqlx::query_scalar(
+        "WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT child.id FROM agena_sessions child JOIN tree ON child.parent_session_id=tree.id WHERE child.relation_kind='subagent' AND child.deleted_at_ms IS NULL) SELECT EXISTS(SELECT 1 FROM agena_attempts WHERE session_id IN (SELECT id FROM tree) AND phase IN ('queued','running')) OR EXISTS(SELECT 1 FROM agena_interactions WHERE session_id IN (SELECT id FROM tree) AND decision_json IS NULL) OR EXISTS(SELECT 1 FROM agena_background_activities WHERE session_id IN (SELECT id FROM tree) AND phase='running')",
+    )
+    .bind(session.get())
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    if busy {
+        return Err(KernelError::Conflict(
+            "old channel executions, interactions and background work must stop before recovery"
+                .into(),
+        ));
+    }
+    configuration.channel_authority = Some(recovery.current.clone());
+    configuration.message_queue_paused = false;
+    if let Some(owner) = configuration.owner.as_mut() {
+        owner.scope_key = Some(recovery.scope_key.clone());
+    }
+    let body = encode(&configuration)?;
+    if body.len() > 65536 {
+        return Err(invalid("session configuration exceeds 64 KiB"));
+    }
+    sqlx::query("UPDATE agena_sessions SET configuration_json=?,metadata_version=metadata_version+1,control_version=control_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?")
+        .bind(body)
+        .bind(now_ms())
+        .bind(session.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    sqlx::query("UPDATE agena_session_statistics SET queued_executions=queued_executions WHERE session_id=?")
+        .bind(session.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(Mutation::Configuration(Box::new(configuration)))
+}
+
 async fn boundary(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -1318,6 +1387,9 @@ pub(super) async fn apply(
             })
         }
         Command::Configure { session, change } => configure(connection, *session, change).await?,
+        Command::RecoverChannelAuthority { session, recovery } => {
+            recover_channel_authority(connection, *session, recovery).await?
+        }
         Command::FinishAgent {
             session,
             agent,

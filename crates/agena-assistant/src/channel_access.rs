@@ -133,7 +133,8 @@ impl IntegrationBinding {
         if a.identity != p.identity
             || !p.serves(a.kind)
             || !self.spec.resource.matches(&a.resource)
-            || a.session_mode != p.session_mode
+            || a.session_mode != p.session_mode_for(&a.actor, now)
+            || a.source_admin != p.is_source_administrator(&a.actor, now)
         {
             return false;
         }
@@ -185,6 +186,7 @@ mod tests {
     use super::*;
     fn binding() -> IntegrationBinding {
         let policy = ChannelAccessPolicy {
+            administrator_actors: Default::default(),
             identity: ChannelIdentity {
                 tenant: "one".into(),
                 account: "bot".into(),
@@ -230,6 +232,66 @@ mod tests {
         b.activated_at_ms = Some(1000);
         b
     }
+    #[test]
+    fn source_administrator_authority_is_checked_against_live_local_policy() {
+        let mut b = binding();
+        let p = b.spec.channel_policy.as_mut().unwrap();
+        p.administrator_actors.insert("alice".into());
+        p.members.push(ChannelMember {
+            actor: "bob".into(),
+            role: ChannelRole::Member,
+            expires_at_ms: None,
+        });
+        let scope = agena_domain::SessionChannelScope {
+            binding_id: b.id.to_string(),
+            identity: p.identity.account(),
+            resource: "room".into(),
+            thread: Some("thread-a".into()),
+            kind: ConversationKind::Group,
+            memory_workspace_root: "/private/admin".into(),
+            private_paths: Default::default(),
+        };
+        let mut a = ChannelAuthority::for_speaker(
+            &scope,
+            b.epoch,
+            "alice",
+            ChannelRole::Owner,
+            Default::default(),
+            ChannelSessionMode::PerActor,
+            1000000,
+        );
+        a.source_admin = true;
+        assert!(b.authorizes_scope(&a, 2100));
+        a.session_mode = ChannelSessionMode::PerConversation;
+        assert!(!b.authorizes_scope(&a, 2100));
+        a.session_mode = ChannelSessionMode::PerActor;
+        a.actor = "bob".into();
+        a.role = ChannelRole::Member;
+        assert!(!b.authorizes_scope(&a, 2100));
+        a.source_admin = false;
+        a.session_mode = ChannelSessionMode::PerConversation;
+        assert!(b.authorizes_scope(&a, 2100));
+        a.actor = "alice".into();
+        a.role = ChannelRole::Owner;
+        a.source_admin = true;
+        a.session_mode = ChannelSessionMode::PerActor;
+        b.spec
+            .channel_policy
+            .as_mut()
+            .unwrap()
+            .administrator_actors
+            .clear();
+        assert!(!b.authorizes_scope(&a, 2100));
+        b.spec
+            .channel_policy
+            .as_mut()
+            .unwrap()
+            .administrator_actors
+            .insert("alice".into());
+        b.epoch += 1;
+        assert!(!b.authorizes_scope(&a, 2100));
+    }
+
     #[test]
     fn verified_namespaces_mentions_and_membership_are_checked_independently() {
         let b = binding();

@@ -5,6 +5,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 fn policy() -> ChannelAccessPolicy {
     ChannelAccessPolicy {
+        administrator_actors: Default::default(),
         identity: ChannelIdentity {
             tenant: "tenant-a".into(),
             account: "bot-a".into(),
@@ -81,6 +82,7 @@ fn event(id: &str, actor: &str) -> ExternalEvent {
 }
 fn authority(b: &IntegrationBinding) -> ChannelAuthority {
     ChannelAuthority {
+        source_admin: false,
         binding_id: b.id.to_string(),
         epoch: b.epoch,
         actor: "alice".into(),
@@ -699,4 +701,217 @@ async fn permanent_channel_admits_initial_and_future_events_and_delivers_without
             .unwrap()
             .is_some()
     );
+}
+
+#[tokio::test]
+async fn compatible_review_keeps_session_and_suppresses_only_pre_review_output() {
+    use agena_domain::{ComposerDocument, ComposerNode};
+    use agena_storage::kernel::{RequestId, SessionConfiguration};
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let session = db
+        .ports
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Existing history".into(),
+            SessionConfiguration::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let execution = db
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Old history remains".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    db.ports
+        .sessions
+        .cancel_queued(RequestId::new(), session, execution.id)
+        .await
+        .unwrap();
+    let mut binding = enabled(&repo).await;
+    let previous = ChannelSessionRecord {
+        binding_id: binding.id,
+        scope_key: "original-epoch-1".into(),
+        session_id: session.get(),
+        authority: authority(&binding),
+        created_at_ms: 1500,
+    };
+    repo.save_channel_session(previous.clone()).await.unwrap();
+    repo.enqueue_delivery(IntegrationDelivery {
+        id: "old-queued-reply".into(),
+        binding_id: binding.id,
+        text: "Old queued output".into(),
+        state: "queued".into(),
+        attempts: 0,
+        next_attempt_ms: 0,
+        remote_id: None,
+        created_at_ms: 1600,
+        error: None,
+        route: Some(ChannelOutputRoute::from_authority(
+            &previous.authority,
+            session.get(),
+        )),
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.unexported_executions(binding.id, session.get())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    binding.state = BindingState::Faulted;
+    binding.epoch = 3;
+    binding.revision = 4;
+    binding.last_error = None;
+    binding
+        .spec
+        .channel_policy
+        .as_mut()
+        .unwrap()
+        .members
+        .iter_mut()
+        .find(|member| member.actor == "alice")
+        .unwrap()
+        .role = ChannelRole::Owner;
+    let faulted = repo.save_binding(binding, 2).await.unwrap();
+    let mut reviewed = faulted.clone();
+    reviewed.state = BindingState::Enabled;
+    reviewed.epoch = 4;
+    reviewed.revision = 5;
+    reviewed.provider_fingerprint = "channel-boundary-v2".into();
+    let reviewed = repo
+        .review_channel_binding(reviewed, 4, "instance_operator", 2000)
+        .await
+        .unwrap();
+    let audit = repo.channel_audit(reviewed.id).await.unwrap();
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].request_key, "review:4");
+    assert_eq!(audit[0].actor, "instance_operator");
+    let mut current = previous.clone();
+    current.scope_key = "original-epoch-4".into();
+    current.authority.epoch = 4;
+    current.authority.role = ChannelRole::Owner;
+    repo.recover_channel_session(previous.clone(), current.clone(), 2000)
+        .await
+        .unwrap();
+    assert!(
+        repo.channel_session(reviewed.id, &previous.scope_key)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let restored = repo
+        .channel_session(reviewed.id, &current.scope_key)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.session_id, session.get());
+    assert_eq!(restored.created_at_ms, previous.created_at_ms);
+    assert!(
+        repo.unexported_executions(reviewed.id, session.get())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let deliveries = repo.deliveries(reviewed.id).await.unwrap();
+    assert_eq!(deliveries.len(), 2);
+    assert!(
+        deliveries
+            .iter()
+            .all(|delivery| delivery.state == "skipped")
+    );
+    assert!(
+        repo.claim_delivery(reviewed.id, 2000)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let fresh = db
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Continue the same history".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    db.ports
+        .sessions
+        .cancel_queued(RequestId::new(), session, fresh.id)
+        .await
+        .unwrap();
+    repo.recover_channel_session(previous, current, 2001)
+        .await
+        .unwrap();
+    let unexported = repo
+        .unexported_executions(reviewed.id, session.get())
+        .await
+        .unwrap();
+    assert_eq!(unexported.len(), 1);
+    assert_eq!(unexported[0].0, fresh.id.to_string());
+}
+
+#[tokio::test]
+async fn compatible_review_rejects_stale_or_changed_boundaries_without_audit() {
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let binding = enabled(&repo).await;
+    let mut reviewed = binding.clone();
+    reviewed.epoch += 1;
+    reviewed.revision += 1;
+    assert!(
+        repo.review_channel_binding(reviewed.clone(), binding.revision, "telegram-user", 2000)
+            .await
+            .is_err()
+    );
+    assert!(
+        repo.review_channel_binding(
+            reviewed.clone(),
+            binding.revision - 1,
+            "instance_operator",
+            2000
+        )
+        .await
+        .is_err()
+    );
+    reviewed.permission_fingerprint = "different-source-capabilities".into();
+    assert!(
+        repo.review_channel_binding(
+            reviewed.clone(),
+            binding.revision,
+            "instance_operator",
+            2000
+        )
+        .await
+        .is_err()
+    );
+    reviewed.permission_fingerprint = binding.permission_fingerprint.clone();
+    reviewed.spec.resource = "different-conversation".into();
+    assert!(
+        repo.review_channel_binding(reviewed, binding.revision, "instance_operator", 2000)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        repo.binding(binding.id).await.unwrap().revision,
+        binding.revision
+    );
+    assert!(repo.channel_audit(binding.id).await.unwrap().is_empty());
 }

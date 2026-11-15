@@ -92,7 +92,9 @@ impl ToolExecutor {
         }
         scoped.channel_authority = session_context.channel_authority().cloned();
         scoped.channel_verifier = session_context.channel_verifier();
-        if let Some(authority) = &scoped.channel_authority {
+        if let Some(authority) = &scoped.channel_authority
+            && !authority.source_admin
+        {
             scoped.principal = scoped
                 .principal
                 .clone()

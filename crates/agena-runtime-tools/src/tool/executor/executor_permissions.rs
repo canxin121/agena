@@ -84,7 +84,11 @@ impl ToolExecutor {
                 .get("name")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("");
-            if !authority.grant.allows_mcp_tool(server, remote_tool) {
+            if !authority.allows_mcp_tool(
+                server,
+                remote_tool,
+                chrono::Utc::now().timestamp_millis(),
+            ) {
                 return Err(ToolError::CapabilityUnavailable(Box::new(agena_domain::CapabilityUnavailableResult {
                     capability:"channel_mcp_tool".into(),tool_name:Some(tool_name.clone()),
                     reason:"MCP server/tool pair is outside this channel member's explicit allowlist".into(),

@@ -6,6 +6,18 @@ const messages = {
     '为每个 Telegram Bot 选择 AI Bot，再选择允许它响应的聊天。',
     'Choose an AI bot for each Telegram bot, then choose where it can reply.',
   ],
+  administrators: ['管理员', 'Administrators'],
+  administrator: ['管理员', 'Administrator'],
+  administratorsHint: [
+    '指定用户在已允许的私聊和群聊中，可使用所选 AI Bot 的全部工具和权限。按 Telegram 数字用户 ID 授权，保存设置后生效；群聊中管理员使用独立上下文。',
+    'Selected users can use the connected AI bot’s full tools and permissions in admitted private and group chats. Enter numeric Telegram user IDs and save. Administrators have separate group context.',
+  ],
+  administratorIdsPlaceholder: ['数字用户 ID，逗号或换行分隔', 'Numeric user IDs, separated by commas or newlines'],
+  administratorIdsInvalid: [
+    '请填写最多 64 个正整数 Telegram 用户 ID，不填用户名或群聊 ID。',
+    'Enter up to 64 positive numeric Telegram user IDs, not usernames or group chat IDs.',
+  ],
+  administratorCandidates: ['从已收到消息的用户中选择', 'Choose from users who have sent messages'],
   bots: ['机器人', 'Bots'],
   addBot: ['添加 Bot', 'Add bot'],
   edit: ['编辑配置', 'Edit configuration'],
@@ -171,6 +183,18 @@ const messages = {
   ],
   retry: ['按原请求重试', 'Retry same request'],
   pauseBinding: ['暂停授权', 'Pause binding'],
+  reviewBinding: ['复核并恢复', 'Review and resume'],
+  reviewHint: [
+    '复核当前连接身份与权限。确认兼容后继续使用原会话和聊天记录；旧回复不会重新发送。权限范围已改变时，可重建独立连接。',
+    'Review the current connection identity and permissions. Compatible connections resume their existing conversation and history without resending old replies. Rebuild a separate connection if its permission boundary changed.',
+  ],
+  reviewed: ['已恢复原会话，可以继续聊天。', 'The existing conversation is ready to continue.'],
+  rebuild: ['重建连接', 'Rebuild connection'],
+  rebuildHint: [
+    '接入配置或来源权限已变化。确认后沿用当前聊天范围、成员和权限建立独立连接，从此刻的新消息继续；旧连接暂停，聊天记录保留。',
+    'The integration or source permissions changed. Rebuild with the current chat scope, members and grants in a separate conversation, starting with new messages from now. The old connection is paused and its transcript is kept.',
+  ],
+  rebuilt: ['已建立新的聊天连接。', 'A new chat connection is ready.'],
   enableBinding: ['启用授权', 'Enable binding'],
   pollNow: ['立即轮询', 'Poll now'],
   bindingConfirm: [

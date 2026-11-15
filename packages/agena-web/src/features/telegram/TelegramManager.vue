@@ -16,6 +16,12 @@ import BindingDetail from './BindingDetail.vue'
 import { useTelegramCopy } from './copy'
 import { telegramApi } from './api'
 import {
+  reconnectTelegramBinding,
+  telegramReconnectAttempt,
+  telegramReconnectKey,
+  type TelegramReconnectAttempt,
+} from './reconnect'
+import {
   botConfig,
   filterTelegramChats,
   matchesTelegramBot,
@@ -23,6 +29,7 @@ import {
   telegramChatAllowed,
   telegramChatRows,
   copyTelegramChatAccess,
+  parseTelegramAdministratorIds,
   type TelegramAiBot,
   type TelegramBot,
   type TelegramBotConfig,
@@ -94,9 +101,34 @@ const bindings = computed(() =>
 )
 const rows = computed(() => (bot.value ? telegramChatRows(bot.value, inventory.value, bindings.value) : []))
 const draft = ref<TelegramBotConfig | null>(null)
+const administratorInput = ref('')
+const reconnectAttempts = ref(new Map<string, TelegramReconnectAttempt>())
 const draftBaseline = ref(''),
   draftRevision = ref(0)
-const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== draftBaseline.value)
+const dirty = computed(
+  () =>
+    !!draft.value &&
+    (JSON.stringify(draft.value) !== draftBaseline.value ||
+      administratorInput.value !== draft.value.administrator_user_ids.join('\n')),
+)
+const administratorCandidates = computed(() => {
+  const senders = new Map<string, string>()
+  for (const room of inventory.value?.rooms || []) {
+    const id = room.last_sender_id
+    if (id && !room.last_sender_is_bot && /^[1-9][0-9]*$/.test(id)) senders.set(id, room.last_sender_name || id)
+  }
+  return [...senders].slice(0, 16).map(([id, name]) => ({ id, name }))
+})
+function administratorSelected(id: string) {
+  return administratorInput.value.split(/[\s,，]+/).includes(id)
+}
+function toggleAdministrator(id: string) {
+  if (busy.value) return
+  const ids = new Set(administratorInput.value.split(/[\s,，]+/).filter(Boolean))
+  if (ids.has(id)) ids.delete(id)
+  else ids.add(id)
+  administratorInput.value = [...ids].join('\n')
+}
 const query = ref(''),
   kind = ref(''),
   accessFilter = ref(''),
@@ -137,6 +169,7 @@ const scopeKey = () => botId.value + ':' + (source.value || '')
 
 function resetDraft() {
   draft.value = bot.value ? botConfig(bot.value) : null
+  administratorInput.value = draft.value?.administrator_user_ids.join('\n') || ''
   draftBaseline.value = JSON.stringify(draft.value)
   draftRevision.value = catalog.value.revision
   mutationError.value = ''
@@ -356,6 +389,11 @@ async function saveAccess() {
   mutationError.value = ''
   stopScopeReads()
   try {
+    try {
+      config.administrator_user_ids = parseTelegramAdministratorIds(administratorInput.value)
+    } catch {
+      throw new Error(tx('administratorIdsInvalid'))
+    }
     await telegramApi.save(draftRevision.value, config)
     if (disposed) return
     draft.value = null
@@ -499,12 +537,48 @@ async function control(binding: IntegrationBinding, action: IntegrationControlAc
   mutationError.value = ''
   try {
     await integrationApi.control(sourceId, binding.id, { action, expected_revision: binding.revision })
+    if (action === 'review' && !disposed && current === epoch) toasts.push('success', tx('reviewed'))
   } catch (cause) {
     if (!disposed && current === epoch) mutationError.value = message(cause)
   } finally {
     if (!disposed) busy.value = false
   }
   if (!disposed && current === epoch) await refreshScope()
+}
+function rebuildPending(binding: IntegrationBinding) {
+  return (
+    reconnectAttempts.value.has(binding.id) ||
+    bindings.value.some((entry) => entry.request_key === telegramReconnectKey(binding.id) && entry.state === 'disabled')
+  )
+}
+async function rebuild(binding: IntegrationBinding) {
+  const sourceId = source.value
+  if (!sourceId || busy.value || !bindings.value.some((entry) => entry.id === binding.id)) return
+  if (
+    !(await confirmAction({
+      title: tx('rebuild'),
+      description: tx('rebuildHint'),
+      confirmText: tx('rebuild'),
+      cancelText: tx('cancel'),
+      variant: 'default',
+    }))
+  )
+    return
+  const attempt = reconnectAttempts.value.get(binding.id) || telegramReconnectAttempt(binding)
+  reconnectAttempts.value.set(binding.id, attempt)
+  busy.value = true
+  mutationError.value = ''
+  try {
+    const replacement = await reconnectTelegramBinding(integrationApi, attempt)
+    reconnectAttempts.value.delete(binding.id)
+    selectedBinding.value = replacement.id
+    toasts.push('success', tx('rebuilt'))
+  } catch (cause) {
+    if (!disposed) mutationError.value = message(cause)
+  } finally {
+    if (!disposed) busy.value = false
+  }
+  if (!disposed) await refreshScope()
 }
 function accessChanged(binding: IntegrationBinding) {
   if (detail.value?.binding.id === binding.id) detail.value.binding = binding
@@ -729,6 +803,51 @@ onBeforeUnmount(() => {
           </section>
 
           <section
+            class="space-y-3 rounded-xl border border-border/70 bg-card p-4 sm:p-5"
+            data-testid="telegram-administrators"
+          >
+            <label for="telegram-administrator-ids" class="block text-sm font-semibold">{{
+              tx('administrators')
+            }}</label>
+            <p id="telegram-administrator-hint" class="text-xs leading-relaxed text-muted-foreground">
+              {{ tx('administratorsHint') }}
+            </p>
+            <textarea
+              id="telegram-administrator-ids"
+              v-model="administratorInput"
+              :disabled="busy"
+              rows="3"
+              :placeholder="tx('administratorIdsPlaceholder')"
+              aria-describedby="telegram-administrator-hint"
+              data-testid="telegram-administrator-ids"
+              class="w-full min-w-0 resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <div v-if="administratorCandidates.length" class="space-y-2">
+              <p class="text-xs text-muted-foreground">{{ tx('administratorCandidates') }}</p>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  v-for="candidate in administratorCandidates"
+                  :key="candidate.id"
+                  type="button"
+                  :disabled="busy"
+                  :aria-pressed="administratorSelected(candidate.id)"
+                  :class="
+                    administratorSelected(candidate.id)
+                      ? 'border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300'
+                      : 'border-border text-muted-foreground'
+                  "
+                  class="rounded-lg border px-3 py-2 text-xs disabled:opacity-50"
+                  :data-telegram-administrator="candidate.id"
+                  @click="toggleAdministrator(candidate.id)"
+                >
+                  {{ candidate.name }} <span class="font-mono">{{ candidate.id }}</span>
+                  <span v-if="administratorSelected(candidate.id)"> · {{ tx('administrator') }}</span>
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section
             class="space-y-5 rounded-xl border border-border/70 bg-card p-4 sm:p-5"
             data-testid="telegram-chat-policy"
           >
@@ -927,6 +1046,8 @@ onBeforeUnmount(() => {
           <div
             class="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/95 p-3 backdrop-blur"
             data-testid="telegram-access-savebar"
+            :data-saving="busy"
+            :data-dirty="dirty"
           >
             <p class="text-xs" :class="dirty ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground'">
               {{ dirty ? tx('unsaved') : tx('aiBotHint') }}
@@ -986,7 +1107,9 @@ onBeforeUnmount(() => {
                   :source="source"
                   :busy="busy"
                   :bot-enabled="bot.enabled"
+                  :rebuild-pending="rebuildPending(detail.binding)"
                   @control="control"
+                  @rebuild="rebuild"
                   @changed="accessChanged"
                   @editing="accessEditing = $event"
                   @open-session="emit('openSession', $event)"

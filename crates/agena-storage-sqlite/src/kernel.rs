@@ -2077,6 +2077,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         Command::PresentInteraction { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::Configure { session, .. }
+        | Command::RecoverChannelAuthority { session, .. }
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
         | Command::Truncate { session, .. }
@@ -2197,6 +2198,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
             _ => (*session, ChangeKind::Membership),
         },
         Command::Configure { session, .. }
+        | Command::RecoverChannelAuthority { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::FinishAgent { session, .. } => (*session, ChangeKind::Metadata),
         Command::Withdraw { session, .. }

@@ -86,6 +86,7 @@ fn update(update_id: i64, message: Value) -> Value {
 
 fn channel_policy() -> ChannelAccessPolicy {
     ChannelAccessPolicy {
+        administrator_actors: Default::default(),
         identity: ChannelIdentity {
             tenant: "telegram".into(),
             // The adapter lowercases the verified bot username.
@@ -640,9 +641,9 @@ async fn bot_owned_telegram_chat_is_created_enabled_and_answers_without_project_
                         .unwrap()
                         .iter()
                         .any(|body| {
-                            body["text"]
-                                .as_str()
-                                .is_some_and(|text| text.contains("bot-owned-telegram-restarted-reply"))
+                            body["text"].as_str().is_some_and(|text| {
+                                text.contains("bot-owned-telegram-restarted-reply")
+                            })
                         })
                         .then_some(()))
                 },
@@ -660,3 +661,5 @@ async fn bot_owned_telegram_chat_is_created_enabled_and_answers_without_project_
         })
         .await
 }
+
+mod recovery;

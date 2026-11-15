@@ -15,7 +15,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 ## Table of Contents
 
 - [`agena.agent`](#agenaagent) — Agent communication and delegation. (5 tools)
-- [`agena.bot`](#agenabot) — Operator Bot access to ordinary project sessions and integration grants. (2 tools)
+- [`agena.bot`](#agenabot) — Named Bot access to ordinary project sessions and integration grants. (2 tools)
 - [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (27 tools)
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
@@ -44,9 +44,11 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 ## agena.agent
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.0` · **Tools** 5 · **Tags** `agent` `interactive`
 
 Agent communication and delegation.
+
+> Create delegated agents, send messages, inspect their status and wait for results. Agent identity, delivery, supervision and recovery are managed by the runtime.
 
 ### cancel
 
@@ -64,21 +66,38 @@ Agent communication and delegation.
 **Input schema**:
 ```json
 {
+  "required": [
+    "target"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "target": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "target": {}
           },
           "required": [
             "target"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "target": {
             "anyOf": [
@@ -86,44 +105,27 @@ Agent communication and delegation.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "target"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "target": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "target"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -144,21 +146,50 @@ Agent communication and delegation.
 **Input schema**:
 ```json
 {
+  "required": [
+    "target",
+    "message"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "target": {
+      "description": "An agent_id, a visible agent name, or `parent`.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "message": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "target": {}
           },
           "required": [
             "target"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "target": {
             "anyOf": [
@@ -166,40 +197,40 @@ Agent communication and delegation.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "target"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "message": {}
               },
               "required": [
                 "message"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "message": {
                 "anyOf": [
@@ -207,58 +238,29 @@ Agent communication and delegation.
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "message"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
-  },
-  "properties": {
-    "message": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "target": {
-      "description": "An agent_id, a visible agent name, or `parent`.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "target",
-    "message"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -279,21 +281,50 @@ Agent communication and delegation.
 **Input schema**:
 ```json
 {
+  "required": [
+    "target",
+    "message"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "target": {
+      "description": "An agent_id, a visible agent name, or `parent`.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "message": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "target": {}
           },
           "required": [
             "target"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "target": {
             "anyOf": [
@@ -301,40 +332,40 @@ Agent communication and delegation.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "target"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "message": {}
               },
               "required": [
                 "message"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "message": {
                 "anyOf": [
@@ -342,58 +373,29 @@ Agent communication and delegation.
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "message"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
-  },
-  "properties": {
-    "message": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "target": {
-      "description": "An agent_id, a visible agent name, or `parent`.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "target",
-    "message"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -421,198 +423,97 @@ Agent communication and delegation.
 {
   "$defs": {
     "AgentModelSelection": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
-        "adapter": {
-          "default": null,
+        "provider": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "default": null
+        },
+        "adapter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "model": {
-          "default": null,
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "default": null
+        },
+        "thinking_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "speed_mode": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "verbosity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         },
         "parallel_tool_calls": {
-          "default": null,
           "type": [
             "boolean",
             "null"
-          ]
-        },
-        "provider": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "speed_mode": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "thinking_mode": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "verbosity": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
+          ],
+          "default": null
         }
       },
-      "type": "object"
+      "additionalProperties": false
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "name": {}
-          },
-          "required": [
-            "name"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "name": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "type": "object"
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "prompt": {}
-              },
-              "required": [
-                "prompt"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "prompt": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
-                  },
-                  {
-                    "maxItems": 0,
-                    "type": "array"
-                  },
-                  {
-                    "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "prompt"
-            ],
-            "type": "object"
-          }
-        ]
-      }
-    ]
-  },
+  "required": [
+    "name",
+    "prompt"
+  ],
+  "type": "object",
   "properties": {
-    "commands": {
-      "default": [],
-      "description": "Command instructions attached to the initial message.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000002"
-    },
-    "max_cost_microusd": {
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "max_tokens": {
-      "description": "Per-execution token budget, retained for followup executions.",
-      "format": "uint64",
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
     "name": {
       "description": "Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "prompt": {
       "description": "Scope, constraints, required context and output contracts, and expected final result.\nParent history is not copied; include any chart or UI contract the task needs.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "commands": {
+      "description": "Command instructions attached to the initial message.",
+      "type": "array",
+      "items": {
         "type": "string"
       },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
+      "default": [],
+      "x-agena-order": "000002"
     },
     "selection": {
       "anyOf": [
@@ -626,20 +527,121 @@ Agent communication and delegation.
       "x-agena-order": "000003"
     },
     "timeout_ms": {
-      "format": "uint64",
-      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
+      "format": "uint64",
+      "minimum": 1,
       "x-agena-order": "000004"
+    },
+    "max_tokens": {
+      "description": "Per-execution token budget, retained for followup executions.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000005"
+    },
+    "max_cost_microusd": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000006"
     }
   },
-  "required": [
-    "name",
-    "prompt"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "prompt": {}
+              },
+              "required": [
+                "prompt"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "prompt"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -663,14 +665,14 @@ Agent communication and delegation.
   "properties": {
     "timeout_ms": {
       "description": "Defaults to 60 seconds. Wait for messages instead of polling statuses.",
-      "format": "uint64",
-      "maximum": 300000,
-      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000000"
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000000",
+      "maximum": 300000
     }
   },
   "type": "object"
@@ -679,9 +681,11 @@ Agent communication and delegation.
 
 ## agena.bot
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.0` · **Tools** 2 · **Tags** `agent` `bots`
 
-Operator Bot access to ordinary project sessions and integration grants.
+Named Bot access to ordinary project sessions and integration grants.
+
+> Manage named AI Bots, their ordinary local project conversations and grants to external integrations. Bot identity and conversation routing are owned by the runtime.
 
 ### connections
 
@@ -704,239 +708,92 @@ Operator Bot access to ordinary project sessions and integration grants.
 ```json
 {
   "$defs": {
-    "ChannelAccessPolicy": {
-      "additionalProperties": false,
-      "properties": {
-        "allow_automated_reports": {
-          "default": false,
-          "description": "Explicit automated posts use a separate service session, never borrow\na human owner's private chat or memories.",
-          "type": "boolean"
-        },
-        "allow_unlisted_chat": {
-          "default": false,
-          "description": "Unlisted platform members can only get chat-only Member access. This\noption never confers the binding capability grant.",
-          "type": "boolean"
-        },
-        "grant": {
-          "$ref": "#/$defs/ChannelGrant",
-          "default": {
-            "mcp_tools": {},
-            "network_hosts": [],
-            "private_memory": false,
-            "source_workspace": false,
-            "tools": []
-          },
-          "description": "Capabilities available to every admitted member of this binding.\n\nThis is deliberately one grant per binding rather than one per role.\nA conversation's transcript is shared by everyone speaking in it, so\nletting two roles hold different tools would let a low-privilege\nmessage drive a tool whose output the whole room then reads. One grant\nmakes that leak structurally impossible; roles continue to govern\nmembership management only."
-        },
-        "identity": {
-          "$ref": "#/$defs/ChannelIdentity"
-        },
-        "kinds": {
-          "default": [],
-          "description": "Room shapes this binding may serve. Empty means every shape the adapter\nreports. The shape of any individual message is still decided per\nmessage, and `Direct` keeps its stricter session rules wherever it\nappears.",
-          "items": {
-            "$ref": "#/$defs/ConversationKind"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "members": {
-          "description": "Explicit local assignments override the open-member option, including\na Blocked entry. Remote platform administrator claims are ignored.",
-          "items": {
-            "$ref": "#/$defs/ChannelMember"
-          },
-          "type": "array"
-        },
-        "per_user_daily_limit": {
-          "default": 50,
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "service_grant": {
-          "$ref": "#/$defs/ChannelGrant",
-          "default": {
-            "mcp_tools": {},
-            "network_hosts": [],
-            "private_memory": false,
-            "source_workspace": false,
-            "tools": []
-          }
-        },
-        "session_mode": {
-          "$ref": "#/$defs/ChannelSessionMode",
-          "default": "per_conversation"
-        },
-        "thread_mode": {
-          "$ref": "#/$defs/ChannelThreadMode",
-          "default": "exact"
-        },
-        "trigger": {
-          "$ref": "#/$defs/ChannelTrigger",
-          "default": "direct_or_mention"
-        }
-      },
-      "required": [
-        "identity",
-        "members"
-      ],
-      "type": "object"
-    },
-    "ChannelGrant": {
-      "additionalProperties": false,
-      "properties": {
-        "mcp_tools": {
-          "additionalProperties": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "uniqueItems": true
-          },
-          "default": {},
-          "description": "Fine-grained MCP server -> exact remote tool names. The generic MCP\ngateway and connection-management tools are never directly grantable.",
-          "properties": {},
-          "type": "object"
-        },
-        "network_hosts": {
-          "default": [],
-          "description": "No network by default, including loopback/private targets. Explicit\ndestination rules still intersect the source session's permission cap.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "private_memory": {
-          "default": false,
-          "type": "boolean"
-        },
-        "source_workspace": {
-          "default": false,
-          "type": "boolean"
-        },
-        "tools": {
-          "default": [],
-          "description": "Exact canonical tool IDs only; empty means no tools. Scope-preserving\nmemory/companion helpers are derived from the booleans below, not freely\nassigned management-tool names.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        }
-      },
-      "type": "object"
-    },
-    "ChannelIdentity": {
-      "additionalProperties": false,
-      "description": "The chat transport identity: tenant plus account. No room shape here.",
-      "properties": {
-        "account": {
-          "type": "string"
-        },
-        "tenant": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "tenant",
-        "account"
-      ],
-      "type": "object"
-    },
-    "ChannelMember": {
-      "additionalProperties": false,
-      "properties": {
-        "actor": {
-          "type": "string"
-        },
-        "expires_at_ms": {
-          "default": null,
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "role": {
-          "$ref": "#/$defs/ChannelRole"
-        }
-      },
-      "required": [
-        "actor",
-        "role"
-      ],
-      "type": "object"
-    },
-    "ChannelRole": {
-      "enum": [
-        "blocked",
-        "member",
-        "operator",
-        "administrator",
-        "owner"
-      ],
-      "type": "string"
-    },
-    "ChannelSessionMode": {
-      "description": "How one conversation's sessions are partitioned.\n\n`PerConversation` is the default: a group is one session shared by all of\nits members, a direct chat is one session per participant, and a channel is\none session per channel. Context is never merged across conversations or\nacross platform accounts.\n\n`PerActor` additionally splits a single conversation by speaker. It is an\nexplicit opt-in for rooms whose members must not share a transcript.",
-      "enum": [
-        "per_conversation",
-        "per_actor"
-      ],
-      "type": "string"
-    },
-    "ChannelThreadMode": {
-      "enum": [
-        "exact",
-        "per_thread"
-      ],
-      "type": "string"
-    },
-    "ChannelTrigger": {
-      "enum": [
-        "direct_or_mention",
-        "every_message"
-      ],
-      "type": "string"
-    },
-    "ConversationKind": {
-      "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
-      "enum": [
-        "direct",
-        "group",
-        "broadcast"
-      ],
-      "type": "string"
-    },
     "IntegrationAction": {
+      "type": "string",
       "enum": [
         "list",
         "status",
         "propose",
         "pause"
       ],
-      "type": "string",
       "x-agena-order": "000000"
     },
-    "IntegrationMode": {
-      "enum": [
-        "channel",
-        "notify",
-        "session"
-      ],
-      "type": "string"
-    },
     "IntegrationSpec": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
+        "title": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/IntegrationMode"
+        },
+        "config": {
+          "x-agena-json-escape": true,
+          "x-agena-json-max-bytes": 32768,
+          "x-agena-json-max-depth": 12
+        },
+        "resource": {
+          "description": "One conversation, an explicit set, or every conversation the adapter\nreports for this account.",
+          "type": "string"
+        },
+        "thread": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "actors": {
-          "default": [],
           "description": "Mandatory for channels. Empty for a source accepts all authors as DATA,\nnot as operators. A source never impersonates the issue author as user.",
+          "type": "array",
           "items": {
             "type": "string"
           },
-          "type": "array"
+          "default": []
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "poll_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "expires_at_ms": {
+          "description": "Expiry timestamp; 0 means no expiry for Channel mode only.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "daily_limit": {
+          "description": "0 means no daily cap for Channel mode only.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "total_limit": {
+          "description": "0 means no lifetime cap for Channel mode only.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "max_execution_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "use_source_permissions": {
+          "description": "Explicit operator consent to use (never expand) the source session's\ncurrent permission boundary. Required for Session and Channel modes.",
+          "type": "boolean",
+          "default": false
         },
         "channel_policy": {
           "anyOf": [
@@ -947,71 +804,9 @@ Operator Bot access to ordinary project sessions and integration grants.
               "type": "null"
             }
           ]
-        },
-        "config": {
-          "x-agena-json-escape": true,
-          "x-agena-json-max-bytes": 32768,
-          "x-agena-json-max-depth": 12
-        },
-        "daily_limit": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "event_types": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "expires_at_ms": {
-          "format": "int64",
-          "type": "integer"
-        },
-        "instruction": {
-          "type": "string"
-        },
-        "max_execution_seconds": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "mode": {
-          "$ref": "#/$defs/IntegrationMode"
-        },
-        "poll_seconds": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "provider": {
-          "type": "string"
-        },
-        "resource": {
-          "description": "One conversation, an explicit set, or every conversation the adapter\nreports for this account.",
-          "type": "string"
-        },
-        "thread": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "title": {
-          "type": "string"
-        },
-        "total_limit": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "use_source_permissions": {
-          "default": false,
-          "description": "Explicit operator consent to use (never expand) the source session's\ncurrent permission boundary. Required for Session and Channel modes.",
-          "type": "boolean"
         }
       },
+      "additionalProperties": false,
       "required": [
         "title",
         "provider",
@@ -1025,30 +820,264 @@ Operator Bot access to ordinary project sessions and integration grants.
         "daily_limit",
         "total_limit",
         "max_execution_seconds"
-      ],
-      "type": "object"
+      ]
+    },
+    "IntegrationMode": {
+      "type": "string",
+      "enum": [
+        "channel",
+        "notify",
+        "session"
+      ]
+    },
+    "ChannelAccessPolicy": {
+      "type": "object",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/ChannelIdentity"
+        },
+        "kinds": {
+          "description": "Room shapes this binding may serve. Empty means every shape the adapter\nreports. The shape of any individual message is still decided per\nmessage, and `Direct` keeps its stricter session rules wherever it\nappears.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ConversationKind"
+          },
+          "default": []
+        },
+        "session_mode": {
+          "$ref": "#/$defs/ChannelSessionMode",
+          "default": "per_conversation"
+        },
+        "thread_mode": {
+          "$ref": "#/$defs/ChannelThreadMode",
+          "default": "exact"
+        },
+        "trigger": {
+          "$ref": "#/$defs/ChannelTrigger",
+          "default": "direct_or_mention"
+        },
+        "members": {
+          "description": "Explicit local assignments override the open-member option, including\na Blocked entry. Remote platform administrator claims are ignored.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChannelMember"
+          }
+        },
+        "administrator_actors": {
+          "description": "Locally trusted actors who may use the source session's capabilities.\nRoles alone never grant this access. These actors use separate\nper-speaker conversations, even when ordinary members share a room.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "allow_unlisted_chat": {
+          "description": "Unlisted platform members can only get chat-only Member access. This\noption never confers the binding capability grant.",
+          "type": "boolean",
+          "default": false
+        },
+        "grant": {
+          "description": "Capabilities available to every admitted member of this binding.\n\nOrdinary members share one grant and may share a transcript. Locally\ntrusted source administrators have isolated per-speaker transcripts.",
+          "$ref": "#/$defs/ChannelGrant",
+          "default": {
+            "tools": [],
+            "mcp_tools": {},
+            "private_memory": false,
+            "source_workspace": false,
+            "network_hosts": []
+          }
+        },
+        "per_user_daily_limit": {
+          "description": "0 removes the per-member daily cap.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 50
+        },
+        "allow_automated_reports": {
+          "description": "Explicit automated posts use a separate service session, never borrow\na human owner's private chat or memories.",
+          "type": "boolean",
+          "default": false
+        },
+        "service_grant": {
+          "$ref": "#/$defs/ChannelGrant",
+          "default": {
+            "tools": [],
+            "mcp_tools": {},
+            "private_memory": false,
+            "source_workspace": false,
+            "network_hosts": []
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "members"
+      ]
+    },
+    "ChannelIdentity": {
+      "description": "The chat transport identity: tenant plus account. No room shape here.",
+      "type": "object",
+      "properties": {
+        "tenant": {
+          "type": "string"
+        },
+        "account": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "account"
+      ]
+    },
+    "ConversationKind": {
+      "description": "The shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, groups and channels at the same time.\nThe shape of the conversation a message was sent in.\n\nThis is a property of the message, not of the binding: one platform account\nserves direct chats, multi-party rooms and broadcast channels at the same\ntime. Four mutually exclusive values cover every adapter surveyed:\n\n- `Direct` — a one-to-one conversation (Telegram private, WeCom single,\n  Weixin p2p, QQ c2c, DingTalk type 1, WhatsApp/Signal/iMessage/mail DM).\n- `Group` — a named, multi-party, interactive room. Group DMs (Slack MPIM,\n  Discord group DM, QQ temporary C2C from a group) and interactive channels\n  (Slack channel, Discord guild text, Feishu group) belong here because the\n  assistant behaves identically: shared transcript, mention-gated trigger,\n  several readers.\n- `Broadcast` — a one-to-many surface where posting is restricted to\n  owners/admins (Telegram channel, WhatsApp newsletter, Discord\n  announcement). The assistant may be unable to reply at all.\n\nVisibility (public vs private) is deliberately *not* a kind: only Slack and\nDiscord private threads expose it, and no policy branches on it. Threads are\na separate axis carried by the message's `thread` field, never folded into\nthis enum.",
+      "type": "string",
+      "enum": [
+        "direct",
+        "group",
+        "broadcast"
+      ]
+    },
+    "ChannelSessionMode": {
+      "description": "How one conversation's sessions are partitioned.\n\n`PerConversation` is the default: a group is one session shared by all of\nits members, a direct chat is one session per participant, and a channel is\none session per channel. Context is never merged across conversations or\nacross platform accounts.\n\n`PerActor` additionally splits a single conversation by speaker. It is an\nexplicit opt-in for rooms whose members must not share a transcript.",
+      "type": "string",
+      "enum": [
+        "per_conversation",
+        "per_actor"
+      ]
+    },
+    "ChannelThreadMode": {
+      "type": "string",
+      "enum": [
+        "exact",
+        "per_thread"
+      ]
+    },
+    "ChannelTrigger": {
+      "type": "string",
+      "enum": [
+        "direct_or_mention",
+        "every_message"
+      ]
+    },
+    "ChannelMember": {
+      "type": "object",
+      "properties": {
+        "actor": {
+          "type": "string"
+        },
+        "role": {
+          "$ref": "#/$defs/ChannelRole"
+        },
+        "expires_at_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "actor",
+        "role"
+      ]
+    },
+    "ChannelRole": {
+      "type": "string",
+      "enum": [
+        "blocked",
+        "member",
+        "operator",
+        "administrator",
+        "owner"
+      ]
+    },
+    "ChannelGrant": {
+      "type": "object",
+      "properties": {
+        "tools": {
+          "description": "Exact canonical tool IDs only; empty means no tools. Scope-preserving\nmemory/companion helpers are derived from the booleans below, not freely\nassigned management-tool names.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "mcp_tools": {
+          "description": "Fine-grained MCP server -> exact remote tool names. The generic MCP\ngateway and connection-management tools are never directly grantable.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "default": {},
+          "properties": {}
+        },
+        "private_memory": {
+          "type": "boolean",
+          "default": false
+        },
+        "source_workspace": {
+          "type": "boolean",
+          "default": false
+        },
+        "network_hosts": {
+          "description": "No network by default, including loopback/private targets. Explicit\nLiteral IP or IP:port grants intersect the source session's permission cap.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "action"
+  ],
+  "type": "object",
   "properties": {
     "action": {
       "$ref": "#/$defs/IntegrationAction"
     },
-    "binding_id": {
-      "default": null,
+    "user_quote": {
+      "description": "Exact quotation from the current direct user, required for propose/pause.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "binding_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
       "x-agena-order": "000002"
     },
     "expected_revision": {
-      "default": null,
-      "format": "int64",
       "type": [
         "integer",
         "null"
       ],
+      "format": "int64",
+      "default": null,
       "x-agena-order": "000003"
     },
     "spec": {
@@ -1062,27 +1091,15 @@ Operator Bot access to ordinary project sessions and integration grants.
       ],
       "default": null,
       "x-agena-order": "000004"
-    },
-    "user_quote": {
-      "default": null,
-      "description": "Exact quotation from the current direct user, required for propose/pause.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
     }
   },
-  "required": [
-    "action"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
 ### sessions
 
-`agena.bot.sessions` · **Summary**: Manage ordinary project conversations as the active named operator Bot. Resolve project names/paths with projects(query), inspect project(workspace_id), then sessions(query/favorite/pinned/states) globally or within that project; never ask humans to find IDs. Read/read_text and status provide evidence, native guards, current model, pending decisions and links. Continue a relevant existing session with send; otherwise create a normally titled root then send a self-contained request. Rename/organize set explicit metadata with expected_version. Fork creates a normal visible branch inheriting transcript/model/permissions at a stable boundary. Delete soft-deletes one idle conversation only, after a native human card naming exact workspace/title/ID; status guards must still match after approval. Clarify ambiguous destructive scope. Models lists configured native choices; configure preserves unset options and needs expected_version. Queue lists identities; queue_pause/queue_edit/queue_remove use observed control version and execution/generation guards, preserve attachments and never silently overwrite. Export returns the existing authenticated transcript download. Register_project records an existing directory, not a new physical folder. Every write requires an exact current direct-user quote and stable request_key; reuse identical payload on retry. Never approve permissions or answer human decisions. Return target links and distinguish queued/running/waiting/completed using native evidence; use bounded pages, never poll forever. Native tools and existing Subagents execute project work with existing permissions.
+`agena.bot.sessions` · **Summary**: Manage ordinary project conversations as the active named Bot, locally or through a chat-channel binding explicitly authorized for this tool. Resolve project names/paths with projects(query), inspect project(workspace_id), then sessions(query/favorite/pinned/states) globally or within that project; never ask humans to find IDs. Read/read_text and status provide evidence, native guards, current model, pending decisions and links. Continue a relevant existing session with send; otherwise create a normally titled root then send a self-contained request. Rename/organize set explicit metadata with expected_version. Fork creates a normal visible branch inheriting transcript/model/permissions at a stable boundary. Delete soft-deletes one idle conversation only, after a native human card naming exact workspace/title/ID; status guards must still match after approval. Clarify ambiguous destructive scope. Models lists configured native choices; configure preserves unset options and needs expected_version. Queue lists identities; queue_pause/queue_edit/queue_remove use observed control version and execution/generation guards, preserve attachments and never silently overwrite. Export returns the existing authenticated transcript download. Register_project records an existing directory, not a new physical folder. Every write requires an exact current direct-user quote and stable request_key; reuse identical payload on retry. Never approve permissions or answer human decisions. Return target links and distinguish queued/running/waiting/completed using native evidence; use bounded pages, never poll forever. Native tools and existing Subagents execute project work with existing permissions.
 
 **Tags**: `agent`
 
@@ -1129,6 +1146,7 @@ Operator Bot access to ordinary project sessions and integration grants.
 {
   "$defs": {
     "BotAction": {
+      "type": "string",
       "enum": [
         "projects",
         "project",
@@ -1152,199 +1170,303 @@ Operator Bot access to ordinary project sessions and integration grants.
         "send",
         "stop"
       ],
-      "type": "string",
       "x-agena-order": "000000"
-    },
-    "BotModelSchema": {
-      "additionalProperties": false,
-      "properties": {
-        "adapter_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "model_id": {
-          "type": "string"
-        },
-        "provider_id": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "provider_id",
-        "model_id"
-      ],
-      "type": "object"
     },
     "SessionStateKind": {
       "description": "The single client-facing processing state of a session.\n\nStorage derives this state from current kernel execution facts and pending\ninteractions. API projections and TUI/CLI/Web consumers share the same\nvocabulary; database ownership and recovery remain kernel responsibilities.",
       "oneOf": [
         {
-          "const": "creating",
           "description": "`sessions.lifecycle_state = creating` — not yet usable.",
-          "type": "string"
+          "type": "string",
+          "const": "creating"
         },
         {
-          "const": "ready",
           "description": "No in-flight run, no pending interaction.",
-          "type": "string"
+          "type": "string",
+          "const": "ready"
         },
         {
-          "const": "running",
           "description": "A run marker is in flight: this server is executing a response.",
-          "type": "string"
+          "type": "string",
+          "const": "running"
         },
         {
-          "const": "awaiting_interaction",
           "description": "An in-flight `tool_call` with unanswered `user_input` gates the session.",
-          "type": "string"
+          "type": "string",
+          "const": "awaiting_interaction"
         },
         {
-          "const": "failed",
           "description": "Lifecycle failed, or the last run terminally failed and is not resumable.",
+          "type": "string",
+          "const": "failed"
+        }
+      ]
+    },
+    "BotModelSchema": {
+      "type": "object",
+      "properties": {
+        "provider_id": {
+          "type": "string"
+        },
+        "adapter_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "model_id": {
           "type": "string"
         }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "model_id"
       ]
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "action"
+  ],
+  "type": "object",
   "properties": {
     "action": {
       "$ref": "#/$defs/BotAction"
     },
-    "at_message_id": {
-      "default": null,
-      "description": "Fork through this visible entry; absent freezes the latest boundary on first attempt.",
+    "workspace_id": {
+      "description": "Existing registered project ID returned by projects; required for project/create. Sessions may search all registered eligible projects.",
+      "type": [
+        "integer",
+        "null"
+      ],
       "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000022"
-    },
-    "byte_offset": {
       "default": null,
-      "description": "Next byte offset returned by read_text.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000020"
+      "x-agena-order": "000001"
     },
-    "cursor": {
-      "default": null,
-      "description": "Opaque next_cursor from the same action/target/filter; preserve it unchanged when paging.",
+    "path": {
+      "description": "Absolute existing directory to register. Does not grant filesystem access.",
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000011"
-    },
-    "entry_id": {
       "default": null,
-      "description": "Visible text entry returned by read; required for read_text.",
-      "format": "int64",
+      "x-agena-order": "000002"
+    },
+    "session_id": {
+      "description": "Exact eligible target ID returned by sessions; required for conversation actions.",
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000019"
-    },
-    "execution_id": {
+      "format": "int64",
       "default": null,
-      "description": "Exact execution observed by status/queue; required for stop, queue_edit and queue_remove.",
+      "x-agena-order": "000003"
+    },
+    "title": {
+      "description": "Human-readable title (at most 512 bytes): required for create/rename, optional for fork.",
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000009"
-    },
-    "expected_control_version": {
       "default": null,
-      "description": "Observed native queue/control revision; required for delete and queue mutations.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000023"
-    },
-    "expected_entry_count": {
-      "default": null,
-      "description": "Observed transcript entry count, required for deletion confirmation.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000024"
-    },
-    "expected_generation": {
-      "default": null,
-      "description": "Native execution generation returned by status/queue, paired with execution_id.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "expected_version": {
-      "default": null,
-      "description": "Metadata version returned by status; required for rename/organize/configure/delete.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000008"
-    },
-    "favorite": {
-      "default": null,
-      "description": "Filter sessions, or explicitly set favorite with organize (never toggles).",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000015"
+      "x-agena-order": "000004"
     },
     "instruction": {
-      "default": null,
       "description": "Self-contained send instruction, or replacement text for queue_edit; at most 16 KiB.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000005"
     },
-    "limit": {
+    "user_quote": {
+      "description": "Exact quote from the current real user message, required for every write.",
+      "type": [
+        "string",
+        "null"
+      ],
       "default": null,
-      "description": "Page size, clamped to 1..50. Transcript previews are also byte limited.",
-      "format": "uint64",
-      "minimum": 0,
+      "x-agena-order": "000006"
+    },
+    "request_key": {
+      "description": "Stable operation identity within this user turn. Reuse unchanged on retry.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000007"
+    },
+    "expected_version": {
+      "description": "Metadata version returned by status; required for rename/organize/configure/delete.",
       "type": [
         "integer",
         "null"
       ],
+      "format": "int64",
+      "default": null,
+      "x-agena-order": "000008"
+    },
+    "execution_id": {
+      "description": "Exact execution observed by status/queue; required for stop, queue_edit and queue_remove.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000009"
+    },
+    "expected_generation": {
+      "description": "Native execution generation returned by status/queue, paired with execution_id.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "cursor": {
+      "description": "Opaque next_cursor from the same action/target/filter; preserve it unchanged when paging.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000011"
+    },
+    "offset": {
+      "description": "Initial page offset where supported; cannot be combined with cursor.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000012"
+    },
+    "limit": {
+      "description": "Page size, clamped to 1..50. Transcript previews are also byte limited.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "default": null,
       "x-agena-order": "000013"
     },
-    "max_bytes": {
+    "query": {
+      "description": "Project name/path or session title search. Resolve names here; never ask humans for IDs.",
+      "type": [
+        "string",
+        "null"
+      ],
       "default": null,
-      "description": "Bounded read_text byte budget (at most 16000).",
-      "format": "uint64",
-      "minimum": 0,
+      "x-agena-order": "000014"
+    },
+    "favorite": {
+      "description": "Filter sessions, or explicitly set favorite with organize (never toggles).",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000015"
+    },
+    "pinned": {
+      "description": "Filter sessions, or explicitly set pinned with organize (never toggles).",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
+    },
+    "states": {
+      "description": "Native session states to include in sessions.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/SessionStateKind"
+      },
+      "default": [],
+      "x-agena-order": "000017"
+    },
+    "parent_session_id": {
+      "description": "Filter sessions by their exact ordinary parent.",
       "type": [
         "integer",
         "null"
       ],
+      "format": "int64",
+      "default": null,
+      "x-agena-order": "000018"
+    },
+    "entry_id": {
+      "description": "Visible text entry returned by read; required for read_text.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null,
+      "x-agena-order": "000019"
+    },
+    "byte_offset": {
+      "description": "Next byte offset returned by read_text.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "default": null,
+      "x-agena-order": "000020"
+    },
+    "max_bytes": {
+      "description": "Bounded read_text byte budget (at most 16000).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "default": null,
       "x-agena-order": "000021"
     },
+    "at_message_id": {
+      "description": "Fork through this visible entry; absent freezes the latest boundary on first attempt.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null,
+      "x-agena-order": "000022"
+    },
+    "expected_control_version": {
+      "description": "Observed native queue/control revision; required for delete and queue mutations.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "default": null,
+      "x-agena-order": "000023"
+    },
+    "expected_entry_count": {
+      "description": "Observed transcript entry count, required for deletion confirmation.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "default": null,
+      "x-agena-order": "000024"
+    },
     "model": {
+      "description": "Configured native provider/model reference from models. Unset preserves selection.",
       "anyOf": [
         {
           "$ref": "#/$defs/BotModelSchema"
@@ -1354,174 +1476,71 @@ Operator Bot access to ordinary project sessions and integration grants.
         }
       ],
       "default": null,
-      "description": "Configured native provider/model reference from models. Unset preserves selection.",
       "x-agena-order": "000025"
     },
-    "offset": {
-      "default": 0,
-      "description": "Initial page offset where supported; cannot be combined with cursor.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000012"
-    },
-    "parallel_tool_calls": {
-      "default": null,
-      "description": "Explicit parallel tool calling preference; unset preserves previous value.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000029"
-    },
-    "parent_session_id": {
-      "default": null,
-      "description": "Filter sessions by their exact ordinary parent.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000018"
-    },
-    "path": {
-      "default": null,
-      "description": "Absolute existing directory to register. Does not grant filesystem access.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "paused": {
-      "default": null,
-      "description": "Explicit queue pause state for queue_pause; never toggles.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000031"
-    },
-    "pinned": {
-      "default": null,
-      "description": "Filter sessions, or explicitly set pinned with organize (never toggles).",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "query": {
-      "default": null,
-      "description": "Project name/path or session title search. Resolve names here; never ask humans for IDs.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000014"
-    },
-    "request_key": {
-      "default": null,
-      "description": "Stable operation identity within this user turn. Reuse unchanged on retry.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000007"
-    },
-    "reset_model": {
-      "default": false,
-      "description": "Reset model to current project defaults; incompatible with model.",
-      "type": "boolean",
-      "x-agena-order": "000030"
-    },
-    "session_id": {
-      "default": null,
-      "description": "Exact eligible target ID returned by sessions; required for conversation actions.",
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "speed_mode": {
-      "default": null,
-      "description": "Supported speed option from models; unset preserves previous value.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000027"
-    },
-    "states": {
-      "default": [],
-      "description": "Native session states to include in sessions.",
-      "items": {
-        "$ref": "#/$defs/SessionStateKind"
-      },
-      "type": "array",
-      "x-agena-order": "000017"
-    },
     "thinking_mode": {
-      "default": null,
       "description": "Supported thinking option from models; unset preserves previous value.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000026"
     },
-    "title": {
-      "default": null,
-      "description": "Human-readable title (at most 512 bytes): required for create/rename, optional for fork.",
+    "speed_mode": {
+      "description": "Supported speed option from models; unset preserves previous value.",
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000004"
-    },
-    "user_quote": {
       "default": null,
-      "description": "Exact quote from the current real user message, required for every write.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
+      "x-agena-order": "000027"
     },
     "verbosity": {
-      "default": null,
       "description": "Supported verbosity from models; unset preserves previous value.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000028"
     },
-    "workspace_id": {
-      "default": null,
-      "description": "Existing registered project ID returned by projects; required for project/create. Sessions may search all registered eligible projects.",
-      "format": "int64",
+    "parallel_tool_calls": {
+      "description": "Explicit parallel tool calling preference; unset preserves previous value.",
       "type": [
-        "integer",
+        "boolean",
         "null"
       ],
-      "x-agena-order": "000001"
+      "default": null,
+      "x-agena-order": "000029"
+    },
+    "reset_model": {
+      "description": "Reset model to current project defaults; incompatible with model.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000030"
+    },
+    "paused": {
+      "description": "Explicit queue pause state for queue_pause; never toggles.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000031"
     }
   },
-  "required": [
-    "action"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
 ## agena.chatgpt
 
-**Version** `0.1.0` · **Tools** 27
+**Version** `0.1.0` · **Tools** 27 · **Tags** `network` `openai` `ai`
 
 Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback.
+
+> Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback.
 
 ### agents
 
@@ -1560,7 +1579,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -1609,157 +1628,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -1787,61 +1806,106 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -1849,16 +1913,17 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -1866,73 +1931,27 @@ Model-based tools default to the current session model. Use an OpenAI model that
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -1973,7 +1992,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -2022,157 +2041,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -2204,19 +2223,23 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
+    "prompt": {
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
     },
-    "input_items": {
-      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "stable_instructions": {
+      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -2226,6 +2249,20 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "description": "Official fields merged into this tool's declaration. `type` is protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_response_id": {
       "description": "Responses API continuation token from an earlier call.",
       "type": [
@@ -2234,37 +2271,19 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
+    "input_items": {
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "include": {
+      "description": "Optional Responses include selectors.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -2308,7 +2327,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -2357,157 +2376,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -2548,7 +2567,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -2597,157 +2616,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -2775,61 +2794,106 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -2837,16 +2901,17 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -2854,73 +2919,27 @@ Model-based tools default to the current session model. Use an OpenAI model that
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -2961,7 +2980,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -3010,157 +3029,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -3183,21 +3202,38 @@ Model-based tools default to the current session model. Use an OpenAI model that
 **Input schema**:
 ```json
 {
+  "required": [
+    "handle"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "handle": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "handle": {}
           },
           "required": [
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "handle": {
             "anyOf": [
@@ -3205,44 +3241,27 @@ Model-based tools default to the current session model. Use an OpenAI model that
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "handle"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "handle": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "handle"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -3274,19 +3293,23 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
+    "prompt": {
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
     },
-    "input_items": {
-      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "stable_instructions": {
+      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -3296,6 +3319,20 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "description": "Official fields merged into this tool's declaration. `type` is protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_response_id": {
       "description": "Responses API continuation token from an earlier call.",
       "type": [
@@ -3304,37 +3341,19 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
+    "input_items": {
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "include": {
+      "description": "Optional Responses include selectors.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -3360,21 +3379,38 @@ Model-based tools default to the current session model. Use an OpenAI model that
 **Input schema**:
 ```json
 {
+  "required": [
+    "handle"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "handle": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "handle": {}
           },
           "required": [
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "handle": {
             "anyOf": [
@@ -3382,44 +3418,27 @@ Model-based tools default to the current session model. Use an OpenAI model that
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "handle"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "handle": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "handle"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -3444,21 +3463,57 @@ Model-based tools default to the current session model. Use an OpenAI model that
 **Input schema**:
 ```json
 {
+  "required": [
+    "path"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "expires_in_seconds": {
+      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "path": {}
           },
           "required": [
             "path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "path": {
             "anyOf": [
@@ -3466,63 +3521,27 @@ Model-based tools default to the current session model. Use an OpenAI model that
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "expires_in_seconds": {
-      "default": null,
-      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -3563,7 +3582,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -3612,157 +3631,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -3788,123 +3807,39 @@ Model-based tools default to the current session model. Use an OpenAI model that
 **Input schema**:
 ```json
 {
+  "required": [
+    "prompt",
+    "images"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "prompt": {}
-          },
-          "required": [
-            "prompt"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "prompt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "prompt"
-        ],
-        "type": "object"
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "images": {
-                  "not": {
-                    "items": {
-                      "not": {}
-                    }
-                  },
-                  "type": "array"
-                }
-              },
-              "required": [
-                "images"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "images": {
-                "not": {
-                  "items": {
-                    "not": {
-                      "anyOf": [
-                        {
-                          "type": "null"
-                        },
-                        {
-                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                          "type": "string"
-                        },
-                        {
-                          "maxItems": 0,
-                          "type": "array"
-                        },
-                        {
-                          "maxProperties": 0,
-                          "properties": {},
-                          "type": "object"
-                        }
-                      ]
-                    }
-                  }
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "images"
-            ],
-            "type": "object"
-          }
-        ]
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
+    "prompt": {
+      "description": "Natural-language edit instructions, including details to preserve from the supplied images.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "images": {
       "description": "One to sixteen permitted local image paths to upload as originals or references. URLs and remote file IDs are not accepted here.",
+      "type": "array",
       "items": {
+        "type": "string",
+        "x-agena-non-empty": true,
         "minLength": 1,
         "not": {
-          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-          "type": "string"
-        },
-        "type": "string",
-        "x-agena-non-empty": true
+          "type": "string",
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+        }
       },
-      "maxItems": 16,
+      "x-agena-order": "000001",
       "minItems": 1,
-      "type": "array",
-      "x-agena-order": "000001"
+      "maxItems": 16
     },
     "model": {
       "description": "GPT Image model ID on the current provider, e.g. gpt-image-2 or gpt-image-2.5-sunburst. Defaults to the session model; explicitly select an image model when the session uses a chat model.",
@@ -3915,29 +3850,113 @@ Model-based tools default to the current session model. Use an OpenAI model that
       "x-agena-order": "000002"
     },
     "options": {
-      "additionalProperties": true,
       "description": "Additional Images edit fields supported by the chosen model, e.g. size, quality, n, and output_format. model, prompt, and image are supplied separately.",
-      "properties": {},
       "type": "object",
+      "additionalProperties": true,
+      "properties": {},
       "x-agena-order": "000003"
-    },
-    "prompt": {
-      "description": "Natural-language edit instructions, including details to preserve from the supplied images.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
     }
   },
-  "required": [
-    "prompt",
-    "images"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "images": {
+                  "type": "array",
+                  "not": {
+                    "items": {
+                      "not": {}
+                    }
+                  }
+                }
+              },
+              "required": [
+                "images"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "images": {
+                "type": "array",
+                "not": {
+                  "items": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                        },
+                        {
+                          "type": "array",
+                          "maxItems": 0
+                        },
+                        {
+                          "type": "object",
+                          "maxProperties": 0,
+                          "properties": {}
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "images"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -3978,7 +3997,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -4027,157 +4046,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -4205,61 +4224,106 @@ Model-based tools default to the current session model. Use an OpenAI model that
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -4267,16 +4331,17 @@ Model-based tools default to the current session model. Use an OpenAI model that
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -4284,73 +4349,27 @@ Model-based tools default to the current session model. Use an OpenAI model that
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -4391,7 +4410,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -4440,157 +4459,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -4631,7 +4650,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -4680,157 +4699,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -4871,7 +4890,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -4920,157 +4939,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -5111,7 +5130,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -5160,157 +5179,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -5342,71 +5361,71 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "additionalProperties": false,
   "properties": {
-    "audio_path": {
-      "default": null,
-      "description": "Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "duration_seconds": {
-      "default": 20,
-      "description": "Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000007"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "input_sample_rate": {
-      "default": 24000,
-      "description": "Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
     "model": {
-      "default": null,
       "description": "Defaults to current session model; explicitly pass a compatible OpenAI\nRealtime or Google Gemini Live model when the current model is unsuitable.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
     },
-    "output_path": {
-      "default": null,
+    "text": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000006"
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "audio_path": {
+      "description": "Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000003"
+    },
+    "input_sample_rate": {
+      "description": "Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 24000,
+      "x-agena-order": "000004"
     },
     "session": {
+      "description": "Official session/setup fields. model and output audio format are managed.",
+      "type": "object",
       "additionalProperties": true,
       "default": {},
-      "description": "Official session/setup fields. model and output audio format are managed.",
       "properties": {},
-      "type": "object",
       "x-agena-order": "000005"
     },
-    "text": {
-      "default": null,
+    "output_path": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "duration_seconds": {
+      "description": "Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 20,
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -5450,7 +5469,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -5499,157 +5518,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -5681,19 +5700,23 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
+    "prompt": {
+      "description": "Drawing or editing request for an additional Responses chat model, which calls the hosted GPT Image tool. May be omitted when input_items supplies the request.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
     },
-    "input_items": {
-      "description": "Explicit Responses history and image references (supported URLs, base64 data URLs, or file IDs). Upload or encode local images first. Agena conversation history is not automatically included; client tool callbacks are rejected.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "stable_instructions": {
+      "description": "Developer instructions for this additional Responses request.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Responses CHAT model that can call the hosted image_generation tool; defaults to the current session model. Select the GPT Image drawing model in tool_options.model.",
@@ -5703,6 +5726,20 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "description": "Hosted image tool settings. model selects the DRAWING model, e.g. gpt-image-2 or gpt-image-2.5-sunburst. Other model-supported fields include action (auto/generate/edit), size, quality, and output_format. type is protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "description": "Additional outer Responses request fields. model, input, tools, stream, and previous_response_id are supplied separately.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_response_id": {
       "description": "OpenAI response ID from an earlier call to this tool, used to continue its server-side context. This is not an Agena session ID.",
       "type": [
@@ -5711,37 +5748,19 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "description": "Drawing or editing request for an additional Responses chat model, which calls the hosted GPT Image tool. May be omitted when input_items supplies the request.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
+    "input_items": {
+      "description": "Explicit Responses history and image references (supported URLs, base64 data URLs, or file IDs). Upload or encode local images first. Agena conversation history is not automatically included; client tool callbacks are rejected.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional outer Responses request fields. model, input, tools, stream, and previous_response_id are supplied separately.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Developer instructions for this additional Responses request.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Hosted image tool settings. model selects the DRAWING model, e.g. gpt-image-2 or gpt-image-2.5-sunburst. Other model-supported fields include action (auto/generate/edit), size, quality, and output_format. type is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "include": {
+      "description": "Optional Responses include selectors.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -5776,19 +5795,23 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
+    "prompt": {
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
     },
-    "input_items": {
-      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "stable_instructions": {
+      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -5798,6 +5821,20 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "description": "Official fields merged into this tool's declaration. `type` is protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_response_id": {
       "description": "Responses API continuation token from an earlier call.",
       "type": [
@@ -5806,37 +5843,19 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
+    "input_items": {
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "include": {
+      "description": "Optional Responses include selectors.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -5880,7 +5899,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -5929,157 +5948,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -6120,7 +6139,7 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -6169,157 +6188,157 @@ Model-based tools default to the current session model. Use an OpenAI model that
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -6351,19 +6370,23 @@ Model-based tools default to the current session model. Use an OpenAI model that
 {
   "additionalProperties": false,
   "properties": {
-    "include": {
-      "description": "Optional Responses include selectors.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
+    "prompt": {
+      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
     },
-    "input_items": {
-      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "stable_instructions": {
+      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an OpenAI model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -6373,6 +6396,20 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "description": "Official fields merged into this tool's declaration. `type` is protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_response_id": {
       "description": "Responses API continuation token from an earlier call.",
       "type": [
@@ -6381,37 +6418,19 @@ Model-based tools default to the current session model. Use an OpenAI model that
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "description": "Instruction for a new hosted request. May be omitted when message history is supplied.",
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
+    "input_items": {
+      "description": "Responses message history for hosted follow-up. Client Function/Computer/Patch/MCP/Shell callback items are rejected; use previous_response_id for hosted continuation.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     },
-    "request_options": {
-      "additionalProperties": true,
-      "description": "Additional Responses request fields. `model`, `input`, `tools`, and `stream` are protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_instructions": {
-      "description": "Stable developer prefix eligible for an explicit OpenAI cache breakpoint.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "description": "Official fields merged into this tool's declaration. `type` is protected.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "include": {
+      "description": "Optional Responses include selectors.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -6420,9 +6439,11 @@ Model-based tools default to the current session model. Use an OpenAI model that
 
 ## agena.claude
 
-**Version** `0.1.0` · **Tools** 15
+**Version** `0.1.0` · **Tools** 15 · **Tags** `network` `anthropic` `ai`
 
 Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback.
+
+> Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback.
 
 ### advisor
 
@@ -6453,23 +6474,34 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "ClaudeCacheTtl": {
+      "type": "string",
       "enum": [
         "disabled",
         "five_minutes",
         "one_hour"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
+    "prompt": {
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system": {
+      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "cache_ttl": {
       "anyOf": [
@@ -6482,21 +6514,6 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000002"
     },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
@@ -6505,38 +6522,42 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000003"
     },
-    "prompt": {
-      "description": "New user instruction. Optional when messages continue hosted server execution.",
-      "maxLength": 64000,
+    "max_tokens": {
       "type": [
-        "string",
+        "integer",
         "null"
       ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000004"
     },
     "tool_options": {
+      "type": "object",
       "additionalProperties": true,
       "properties": {},
-      "type": "object",
       "x-agena-order": "000005"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000006"
+    },
+    "messages": {
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000007"
+    },
+    "beta_headers": {
+      "description": "Additional official Anthropic beta feature headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000008"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -6577,7 +6598,7 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -6626,157 +6647,157 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -6817,7 +6838,7 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -6866,157 +6887,157 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -7049,23 +7070,34 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "ClaudeCacheTtl": {
+      "type": "string",
       "enum": [
         "disabled",
         "five_minutes",
         "one_hour"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
+    "prompt": {
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system": {
+      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "cache_ttl": {
       "anyOf": [
@@ -7078,21 +7110,6 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000002"
     },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
@@ -7101,38 +7118,42 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000003"
     },
-    "prompt": {
-      "description": "New user instruction. Optional when messages continue hosted server execution.",
-      "maxLength": 64000,
+    "max_tokens": {
       "type": [
-        "string",
+        "integer",
         "null"
       ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000004"
     },
     "tool_options": {
+      "type": "object",
       "additionalProperties": true,
       "properties": {},
-      "type": "object",
       "x-agena-order": "000005"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000006"
+    },
+    "messages": {
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000007"
+    },
+    "beta_headers": {
+      "description": "Additional official Anthropic beta feature headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000008"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -7173,7 +7194,7 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -7222,157 +7243,157 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -7400,61 +7421,106 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -7462,16 +7528,17 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -7479,73 +7546,27 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -7568,21 +7589,38 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 **Input schema**:
 ```json
 {
+  "required": [
+    "handle"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "handle": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "handle": {}
           },
           "required": [
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "handle": {
             "anyOf": [
@@ -7590,44 +7628,27 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "handle"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "handle": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "handle"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -7650,21 +7671,38 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 **Input schema**:
 ```json
 {
+  "required": [
+    "handle"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "handle": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "handle": {}
           },
           "required": [
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "handle": {
             "anyOf": [
@@ -7672,44 +7710,27 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "handle"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "handle": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "handle"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -7734,21 +7755,57 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 **Input schema**:
 ```json
 {
+  "required": [
+    "path"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "expires_in_seconds": {
+      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "path": {}
           },
           "required": [
             "path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "path": {
             "anyOf": [
@@ -7756,63 +7813,27 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "expires_in_seconds": {
-      "default": null,
-      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -7853,7 +7874,7 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -7902,157 +7923,157 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -8080,61 +8101,106 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -8142,16 +8208,17 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -8159,73 +8226,27 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -8266,7 +8287,7 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -8315,157 +8336,157 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -8506,7 +8527,7 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -8555,157 +8576,157 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -8738,23 +8759,34 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "ClaudeCacheTtl": {
+      "type": "string",
       "enum": [
         "disabled",
         "five_minutes",
         "one_hour"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
+    "prompt": {
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system": {
+      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "cache_ttl": {
       "anyOf": [
@@ -8767,21 +8799,6 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000002"
     },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
@@ -8790,38 +8807,42 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000003"
     },
-    "prompt": {
-      "description": "New user instruction. Optional when messages continue hosted server execution.",
-      "maxLength": 64000,
+    "max_tokens": {
       "type": [
-        "string",
+        "integer",
         "null"
       ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000004"
     },
     "tool_options": {
+      "type": "object",
       "additionalProperties": true,
       "properties": {},
-      "type": "object",
       "x-agena-order": "000005"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000006"
+    },
+    "messages": {
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000007"
+    },
+    "beta_headers": {
+      "description": "Additional official Anthropic beta feature headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000008"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -8854,23 +8875,34 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
 {
   "$defs": {
     "ClaudeCacheTtl": {
+      "type": "string",
       "enum": [
         "disabled",
         "five_minutes",
         "one_hour"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "beta_headers": {
-      "description": "Additional official Anthropic beta feature headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
+    "prompt": {
+      "description": "New user instruction. Optional when messages continue hosted server execution.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system": {
+      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "cache_ttl": {
       "anyOf": [
@@ -8883,21 +8915,6 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000002"
     },
-    "max_tokens": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "messages": {
-      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be an Anthropic Claude model that supports this operation. Pass model explicitly if the current model is unsuitable.",
       "type": [
@@ -8906,46 +8923,52 @@ Model-based tools default to the current session model. Use an Anthropic Claude 
       ],
       "x-agena-order": "000003"
     },
-    "prompt": {
-      "description": "New user instruction. Optional when messages continue hosted server execution.",
-      "maxLength": 64000,
+    "max_tokens": {
       "type": [
-        "string",
+        "integer",
         "null"
       ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000006"
-    },
-    "stable_system": {
-      "description": "Stable system prefix placed before dynamic messages for cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000004"
     },
     "tool_options": {
+      "type": "object",
       "additionalProperties": true,
       "properties": {},
-      "type": "object",
       "x-agena-order": "000005"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000006"
+    },
+    "messages": {
+      "description": "Anthropic message history for hosted results or pause_turn resumption. Client tool_use/tool_result callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000007"
+    },
+    "beta_headers": {
+      "description": "Additional official Anthropic beta feature headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "x-agena-order": "000008"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
 ## agena.code
 
-**Version** `0.1.0` · **Tools** 3
+**Version** `0.1.0` · **Tools** 3 · **Tags** `discovery` `filesystem`
 
 Structured code search and syntax inspection tools.
+
+> Search source code with structured patterns and inspect syntax. The code tools help locate implementations and understand source structure in the workspace.
 
 ### rewrite_ast
 
@@ -8976,6 +8999,7 @@ Structured code search and syntax inspection tools.
   "$defs": {
     "CodeLanguage": {
       "description": "Language of a code search target.",
+      "type": "string",
       "enum": [
         "auto",
         "bash",
@@ -9004,73 +9028,24 @@ Structured code search and syntax inspection tools.
         "tsx",
         "typescript",
         "yaml"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "path",
+    "replacement"
+  ],
+  "type": "object",
   "properties": {
-    "apply": {
-      "default": false,
-      "description": "False previews; true publishes after checking expected_sha256.",
-      "type": "boolean",
-      "x-agena-order": "000006"
-    },
-    "expected_sha256": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000007"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
@@ -9079,6 +9054,24 @@ Structured code search and syntax inspection tools.
         "null"
       ],
       "x-agena-order": "000001"
+    },
+    "pattern": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 16384,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "rule": {
+      "description": "Structured ast-grep rule; the same shape as search_ast.rule.",
+      "x-agena-order": "000003"
     },
     "language": {
       "anyOf": [
@@ -9091,46 +9084,76 @@ Structured code search and syntax inspection tools.
       ],
       "x-agena-order": "000004"
     },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
+    "replacement": {
+      "description": "ast-grep replacement template. Empty text deletes matched nodes.",
       "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+      "x-agena-order": "000002",
+      "maxLength": 16384
     },
-    "pattern": {
-      "maxLength": 16384,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
+    "apply": {
+      "description": "False previews; true publishes after checking expected_sha256.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000006"
+    },
+    "expected_sha256": {
       "type": [
         "string",
         "null"
       ],
+      "x-agena-order": "000007",
       "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "replacement": {
-      "description": "ast-grep replacement template. Empty text deletes matched nodes.",
-      "maxLength": 16384,
-      "type": "string",
-      "x-agena-order": "000002"
-    },
-    "rule": {
-      "description": "Structured ast-grep rule; the same shape as search_ast.rule.",
-      "x-agena-order": "000003"
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     }
   },
-  "required": [
-    "path",
-    "replacement"
-  ],
-  "type": "object",
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  },
   "x-agena-relations": [
     "exactly_one_of: `pattern`, `rule`"
   ]
@@ -9164,6 +9187,7 @@ Structured code search and syntax inspection tools.
   "$defs": {
     "CodeLanguage": {
       "description": "Language of a code search target.",
+      "type": "string",
       "enum": [
         "auto",
         "bash",
@@ -9192,55 +9216,24 @@ Structured code search and syntax inspection tools.
         "tsx",
         "typescript",
         "yaml"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "path"
+  ],
+  "type": "object",
   "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
       "type": [
@@ -9248,6 +9241,25 @@ Structured code search and syntax inspection tools.
         "null"
       ],
       "x-agena-order": "000001"
+    },
+    "pattern": {
+      "description": "Simple ast-grep pattern; provide exactly one of pattern or rule.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 16384,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "rule": {
+      "description": "Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.).",
+      "x-agena-order": "000003"
     },
     "language": {
       "anyOf": [
@@ -9261,49 +9273,60 @@ Structured code search and syntax inspection tools.
       "x-agena-order": "000004"
     },
     "limit": {
-      "format": "uint32",
-      "maximum": 100,
-      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
-      "x-agena-order": "000002"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "pattern": {
-      "description": "Simple ast-grep pattern; provide exactly one of pattern or rule.",
-      "maxLength": 16384,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "rule": {
-      "description": "Structured ast-grep rule object (kind, pattern, all/any/not, inside/has, etc.).",
-      "x-agena-order": "000003"
+      "format": "uint32",
+      "minimum": 1,
+      "x-agena-order": "000002",
+      "maximum": 100
     }
   },
-  "required": [
-    "path"
-  ],
-  "type": "object",
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  },
   "x-agena-relations": [
     "exactly_one_of: `pattern`, `rule`"
   ]
@@ -9335,6 +9358,7 @@ Structured code search and syntax inspection tools.
   "$defs": {
     "CodeLanguage": {
       "description": "Language of a code search target.",
+      "type": "string",
       "enum": [
         "auto",
         "bash",
@@ -9363,55 +9387,24 @@ Structured code search and syntax inspection tools.
         "tsx",
         "typescript",
         "yaml"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "path"
+  ],
+  "type": "object",
   "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
       "type": [
@@ -9432,38 +9425,70 @@ Structured code search and syntax inspection tools.
       "x-agena-order": "000002"
     },
     "max_depth": {
-      "format": "uint8",
-      "maximum": 6,
-      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
+      "format": "uint8",
+      "minimum": 1,
+      "maximum": 6,
       "x-agena-order": "000001"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
     }
   },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
 ## agena.commands
 
-**Version** `0.1.0` · **Tools** 6
+**Version** `0.1.0` · **Tools** 6 · **Tags** `discovery` `commands`
 
 Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface.
+
+> Expose the built-in command catalog to Agena clients and project skills from other agent ecosystems into the same surface. Read command instructions and bundled resources before applying a workflow.
 
 ### get
 
@@ -9484,17 +9509,17 @@ Declare the built-in commands every Agena client renders locally, and project sk
 **Input schema**:
 ```json
 {
+  "required": [
+    "name"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "name": {
       "description": "Canonical name, or an alias, of the skill to read.",
       "type": "string"
     }
-  },
-  "required": [
-    "name"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -9517,17 +9542,17 @@ Declare the built-in commands every Agena client renders locally, and project sk
 **Input schema**:
 ```json
 {
+  "required": [
+    "document"
+  ],
   "additionalProperties": false,
   "description": "A complete package document. Keeping the editor boundary at the native\ndocument format lets callers preserve a package's YAML frontmatter\nalongside its Markdown instructions instead of maintaining a second,\nlossy model.",
+  "type": "object",
   "properties": {
     "document": {
       "type": "string"
     }
-  },
-  "required": [
-    "document"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -9554,25 +9579,25 @@ Declare the built-in commands every Agena client renders locally, and project sk
 {
   "additionalProperties": false,
   "properties": {
-    "limit": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
     "offset": {
-      "format": "uint32",
-      "minimum": 0,
       "type": [
         "integer",
         "null"
-      ]
+      ],
+      "format": "uint32",
+      "minimum": 0
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0
     },
     "verbose": {
-      "default": false,
-      "type": "boolean"
+      "type": "boolean",
+      "default": false
     }
   },
   "type": "object"
@@ -9597,27 +9622,27 @@ Declare the built-in commands every Agena client renders locally, and project sk
 **Input schema**:
 ```json
 {
+  "required": [
+    "name",
+    "path"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "max_bytes": {
-      "default": 262144,
-      "format": "uint32",
-      "maximum": 1048576,
-      "minimum": 1,
-      "type": "integer"
-    },
     "name": {
       "type": "string"
     },
     "path": {
       "type": "string"
+    },
+    "max_bytes": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1048576,
+      "default": 262144
     }
-  },
-  "required": [
-    "name",
-    "path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -9640,9 +9665,9 @@ Declare the built-in commands every Agena client renders locally, and project sk
   "additionalProperties": false,
   "properties": {
     "verbose": {
-      "default": false,
       "description": "Include discovery diagnostics in the human-readable response.",
-      "type": "boolean"
+      "type": "boolean",
+      "default": false
     }
   },
   "type": "object"
@@ -9668,25 +9693,27 @@ Declare the built-in commands every Agena client renders locally, and project sk
 **Input schema**:
 ```json
 {
+  "required": [
+    "name"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "name": {
       "description": "Canonical name (or alias) of the workspace-managed package to remove.",
       "type": "string"
     }
-  },
-  "required": [
-    "name"
-  ],
-  "type": "object"
+  }
 }
 ```
 
 ## agena.companion
 
-**Version** `0.1.0` · **Tools** 1
+**Version** `0.1.0` · **Tools** 1 · **Tags** `interactive` `assistant`
 
 Assistant personality and consent-based reminders.
+
+> Configure the assistant personality and consent-based reminders. The runtime owns reminder timing, user identities and persistent companion state.
 
 ### manage
 
@@ -9710,103 +9737,35 @@ Assistant personality and consent-based reminders.
 ```json
 {
   "$defs": {
+    "CompanionAction": {
+      "type": "string",
+      "enum": [
+        "profile",
+        "configure",
+        "remind",
+        "reminders",
+        "pause_reminder",
+        "resume_reminder",
+        "cancel_reminder"
+      ],
+      "x-agena-order": "000000"
+    },
     "AssistantPatch": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
-        "address_user": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cooldown_seconds": {
-          "default": null,
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "daily_limit": {
-          "default": null,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "instructions": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "language": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "memory_enabled": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "name": {
-          "default": null,
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "default": null
         },
-        "proactive_enabled": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "quiet_enabled": {
-          "default": null,
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "quiet_end_minute": {
-          "default": null,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "quiet_start_minute": {
-          "default": null,
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "timezone": {
-          "default": null,
+        "address_user": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "default": null
         },
         "tone": {
           "anyOf": [
@@ -9818,104 +9777,184 @@ Assistant personality and consent-based reminders.
             }
           ],
           "default": null
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "instructions": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "memory_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "proactive_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "quiet_enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "quiet_start_minute": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": null
+        },
+        "quiet_end_minute": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": null
+        },
+        "daily_limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": null
+        },
+        "cooldown_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
         }
       },
-      "type": "object"
+      "additionalProperties": false
     },
     "AssistantTone": {
+      "type": "string",
       "enum": [
         "balanced",
         "warm",
         "direct",
         "playful"
-      ],
-      "type": "string"
-    },
-    "CompanionAction": {
-      "enum": [
-        "profile",
-        "configure",
-        "remind",
-        "reminders",
-        "pause_reminder",
-        "resume_reminder",
-        "cancel_reminder"
-      ],
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "ReminderKind": {
-      "enum": [
-        "reminder",
-        "check_in"
-      ],
-      "type": "string"
+      ]
     },
     "ReminderSpec": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
-        "after_seconds": {
-          "default": null,
-          "description": "Relative reminders are calculated by the host, never by a guessed clock.",
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "at": {
-          "default": null,
-          "description": "RFC3339 with explicit UTC offset. Use profile timezone to resolve natural dates.",
-          "type": [
-            "string",
-            "null"
-          ]
+        "text": {
+          "type": "string"
         },
         "kind": {
           "$ref": "#/$defs/ReminderKind",
           "default": "reminder"
         },
-        "occurrences": {
-          "default": 1,
-          "description": "Mandatory finite cap for recurring contact; default one occurrence.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "repeat_seconds": {
-          "default": null,
-          "format": "uint32",
-          "minimum": 0,
+        "after_seconds": {
+          "description": "Relative reminders are calculated by the host, never by a guessed clock.",
           "type": [
             "integer",
             "null"
-          ]
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
         },
-        "text": {
-          "type": "string"
+        "at": {
+          "description": "RFC3339 with explicit UTC offset. Use profile timezone to resolve natural dates.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "repeat_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0,
+          "default": null
+        },
+        "occurrences": {
+          "description": "Mandatory finite cap for recurring contact; default one occurrence.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 1
         }
       },
+      "additionalProperties": false,
       "required": [
         "text"
-      ],
-      "type": "object"
+      ]
+    },
+    "ReminderKind": {
+      "type": "string",
+      "enum": [
+        "reminder",
+        "check_in"
+      ]
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "action"
+  ],
+  "type": "object",
   "properties": {
     "action": {
       "$ref": "#/$defs/CompanionAction"
     },
-    "expected_revision": {
+    "user_quote": {
+      "description": "Exact quote from the CURRENT direct user message. Required for writes.",
+      "type": [
+        "string",
+        "null"
+      ],
       "default": null,
+      "x-agena-order": "000001"
+    },
+    "expected_revision": {
       "description": "Current profile/reminder revision from live context; never guess it.",
-      "format": "int64",
       "type": [
         "integer",
         "null"
       ],
+      "format": "int64",
+      "default": null,
       "x-agena-order": "000002"
     },
     "patch": {
@@ -9943,35 +9982,25 @@ Assistant personality and consent-based reminders.
       "x-agena-order": "000004"
     },
     "reminder_id": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000005"
-    },
-    "user_quote": {
-      "default": null,
-      "description": "Exact quote from the CURRENT direct user message. Required for writes.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
     }
   },
-  "required": [
-    "action"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
 ## agena.cron
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7 · **Tags** `scheduler` `goal`
 
 Cron-style and one-shot wakeup scheduling tools.
+
+> Schedule recurring cron-style wakeups and one-time tasks, then inspect or manage their lifecycle. Scheduled work is executed by the runtime scheduler.
 
 ### create
 
@@ -9991,7 +10020,7 @@ Cron-style and one-shot wakeup scheduling tools.
 | `max_age_days` | `integer` | — | `7` |  |
 | `misfire_policy` | `CronMisfirePolicyInput` | — | `run_once_now` | What to do after a restart when this fire is materially overdue. |
 | `prompt` | `string` | ✓ | — | Prompt to enqueue when the job fires. |
-| `retry_policy` | `CronRetryPolicyInput` | — | `{"initial_delay_seconds":15,"max_attempts":3,"max_delay_seconds":300,"multiplier":2}` |  |
+| `retry_policy` | `CronRetryPolicyInput` | — | `{"max_attempts":3,"initial_delay_seconds":15,"max_delay_seconds":300,"multiplier":2}` |  |
 | `timezone` | `string` | ✓ | — | IANA timezone in which the cron expression is evaluated (for example<br>`Asia/Shanghai`). This is required so local wall-clock requests cannot<br>be silently interpreted as UTC. |
 
 **Input schema**:
@@ -10000,235 +10029,49 @@ Cron-style and one-shot wakeup scheduling tools.
   "$defs": {
     "CronMisfirePolicyInput": {
       "description": "What to do after a restart when this fire is materially overdue.",
+      "type": "string",
       "enum": [
         "skip",
         "run_once_now",
         "reschedule"
       ],
-      "type": "string",
       "x-agena-order": "000004"
     },
     "CronRetryPolicyInput": {
-      "additionalProperties": false,
       "description": "Bounded exponential retry settings for a cron delivery. `max_attempts`\nincludes the initial attempt, so the default permits two retries after the\nnormal delivery attempt.",
+      "type": "object",
       "properties": {
-        "initial_delay_seconds": {
-          "default": 15,
-          "format": "uint32",
-          "maximum": 3600,
-          "minimum": 1,
-          "type": "integer"
-        },
         "max_attempts": {
-          "default": 3,
+          "type": "integer",
           "format": "uint32",
-          "maximum": 20,
           "minimum": 1,
-          "type": "integer"
+          "maximum": 20,
+          "default": 3
+        },
+        "initial_delay_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 15
         },
         "max_delay_seconds": {
-          "default": 300,
+          "type": "integer",
           "format": "uint32",
-          "maximum": 86400,
           "minimum": 1,
-          "type": "integer"
+          "maximum": 86400,
+          "default": 300
         },
         "multiplier": {
-          "default": 2,
+          "type": "integer",
           "format": "uint32",
-          "maximum": 10,
           "minimum": 1,
-          "type": "integer"
+          "maximum": 10,
+          "default": 2
         }
       },
-      "type": "object",
+      "additionalProperties": false,
       "x-agena-order": "000005"
-    }
-  },
-  "description": "Input of the cron create tool.",
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "expression": {}
-          },
-          "required": [
-            "expression"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "expression": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "expression"
-        ],
-        "type": "object"
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "prompt": {}
-              },
-              "required": [
-                "prompt"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "prompt": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
-                  },
-                  {
-                    "maxItems": 0,
-                    "type": "array"
-                  },
-                  {
-                    "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "prompt"
-            ],
-            "type": "object"
-          }
-        ]
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "timezone": {}
-              },
-              "required": [
-                "timezone"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "timezone": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
-                  },
-                  {
-                    "maxItems": 0,
-                    "type": "array"
-                  },
-                  {
-                    "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "timezone"
-            ],
-            "type": "object"
-          }
-        ]
-      }
-    ]
-  },
-  "properties": {
-    "expression": {
-      "description": "6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "max_age_days": {
-      "default": 7,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000003"
-    },
-    "misfire_policy": {
-      "$ref": "#/$defs/CronMisfirePolicyInput",
-      "default": "run_once_now",
-      "description": "What to do after a restart when this fire is materially overdue."
-    },
-    "prompt": {
-      "description": "Prompt to enqueue when the job fires.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "retry_policy": {
-      "$ref": "#/$defs/CronRetryPolicyInput",
-      "default": {
-        "initial_delay_seconds": 15,
-        "max_attempts": 3,
-        "max_delay_seconds": 300,
-        "multiplier": 2
-      }
-    },
-    "timezone": {
-      "description": "IANA timezone in which the cron expression is evaluated (for example\n`Asia/Shanghai`). This is required so local wall-clock requests cannot\nbe silently interpreted as UTC.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000002"
     }
   },
   "required": [
@@ -10236,7 +10079,193 @@ Cron-style and one-shot wakeup scheduling tools.
     "prompt",
     "timezone"
   ],
-  "type": "object"
+  "description": "Input of the cron create tool.",
+  "type": "object",
+  "properties": {
+    "expression": {
+      "description": "6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "prompt": {
+      "description": "Prompt to enqueue when the job fires.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timezone": {
+      "description": "IANA timezone in which the cron expression is evaluated (for example\n`Asia/Shanghai`). This is required so local wall-clock requests cannot\nbe silently interpreted as UTC.",
+      "type": "string",
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "max_age_days": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 7,
+      "x-agena-order": "000003"
+    },
+    "misfire_policy": {
+      "description": "What to do after a restart when this fire is materially overdue.",
+      "$ref": "#/$defs/CronMisfirePolicyInput",
+      "default": "run_once_now"
+    },
+    "retry_policy": {
+      "$ref": "#/$defs/CronRetryPolicyInput",
+      "default": {
+        "max_attempts": 3,
+        "initial_delay_seconds": 15,
+        "max_delay_seconds": 300,
+        "multiplier": 2
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "expression": {}
+          },
+          "required": [
+            "expression"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "expression"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "prompt": {}
+              },
+              "required": [
+                "prompt"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "prompt": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "prompt"
+            ]
+          }
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "timezone": {}
+              },
+              "required": [
+                "timezone"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "timezone": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "timezone"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -10259,21 +10288,38 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "description": "Input of the cron delete tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "id": {}
           },
           "required": [
             "id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "id": {
             "anyOf": [
@@ -10281,44 +10327,27 @@ Cron-style and one-shot wakeup scheduling tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -10343,7 +10372,6 @@ Cron-style and one-shot wakeup scheduling tools.
 ```json
 {
   "additionalProperties": false,
-  "description": "Input of the cron history tool.",
   "properties": {
     "id": {
       "description": "Restrict history to one job. Omitting it returns newest records across\nall retained jobs.",
@@ -10354,14 +10382,15 @@ Cron-style and one-shot wakeup scheduling tools.
       "x-agena-order": "000000"
     },
     "limit": {
-      "default": 50,
-      "format": "uint32",
-      "maximum": 200,
-      "minimum": 1,
       "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 50,
       "x-agena-order": "000001"
     }
   },
+  "description": "Input of the cron history tool.",
   "type": "object"
 }
 ```
@@ -10381,9 +10410,9 @@ Cron-style and one-shot wakeup scheduling tools.
 ```json
 {
   "additionalProperties": false,
+  "type": "object",
   "description": "Input of the cron list tool.",
-  "properties": {},
-  "type": "object"
+  "properties": {}
 }
 ```
 
@@ -10406,21 +10435,38 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "description": "Input of the cron job control tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "id": {}
           },
           "required": [
             "id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "id": {
             "anyOf": [
@@ -10428,44 +10474,27 @@ Cron-style and one-shot wakeup scheduling tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -10488,21 +10517,38 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "description": "Input of the cron job control tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "id": {}
           },
           "required": [
             "id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "id": {
             "anyOf": [
@@ -10510,44 +10556,27 @@ Cron-style and one-shot wakeup scheduling tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -10578,133 +10607,64 @@ Cron-style and one-shot wakeup scheduling tools.
   "$defs": {
     "CronMisfirePolicyInput": {
       "description": "Policy applied when a scheduled job misses its fire time.",
+      "type": "string",
       "enum": [
         "skip",
         "run_once_now",
         "reschedule"
-      ],
-      "type": "string"
+      ]
     },
     "CronRetryPolicyInput": {
-      "additionalProperties": false,
       "description": "Bounded exponential retry settings for a cron delivery. `max_attempts`\nincludes the initial attempt, so the default permits two retries after the\nnormal delivery attempt.",
+      "type": "object",
       "properties": {
-        "initial_delay_seconds": {
-          "default": 15,
-          "format": "uint32",
-          "maximum": 3600,
-          "minimum": 1,
-          "type": "integer"
-        },
         "max_attempts": {
-          "default": 3,
+          "type": "integer",
           "format": "uint32",
-          "maximum": 20,
           "minimum": 1,
-          "type": "integer"
+          "maximum": 20,
+          "default": 3
+        },
+        "initial_delay_seconds": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1,
+          "maximum": 3600,
+          "default": 15
         },
         "max_delay_seconds": {
-          "default": 300,
+          "type": "integer",
           "format": "uint32",
-          "maximum": 86400,
           "minimum": 1,
-          "type": "integer"
+          "maximum": 86400,
+          "default": 300
         },
         "multiplier": {
-          "default": 2,
+          "type": "integer",
           "format": "uint32",
-          "maximum": 10,
           "minimum": 1,
-          "type": "integer"
+          "maximum": 10,
+          "default": 2
         }
       },
-      "type": "object"
+      "additionalProperties": false
     }
   },
+  "required": [
+    "id"
+  ],
   "description": "Input of the cron update tool.",
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "id": {}
-          },
-          "required": [
-            "id"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "id"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "expression": {
-      "description": "Optional replacement cron expression. Valid only for cron jobs.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
     "id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "max_age_days": {
-      "description": "Optional replacement retention period. Valid only for cron jobs.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "misfire_policy": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/CronMisfirePolicyInput"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "description": "Optional replacement recovery policy. Valid only for cron jobs.",
-      "x-agena-order": "000004"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "prompt": {
       "description": "Optional replacement prompt. At least one update field is required.",
@@ -10714,7 +10674,38 @@ Cron-style and one-shot wakeup scheduling tools.
       ],
       "x-agena-order": "000001"
     },
+    "expression": {
+      "description": "Optional replacement cron expression. Valid only for cron jobs.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "max_age_days": {
+      "description": "Optional replacement retention period. Valid only for cron jobs.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000003"
+    },
+    "misfire_policy": {
+      "description": "Optional replacement recovery policy. Valid only for cron jobs.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CronMisfirePolicyInput"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000004"
+    },
     "retry_policy": {
+      "description": "Optional replacement bounded retry policy. Valid only for cron jobs.",
       "anyOf": [
         {
           "$ref": "#/$defs/CronRetryPolicyInput"
@@ -10723,22 +10714,62 @@ Cron-style and one-shot wakeup scheduling tools.
           "type": "null"
         }
       ],
-      "description": "Optional replacement bounded retry policy. Valid only for cron jobs.",
       "x-agena-order": "000005"
     }
   },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "id": {}
+          },
+          "required": [
+            "id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    ]
+  }
 }
 ```
 
 ## agena.fs
 
-**Version** `0.1.0` · **Tools** 10
+**Version** `0.1.0` · **Tools** 10 · **Tags** `filesystem` `discovery`
 
 Filesystem command tools for read/search and explicit edits.
+
+> Read and search workspace files, inspect documents and media, and make explicit revision-checked edits. File access follows the host filesystem permission policy.
 
 ### apply_patch
 
@@ -10760,32 +10791,32 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
-  "description": "Textual patch payload in the agena patch format. Must start with the exact\nmarker line `*** Begin Patch` and end with the exact marker line\n`*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`\ndirectives with `@@` or `@@ exact context line` hunks. Context lines start\nwith a space, removed lines with `-`, and added lines with `+`. Matching is\nexact and line-oriented; ambiguous targets are rejected. `*** End of File`\nrestricts the last hunk to EOF. `\\ No newline at end of file` after a content\nline specifies a missing final newline. Existing line endings are preserved.",
+  "required": [
+    "patch"
+  ],
   "properties": {
+    "patch": {
+      "description": "Unified patch text to apply to the workspace.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 16777216
+    },
     "folder": {
       "description": "Base folder for relative patch paths. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-order": "000000",
       "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "patch": {
-      "description": "Unified patch text to apply to the workspace.",
-      "maxLength": 16777216,
-      "type": "string",
-      "x-agena-order": "000000"
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     }
   },
-  "required": [
-    "patch"
-  ],
+  "description": "Textual patch payload in the agena patch format. Must start with the exact\nmarker line `*** Begin Patch` and end with the exact marker line\n`*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`\ndirectives with `@@` or `@@ exact context line` hunks. Context lines start\nwith a space, removed lines with `-`, and added lines with `+`. Matching is\nexact and line-oriented; ambiguous targets are rejected. `*** End of File`\nrestricts the last hunk to EOF. `\\ No newline at end of file` after a content\nline specifies a missing final newline. Existing line endings are preserved.",
   "type": "object"
 }
 ```
@@ -10818,68 +10849,29 @@ Filesystem command tools for read/search and explicit edits.
 {
   "$defs": {
     "Backend": {
+      "type": "string",
       "enum": [
         "auto",
         "pdftotext",
         "markitdown"
       ],
-      "type": "string",
       "x-agena-order": "000002"
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "path"
+  ],
+  "type": "object",
   "properties": {
-    "backend": {
-      "$ref": "#/$defs/Backend",
-      "default": "auto"
-    },
-    "fixed_strings": {
-      "default": true,
-      "type": "boolean",
-      "x-agena-order": "000004"
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
@@ -10889,55 +10881,94 @@ Filesystem command tools for read/search and explicit edits.
       ],
       "x-agena-order": "000001"
     },
-    "ignore_case": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000005"
-    },
-    "max_lines": {
-      "default": 100,
-      "format": "uint",
-      "maximum": 500,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000003"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+    "backend": {
+      "$ref": "#/$defs/Backend",
+      "default": "auto"
     },
     "pattern": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-order": "000001",
+      "maxLength": 4096,
       "x-agena-non-empty": true,
-      "x-agena-order": "000001"
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "fixed_strings": {
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000004"
+    },
+    "ignore_case": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000005"
     },
     "start_line": {
-      "default": 1,
+      "type": "integer",
       "format": "uint",
       "minimum": 1,
-      "type": "integer",
+      "default": 1,
       "x-agena-order": "000002"
+    },
+    "max_lines": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 1,
+      "default": 100,
+      "x-agena-order": "000003",
+      "maximum": 500
     }
   },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -10969,32 +11000,120 @@ Filesystem command tools for read/search and explicit edits.
 {
   "$defs": {
     "GlobKind": {
-      "description": "Filter by path kind; defaults to both files and directories.",
+      "type": "string",
       "enum": [
         "all",
         "file",
         "directory"
       ],
+      "x-agena-order": "000006",
+      "description": "Filter by path kind; defaults to both files and directories."
+    }
+  },
+  "required": [
+    "pattern"
+  ],
+  "description": "Input of the glob tool.",
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "description": "Glob pattern to match.",
       "type": "string",
-      "x-agena-order": "000006"
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "path": {
+      "description": "Optional base path. Defaults to the workspace root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "offset": {
+      "description": "Number of matching paths to skip before returning results.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000003"
+    },
+    "limit": {
+      "description": "Maximum paths to return. Defaults to 200 and cannot exceed 1000.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000004"
+    },
+    "include_ignored": {
+      "description": "Include dependency, VCS, and build-output directories that are skipped\nby default (`.git`, `node_modules`, `target`, `dist`, and caches).",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000005"
+    },
+    "kind": {
+      "description": "Filter by path kind; defaults to both files and directories.",
+      "$ref": "#/$defs/GlobKind",
+      "default": "all"
+    },
+    "exclude": {
+      "description": "Exclude matching base-path-relative globs. Exclusions win.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      },
+      "x-agena-order": "000007",
+      "maxItems": 32
     }
   },
   "additionalProperties": false,
-  "description": "Input of the glob tool.",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "pattern": {}
           },
           "required": [
             "pattern"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "pattern": {
             "anyOf": [
@@ -11002,115 +11121,27 @@ Filesystem command tools for read/search and explicit edits.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "pattern"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "exclude": {
-      "description": "Exclude matching base-path-relative globs. Exclusions win.",
-      "items": {
-        "maxLength": 1024,
-        "minLength": 1,
-        "type": "string"
-      },
-      "maxItems": 32,
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "folder": {
-      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000002"
-    },
-    "include_ignored": {
-      "default": false,
-      "description": "Include dependency, VCS, and build-output directories that are skipped\nby default (`.git`, `node_modules`, `target`, `dist`, and caches).",
-      "type": "boolean",
-      "x-agena-order": "000005"
-    },
-    "kind": {
-      "$ref": "#/$defs/GlobKind",
-      "default": "all",
-      "description": "Filter by path kind; defaults to both files and directories."
-    },
-    "limit": {
-      "description": "Maximum paths to return. Defaults to 200 and cannot exceed 1000.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "offset": {
-      "description": "Number of matching paths to skip before returning results.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "path": {
-      "description": "Optional base path. Defaults to the workspace root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "pattern": {
-      "description": "Glob pattern to match.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "pattern"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -11147,177 +11178,177 @@ Filesystem command tools for read/search and explicit edits.
 {
   "$defs": {
     "GrepCase": {
-      "description": "Sensitive by default; smart ignores case for patterns without uppercase.",
       "oneOf": [
         {
+          "type": "string",
           "enum": [
             "sensitive",
             "insensitive"
-          ],
-          "type": "string"
+          ]
         },
         {
-          "const": "smart",
           "description": "Ignore case unless the pattern contains an uppercase character.",
-          "type": "string"
+          "type": "string",
+          "const": "smart"
         }
       ],
-      "x-agena-order": "000006"
-    },
-    "GrepMode": {
-      "description": "Content, matching file paths, or matching-line counts per file.",
-      "oneOf": [
-        {
-          "enum": [
-            "content"
-          ],
-          "type": "string"
-        },
-        {
-          "const": "files",
-          "description": "Return each matching file once, stopping at its first matching line.",
-          "type": "string"
-        },
-        {
-          "const": "count",
-          "description": "Count matching lines per file, omitting files without matches.",
-          "type": "string"
-        }
-      ],
-      "x-agena-order": "000007"
-    }
-  },
-  "additionalProperties": false,
-  "description": "Input of the grep tool.",
-  "properties": {
-    "after_context": {
-      "default": 0,
-      "description": "Context lines after each match (0–20); content mode only.",
-      "format": "uint32",
-      "maximum": 20,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000011"
-    },
-    "before_context": {
-      "default": 0,
-      "description": "Context lines before each match (0–20); content mode only.",
-      "format": "uint32",
-      "maximum": 20,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000010"
-    },
-    "case": {
-      "$ref": "#/$defs/GrepCase",
-      "default": "sensitive",
+      "x-agena-order": "000006",
       "description": "Sensitive by default; smart ignores case for patterns without uppercase."
     },
-    "exclude": {
-      "description": "Exclude relative-path globs; exclusions override all includes.",
-      "items": {
-        "maxLength": 1024,
-        "minLength": 1,
-        "type": "string"
-      },
-      "maxItems": 32,
-      "type": "array",
-      "x-agena-order": "000009"
-    },
-    "fixed_strings": {
-      "default": false,
-      "description": "Treat pattern literally instead of as a regex.",
-      "type": "boolean",
-      "x-agena-order": "000005"
-    },
-    "folder": {
-      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
+    "GrepMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "content"
+          ]
+        },
+        {
+          "description": "Return each matching file once, stopping at its first matching line.",
+          "type": "string",
+          "const": "files"
+        },
+        {
+          "description": "Count matching lines per file, omitting files without matches.",
+          "type": "string",
+          "const": "count"
+        }
       ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "include": {
-      "description": "Optional glob filter applied before matching lines.",
-      "maxLength": 1024,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000002"
-    },
-    "include_ignored": {
-      "default": false,
-      "description": "Include hidden and ignored files that are skipped by default according\nto ripgrep-compatible ignore rules.",
-      "type": "boolean",
-      "x-agena-order": "000004"
-    },
-    "includes": {
-      "description": "Additional include globs, ORed with `include`. An empty set includes all.",
-      "items": {
-        "maxLength": 1024,
-        "minLength": 1,
-        "type": "string"
-      },
-      "maxItems": 32,
-      "type": "array",
-      "x-agena-order": "000008"
-    },
-    "max_results": {
-      "description": "Global matching-line limit in content mode, matching-file limit otherwise.\nDefaults to 500; 1–500. Context lines do not consume this limit.",
-      "format": "uint32",
-      "maximum": 500,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000012"
-    },
-    "mode": {
-      "$ref": "#/$defs/GrepMode",
-      "default": "content",
+      "x-agena-order": "000007",
       "description": "Content, matching file paths, or matching-line counts per file."
-    },
-    "path": {
-      "description": "Optional target: a directory to search recursively, or a single file.\nDefaults to the workspace root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "pattern": {
-      "description": "Regex or fixed string to search for. Whitespace is significant.",
-      "maxLength": 16384,
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000000"
     }
   },
   "required": [
     "pattern"
   ],
-  "type": "object"
+  "description": "Input of the grep tool.",
+  "type": "object",
+  "properties": {
+    "pattern": {
+      "description": "Regex or fixed string to search for. Whitespace is significant.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "minLength": 1,
+      "maxLength": 16384
+    },
+    "path": {
+      "description": "Optional target: a directory to search recursively, or a single file.\nDefaults to the workspace root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "include": {
+      "description": "Optional glob filter applied before matching lines.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 1024
+    },
+    "include_ignored": {
+      "description": "Include hidden and ignored files that are skipped by default according\nto ripgrep-compatible ignore rules.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000004"
+    },
+    "fixed_strings": {
+      "description": "Treat pattern literally instead of as a regex.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000005"
+    },
+    "case": {
+      "description": "Sensitive by default; smart ignores case for patterns without uppercase.",
+      "$ref": "#/$defs/GrepCase",
+      "default": "sensitive"
+    },
+    "mode": {
+      "description": "Content, matching file paths, or matching-line counts per file.",
+      "$ref": "#/$defs/GrepMode",
+      "default": "content"
+    },
+    "includes": {
+      "description": "Additional include globs, ORed with `include`. An empty set includes all.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      },
+      "x-agena-order": "000008",
+      "maxItems": 32
+    },
+    "exclude": {
+      "description": "Exclude relative-path globs; exclusions override all includes.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1024
+      },
+      "x-agena-order": "000009",
+      "maxItems": 32
+    },
+    "before_context": {
+      "description": "Context lines before each match (0–20); content mode only.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000010",
+      "maximum": 20
+    },
+    "after_context": {
+      "description": "Context lines after each match (0–20); content mode only.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000011",
+      "maximum": 20
+    },
+    "max_results": {
+      "description": "Global matching-line limit in content mode, matching-file limit otherwise.\nDefaults to 500; 1–500. Context lines do not consume this limit.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "x-agena-order": "000012",
+      "maximum": 500
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
@@ -11349,30 +11380,108 @@ Filesystem command tools for read/search and explicit edits.
   "$defs": {
     "ReadMode": {
       "description": "How to render the target: `text`, `attachment`, or `auto`.",
+      "type": "string",
       "enum": [
         "text",
         "attachment",
         "auto"
       ],
-      "type": "string",
       "x-agena-order": "000006"
     }
   },
+  "required": [
+    "file_path"
+  ],
   "description": "Input of the file read tool.",
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions,\nwhich have no project folder of their own, use it; a project session\nalways resolves against its project root and ignores this field.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "offset": {
+      "description": "1-based offset for file lines or directory entries.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000002"
+    },
+    "limit": {
+      "description": "Maximum number of lines or directory entries to return.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000003"
+    },
+    "byte_offset": {
+      "description": "Zero-based byte position for a text byte-range read. Cannot be combined\nwith line/entry offset or limit. Useful for very long single lines.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "x-agena-order": "000004"
+    },
+    "byte_limit": {
+      "description": "Byte-range page size (4–16384; default 8192). May start at byte 0 when\nbyte_offset is omitted. UTF-8 boundaries are preserved.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 4,
+      "x-agena-order": "000005",
+      "maximum": 16384
+    },
+    "mode": {
+      "description": "How to render the target: `text`, `attachment`, or `auto`.",
+      "$ref": "#/$defs/ReadMode",
+      "default": "auto"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "file_path": {}
           },
           "required": [
             "file_path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "file_path": {
             "anyOf": [
@@ -11380,105 +11489,27 @@ Filesystem command tools for read/search and explicit edits.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "file_path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "byte_limit": {
-      "description": "Byte-range page size (4–16384; default 8192). May start at byte 0 when\nbyte_offset is omitted. UTF-8 boundaries are preserved.",
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 4,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "byte_offset": {
-      "description": "Zero-based byte position for a text byte-range read. Cannot be combined\nwith line/entry offset or limit. Useful for very long single lines.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "file_path": {
-      "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "folder": {
-      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions,\nwhich have no project folder of their own, use it; a project session\nalways resolves against its project root and ignores this field.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "limit": {
-      "description": "Maximum number of lines or directory entries to return.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "mode": {
-      "$ref": "#/$defs/ReadMode",
-      "default": "auto",
-      "description": "How to render the target: `text`, `attachment`, or `auto`."
-    },
-    "offset": {
-      "description": "1-based offset for file lines or directory entries.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    }
-  },
-  "required": [
-    "file_path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -11500,65 +11531,27 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "required": [
+    "paths"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
+  "type": "object",
+  "properties": {
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-agena-non-empty": true,
+        "minLength": 1,
         "not": {
-          "properties": {
-            "paths": {
-              "not": {
-                "items": {
-                  "not": {}
-                }
-              },
-              "type": "array"
-            }
-          },
-          "required": [
-            "paths"
-          ],
-          "type": "object"
+          "type": "string",
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
         }
       },
-      {
-        "properties": {
-          "paths": {
-            "not": {
-              "items": {
-                "not": {
-                  "anyOf": [
-                    {
-                      "type": "null"
-                    },
-                    {
-                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                      "type": "string"
-                    },
-                    {
-                      "maxItems": 0,
-                      "type": "array"
-                    },
-                    {
-                      "maxProperties": 0,
-                      "properties": {},
-                      "type": "object"
-                    }
-                  ]
-                }
-              }
-            },
-            "type": "array"
-          }
-        },
-        "required": [
-          "paths"
-        ],
-        "type": "object"
-      }
-    ]
-  },
-  "properties": {
+      "x-agena-order": "000000",
+      "minItems": 1,
+      "maxItems": 64
+    },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
       "type": [
@@ -11568,33 +11561,71 @@ Filesystem command tools for read/search and explicit edits.
       "x-agena-order": "000001"
     },
     "max_total_bytes": {
-      "default": 131072,
-      "format": "uint32",
-      "maximum": 1048576,
-      "minimum": 1,
       "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "paths": {
-      "items": {
-        "minLength": 1,
-        "not": {
-          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-          "type": "string"
-        },
-        "type": "string",
-        "x-agena-non-empty": true
-      },
-      "maxItems": 64,
-      "minItems": 1,
-      "type": "array",
-      "x-agena-order": "000000"
+      "format": "uint32",
+      "minimum": 1,
+      "default": 131072,
+      "x-agena-order": "000002",
+      "maximum": 1048576
     }
   },
-  "required": [
-    "paths"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "paths": {
+              "type": "array",
+              "not": {
+                "items": {
+                  "not": {}
+                }
+              }
+            }
+          },
+          "required": [
+            "paths"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "not": {
+              "items": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                    },
+                    {
+                      "type": "array",
+                      "maxItems": 0
+                    },
+                    {
+                      "type": "object",
+                      "maxProperties": 0,
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "paths"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -11619,22 +11650,68 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "required": [
+    "path"
+  ],
   "additionalProperties": false,
   "description": "Read immutable media bytes into the current conversation model's context.",
+  "type": "object",
+  "properties": {
+    "path": {
+      "description": "Local image, PDF, audio, video or UTF-8 file. Relative paths resolve\nagainst the active workspace, like the other filesystem tools.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_sha256": {
+      "description": "Optional revision guard from fs.stat or a previous read_media result.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "path": {}
           },
           "required": [
             "path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "path": {
             "anyOf": [
@@ -11642,73 +11719,27 @@ Filesystem command tools for read/search and explicit edits.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "expected_sha256": {
-      "description": "Optional revision guard from fs.stat or a previous read_media result.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000002"
-    },
-    "folder": {
-      "description": "Base folder for a relative `path`. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "path": {
-      "description": "Local image, PDF, audio, video or UTF-8 file. Relative paths resolve\nagainst the active workspace, like the other filesystem tools.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -11734,70 +11765,23 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "required": [
+    "path",
+    "old",
+    "new"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "expected_occurrences": {
-      "default": 1,
-      "format": "uint32",
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "expected_sha256": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000006"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
@@ -11807,39 +11791,86 @@ Filesystem command tools for read/search and explicit edits.
       ],
       "x-agena-order": "000001"
     },
-    "new": {
-      "maxLength": 16777216,
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "old": {
-      "maxLength": 16777216,
-      "minLength": 1,
       "type": "string",
-      "x-agena-order": "000002"
+      "x-agena-order": "000002",
+      "minLength": 1,
+      "maxLength": 16777216
     },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
+    "new": {
       "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+      "x-agena-order": "000003",
+      "maxLength": 16777216
+    },
+    "expected_occurrences": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "default": 1,
+      "x-agena-order": "000004"
     },
     "replace_all": {
-      "default": false,
       "type": "boolean",
+      "default": false,
       "x-agena-order": "000005"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     }
   },
-  "required": [
-    "path",
-    "old",
-    "new"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -11861,51 +11892,22 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "required": [
+    "path"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
       "type": [
@@ -11915,25 +11917,54 @@ Filesystem command tools for read/search and explicit edits.
       "x-agena-order": "000001"
     },
     "hash": {
-      "default": true,
       "type": "boolean",
+      "default": true,
       "x-agena-order": "000002"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
     }
   },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -11960,74 +11991,22 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "required": [
+    "path",
+    "content"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "content": {
-      "maxLength": 16777216,
+    "path": {
       "type": "string",
-      "x-agena-order": "000002"
-    },
-    "create_parents": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000003"
-    },
-    "expected_sha256": {
-      "description": "Required when replacing an existing file. Use the hash returned by\n`fs.stat` or a prior mutating result.",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000004"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "folder": {
       "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
@@ -12037,30 +12016,84 @@ Filesystem command tools for read/search and explicit edits.
       ],
       "x-agena-order": "000001"
     },
-    "path": {
+    "content": {
+      "type": "string",
+      "x-agena-order": "000002",
+      "maxLength": 16777216
+    },
+    "create_parents": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000003"
+    },
+    "expected_sha256": {
+      "description": "Required when replacing an existing file. Use the hash returned by\n`fs.stat` or a prior mutating result.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     }
   },
-  "required": [
-    "path",
-    "content"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
 ## agena.gemini
 
-**Version** `0.1.0` · **Tools** 29
+**Version** `0.1.0` · **Tools** 29 · **Tags** `network` `google` `ai`
 
 Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback.
+
+> Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback.
 
 ### agents
 
@@ -12099,7 +12132,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -12148,157 +12181,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -12326,61 +12359,106 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -12388,16 +12466,17 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -12405,73 +12484,27 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -12512,7 +12545,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -12561,157 +12594,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -12752,7 +12785,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -12801,157 +12834,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -12982,11 +13015,22 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system_instruction": {
+      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -12996,6 +13040,18 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_interaction_id": {
       "type": [
         "string",
@@ -13003,34 +13059,11 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "input_steps": {
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     }
   },
   "type": "object"
@@ -13074,7 +13107,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -13123,157 +13156,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -13301,61 +13334,106 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -13363,16 +13441,17 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -13380,73 +13459,27 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -13487,7 +13520,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -13536,157 +13569,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -13709,21 +13742,38 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 **Input schema**:
 ```json
 {
+  "required": [
+    "handle"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "handle": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "handle": {}
           },
           "required": [
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "handle": {
             "anyOf": [
@@ -13731,44 +13781,27 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "handle"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "handle": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "handle"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -13799,11 +13832,22 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system_instruction": {
+      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -13813,6 +13857,18 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_interaction_id": {
       "type": [
         "string",
@@ -13820,34 +13876,11 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "input_steps": {
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     }
   },
   "type": "object"
@@ -13873,21 +13906,38 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 **Input schema**:
 ```json
 {
+  "required": [
+    "handle"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "handle": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "handle": {}
           },
           "required": [
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "handle": {
             "anyOf": [
@@ -13895,44 +13945,27 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "handle"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "handle": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "handle"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -13957,21 +13990,57 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 **Input schema**:
 ```json
 {
+  "required": [
+    "path"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "expires_in_seconds": {
+      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "path": {}
           },
           "required": [
             "path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "path": {
             "anyOf": [
@@ -13979,63 +14048,27 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "expires_in_seconds": {
-      "default": null,
-      "description": "Optional provider expiry. OpenAI/Anthropic default to one day.\nGoogle uses its own lifecycle and rejects custom expiry.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -14076,7 +14109,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -14125,157 +14158,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -14306,11 +14339,22 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system_instruction": {
+      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -14320,6 +14364,18 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_interaction_id": {
       "type": [
         "string",
@@ -14327,34 +14383,11 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "input_steps": {
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     }
   },
   "type": "object"
@@ -14388,11 +14421,22 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system_instruction": {
+      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -14402,6 +14446,18 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_interaction_id": {
       "type": [
         "string",
@@ -14409,34 +14465,11 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "input_steps": {
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     }
   },
   "type": "object"
@@ -14467,135 +14500,37 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 **Input schema**:
 ```json
 {
+  "required": [
+    "prompt",
+    "images"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "prompt": {}
-          },
-          "required": [
-            "prompt"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "prompt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "prompt"
-        ],
-        "type": "object"
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "images": {
-                  "not": {
-                    "items": {
-                      "not": {}
-                    }
-                  },
-                  "type": "array"
-                }
-              },
-              "required": [
-                "images"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "images": {
-                "not": {
-                  "items": {
-                    "not": {
-                      "anyOf": [
-                        {
-                          "type": "null"
-                        },
-                        {
-                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                          "type": "string"
-                        },
-                        {
-                          "maxItems": 0,
-                          "type": "array"
-                        },
-                        {
-                          "maxProperties": 0,
-                          "properties": {},
-                          "type": "object"
-                        }
-                      ]
-                    }
-                  }
-                },
-                "type": "array"
-              }
-            },
-            "required": [
-              "images"
-            ],
-            "type": "object"
-          }
-        ]
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "cached_content": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "generation_config": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "images": {
+      "type": "array",
       "items": {
+        "type": "string",
+        "x-agena-non-empty": true,
         "minLength": 1,
         "not": {
-          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-          "type": "string"
-        },
-        "type": "string",
-        "x-agena-non-empty": true
+          "type": "string",
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+        }
       },
-      "maxItems": 16,
+      "x-agena-order": "000001",
       "minItems": 1,
-      "type": "array",
-      "x-agena-order": "000001"
+      "maxItems": 16
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -14605,28 +14540,126 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000002"
     },
-    "prompt": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "request_options": {
+    "generation_config": {
+      "type": "object",
       "additionalProperties": true,
       "properties": {},
+      "x-agena-order": "000003"
+    },
+    "cached_content": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "request_options": {
       "type": "object",
+      "additionalProperties": true,
+      "properties": {},
       "x-agena-order": "000005"
     }
   },
-  "required": [
-    "prompt",
-    "images"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "images": {
+                  "type": "array",
+                  "not": {
+                    "items": {
+                      "not": {}
+                    }
+                  }
+                }
+              },
+              "required": [
+                "images"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "images": {
+                "type": "array",
+                "not": {
+                  "items": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                        },
+                        {
+                          "type": "array",
+                          "maxItems": 0
+                        },
+                        {
+                          "type": "object",
+                          "maxProperties": 0,
+                          "properties": {}
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "images"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -14653,64 +14686,22 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 **Input schema**:
 ```json
 {
+  "required": [
+    "prompt"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "prompt": {}
-          },
-          "required": [
-            "prompt"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "prompt": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "prompt"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "cached_content": {
-      "description": "Existing Gemini cachedContents resource name.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "generation_config": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000002"
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -14720,28 +14711,70 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000001"
     },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "request_options": {
+    "generation_config": {
+      "type": "object",
       "additionalProperties": true,
       "properties": {},
+      "x-agena-order": "000002"
+    },
+    "cached_content": {
+      "description": "Existing Gemini cachedContents resource name.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "request_options": {
       "type": "object",
+      "additionalProperties": true,
+      "properties": {},
       "x-agena-order": "000004"
     }
   },
-  "required": [
-    "prompt"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "prompt": {}
+          },
+          "required": [
+            "prompt"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "prompt"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -14769,61 +14802,106 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -14831,16 +14909,17 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -14848,73 +14927,27 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -14955,7 +14988,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -15004,157 +15037,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -15195,7 +15228,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -15244,157 +15277,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -15435,7 +15468,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -15484,157 +15517,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -15675,7 +15708,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -15724,157 +15757,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -15915,7 +15948,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -15964,157 +15997,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -16146,71 +16179,71 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "additionalProperties": false,
   "properties": {
-    "audio_path": {
-      "default": null,
-      "description": "Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "duration_seconds": {
-      "default": 20,
-      "description": "Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000007"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "input_sample_rate": {
-      "default": 24000,
-      "description": "Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
     "model": {
-      "default": null,
       "description": "Defaults to current session model; explicitly pass a compatible OpenAI\nRealtime or Google Gemini Live model when the current model is unsuitable.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
     },
-    "output_path": {
-      "default": null,
+    "text": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000006"
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "audio_path": {
+      "description": "Explicit raw signed 16-bit little-endian mono PCM file, not WAV/MP3.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000003"
+    },
+    "input_sample_rate": {
+      "description": "Input sample rate. OpenAI requires 24000; Gemini permits 16000 or 24000.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 24000,
+      "x-agena-order": "000004"
     },
     "session": {
+      "description": "Official session/setup fields. model and output audio format are managed.",
+      "type": "object",
       "additionalProperties": true,
       "default": {},
-      "description": "Official session/setup fields. model and output audio format are managed.",
       "properties": {},
-      "type": "object",
       "x-agena-order": "000005"
     },
-    "text": {
-      "default": null,
+    "output_path": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "duration_seconds": {
+      "description": "Complete turn deadline, 1..50 seconds. Partial audio is retained on timeout.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 20,
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -16254,7 +16287,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -16303,157 +16336,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -16484,11 +16517,22 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "additionalProperties": false,
   "properties": {
-    "input_steps": {
-      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
-      "items": true,
-      "type": "array",
-      "x-agena-order": "000006"
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 64000
+    },
+    "stable_system_instruction": {
+      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 256000
     },
     "model": {
       "description": "Optional model override on the current provider; defaults to the current session model. Must be a Google Gemini model that supports this operation. Pass model explicitly if the current model is unsuitable.",
@@ -16498,6 +16542,18 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000002"
     },
+    "tool_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000003"
+    },
+    "request_options": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {},
+      "x-agena-order": "000004"
+    },
     "previous_interaction_id": {
       "type": [
         "string",
@@ -16505,34 +16561,11 @@ Model-based tools default to the current session model. Use a Google Gemini mode
       ],
       "x-agena-order": "000005"
     },
-    "prompt": {
-      "maxLength": 64000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000"
-    },
-    "request_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000004"
-    },
-    "stable_system_instruction": {
-      "description": "Stable prefix used to improve Gemini implicit cache reuse.",
-      "maxLength": 256000,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "tool_options": {
-      "additionalProperties": true,
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000003"
+    "input_steps": {
+      "description": "Official Interactions message/history steps for hosted operations. Client function callbacks are not accepted.",
+      "type": "array",
+      "items": true,
+      "x-agena-order": "000006"
     }
   },
   "type": "object"
@@ -16576,7 +16609,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -16625,157 +16658,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -16816,7 +16849,7 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 {
   "$defs": {
     "Action": {
-      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
+      "type": "string",
       "enum": [
         "list",
         "create",
@@ -16865,157 +16898,157 @@ Model-based tools default to the current session model. Use a Google Gemini mode
         "delete_run",
         "validate"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "Operation. Each tool documents its supported actions. No automatic retries."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "Operation. Each tool documents its supported actions. No automatic retries.",
       "$ref": "#/$defs/Action",
-      "default": "list",
-      "description": "Operation. Each tool documents its supported actions. No automatic retries."
-    },
-    "beta_headers": {
-      "default": [],
-      "description": "Official beta feature names only; cannot override authentication headers.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000015"
-    },
-    "expected_sha256": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000012"
+      "default": "list"
     },
     "id": {
-      "default": null,
       "description": "Vendor resource ID, or its documented resource name (not an HTTP URL).",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000001"
     },
     "item_id": {
-      "default": null,
       "description": "Nested resource ID, such as a vector-store file, skill version or event.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000002"
     },
-    "last_event_id": {
-      "default": null,
-      "description": "Resume an event stream from the provider's last SSE event ID.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000016"
-    },
-    "model": {
-      "default": null,
-      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "output_path": {
-      "default": null,
-      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000013"
-    },
-    "parameters": {
-      "additionalProperties": true,
-      "default": {},
-      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000008"
-    },
-    "path": {
-      "default": null,
-      "description": "Explicit local input file for multipart uploads/transcription.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000010"
-    },
-    "paths": {
-      "default": [],
-      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000011"
-    },
-    "prompt": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "query": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": {},
-      "description": "Pagination, filters and other official query parameters.",
-      "properties": {},
-      "type": "object",
-      "x-agena-order": "000009"
-    },
-    "resource": {
-      "default": null,
-      "description": "Optional collection for platform/managed-agent operations; see tool help.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "stream": {
-      "default": false,
-      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
-      "type": "boolean",
-      "x-agena-order": "000007"
-    },
     "sub_item_id": {
-      "default": null,
       "description": "Third-level resource ID, e.g. an eval output item or a subagent turn.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
+    "resource": {
+      "description": "Optional collection for platform/managed-agent operations; see tool help.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
+    },
+    "model": {
+      "description": "Defaults to the current session model for model-based requests. Use a\nmodel from this tool's vendor with the required capability; otherwise\nexplicitly pass model. Resource list/get/delete operations need no model.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000005"
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000006"
+    },
+    "stream": {
+      "description": "Opt in to a bounded inference event stream. Returns complete received\nevents and a cursor; does not keep a background connection open.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000007"
+    },
+    "parameters": {
+      "description": "Official API request fields. model/stream are controlled by Agena.\nThis is request JSON, never local commands or connection configuration.",
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000008"
+    },
+    "query": {
+      "description": "Pagination, filters and other official query parameters.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000009"
+    },
+    "path": {
+      "description": "Explicit local input file for multipart uploads/transcription.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000010"
+    },
+    "paths": {
+      "description": "Additional local paths, e.g. the files of a custom Claude Skill.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000011"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000012"
+    },
+    "output_path": {
+      "description": "Optional workspace output path. Existing files are never overwritten.\nOmit to save downloads as managed attachments.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000013"
+    },
     "wait_seconds": {
-      "default": 20,
       "description": "Bound a wait call to 1..50 seconds. An unfinished task is returned as\npending with its ID; call wait again rather than creating another task.",
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 20,
       "x-agena-order": "000014"
+    },
+    "beta_headers": {
+      "description": "Official beta feature names only; cannot override authentication headers.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000015"
+    },
+    "last_event_id": {
+      "description": "Resume an event stream from the provider's last SSE event ID.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000016"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -17043,61 +17076,106 @@ Model-based tools default to the current session model. Use a Google Gemini mode
 ```json
 {
   "$defs": {
-    "ImageDetail": {
-      "enum": [
-        "auto",
-        "low",
-        "high"
-      ],
-      "type": "string",
-      "x-agena-order": "000003"
-    },
     "MediaSource": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "expected_sha256": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "path": {
               "type": "string"
             },
+            "expected_sha256": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "source": {
-              "const": "local",
-              "type": "string"
+              "type": "string",
+              "const": "local"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "path"
-          ],
-          "type": "object"
+          ]
         },
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
             "handle": {
               "type": "string"
             },
             "source": {
-              "const": "cloud",
-              "type": "string"
+              "type": "string",
+              "const": "cloud"
             }
           },
+          "additionalProperties": false,
           "required": [
             "source",
             "handle"
-          ],
-          "type": "object"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "low",
+        "high"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "required": [
+    "inputs",
+    "prompt"
+  ],
+  "type": "object",
+  "properties": {
+    "inputs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "x-agena-order": "000000"
+    },
+    "prompt": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 64000
+    },
+    "model": {
+      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "detail": {
+      "$ref": "#/$defs/ImageDetail",
+      "default": "auto"
+    },
+    "max_output_tokens": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 4096,
+      "x-agena-order": "000004"
     }
   },
   "additionalProperties": false,
@@ -17105,16 +17183,17 @@ Model-based tools default to the current session model. Use a Google Gemini mode
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "prompt": {}
           },
           "required": [
             "prompt"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "prompt": {
             "anyOf": [
@@ -17122,81 +17201,37 @@ Model-based tools default to the current session model. Use a Google Gemini mode
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "prompt"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "detail": {
-      "$ref": "#/$defs/ImageDetail",
-      "default": "auto"
-    },
-    "inputs": {
-      "items": {
-        "$ref": "#/$defs/MediaSource"
-      },
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "max_output_tokens": {
-      "default": 4096,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "model": {
-      "default": null,
-      "description": "Optional override; defaults to the current session model. Use a model from the invoked plugin’s AI vendor that supports this operation; pass model explicitly when the current model is unsuitable.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "prompt": {
-      "maxLength": 64000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "inputs",
-    "prompt"
-  ],
-  "type": "object"
+  }
 }
 ```
 
 ## agena.inline_ui
 
-**Version** `0.1.0` · **Tools** 4
+**Version** `0.1.0` · **Tools** 4 · **Tags** `interactive` `ui`
 
 Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update.
+
+> Create composable, stateful interfaces and live work updates inside assistant responses. Start with guide, then prepare, read and update the interface through the declared tools.
 
 ### guide
 
@@ -17219,6 +17254,7 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 {
   "$defs": {
     "GuideSection": {
+      "type": "string",
       "enum": [
         "schema",
         "dashboard",
@@ -17232,23 +17268,22 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
         "metrics",
         "table",
         "details"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "sections": {
-      "default": [],
       "description": "Empty/default: complete core guide and tested 7-node example.\nNonempty: only these supplemental sections in one call.",
+      "type": "array",
       "items": {
         "$ref": "#/$defs/GuideSection"
       },
-      "type": "array",
+      "default": [],
       "x-agena-order": "000000"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -17274,21 +17309,25 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 {
   "$defs": {
     "InlinePhase": {
+      "type": "string",
       "enum": [
         "working",
         "complete",
         "error"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "document"
+  ],
+  "type": "object",
   "properties": {
     "document": {
       "description": "Bounded semantic document: version=1, optional title, ordered blocks.\nDocument v1; guide() covers the common contract. No executable code.",
       "x-agena-order": "000000"
     },
     "phase": {
+      "description": "Complete by default; working when the agent will publish later updates.",
       "anyOf": [
         {
           "$ref": "#/$defs/InlinePhase"
@@ -17298,14 +17337,10 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
         }
       ],
       "default": null,
-      "description": "Complete by default; working when the agent will publish later updates.",
       "x-agena-order": "000001"
     }
   },
-  "required": [
-    "document"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
@@ -17325,17 +17360,17 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 **Input schema**:
 ```json
 {
+  "required": [
+    "reference"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "reference": {
       "type": "string",
       "x-agena-order": "000000"
     }
-  },
-  "required": [
-    "reference"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -17359,465 +17394,17 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
 ```json
 {
   "$defs": {
-    "InlineBlock": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "program": {
-              "$ref": "#/$defs/UiProgram"
-            },
-            "type": {
-              "const": "panel",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "program"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "text": {
-              "type": "string"
-            },
-            "type": {
-              "const": "paragraph",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "text": {
-              "type": "string"
-            },
-            "title": {
-              "type": "string"
-            },
-            "tone": {
-              "$ref": "#/$defs/InlineTone",
-              "default": "note"
-            },
-            "type": {
-              "const": "callout",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "items": {
-              "items": {
-                "$ref": "#/$defs/InlineStep"
-              },
-              "type": "array"
-            },
-            "title": {
-              "type": "string"
-            },
-            "type": {
-              "const": "steps",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "items"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "columns": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "id": {
-              "type": "string"
-            },
-            "rows": {
-              "items": {
-                "$ref": "#/$defs/InlineComparisonRow"
-              },
-              "type": "array"
-            },
-            "title": {
-              "type": "string"
-            },
-            "type": {
-              "const": "comparison",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "columns",
-            "rows"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "items": {
-              "items": {
-                "$ref": "#/$defs/InlineMetric"
-              },
-              "type": "array"
-            },
-            "title": {
-              "type": "string"
-            },
-            "type": {
-              "const": "metrics",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "items"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "columns": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "id": {
-              "type": "string"
-            },
-            "rows": {
-              "items": {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              "type": "array"
-            },
-            "title": {
-              "type": "string"
-            },
-            "type": {
-              "const": "table",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "columns",
-            "rows"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "text": {
-              "type": "string"
-            },
-            "title": {
-              "type": "string"
-            },
-            "type": {
-              "const": "details",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "title",
-            "text"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "chart_type": {
-              "$ref": "#/$defs/InlineChartType"
-            },
-            "id": {
-              "type": "string"
-            },
-            "labels": {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            "series": {
-              "items": {
-                "$ref": "#/$defs/InlineSeries"
-              },
-              "type": "array"
-            },
-            "title": {
-              "type": "string"
-            },
-            "type": {
-              "const": "chart",
-              "type": "string"
-            },
-            "x_label": {
-              "type": "string"
-            },
-            "y_label": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "id",
-            "title",
-            "chart_type",
-            "labels",
-            "series"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {},
-      "type": "object"
-    },
-    "InlineChartType": {
-      "enum": [
-        "line",
-        "bar",
-        "area",
-        "pie"
-      ],
-      "type": "string"
-    },
-    "InlineComparisonRow": {
-      "additionalProperties": false,
-      "properties": {
-        "label": {
-          "type": "string"
-        },
-        "values": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "label",
-        "values"
-      ],
-      "type": "object"
-    },
-    "InlineDocument": {
-      "additionalProperties": false,
-      "properties": {
-        "blocks": {
-          "description": "Ordered semantic content. Each id is unique within this document.",
-          "items": {
-            "$ref": "#/$defs/InlineBlock"
-          },
-          "type": "array"
-        },
-        "title": {
-          "description": "Optional heading for the whole passage, not a separate app/window title.",
-          "type": "string"
-        },
-        "version": {
-          "description": "Protocol version. Currently exactly 1; unknown versions are rejected.",
-          "format": "uint8",
-          "maximum": 255,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "version",
-        "blocks"
-      ],
-      "type": "object"
-    },
-    "InlineIcon": {
-      "enum": [
-        "number",
-        "shield",
-        "layers",
-        "sparkles",
-        "link",
-        "check",
-        "search",
-        "code"
-      ],
-      "type": "string"
-    },
-    "InlineMetric": {
-      "additionalProperties": false,
-      "properties": {
-        "detail": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "value": {
-          "description": "A supplied fact including its unit. Never an inferred or invented value.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "label",
-        "value"
-      ],
-      "type": "object"
-    },
-    "InlinePanelPatch": {
-      "additionalProperties": false,
-      "properties": {
-        "block_id": {
-          "type": "string"
-        },
-        "data": {
-          "additionalProperties": true,
-          "default": {},
-          "properties": {},
-          "type": "object"
-        },
-        "nodes": {
-          "default": [],
-          "description": "Whole-node upserts preserve identity and allow incremental layout growth.",
-          "items": {
-            "$ref": "#/$defs/UiNode"
-          },
-          "type": "array"
-        },
-        "remove": {
-          "default": [],
-          "description": "Explicitly remove a subtree. Dangling/duplicate/cyclic references reject\nthe entire transaction, leaving the previous valid revision visible.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "block_id"
-      ],
-      "type": "object"
-    },
-    "InlinePhase": {
-      "enum": [
-        "working",
-        "complete",
-        "error"
-      ],
-      "type": "string"
-    },
-    "InlineSeries": {
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "values": {
-          "items": {
-            "type": [
-              "number",
-              "null"
-            ]
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "name",
-        "values"
-      ],
-      "type": "object"
-    },
-    "InlineStep": {
-      "additionalProperties": false,
-      "properties": {
-        "icon": {
-          "$ref": "#/$defs/InlineIcon",
-          "default": "number"
-        },
-        "label": {
-          "description": "Optional short stage label, such as \"P0\". Does not imply execution status.",
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        },
-        "title": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "title",
-        "text"
-      ],
-      "type": "object"
-    },
-    "InlineTone": {
-      "enum": [
-        "note",
-        "tip",
-        "warning"
-      ],
-      "type": "string"
-    },
     "InlineUpdate": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
+        "reference": {
+          "type": "string"
+        },
+        "expected_revision": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
         "document": {
           "anyOf": [
             {
@@ -17827,11 +17414,6 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
               "type": "null"
             }
           ]
-        },
-        "expected_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
         },
         "patch": {
           "anyOf": [
@@ -17852,89 +17434,412 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
               "type": "null"
             }
           ]
-        },
-        "reference": {
-          "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "reference",
         "expected_revision"
       ],
-      "type": "object",
       "x-agena-order": "000000"
     },
-    "UiAction": {
+    "InlineDocument": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "Protocol version. Currently exactly 1; unknown versions are rejected.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "title": {
+          "description": "Optional heading for the whole passage, not a separate app/window title.",
+          "type": "string"
+        },
+        "blocks": {
+          "description": "Ordered semantic content. Each id is unique within this document.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InlineBlock"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "blocks"
+      ]
+    },
+    "InlineBlock": {
       "oneOf": [
         {
-          "additionalProperties": false,
+          "type": "object",
           "properties": {
-            "key": {
+            "id": {
+              "type": "string"
+            },
+            "program": {
+              "$ref": "#/$defs/UiProgram"
+            },
+            "type": {
+              "type": "string",
+              "const": "panel"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "program"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
               "type": "string"
             },
             "type": {
-              "const": "set",
-              "type": "string"
-            },
-            "value": true
-          },
-          "required": [
-            "type",
-            "key",
-            "value"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "key": {
-              "type": "string"
-            },
-            "type": {
-              "const": "toggle",
-              "type": "string"
+              "type": "string",
+              "const": "paragraph"
             }
           },
+          "additionalProperties": false,
           "required": [
             "type",
-            "key"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "type": {
-              "const": "reset",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "text": true,
-            "type": {
-              "const": "copy",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
+            "id",
             "text"
-          ],
-          "type": "object"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "tone": {
+              "$ref": "#/$defs/InlineTone",
+              "default": "note"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "callout"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InlineStep"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "steps"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "items"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InlineComparisonRow"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "comparison"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "columns",
+            "rows"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InlineMetric"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "metrics"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "items"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "table"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "columns",
+            "rows"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "details"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "title",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "chart_type": {
+              "$ref": "#/$defs/InlineChartType"
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "series": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/InlineSeries"
+              }
+            },
+            "x_label": {
+              "type": "string"
+            },
+            "y_label": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "chart"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "id",
+            "title",
+            "chart_type",
+            "labels",
+            "series"
+          ]
         }
       ],
-      "properties": {},
-      "type": "object"
+      "type": "object",
+      "properties": {}
+    },
+    "UiProgram": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UiNode"
+          }
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {},
+          "properties": {}
+        },
+        "state": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/UiStateField"
+          },
+          "default": {},
+          "properties": {}
+        },
+        "computed": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {},
+          "properties": {}
+        },
+        "actions": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UiAction"
+            }
+          },
+          "default": {},
+          "properties": {}
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "nodes"
+      ]
+    },
+    "UiNode": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/UiKind"
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {},
+          "properties": {}
+        },
+        "children": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "bind": {
+          "description": "A typed local state field. Controls write only this field.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible": {
+          "description": "Boolean expression; hidden subtrees do not render or accept events."
+        },
+        "action": {
+          "description": "Explicitly declared local action; not an arbitrary tool or URL.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind"
+      ]
     },
     "UiKind": {
+      "type": "string",
       "enum": [
         "stack",
         "row",
@@ -17960,127 +17865,20 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
         "timeline",
         "callout",
         "details"
-      ],
-      "type": "string"
-    },
-    "UiNode": {
-      "additionalProperties": false,
-      "properties": {
-        "action": {
-          "description": "Explicitly declared local action; not an arbitrary tool or URL.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "bind": {
-          "description": "A typed local state field. Controls write only this field.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "children": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "id": {
-          "type": "string"
-        },
-        "kind": {
-          "$ref": "#/$defs/UiKind"
-        },
-        "props": {
-          "additionalProperties": true,
-          "default": {},
-          "properties": {},
-          "type": "object"
-        },
-        "visible": {
-          "description": "Boolean expression; hidden subtrees do not render or accept events."
-        }
-      },
-      "required": [
-        "id",
-        "kind"
-      ],
-      "type": "object"
-    },
-    "UiOption": {
-      "additionalProperties": false,
-      "properties": {
-        "label": {
-          "type": "string"
-        },
-        "value": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "value",
-        "label"
-      ],
-      "type": "object"
-    },
-    "UiProgram": {
-      "additionalProperties": false,
-      "properties": {
-        "actions": {
-          "additionalProperties": {
-            "items": {
-              "$ref": "#/$defs/UiAction"
-            },
-            "type": "array"
-          },
-          "default": {},
-          "properties": {},
-          "type": "object"
-        },
-        "computed": {
-          "additionalProperties": true,
-          "default": {},
-          "properties": {},
-          "type": "object"
-        },
-        "data": {
-          "additionalProperties": true,
-          "default": {},
-          "properties": {},
-          "type": "object"
-        },
-        "nodes": {
-          "items": {
-            "$ref": "#/$defs/UiNode"
-          },
-          "type": "array"
-        },
-        "root": {
-          "type": "string"
-        },
-        "state": {
-          "additionalProperties": {
-            "$ref": "#/$defs/UiStateField"
-          },
-          "default": {},
-          "properties": {},
-          "type": "object"
-        }
-      },
-      "required": [
-        "root",
-        "nodes"
-      ],
-      "type": "object"
+      ]
     },
     "UiStateField": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
-        "initial": true,
         "kind": {
           "$ref": "#/$defs/UiStateKind"
+        },
+        "initial": true,
+        "min": {
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "max": {
           "type": [
@@ -18088,67 +17886,306 @@ Inline Generative UI: composable, stateful interfaces and live work updates insi
             "null"
           ]
         },
-        "max_length": {
-          "default": 1024,
-          "format": "uint",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "min": {
+        "step": {
           "type": [
             "number",
             "null"
           ]
         },
         "options": {
-          "default": [],
+          "type": "array",
           "items": {
             "$ref": "#/$defs/UiOption"
           },
-          "type": "array"
+          "default": []
         },
-        "step": {
-          "type": [
-            "number",
-            "null"
-          ]
+        "max_length": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "default": 1024
         }
       },
+      "additionalProperties": false,
       "required": [
         "kind",
         "initial"
-      ],
-      "type": "object"
+      ]
     },
     "UiStateKind": {
+      "type": "string",
       "enum": [
         "boolean",
         "number",
         "text",
         "choice",
         "selection"
+      ]
+    },
+    "UiOption": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "UiAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "value": true,
+            "type": {
+              "type": "string",
+              "const": "set"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "key",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "toggle"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "reset"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": true,
+            "type": {
+              "type": "string",
+              "const": "copy"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text"
+          ]
+        }
       ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "update": {
-      "$ref": "#/$defs/InlineUpdate"
+      "type": "object",
+      "properties": {}
+    },
+    "InlineTone": {
+      "type": "string",
+      "enum": [
+        "note",
+        "tip",
+        "warning"
+      ]
+    },
+    "InlineStep": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Optional short stage label, such as \"P0\". Does not imply execution status.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "icon": {
+          "$ref": "#/$defs/InlineIcon",
+          "default": "number"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "title",
+        "text"
+      ]
+    },
+    "InlineIcon": {
+      "type": "string",
+      "enum": [
+        "number",
+        "shield",
+        "layers",
+        "sparkles",
+        "link",
+        "check",
+        "search",
+        "code"
+      ]
+    },
+    "InlineComparisonRow": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "values"
+      ]
+    },
+    "InlineMetric": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "description": "A supplied fact including its unit. Never an inferred or invented value.",
+          "type": "string"
+        },
+        "detail": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "value"
+      ]
+    },
+    "InlineChartType": {
+      "type": "string",
+      "enum": [
+        "line",
+        "bar",
+        "area",
+        "pie"
+      ]
+    },
+    "InlineSeries": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "values"
+      ]
+    },
+    "InlinePanelPatch": {
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "type": "string"
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {},
+          "properties": {}
+        },
+        "nodes": {
+          "description": "Whole-node upserts preserve identity and allow incremental layout growth.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UiNode"
+          },
+          "default": []
+        },
+        "remove": {
+          "description": "Explicitly remove a subtree. Dangling/duplicate/cyclic references reject\nthe entire transaction, leaving the previous valid revision visible.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "block_id"
+      ]
+    },
+    "InlinePhase": {
+      "type": "string",
+      "enum": [
+        "working",
+        "complete",
+        "error"
+      ]
     }
   },
   "required": [
     "update"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "update": {
+      "$ref": "#/$defs/InlineUpdate"
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
 ## agena.interaction
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.0` · **Tools** 2 · **Tags** `interactive`
 
 User interaction tools.
+
+> Ask the user for structured input through the active client. Responses are delivered back to the requesting session so work can continue with the selected answers.
 
 ### ask
 
@@ -18174,103 +18211,144 @@ User interaction tools.
 ```json
 {
   "$defs": {
-    "UserInputOption": {
-      "description": "Option offered in a user input question.",
-      "properties": {
-        "custom": {
-          "description": "This option accepts a user-written answer instead of its label.\nA question may contain only this option. At most one custom option is supported.",
-          "type": "boolean"
-        },
-        "description": {
-          "type": "string"
-        },
-        "label": {
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": "string",
-          "x-agena-non-empty": true
-        }
-      },
-      "required": [
-        "label"
-      ],
-      "type": "object"
-    },
     "UserInputQuestion": {
       "description": "Question asked to the user with selectable options.",
+      "type": "object",
       "properties": {
-        "allow_custom": {
-          "description": "Compatibility for older requests. New questions use an option with `custom: true`.",
-          "type": "boolean"
-        },
         "header": {
-          "maxLength": 12,
-          "type": "string"
+          "type": "string",
+          "maxLength": 12
+        },
+        "question": {
+          "type": "string",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/UserInputOption"
+          },
+          "maxItems": 8
         },
         "multiple": {
           "type": "boolean"
         },
-        "options": {
-          "items": {
-            "$ref": "#/$defs/UserInputOption"
-          },
-          "maxItems": 8,
-          "type": "array"
-        },
-        "question": {
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": "string",
-          "x-agena-non-empty": true
+        "allow_custom": {
+          "description": "Compatibility for older requests. New questions use an option with `custom: true`.",
+          "type": "boolean"
         }
       },
       "required": [
         "question"
+      ]
+    },
+    "UserInputOption": {
+      "description": "Option offered in a user input question.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
+        "description": {
+          "type": "string"
+        },
+        "custom": {
+          "description": "This option accepts a user-written answer instead of its label.\nA question may contain only this option. At most one custom option is supported.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "label"
+      ]
+    }
+  },
+  "properties": {
+    "title": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "kind": {
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "body_markdown": {
+      "description": "Optional Markdown body shown in the review dialog. Only the plan\napproval review (`kind == \"review\"`) sets it to the full plan document;\nother ask_user requests leave it empty.",
+      "type": "string",
+      "x-agena-order": "000002",
+      "maxLength": 16000
+    },
+    "auto_resolution_ms": {
+      "description": "Automatically continue without an answer after this many milliseconds.\nValues are limited to 60 seconds through 10 minutes.\nA timeout is not approval; only independent, already-authorized work may continue.",
+      "type": [
+        "integer",
+        "null"
       ],
-      "type": "object"
+      "format": "uint64",
+      "minimum": 60000,
+      "x-agena-order": "000003",
+      "maximum": 600000
+    },
+    "questions": {
+      "description": "One to three questions. Each option is a normal choice unless `custom: true`,\nwhich lets the user select it and write an answer. A custom option may be\nthe only option; do not invent a fixed choice for free-text questions.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/UserInputQuestion"
+      },
+      "x-agena-order": "000004",
+      "minItems": 1,
+      "maxItems": 3
     }
   },
   "description": "Input of the ask-user tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "questions": {
+              "type": "array",
               "not": {
                 "items": {
                   "not": {
+                    "type": "object",
                     "properties": {
                       "question": {}
                     },
                     "required": [
                       "question"
-                    ],
-                    "type": "object"
+                    ]
                   }
                 }
-              },
-              "type": "array"
+              }
             }
           },
           "required": [
             "questions"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "questions": {
+            "type": "array",
             "not": {
               "items": {
                 "not": {
+                  "type": "object",
                   "properties": {
                     "question": {
                       "anyOf": [
@@ -18278,76 +18356,35 @@ User interaction tools.
                           "type": "null"
                         },
                         {
-                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                          "type": "string"
+                          "type": "string",
+                          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                         },
                         {
-                          "maxItems": 0,
-                          "type": "array"
+                          "type": "array",
+                          "maxItems": 0
                         },
                         {
+                          "type": "object",
                           "maxProperties": 0,
-                          "properties": {},
-                          "type": "object"
+                          "properties": {}
                         }
                       ]
                     }
                   },
                   "required": [
                     "question"
-                  ],
-                  "type": "object"
+                  ]
                 }
               }
-            },
-            "type": "array"
+            }
           }
         },
         "required": [
           "questions"
-        ],
-        "type": "object"
+        ]
       }
     ]
   },
-  "properties": {
-    "auto_resolution_ms": {
-      "description": "Automatically continue without an answer after this many milliseconds.\nValues are limited to 60 seconds through 10 minutes.\nA timeout is not approval; only independent, already-authorized work may continue.",
-      "format": "uint64",
-      "maximum": 600000,
-      "minimum": 60000,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "body_markdown": {
-      "description": "Optional Markdown body shown in the review dialog. Only the plan\napproval review (`kind == \"review\"`) sets it to the full plan document;\nother ask_user requests leave it empty.",
-      "maxLength": 16000,
-      "type": "string",
-      "x-agena-order": "000002"
-    },
-    "kind": {
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "questions": {
-      "description": "One to three questions. Each option is a normal choice unless `custom: true`,\nwhich lets the user select it and write an answer. A custom option may be\nthe only option; do not invent a fixed choice for free-text questions.",
-      "items": {
-        "$ref": "#/$defs/UserInputQuestion"
-      },
-      "maxItems": 3,
-      "minItems": 1,
-      "type": "array",
-      "x-agena-order": "000004"
-    },
-    "title": {
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "type": "object",
   "x-agena-relations": [
     "distinct_trimmed_within `questions[].options[].label` within `questions[]`"
   ]
@@ -18375,31 +18412,61 @@ User interaction tools.
   "$defs": {
     "InteractionNotificationLevel": {
       "description": "Visual severity used by the TUI notification card.",
+      "type": "string",
       "enum": [
         "info",
         "success",
         "warning",
         "error"
       ],
-      "type": "string",
       "x-agena-order": "000002"
     }
   },
+  "required": [
+    "body_markdown"
+  ],
   "description": "Input of the interaction notify tool.",
+  "type": "object",
+  "properties": {
+    "title": {
+      "description": "Short heading displayed in the transcript notification card.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 80
+    },
+    "body_markdown": {
+      "description": "Markdown notification body. This tool never waits for a reply.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 16000
+    },
+    "level": {
+      "description": "Visual severity used by the TUI notification card.",
+      "$ref": "#/$defs/InteractionNotificationLevel",
+      "default": "info"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "body_markdown": {}
           },
           "required": [
             "body_markdown"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "body_markdown": {
             "anyOf": [
@@ -18407,65 +18474,37 @@ User interaction tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "body_markdown"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "body_markdown": {
-      "description": "Markdown notification body. This tool never waits for a reply.",
-      "maxLength": 16000,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "level": {
-      "$ref": "#/$defs/InteractionNotificationLevel",
-      "default": "info",
-      "description": "Visual severity used by the TUI notification card."
-    },
-    "title": {
-      "description": "Short heading displayed in the transcript notification card.",
-      "maxLength": 80,
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "body_markdown"
-  ],
-  "type": "object"
+  }
 }
 ```
 
 ## agena.lsp
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.0` · **Tools** 5 · **Tags** `lsp` `discovery`
 
 LSP read-only observability and navigation tools.
+
+> Inspect language-server availability and diagnostics, read hover documentation, and navigate symbols and references. Queries use the workspace language-server connections.
 
 ### definition
 
@@ -18486,21 +18525,68 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "character",
+    "file_path",
+    "line"
+  ],
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "x-agena-order": "000000.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "line": {
+      "description": "Zero-based source line.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000000.000002"
+    },
+    "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000000.000003"
+    }
+  },
   "description": "Input of the LSP definition tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "file_path": {}
           },
           "required": [
             "file_path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "file_path": {
             "anyOf": [
@@ -18508,74 +18594,27 @@ LSP read-only observability and navigation tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "file_path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "character": {
-      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000.000003"
-    },
-    "file_path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000.000000"
-    },
-    "folder": {
-      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000.000001"
-    },
-    "line": {
-      "description": "Zero-based source line.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000.000002"
-    }
-  },
-  "required": [
-    "character",
-    "file_path",
-    "line"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -18596,21 +18635,52 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "file_path"
+  ],
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "description": "Input of the LSP diagnostics tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "file_path": {}
           },
           "required": [
             "file_path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "file_path": {
             "anyOf": [
@@ -18618,58 +18688,27 @@ LSP read-only observability and navigation tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "file_path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "file_path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "folder": {
-      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "file_path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -18692,21 +18731,68 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "character",
+    "file_path",
+    "line"
+  ],
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "x-agena-order": "000000.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "line": {
+      "description": "Zero-based source line.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000000.000002"
+    },
+    "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000000.000003"
+    }
+  },
   "description": "Input of the LSP hover tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "file_path": {}
           },
           "required": [
             "file_path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "file_path": {
             "anyOf": [
@@ -18714,74 +18800,27 @@ LSP read-only observability and navigation tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "file_path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "character": {
-      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000.000003"
-    },
-    "file_path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000.000000"
-    },
-    "folder": {
-      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000.000001"
-    },
-    "line": {
-      "description": "Zero-based source line.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000.000002"
-    }
-  },
-  "required": [
-    "character",
-    "file_path",
-    "line"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -18805,21 +18844,73 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "character",
+    "file_path",
+    "line"
+  ],
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "x-agena-order": "000000.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "line": {
+      "description": "Zero-based source line.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000000.000002"
+    },
+    "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000000.000003"
+    },
+    "include_declaration": {
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000001"
+    }
+  },
   "description": "Input of the LSP references tool.",
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "file_path": {}
           },
           "required": [
             "file_path"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "file_path": {
             "anyOf": [
@@ -18827,79 +18918,27 @@ LSP read-only observability and navigation tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "file_path"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "character": {
-      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000.000003"
-    },
-    "file_path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000.000000"
-    },
-    "folder": {
-      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000.000001"
-    },
-    "include_declaration": {
-      "default": true,
-      "type": "boolean",
-      "x-agena-order": "000001"
-    },
-    "line": {
-      "description": "Zero-based source line.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000000.000002"
-    }
-  },
-  "required": [
-    "character",
-    "file_path",
-    "line"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -18918,16 +18957,18 @@ LSP read-only observability and navigation tools.
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
 ## agena.mcp
 
-**Version** `0.1.0` · **Tools** 26 · **Condition** `runtime:mcp-manager`
+**Version** `0.1.0` · **Tools** 26 · **Tags** `mcp` `network` · **Condition** `runtime:mcp-manager`
 
 MCP discovery and bridge tools.
+
+> Discover connected MCP servers and bridge their tools, resources and prompts. The shared MCP client manager owns connection lifecycle and operation routing.
 
 ### connections.auth.cancel
 
@@ -18946,22 +18987,22 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "flow_id": {
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "id": {
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
   "required": [
     "id",
     "flow_id"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "flow_id": {
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  }
 }
 ```
 
@@ -18983,27 +19024,27 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "callback_url": {
-      "type": "string",
-      "x-agena-order": "000002"
-    },
-    "flow_id": {
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "id": {
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
   "required": [
     "id",
     "flow_id",
     "callback_url"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "flow_id": {
+      "type": "string",
+      "x-agena-order": "000001"
+    },
+    "callback_url": {
+      "type": "string",
+      "x-agena-order": "000002"
+    }
+  }
 }
 ```
 
@@ -19023,18 +19064,18 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "description": "Opaque ID returned by connections.list or connections.get.",
       "type": "string",
       "x-agena-order": "000000"
     }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19055,7 +19096,12 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id",
+    "redirect_uri"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "type": "string",
@@ -19065,12 +19111,7 @@ MCP discovery and bridge tools.
       "type": "string",
       "x-agena-order": "000001"
     }
-  },
-  "required": [
-    "id",
-    "redirect_uri"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19093,13 +19134,17 @@ MCP discovery and bridge tools.
 {
   "$defs": {
     "McpConnectionScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
+      ]
     }
   },
+  "required": [
+    "enabled"
+  ],
+  "type": "object",
   "properties": {
     "enabled": {
       "type": "boolean"
@@ -19108,11 +19153,7 @@ MCP discovery and bridge tools.
       "$ref": "#/$defs/McpConnectionScope",
       "default": "workspace"
     }
-  },
-  "required": [
-    "enabled"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19136,28 +19177,28 @@ MCP discovery and bridge tools.
 {
   "$defs": {
     "McpConnectionScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
-    }
-  },
-  "properties": {
-    "config": true,
-    "name": {
-      "type": "string"
-    },
-    "scope": {
-      "$ref": "#/$defs/McpConnectionScope",
-      "default": "workspace"
+      ]
     }
   },
   "required": [
     "name",
     "config"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    },
+    "config": true
+  }
 }
 ```
 
@@ -19177,18 +19218,18 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "description": "Opaque ID returned by connections.list or connections.get.",
       "type": "string",
       "x-agena-order": "000000"
     }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19209,7 +19250,12 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id",
+    "token"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "type": "string",
@@ -19220,12 +19266,7 @@ MCP discovery and bridge tools.
       "type": "string",
       "x-agena-order": "000001"
     }
-  },
-  "required": [
-    "id",
-    "token"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19246,22 +19287,22 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "expected_revision": {
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "id": {
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
   "required": [
     "id",
     "expected_revision"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "expected_revision": {
+      "type": "string",
+      "x-agena-order": "000001"
+    }
+  }
 }
 ```
 
@@ -19281,18 +19322,18 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "description": "Opaque ID returned by connections.list or connections.get.",
       "type": "string",
       "x-agena-order": "000000"
     }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19318,31 +19359,11 @@ MCP discovery and bridge tools.
 {
   "$defs": {
     "McpConnectionScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
-    }
-  },
-  "properties": {
-    "document": true,
-    "expected_revision": {
-      "type": "string"
-    },
-    "replace": {
-      "default": false,
-      "type": "boolean"
-    },
-    "scope": {
-      "$ref": "#/$defs/McpConnectionScope",
-      "default": "workspace"
-    },
-    "selected": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
+      ]
     }
   },
   "required": [
@@ -19350,7 +19371,27 @@ MCP discovery and bridge tools.
     "selected",
     "expected_revision"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    },
+    "document": true,
+    "selected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "replace": {
+      "type": "boolean",
+      "default": false
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  }
 }
 ```
 
@@ -19373,24 +19414,24 @@ MCP discovery and bridge tools.
 {
   "$defs": {
     "McpConnectionScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
-    }
-  },
-  "properties": {
-    "document": true,
-    "scope": {
-      "$ref": "#/$defs/McpConnectionScope",
-      "default": "workspace"
+      ]
     }
   },
   "required": [
     "document"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "scope": {
+      "$ref": "#/$defs/McpConnectionScope",
+      "default": "workspace"
+    },
+    "document": true
+  }
 }
 ```
 
@@ -19406,8 +19447,8 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -19427,18 +19468,18 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "description": "Opaque ID returned by connections.list or connections.get.",
       "type": "string",
       "x-agena-order": "000000"
     }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19460,23 +19501,23 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
-  "properties": {
-    "enabled": {
-      "type": "boolean"
-    },
-    "expected_revision": {
-      "type": "string"
-    },
-    "id": {
-      "type": "string",
-      "x-agena-order": "000000"
-    }
-  },
   "required": [
     "id",
     "enabled",
     "expected_revision"
   ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  },
   "type": "object"
 }
 ```
@@ -19497,18 +19538,18 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "description": "Opaque ID returned by connections.list or connections.get.",
       "type": "string",
       "x-agena-order": "000000"
     }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19531,28 +19572,28 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
-  "properties": {
-    "config": true,
-    "expected_revision": {
-      "type": "string"
-    },
-    "id": {
-      "type": "string",
-      "x-agena-order": "000000"
-    },
-    "preserve_secrets": {
-      "default": [],
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    }
-  },
   "required": [
     "id",
     "config",
     "expected_revision"
   ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "x-agena-order": "000000"
+    },
+    "config": true,
+    "preserve_secrets": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  },
   "type": "object"
 }
 ```
@@ -19575,21 +19616,60 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server",
+    "name"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "name": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "arguments": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -19597,40 +19677,40 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "name": {}
               },
               "required": [
                 "name"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "name": {
                 "anyOf": [
@@ -19638,68 +19718,29 @@ MCP discovery and bridge tools.
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "name"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
-  },
-  "properties": {
-    "arguments": {
-      "additionalProperties": {
-        "type": "string"
-      },
-      "default": null,
-      "type": [
-        "object",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "name": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "server",
-    "name"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19720,21 +19761,45 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -19742,51 +19807,27 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "cursor": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "server"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19807,21 +19848,45 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -19829,51 +19894,27 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "cursor": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "server"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -19894,21 +19935,49 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server",
+    "uri"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "uri": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -19916,40 +19985,40 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "uri": {}
               },
               "required": [
                 "uri"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "uri": {
                 "anyOf": [
@@ -19957,57 +20026,29 @@ MCP discovery and bridge tools.
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "uri"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
-  },
-  "properties": {
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "uri": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "server",
-    "uri"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -20028,21 +20069,45 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -20050,51 +20115,27 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "cursor": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "server"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -20114,21 +20155,38 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -20136,44 +20194,27 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "server"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -20189,8 +20230,8 @@ MCP discovery and bridge tools.
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -20212,21 +20253,53 @@ MCP discovery and bridge tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "server",
+    "name"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "name": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "arguments": {
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "server": {}
           },
           "required": [
             "server"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "server": {
             "anyOf": [
@@ -20234,40 +20307,40 @@ MCP discovery and bridge tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "server"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "name": {}
               },
               "required": [
                 "name"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "name": {
                 "anyOf": [
@@ -20275,61 +20348,29 @@ MCP discovery and bridge tools.
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "name"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
-  },
-  "properties": {
-    "arguments": {
-      "default": null,
-      "x-agena-order": "000002"
-    },
-    "name": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "server": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "server",
-    "name"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -20352,18 +20393,18 @@ MCP discovery and bridge tools.
 {
   "additionalProperties": false,
   "properties": {
-    "limit": {
-      "default": 20,
-      "format": "uint32",
-      "maximum": 100,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000001"
-    },
     "query": {
-      "default": "",
       "type": "string",
+      "default": "",
       "x-agena-order": "000000"
+    },
+    "limit": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "default": 20,
+      "x-agena-order": "000001",
+      "maximum": 100
     }
   },
   "type": "object"
@@ -20372,9 +20413,11 @@ MCP discovery and bridge tools.
 
 ## agena.memory
 
-**Version** `0.1.0` · **Tools** 5
+**Version** `0.1.0` · **Tools** 5 · **Tags** `discovery` `memory`
 
 Persistent memory with searchable retrieval and write tools.
+
+> Store durable memory and retrieve it through searchable queries. Reads and writes use the configured memory storage and index.
 
 ### delete
 
@@ -20393,21 +20436,50 @@ Persistent memory with searchable retrieval and write tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "name",
+    "expected_sha256"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_sha256": {
+      "description": "The revision observed by the caller before requesting deletion.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "name": {}
           },
           "required": [
             "name"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "name": {
             "anyOf": [
@@ -20415,40 +20487,40 @@ Persistent memory with searchable retrieval and write tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "name"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "expected_sha256": {}
               },
               "required": [
                 "expected_sha256"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "expected_sha256": {
                 "anyOf": [
@@ -20456,58 +20528,29 @@ Persistent memory with searchable retrieval and write tools.
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "expected_sha256"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
   },
-  "properties": {
-    "expected_sha256": {
-      "description": "The revision observed by the caller before requesting deletion.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "name": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "name",
-    "expected_sha256"
-  ],
-  "type": "object",
   "x-agena-relations": [
     "forbid_substrings `name`: \"/\", \"\\\""
   ]
@@ -20532,21 +20575,56 @@ Persistent memory with searchable retrieval and write tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "name"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "offset": {
+      "description": "Zero-based Unicode character offset into the body; use body_range.next_offset to continue.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000001"
+    },
+    "limit": {
+      "description": "Body characters to return (default 8000, maximum 32000).",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "name": {}
           },
           "required": [
             "name"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "name": {
             "anyOf": [
@@ -20554,62 +20632,27 @@ Persistent memory with searchable retrieval and write tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "name"
-        ],
-        "type": "object"
+        ]
       }
     ]
   },
-  "properties": {
-    "limit": {
-      "description": "Body characters to return (default 8000, maximum 32000).",
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "name": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "offset": {
-      "default": 0,
-      "description": "Zero-based Unicode character offset into the body; use body_range.next_offset to continue.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "name"
-  ],
-  "type": "object",
   "x-agena-relations": [
     "forbid_substrings `name`: \"/\", \"\\\""
   ]
@@ -20636,26 +20679,26 @@ Persistent memory with searchable retrieval and write tools.
 {
   "additionalProperties": false,
   "properties": {
-    "include_history": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000002"
-    },
     "limit": {
-      "format": "uint32",
-      "minimum": 0,
       "type": [
         "integer",
         "null"
       ],
+      "format": "uint32",
+      "minimum": 0,
       "x-agena-order": "000000"
     },
     "offset": {
-      "default": 0,
+      "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "type": "integer",
+      "default": 0,
       "x-agena-order": "000001"
+    },
+    "include_history": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
     }
   },
   "type": "object"
@@ -20680,21 +20723,54 @@ Persistent memory with searchable retrieval and write tools.
 **Input schema**:
 ```json
 {
+  "required": [
+    "query"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 4096
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000001"
+    },
+    "include_history": {
+      "description": "Include archived/superseded history within the current scope.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "query": {}
           },
           "required": [
             "query"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "query": {
             "anyOf": [
@@ -20702,60 +20778,27 @@ Persistent memory with searchable retrieval and write tools.
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "query"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "include_history": {
-      "default": false,
-      "description": "Include archived/superseded history within the current scope.",
-      "type": "boolean",
-      "x-agena-order": "000002"
-    },
-    "limit": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "query": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "query"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -20785,7 +20828,7 @@ Persistent memory with searchable retrieval and write tools.
 {
   "$defs": {
     "MemoryKind": {
-      "description": "The canonical classification of this record.",
+      "type": "string",
       "enum": [
         "fact",
         "preference",
@@ -20793,11 +20836,26 @@ Persistent memory with searchable retrieval and write tools.
         "procedure",
         "task"
       ],
+      "x-agena-order": "000004",
+      "description": "The canonical classification of this record."
+    },
+    "MemoryWriteScope": {
       "type": "string",
-      "x-agena-order": "000004"
+      "enum": [
+        "workspace",
+        "global",
+        "session"
+      ]
+    },
+    "MemoryWriteStatus": {
+      "type": "string",
+      "enum": [
+        "active",
+        "archived"
+      ]
     },
     "MemoryRevision": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
         "name": {
           "type": "string"
@@ -20806,169 +20864,62 @@ Persistent memory with searchable retrieval and write tools.
           "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "name",
         "sha256"
-      ],
-      "type": "object"
-    },
-    "MemoryWriteScope": {
-      "enum": [
-        "workspace",
-        "global",
-        "session"
-      ],
-      "type": "string"
-    },
-    "MemoryWriteStatus": {
-      "enum": [
-        "active",
-        "archived"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "name": {}
-          },
-          "required": [
-            "name"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "name": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "type": "object"
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "content": {}
-              },
-              "required": [
-                "content"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "content": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
-                  },
-                  {
-                    "maxItems": 0,
-                    "type": "array"
-                  },
-                  {
-                    "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "content"
-            ],
-            "type": "object"
-          }
-        ]
-      }
-    ]
-  },
+  "required": [
+    "name",
+    "content",
+    "kind"
+  ],
+  "type": "object",
   "properties": {
-    "content": {
-      "maxLength": 8388608,
+    "name": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000002"
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "description": {
-      "default": "",
-      "maxLength": 64000,
       "type": "string",
-      "x-agena-order": "000001"
+      "default": "",
+      "x-agena-order": "000001",
+      "maxLength": 64000
+    },
+    "content": {
+      "type": "string",
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 8388608
     },
     "expected_sha256": {
-      "default": null,
       "description": "Required when updating an existing record; returned by memory.get/write.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
-    "importance": {
-      "default": null,
-      "description": "Relative importance (0–100), not confidence in factual truth.",
-      "format": "uint8",
-      "maximum": 255,
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000007"
-    },
     "kind": {
-      "$ref": "#/$defs/MemoryKind",
-      "description": "The canonical classification of this record."
-    },
-    "name": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+      "description": "The canonical classification of this record.",
+      "$ref": "#/$defs/MemoryKind"
     },
     "scope": {
+      "description": "Workspace knowledge or a checkpoint for the invoking session only.",
       "anyOf": [
         {
           "$ref": "#/$defs/MemoryWriteScope"
@@ -20978,7 +20929,6 @@ Persistent memory with searchable retrieval and write tools.
         }
       ],
       "default": null,
-      "description": "Workspace knowledge or a checkpoint for the invoking session only.",
       "x-agena-order": "000005"
     },
     "status": {
@@ -20993,22 +20943,115 @@ Persistent memory with searchable retrieval and write tools.
       "default": null,
       "x-agena-order": "000006"
     },
+    "importance": {
+      "description": "Relative importance (0–100), not confidence in factual truth.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint8",
+      "minimum": 0,
+      "maximum": 255,
+      "default": null,
+      "x-agena-order": "000007"
+    },
     "supersedes": {
-      "default": [],
       "description": "Read these records first and provide their current revisions to replace them atomically.",
+      "type": "array",
       "items": {
         "$ref": "#/$defs/MemoryRevision"
       },
-      "type": "array",
+      "default": [],
       "x-agena-order": "000008"
     }
   },
-  "required": [
-    "name",
-    "content",
-    "kind"
-  ],
-  "type": "object",
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "content": {}
+              },
+              "required": [
+                "content"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "content": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "content"
+            ]
+          }
+        ]
+      }
+    ]
+  },
   "x-agena-relations": [
     "forbid_substrings `name`: \"/\", \"\\\""
   ]
@@ -21017,9 +21060,11 @@ Persistent memory with searchable retrieval and write tools.
 
 ## agena.monitor
 
-**Version** `0.1.0` · **Tools** 2
+**Version** `0.1.0` · **Tools** 2 · **Tags** `network` `events`
 
 WebSocket event subscriptions with background notifications. Use shell.watch for local command-output monitoring.
+
+> Subscribe to WebSocket streams and receive background event notifications. Inspect subscriptions and stop them when the event source is no longer needed.
 
 ### start
 
@@ -21045,57 +21090,68 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
   "$defs": {
     "MonitorWsInput": {
       "description": "WebSocket endpoint monitored by the monitor tool.",
+      "type": "object",
       "properties": {
-        "protocols": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "url": {
           "type": "string"
+        },
+        "protocols": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
         "url"
       ],
-      "type": "object",
       "x-agena-order": "000000"
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "ws"
+  ],
+  "type": "object",
   "properties": {
-    "description": {
-      "default": "",
-      "type": "string",
-      "x-agena-order": "000002"
-    },
-    "timeout_ms": {
-      "format": "uint64",
-      "maximum": 3600000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
     "ws": {
       "$ref": "#/$defs/MonitorWsInput",
+      "required": [
+        "url"
+      ],
+      "properties": {
+        "url": {
+          "type": "string",
+          "x-agena-order": "000000.000000",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
+        "protocols": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "x-agena-order": "000000.000001"
+        }
+      },
       "not": {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "url": {}
               },
               "required": [
                 "url"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "url": {
                 "anyOf": [
@@ -21103,57 +21159,46 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "url"
-            ],
-            "type": "object"
+            ]
           }
         ]
       },
-      "properties": {
-        "protocols": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-agena-order": "000000.000001"
-        },
-        "url": {
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": "string",
-          "x-agena-non-empty": true,
-          "x-agena-order": "000000.000000"
-        }
-      },
-      "required": [
-        "url"
-      ],
       "type": "object"
+    },
+    "timeout_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000001",
+      "maximum": 3600000
+    },
+    "description": {
+      "type": "string",
+      "default": "",
+      "x-agena-order": "000002"
     }
   },
-  "required": [
-    "ws"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
@@ -21173,21 +21218,38 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
 **Input schema**:
 ```json
 {
+  "required": [
+    "monitor_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "monitor_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "monitor_id": {}
           },
           "required": [
             "monitor_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "monitor_id": {
             "anyOf": [
@@ -21195,52 +21257,37 @@ WebSocket event subscriptions with background notifications. Use shell.watch for
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "monitor_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "monitor_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "monitor_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
 ## agena.notebook
 
-**Version** `0.1.0` · **Tools** 1
+**Version** `0.1.0` · **Tools** 1 · **Tags** `filesystem` `notebooks`
 
 Revision-safe Jupyter notebook cell editing.
+
+> Replace, insert or delete Jupyter notebook cells with revision checks. Code outputs are discarded by default and can be retained only through an explicit option.
 
 ### edit_cell
 
@@ -21266,120 +21313,58 @@ Revision-safe Jupyter notebook cell editing.
 ```json
 {
   "$defs": {
-    "NotebookCellType": {
-      "enum": [
-        "code",
-        "markdown",
-        "raw"
-      ],
-      "type": "string"
-    },
     "NotebookEditAction": {
+      "type": "string",
       "enum": [
         "replace",
         "insert_before",
         "insert_after",
         "delete"
       ],
-      "type": "string",
       "x-agena-order": "000002"
+    },
+    "NotebookCellType": {
+      "type": "string",
+      "enum": [
+        "code",
+        "markdown",
+        "raw"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "expected_sha256": {}
-              },
-              "required": [
-                "expected_sha256"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "expected_sha256": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
-                  },
-                  {
-                    "maxItems": 0,
-                    "type": "array"
-                  },
-                  {
-                    "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "expected_sha256"
-            ],
-            "type": "object"
-          }
-        ]
-      }
-    ]
-  },
+  "required": [
+    "path",
+    "action",
+    "cell_index",
+    "expected_sha256"
+  ],
+  "type": "object",
   "properties": {
+    "path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "action": {
       "$ref": "#/$defs/NotebookEditAction"
     },
     "cell_index": {
+      "type": "integer",
       "format": "uint",
       "minimum": 0,
-      "type": "integer",
       "x-agena-order": "000003"
     },
     "cell_type": {
@@ -21393,68 +21378,134 @@ Revision-safe Jupyter notebook cell editing.
       ],
       "x-agena-order": "000004"
     },
-    "expected_sha256": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
+    "source": {
       "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000007"
-    },
-    "folder": {
-      "description": "Base folder for a relative path. Only global (Bot) sessions use it;\na project session keeps resolving against its project root.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+      "default": "",
+      "x-agena-order": "000005",
+      "maxLength": 16777216
     },
     "preserve_outputs": {
-      "default": false,
       "description": "Explicit opt-in to retaining code outputs; retained output may be stale.",
       "type": "boolean",
+      "default": false,
       "x-agena-order": "000006"
     },
-    "source": {
-      "default": "",
-      "maxLength": 16777216,
+    "expected_sha256": {
       "type": "string",
-      "x-agena-order": "000005"
+      "x-agena-order": "000007",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     }
   },
-  "required": [
-    "path",
-    "action",
-    "cell_index",
-    "expected_sha256"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "expected_sha256": {}
+              },
+              "required": [
+                "expected_sha256"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "expected_sha256": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "expected_sha256"
+            ]
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
 ## agena.notifications
 
-**Version** `0.1.0` · **Tools** 0
+**Version** `0.1.0` · **Tools** 0 · **Tags** `interactive` `notifications`
 
 AI completion, question and approval notifications for browsers and terminals, with terminal window titles.
 
+> Deliver completion, question and approval notifications to browsers and terminals. Plugin settings control notification delivery and terminal window titles.
+
 ## agena.plan
 
-**Version** `0.1.0` · **Tools** 6
+**Version** `0.1.0` · **Tools** 6 · **Tags** `planning` `goal`
 
 Plan orchestration and plan-autorun tools.
+
+> Create and maintain structured task plans and coordinate plan execution. The runtime enforces planning state and plan-autorun permissions.
 
 ### clear
 
@@ -21468,8 +21519,8 @@ Plan orchestration and plan-autorun tools.
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -21498,29 +21549,20 @@ Plan orchestration and plan-autorun tools.
 {
   "$defs": {
     "WorkflowPlanStepStatus": {
+      "type": "string",
       "enum": [
         "pending",
         "in_progress",
         "blocked",
         "completed",
         "skipped"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
   "description": "Edit the current plan's steps and checks. Never requests user approval and never changes the plan phase. Address steps and checks by their 1-based index (step 1 is the first step; check 1 is the first check within the step): use `step` + `status` (with an optional `note`) to update a step, or `step` + `check` + `status` to update a check.",
+  "type": "object",
   "properties": {
-    "check": {
-      "description": "1-based index of the check within the step to update (1 = first check). Requires `step`.",
-      "format": "uint",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
     "expected_revision": {
       "description": "Optional revision from plan.get; mismatches never overwrite newer state.",
       "type": [
@@ -21529,12 +21571,25 @@ Plan orchestration and plan-autorun tools.
       ],
       "x-agena-order": "000000"
     },
-    "note": {
+    "step": {
+      "description": "1-based index of the step to update (1 = first step).",
       "type": [
-        "string",
+        "integer",
         "null"
       ],
-      "x-agena-order": "000004"
+      "format": "uint",
+      "minimum": 0,
+      "x-agena-order": "000001"
+    },
+    "check": {
+      "description": "1-based index of the check within the step to update (1 = first check). Requires `step`.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0,
+      "x-agena-order": "000002"
     },
     "status": {
       "anyOf": [
@@ -21547,18 +21602,14 @@ Plan orchestration and plan-autorun tools.
       ],
       "x-agena-order": "000003"
     },
-    "step": {
-      "description": "1-based index of the step to update (1 = first step).",
-      "format": "uint",
-      "minimum": 0,
+    "note": {
       "type": [
-        "integer",
+        "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000004"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -21580,23 +21631,23 @@ Plan orchestration and plan-autorun tools.
 {
   "$defs": {
     "PlanGetView": {
+      "type": "string",
       "enum": [
         "current",
         "summary",
         "full"
       ],
-      "type": "string",
       "x-agena-order": "000000"
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "view": {
       "$ref": "#/$defs/PlanGetView",
       "default": "current"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -21625,27 +21676,20 @@ Plan orchestration and plan-autorun tools.
 {
   "$defs": {
     "WorkflowPlanPhase": {
+      "type": "string",
       "enum": [
         "planning",
         "active",
         "blocked",
         "completed",
         "cancelled"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
   "description": "Transition the current plan's phase. `phase` moves the plan between `planning`, `active`, `blocked`, `completed`, and `cancelled`; `autorun` and `summary` are optional modifiers. A transition into `active`, `blocked`, or `completed` requests review only when the current phase is not already approved (`active`, `blocked`, or `completed`). Leave `request_approval` omitted or true for normal transitions. Passing false requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; never change settings to bypass approval. To complete a plan with steps, first mark the relevant steps or checks `completed` via `plan.edit`, then make a separate call with `phase: completed`.",
+  "type": "object",
   "properties": {
-    "autorun": {
-      "description": "Whether an approved active plan should keep running automatically.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
     "expected_revision": {
       "description": "Optional revision from plan.get; mismatches never overwrite newer state.",
       "type": [
@@ -21655,6 +21699,7 @@ Plan orchestration and plan-autorun tools.
       "x-agena-order": "000000"
     },
     "phase": {
+      "description": "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`.",
       "anyOf": [
         {
           "$ref": "#/$defs/WorkflowPlanPhase"
@@ -21663,7 +21708,6 @@ Plan orchestration and plan-autorun tools.
           "type": "null"
         }
       ],
-      "description": "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`.",
       "x-agena-order": "000001"
     },
     "request_approval": {
@@ -21674,6 +21718,14 @@ Plan orchestration and plan-autorun tools.
       ],
       "x-agena-order": "000002"
     },
+    "autorun": {
+      "description": "Whether an approved active plan should keep running automatically.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
     "summary": {
       "description": "Optional completion summary. This is only applied when `phase` is `completed`.",
       "type": [
@@ -21682,8 +21734,7 @@ Plan orchestration and plan-autorun tools.
       ],
       "x-agena-order": "000004"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -21702,9 +21753,9 @@ Plan orchestration and plan-autorun tools.
 ```json
 {
   "additionalProperties": false,
+  "type": "object",
   "description": "Request user approval of the current saved plan to make it active. This can pause for the user; plan.phase can also request review for transitions that need approval.",
-  "properties": {},
-  "type": "object"
+  "properties": {}
 }
 ```
 
@@ -21734,10 +21785,25 @@ Plan orchestration and plan-autorun tools.
 ```json
 {
   "$defs": {
-    "WorkflowPlanCheckpointInput": {
-      "additionalProperties": false,
-      "description": "Plan check input. Each check item should use `text`.",
+    "WorkflowPlanStepInput": {
+      "description": "Plan step input. Each step uses `title`; nested checks under `checks` use `text`.",
+      "type": "object",
       "properties": {
+        "title": {
+          "description": "Human-readable step title.",
+          "type": "string",
+          "default": ""
+        },
+        "description": {
+          "description": "Optional longer explanation for the step. If omitted, the step title can serve as the short description.",
+          "type": "string",
+          "default": ""
+        },
+        "executor": {
+          "description": "Who should execute the step. Use `ai` for agent work and `human` for manual work.",
+          "$ref": "#/$defs/WorkflowPlanExecutor",
+          "default": "ai"
+        },
         "status": {
           "anyOf": [
             {
@@ -21747,42 +21813,6 @@ Plan orchestration and plan-autorun tools.
               "type": "null"
             }
           ]
-        },
-        "text": {
-          "default": "",
-          "description": "Check text.",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "WorkflowPlanExecutor": {
-      "enum": [
-        "ai",
-        "human"
-      ],
-      "type": "string"
-    },
-    "WorkflowPlanStepInput": {
-      "additionalProperties": false,
-      "description": "Plan step input. Each step uses `title`; nested checks under `checks` use `text`.",
-      "properties": {
-        "checks": {
-          "description": "Optional checklist checks for this step. Each check item uses `text`, not `title`.",
-          "items": {
-            "$ref": "#/$defs/WorkflowPlanCheckpointInput"
-          },
-          "type": "array"
-        },
-        "description": {
-          "default": "",
-          "description": "Optional longer explanation for the step. If omitted, the step title can serve as the short description.",
-          "type": "string"
-        },
-        "executor": {
-          "$ref": "#/$defs/WorkflowPlanExecutor",
-          "default": "ai",
-          "description": "Who should execute the step. Use `ai` for agent work and `human` for manual work."
         },
         "note": {
           "type": [
@@ -21790,6 +21820,42 @@ Plan orchestration and plan-autorun tools.
             "null"
           ]
         },
+        "checks": {
+          "description": "Optional checklist checks for this step. Each check item uses `text`, not `title`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WorkflowPlanCheckpointInput"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkflowPlanExecutor": {
+      "type": "string",
+      "enum": [
+        "ai",
+        "human"
+      ]
+    },
+    "WorkflowPlanStepStatus": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "in_progress",
+        "blocked",
+        "completed",
+        "skipped"
+      ]
+    },
+    "WorkflowPlanCheckpointInput": {
+      "description": "Plan check input. Each check item should use `text`.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "description": "Check text.",
+          "type": "string",
+          "default": ""
+        },
         "status": {
           "anyOf": [
             {
@@ -21799,43 +21865,17 @@ Plan orchestration and plan-autorun tools.
               "type": "null"
             }
           ]
-        },
-        "title": {
-          "default": "",
-          "description": "Human-readable step title.",
-          "type": "string"
         }
       },
-      "type": "object"
-    },
-    "WorkflowPlanStepStatus": {
-      "enum": [
-        "pending",
-        "in_progress",
-        "blocked",
-        "completed",
-        "skipped"
-      ],
-      "type": "string"
+      "additionalProperties": false
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "objective"
+  ],
   "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`.",
+  "type": "object",
   "properties": {
-    "autorun": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "document_markdown": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
     "expected_revision": {
       "description": "Optional revision from plan.get; mismatches never overwrite newer state.",
       "type": [
@@ -21848,6 +21888,35 @@ Plan orchestration and plan-autorun tools.
       "type": "string",
       "x-agena-order": "000001"
     },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "document_markdown": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "steps": {
+      "description": "Ordered plan steps. Each step item uses `title`; nested checks use `text`.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/WorkflowPlanStepInput"
+      },
+      "x-agena-order": "000004"
+    },
+    "autorun": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000005"
+    },
     "request_approval": {
       "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: the plan stays in `planning` and you must call `plan.review` to request approval. Pass `false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`; the plan then becomes active immediately. Never change settings to bypass approval.",
       "type": [
@@ -21855,35 +21924,19 @@ Plan orchestration and plan-autorun tools.
         "null"
       ],
       "x-agena-order": "000006"
-    },
-    "steps": {
-      "description": "Ordered plan steps. Each step item uses `title`; nested checks use `text`.",
-      "items": {
-        "$ref": "#/$defs/WorkflowPlanStepInput"
-      },
-      "type": "array",
-      "x-agena-order": "000004"
-    },
-    "title": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
     }
   },
-  "required": [
-    "objective"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
 ## agena.provider
 
-**Version** `0.1.0` · **Tools** 1
+**Version** `0.1.0` · **Tools** 1 · **Tags** `discovery` `models`
 
 Discover model routes across all enabled adapters of the current provider.
+
+> List model routes across enabled adapters and inspect one model route in detail. Results include discovery sources and failures for the current provider.
 
 ### models
 
@@ -21911,80 +21964,82 @@ Discover model routes across all enabled adapters of the current provider.
 {
   "$defs": {
     "ModelsAction": {
-      "description": "list returns compact model routes; get returns full metadata for id.",
+      "type": "string",
       "enum": [
         "list",
         "get"
       ],
-      "type": "string",
-      "x-agena-order": "000000"
+      "x-agena-order": "000000",
+      "description": "list returns compact model routes; get returns full metadata for id."
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "action": {
+      "description": "list returns compact model routes; get returns full metadata for id.",
       "$ref": "#/$defs/ModelsAction",
-      "default": "list",
-      "description": "list returns compact model routes; get returns full metadata for id."
+      "default": "list"
+    },
+    "query": {
+      "description": "Optional case-insensitive text search over IDs and existing metadata.\nThis is a text filter, not a model-type classifier. list only.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000001",
+      "maxLength": 256
+    },
+    "id": {
+      "description": "Exact model ID for get. Use adapter_id when the ID has multiple routes.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002",
+      "maxLength": 512
     },
     "adapter_id": {
-      "default": null,
       "description": "Optional adapter within the current provider. Omit to query all enabled adapters.",
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000003"
     },
-    "cursor": {
-      "default": null,
-      "description": "Opaque next_cursor from list; keep the same query and adapter_id.\nIf the provider's model list changes, restart without a cursor.",
-      "maxLength": 256,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "id": {
-      "default": null,
-      "description": "Exact model ID for get. Use adapter_id when the ID has multiple routes.",
-      "maxLength": 512,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
     "limit": {
-      "default": 100,
       "description": "Maximum list entries per page, 1–200. Defaults to 100.",
-      "format": "uint",
-      "maximum": 200,
-      "minimum": 1,
       "type": "integer",
+      "format": "uint",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 100,
       "x-agena-order": "000004"
     },
-    "query": {
-      "default": null,
-      "description": "Optional case-insensitive text search over IDs and existing metadata.\nThis is a text filter, not a model-type classifier. list only.",
-      "maxLength": 256,
+    "cursor": {
+      "description": "Opaque next_cursor from list; keep the same query and adapter_id.\nIf the provider's model list changes, restart without a cursor.",
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000001"
+      "default": null,
+      "x-agena-order": "000005",
+      "maxLength": 256
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
 ## agena.report
 
-**Version** `0.1.0` · **Tools** 1
+**Version** `0.1.0` · **Tools** 1 · **Tags** `review` `verification`
 
 Structured review and verification findings.
+
+> Record structured findings from code reviews and verification work. Preserve finding details so clients can present and track them consistently.
 
 ### findings
 
@@ -22005,93 +22060,95 @@ Structured review and verification findings.
 {
   "$defs": {
     "Finding": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
+        "severity": {
+          "$ref": "#/$defs/FindingSeverity"
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 1
+        },
+        "end_line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1
+        },
+        "title": {
+          "type": "string"
+        },
         "body": {
           "type": "string"
+        },
+        "confidence": {
+          "type": "number",
+          "format": "double",
+          "default": 1.0,
+          "minimum": 0,
+          "maximum": 1
         },
         "code": {
           "type": [
             "string",
             "null"
           ]
-        },
-        "confidence": {
-          "default": 1.0,
-          "format": "double",
-          "maximum": 1,
-          "minimum": 0,
-          "type": "number"
-        },
-        "end_line": {
-          "format": "uint32",
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "file": {
-          "type": "string"
-        },
-        "line": {
-          "format": "uint32",
-          "minimum": 1,
-          "type": "integer"
-        },
-        "severity": {
-          "$ref": "#/$defs/FindingSeverity"
-        },
-        "title": {
-          "type": "string"
         }
       },
+      "additionalProperties": false,
       "required": [
         "severity",
         "file",
         "line",
         "title",
         "body"
-      ],
-      "type": "object"
+      ]
     },
     "FindingSeverity": {
+      "type": "string",
       "enum": [
         "critical",
         "high",
         "medium",
         "low",
         "info"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
+    "summary": {
+      "type": "string",
+      "default": "",
+      "x-agena-order": "000000"
+    },
     "findings": {
-      "default": [],
+      "type": "array",
       "items": {
         "$ref": "#/$defs/Finding"
       },
-      "maxItems": 200,
-      "type": "array",
-      "x-agena-order": "000001"
-    },
-    "summary": {
-      "default": "",
-      "type": "string",
-      "x-agena-order": "000000"
+      "default": [],
+      "x-agena-order": "000001",
+      "maxItems": 200
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 6
+**Version** `0.1.0` · **Tools** 6 · **Tags** `query` `sessions`
 
 Inspect and manage the current runtime session and its environment, model, and token state.
+
+> Inspect the current session, environment, model and token state, and apply supported session controls. Operations remain bound to the active runtime session.
 
 ### environment
 
@@ -22105,8 +22162,8 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -22132,29 +22189,62 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
+  "properties": {
+    "names": {
+      "description": "Curated tool names or aliases. Empty lists installed tools and missing names.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-agena-non-empty": true,
+        "minLength": 1,
+        "not": {
+          "type": "string",
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+        }
+      },
+      "default": [],
+      "x-agena-order": "000000",
+      "maxItems": 32
+    },
+    "probe_versions": {
+      "description": "Explicitly run bounded version probes. Requires 1–8 named tools.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000001"
+    },
+    "refresh": {
+      "description": "Bypass the 15-second availability cache after installing/changing tools.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
+    }
+  },
+  "type": "object",
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "names": {
+              "type": "array",
               "not": {
                 "items": {
                   "not": {}
                 }
-              },
-              "type": "array"
+              }
             }
           },
           "required": [
             "names"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "names": {
+            "type": "array",
             "not": {
               "items": {
                 "not": {
@@ -22163,63 +22253,30 @@ Inspect and manage the current runtime session and its environment, model, and t
                       "type": "null"
                     },
                     {
-                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                      "type": "string"
+                      "type": "string",
+                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                     },
                     {
-                      "maxItems": 0,
-                      "type": "array"
+                      "type": "array",
+                      "maxItems": 0
                     },
                     {
+                      "type": "object",
                       "maxProperties": 0,
-                      "properties": {},
-                      "type": "object"
+                      "properties": {}
                     }
                   ]
                 }
               }
-            },
-            "type": "array"
+            }
           }
         },
         "required": [
           "names"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "names": {
-      "default": [],
-      "description": "Curated tool names or aliases. Empty lists installed tools and missing names.",
-      "items": {
-        "minLength": 1,
-        "not": {
-          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-          "type": "string"
-        },
-        "type": "string",
-        "x-agena-non-empty": true
-      },
-      "maxItems": 32,
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "probe_versions": {
-      "default": false,
-      "description": "Explicitly run bounded version probes. Requires 1–8 named tools.",
-      "type": "boolean",
-      "x-agena-order": "000001"
-    },
-    "refresh": {
-      "default": false,
-      "description": "Bypass the 15-second availability cache after installing/changing tools.",
-      "type": "boolean",
-      "x-agena-order": "000002"
-    }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -22235,8 +22292,8 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -22252,8 +22309,8 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -22273,21 +22330,38 @@ Inspect and manage the current runtime session and its environment, model, and t
 **Input schema**:
 ```json
 {
+  "required": [
+    "title"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "title": {}
           },
           "required": [
             "title"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "title": {
             "anyOf": [
@@ -22295,44 +22369,27 @@ Inspect and manage the current runtime session and its environment, model, and t
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "title"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "title": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "title"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -22348,16 +22405,18 @@ Inspect and manage the current runtime session and its environment, model, and t
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
 ## agena.settings
 
-**Version** `0.1.0` · **Tools** 7
+**Version** `0.1.0` · **Tools** 7 · **Tags** `query` `configuration`
 
 Inspect and edit Agena's global and workspace agena.json settings.
+
+> Inspect global and workspace configuration and apply explicit settings changes. The runtime settings service validates values and resolves their effective scope.
 
 ### delete
 
@@ -22386,70 +22445,35 @@ Inspect and edit Agena's global and workspace agena.json settings.
   "$defs": {
     "SettingsLayer": {
       "description": "Config file layer targeted by a settings edit.",
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "path"
+  ],
+  "type": "object",
   "properties": {
-    "dry_run": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000003"
-    },
     "expected_revision": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
+    },
+    "path": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "layer": {
       "anyOf": [
@@ -22462,22 +22486,10 @@ Inspect and edit Agena's global and workspace agena.json settings.
       ],
       "x-agena-order": "000002"
     },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "reload": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000005"
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000003"
     },
     "validate": {
       "type": [
@@ -22485,12 +22497,59 @@ Inspect and edit Agena's global and workspace agena.json settings.
         "null"
       ],
       "x-agena-order": "000004"
+    },
+    "reload": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000005"
     }
   },
-  "required": [
-    "path"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -22517,50 +22576,39 @@ Inspect and edit Agena's global and workspace agena.json settings.
 ```json
 {
   "$defs": {
-    "ConfigSettingsSource": {
-      "description": "Source layer of a settings read or write.",
-      "enum": [
-        "effective",
-        "file"
-      ],
-      "type": "string"
-    },
-    "SettingsLayer": {
-      "description": "Config file layer targeted by a settings edit.",
-      "enum": [
-        "global",
-        "workspace"
-      ],
-      "type": "string"
-    },
     "SettingsScope": {
+      "type": "string",
       "enum": [
         "config",
         "meta"
-      ],
-      "type": "string"
+      ]
+    },
+    "ConfigSettingsSource": {
+      "description": "Source layer of a settings read or write.",
+      "type": "string",
+      "enum": [
+        "effective",
+        "file"
+      ]
+    },
+    "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
+      "type": "string",
+      "enum": [
+        "global",
+        "workspace"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "layer": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SettingsLayer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "x-agena-order": "000003"
-    },
     "path": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
     },
     "scope": {
@@ -22586,9 +22634,20 @@ Inspect and edit Agena's global and workspace agena.json settings.
       ],
       "default": null,
       "x-agena-order": "000002"
+    },
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000003"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -22614,11 +22673,11 @@ Inspect and edit Agena's global and workspace agena.json settings.
   "additionalProperties": false,
   "properties": {
     "path": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
     }
   },
@@ -22647,59 +22706,40 @@ Inspect and edit Agena's global and workspace agena.json settings.
 ```json
 {
   "$defs": {
-    "ConfigSettingsSource": {
-      "description": "Source layer of a settings read or write.",
-      "enum": [
-        "effective",
-        "file"
-      ],
-      "type": "string"
-    },
-    "SettingsLayer": {
-      "description": "Config file layer targeted by a settings edit.",
-      "enum": [
-        "global",
-        "workspace"
-      ],
-      "type": "string"
-    },
     "SettingsScope": {
+      "type": "string",
       "enum": [
         "config",
         "meta"
-      ],
-      "type": "string"
+      ]
+    },
+    "ConfigSettingsSource": {
+      "description": "Source layer of a settings read or write.",
+      "type": "string",
+      "enum": [
+        "effective",
+        "file"
+      ]
+    },
+    "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
+      "type": "string",
+      "enum": [
+        "global",
+        "workspace"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "layer": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SettingsLayer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "x-agena-order": "000003"
-    },
     "path": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000000"
-    },
-    "recursive": {
       "default": null,
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000000"
     },
     "scope": {
       "anyOf": [
@@ -22724,9 +22764,28 @@ Inspect and edit Agena's global and workspace agena.json settings.
       ],
       "default": null,
       "x-agena-order": "000002"
+    },
+    "layer": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SettingsLayer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "x-agena-order": "000003"
+    },
+    "recursive": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -22758,30 +22817,36 @@ Inspect and edit Agena's global and workspace agena.json settings.
   "$defs": {
     "SettingsLayer": {
       "description": "Config file layer targeted by a settings edit.",
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "changes"
+  ],
+  "type": "object",
   "properties": {
-    "changes": {
-      "x-agena-order": "000002"
-    },
-    "dry_run": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000004"
-    },
     "expected_revision": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
+    },
+    "path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000001"
+    },
+    "changes": {
+      "x-agena-order": "000002"
     },
     "layer": {
       "anyOf": [
@@ -22794,20 +22859,10 @@ Inspect and edit Agena's global and workspace agena.json settings.
       ],
       "x-agena-order": "000003"
     },
-    "path": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "reload": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000006"
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000004"
     },
     "validate": {
       "type": [
@@ -22815,12 +22870,16 @@ Inspect and edit Agena's global and workspace agena.json settings.
         "null"
       ],
       "x-agena-order": "000005"
+    },
+    "reload": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000006"
     }
   },
-  "required": [
-    "changes"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
@@ -22852,70 +22911,39 @@ Inspect and edit Agena's global and workspace agena.json settings.
   "$defs": {
     "SettingsLayer": {
       "description": "Config file layer targeted by a settings edit.",
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "path": {}
-          },
-          "required": [
-            "path"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "path": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "path",
+    "value"
+  ],
+  "type": "object",
   "properties": {
-    "dry_run": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000004"
-    },
     "expected_revision": {
-      "default": null,
       "type": [
         "string",
         "null"
       ],
+      "default": null,
       "x-agena-order": "000000"
+    },
+    "path": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "value": {
+      "x-agena-order": "000002"
     },
     "layer": {
       "anyOf": [
@@ -22928,22 +22956,10 @@ Inspect and edit Agena's global and workspace agena.json settings.
       ],
       "x-agena-order": "000003"
     },
-    "path": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "reload": {
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000006"
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000004"
     },
     "validate": {
       "type": [
@@ -22952,15 +22968,58 @@ Inspect and edit Agena's global and workspace agena.json settings.
       ],
       "x-agena-order": "000005"
     },
-    "value": {
-      "x-agena-order": "000002"
+    "reload": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000006"
     }
   },
-  "required": [
-    "path",
-    "value"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "path": {}
+          },
+          "required": [
+            "path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -22983,14 +23042,15 @@ Inspect and edit Agena's global and workspace agena.json settings.
   "$defs": {
     "SettingsLayer": {
       "description": "Config file layer targeted by a settings edit.",
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "layer": {
       "anyOf": [
@@ -23004,16 +23064,17 @@ Inspect and edit Agena's global and workspace agena.json settings.
       "default": null,
       "x-agena-order": "000000"
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
 ## agena.shell
 
-**Version** `0.1.0` · **Tools** 11
+**Version** `0.1.0` · **Tools** 11 · **Tags** `shell` `execute`
 
 Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them.
+
+> Execute commands, run background jobs, watch output and open interactive terminals. Shared status, logs, input, resize and stop controls manage owned processes.
 
 ### exec
 
@@ -23024,7 +23085,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Run a command to completion. Declare actual reads/writes paths and network targets; use empty arrays when none. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_resource refers to the same cursor-based content resource used by all Parts. Capture status and retained ranges are independent of process exit and preview limits. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
+> Run a command to completion. Declare actual reads/writes paths; use empty arrays when none. An empty network array starts offline; a lone * requests the configured native MXC network scope. Specific targets request an IP/protocol/port subset of that policy; hostname declarations do not provide domain isolation. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_resource refers to the same cursor-based content resource used by all Parts. Capture status and retained ranges are independent of process exit and preview limits. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -23033,7 +23094,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `description` | `string` | — | `` |  |
 | `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
-| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `network` | `array<string>` | — | `[]` | Requested network scope, intersected with the configured native MXC policy.<br>`[]` starts offline. `["*"]`, used alone, requests the full configured scope.<br>`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;<br>`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.<br>A bare host/IP requests only that target's configured protocols and ports.<br>Hosts resolve to IPs before startup; this does not isolate domains or URL<br>paths. DNS dependencies must also be allowed by the configured policy. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
@@ -23046,30 +23107,146 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "$defs": {
     "ProcessShell": {
       "description": "Shell used to run a process.",
+      "type": "string",
       "enum": [
         "bash",
         "powershell"
       ],
-      "type": "string",
       "x-agena-order": "000000"
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "command"
+  ],
   "description": "A non-interactive command. The selected tool determines whether it waits\nfor completion (`shell.exec`) or returns a background receipt (`shell.spawn`).",
+  "type": "object",
+  "properties": {
+    "shell": {
+      "$ref": "#/$defs/ProcessShell",
+      "default": "bash"
+    },
+    "command": {
+      "type": "string",
+      "x-agena-order": "000001.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "description": {
+      "type": "string",
+      "default": "",
+      "x-agena-order": "000001.000001"
+    },
+    "timeout_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000001.000002",
+      "maximum": 86400000
+    },
+    "max_output_bytes": {
+      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1024,
+      "x-agena-order": "000001.000003",
+      "maximum": 16384
+    },
+    "workdir": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "reads": {
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000006"
+    },
+    "writes": {
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000007"
+    },
+    "network": {
+      "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "192.0.2.10:443"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000008"
+    }
+  },
+  "additionalProperties": false,
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "command": {}
           },
           "required": [
             "command"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "command": {
             "anyOf": [
@@ -23077,143 +23254,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "command"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "command": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000000"
-    },
-    "description": {
-      "default": "",
-      "type": "string",
-      "x-agena-order": "000001.000001"
-    },
-    "folder": {
-      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000001"
-    },
-    "max_output_bytes": {
-      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 1024,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000003"
-    },
-    "network": {
-      "default": [],
-      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
-      "examples": [
-        [
-          "<target>"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000008"
-    },
-    "reads": {
-      "default": [],
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
-      "examples": [
-        [
-          "src/lib.rs"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000006"
-    },
-    "shell": {
-      "$ref": "#/$defs/ProcessShell",
-      "default": "bash"
-    },
-    "timeout_ms": {
-      "format": "uint64",
-      "maximum": 86400000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000002"
-    },
-    "workdir": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000000"
-    },
-    "writes": {
-      "default": [],
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
-      "examples": [
-        [
-          "target/out.txt"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000007"
-    }
-  },
-  "required": [
-    "command"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -23229,8 +23290,8 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -23258,21 +23319,81 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Input schema**:
 ```json
 {
+  "required": [
+    "process_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "process_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "since_seq": {
+      "description": "Return events after this cursor; continue with the returned last_seq.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000001"
+    },
+    "event_offset": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000002"
+    },
+    "max_output_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1024,
+      "x-agena-order": "000003",
+      "maximum": 16384
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "x-agena-order": "000004",
+      "maximum": 2000
+    },
+    "wait_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000005",
+      "maximum": 30000
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "process_id": {}
           },
           "required": [
             "process_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "process_id": {
             "anyOf": [
@@ -23280,87 +23401,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "process_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "event_offset": {
-      "default": 0,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "limit": {
-      "format": "uint32",
-      "maximum": 2000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "max_output_bytes": {
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 1024,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "process_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "since_seq": {
-      "default": 0,
-      "description": "Return events after this cursor; continue with the returned last_seq.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000001"
-    },
-    "wait_ms": {
-      "default": 0,
-      "format": "uint64",
-      "maximum": 30000,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000005"
-    }
-  },
-  "required": [
-    "process_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -23384,7 +23445,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `include_screen` | `boolean` | — | `false` | Return the current rendered screen in addition to incremental output.<br>Enable for full-screen interfaces; ordinary prompts need only output. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
-| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `network` | `array<string>` | — | `[]` | Requested network scope, intersected with the configured native MXC policy.<br>`[]` starts offline. `["*"]`, used alone, requests the full configured scope.<br>`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;<br>`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.<br>A bare host/IP requests only that target's configured protocols and ports.<br>Hosts resolve to IPs before startup; this does not isolate domains or URL<br>paths. DNS dependencies must also be allowed by the configured policy. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
 | `rows` | `integer` | — | `24` |  |
 | `shell` | `ProcessShell` | — | `bash` |  |
@@ -23399,30 +23460,177 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "$defs": {
     "ProcessShell": {
       "description": "Shell used to run a process.",
+      "type": "string",
       "enum": [
         "bash",
         "powershell"
       ],
-      "type": "string",
       "x-agena-order": "000000"
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "command"
+  ],
   "description": "Open a persistent interactive shell/PTY. Waiting for initial output never\nends the terminal's lifetime and never creates a completion-notified job.",
+  "type": "object",
+  "properties": {
+    "shell": {
+      "$ref": "#/$defs/ProcessShell",
+      "default": "bash"
+    },
+    "command": {
+      "type": "string",
+      "x-agena-order": "000001.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "description": {
+      "type": "string",
+      "default": "",
+      "x-agena-order": "000001.000001"
+    },
+    "timeout_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000001.000002",
+      "maximum": 86400000
+    },
+    "max_output_bytes": {
+      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1024,
+      "x-agena-order": "000001.000003",
+      "maximum": 16384
+    },
+    "workdir": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "reads": {
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000006"
+    },
+    "writes": {
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000007"
+    },
+    "network": {
+      "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "192.0.2.10:443"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000008"
+    },
+    "yield_time_ms": {
+      "description": "Maximum initial output wait, in milliseconds. This is not a timeout.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 1000,
+      "x-agena-order": "000002",
+      "maximum": 30000
+    },
+    "rows": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 1,
+      "maximum": 200,
+      "default": 24,
+      "x-agena-order": "000003"
+    },
+    "cols": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 1,
+      "maximum": 400,
+      "default": 80,
+      "x-agena-order": "000004"
+    },
+    "include_screen": {
+      "description": "Return the current rendered screen in addition to incremental output.\nEnable for full-screen interfaces; ordinary prompts need only output.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000005"
+    }
+  },
+  "additionalProperties": false,
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "command": {}
           },
           "required": [
             "command"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "command": {
             "anyOf": [
@@ -23430,174 +23638,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "command"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "cols": {
-      "default": 80,
-      "format": "uint16",
-      "maximum": 400,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000004"
-    },
-    "command": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000000"
-    },
-    "description": {
-      "default": "",
-      "type": "string",
-      "x-agena-order": "000001.000001"
-    },
-    "folder": {
-      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000001"
-    },
-    "include_screen": {
-      "default": false,
-      "description": "Return the current rendered screen in addition to incremental output.\nEnable for full-screen interfaces; ordinary prompts need only output.",
-      "type": "boolean",
-      "x-agena-order": "000005"
-    },
-    "max_output_bytes": {
-      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 1024,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000003"
-    },
-    "network": {
-      "default": [],
-      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
-      "examples": [
-        [
-          "<target>"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000008"
-    },
-    "reads": {
-      "default": [],
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
-      "examples": [
-        [
-          "src/lib.rs"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000006"
-    },
-    "rows": {
-      "default": 24,
-      "format": "uint16",
-      "maximum": 200,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000003"
-    },
-    "shell": {
-      "$ref": "#/$defs/ProcessShell",
-      "default": "bash"
-    },
-    "timeout_ms": {
-      "format": "uint64",
-      "maximum": 86400000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000002"
-    },
-    "workdir": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000000"
-    },
-    "writes": {
-      "default": [],
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
-      "examples": [
-        [
-          "target/out.txt"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000007"
-    },
-    "yield_time_ms": {
-      "default": 1000,
-      "description": "Maximum initial output wait, in milliseconds. This is not a timeout.",
-      "format": "uint64",
-      "maximum": 30000,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000002"
-    }
-  },
-  "required": [
-    "command"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -23626,22 +23687,89 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Input schema**:
 ```json
 {
+  "required": [
+    "process_id"
+  ],
   "additionalProperties": false,
   "description": "Read a background job or terminal without input. Explicit cursors replay output;\nomitting the cursor consumes only previously unread output.",
+  "type": "object",
+  "properties": {
+    "process_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "since_seq": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "x-agena-order": "000001"
+    },
+    "event_offset": {
+      "description": "Resume within the next event using the previous next_event_offset.\nA nonzero value requires since_seq; omit both for automatic consumption.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000002"
+    },
+    "max_output_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1024,
+      "x-agena-order": "000003",
+      "maximum": 16384
+    },
+    "wait_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 250,
+      "x-agena-order": "000004",
+      "maximum": 30000
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "x-agena-order": "000005",
+      "maximum": 2000
+    },
+    "include_screen": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000006"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "process_id": {}
           },
           "required": [
             "process_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "process_id": {
             "anyOf": [
@@ -23649,94 +23777,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "process_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "event_offset": {
-      "default": 0,
-      "description": "Resume within the next event using the previous next_event_offset.\nA nonzero value requires since_seq; omit both for automatic consumption.",
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "include_screen": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000006"
-    },
-    "limit": {
-      "format": "uint32",
-      "maximum": 2000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000005"
-    },
-    "max_output_bytes": {
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 1024,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "process_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "since_seq": {
-      "format": "uint64",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "wait_ms": {
-      "default": 250,
-      "format": "uint64",
-      "maximum": 30000,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000004"
-    }
-  },
-  "required": [
-    "process_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -23758,21 +23819,54 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Input schema**:
 ```json
 {
+  "required": [
+    "process_id",
+    "rows",
+    "cols"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "process_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "rows": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 1,
+      "maximum": 200,
+      "x-agena-order": "000001"
+    },
+    "cols": {
+      "type": "integer",
+      "format": "uint16",
+      "minimum": 1,
+      "maximum": 400,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "process_id": {}
           },
           "required": [
             "process_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "process_id": {
             "anyOf": [
@@ -23780,60 +23874,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "process_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "cols": {
-      "format": "uint16",
-      "maximum": 400,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "process_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "rows": {
-      "format": "uint16",
-      "maximum": 200,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "process_id",
-    "rows",
-    "cols"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -23860,13 +23921,33 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "$defs": {
     "ShellSignal": {
       "description": "Out-of-band process control. On Unix, interrupt signals the foreground\nprocess group even in raw mode. Windows uses ConPTY Ctrl-C semantics.",
+      "type": "string",
       "enum": [
         "interrupt",
         "terminate",
         "kill"
       ],
-      "type": "string",
       "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "process_id",
+    "signal"
+  ],
+  "type": "object",
+  "properties": {
+    "process_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "signal": {
+      "$ref": "#/$defs/ShellSignal"
     }
   },
   "additionalProperties": false,
@@ -23874,16 +23955,17 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "process_id": {}
           },
           "required": [
             "process_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "process_id": {
             "anyOf": [
@@ -23891,48 +23973,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "process_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "process_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "signal": {
-      "$ref": "#/$defs/ShellSignal"
-    }
-  },
-  "required": [
-    "process_id",
-    "signal"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -23954,7 +24015,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `description` | `string` | — | `` |  |
 | `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
-| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `network` | `array<string>` | — | `[]` | Requested network scope, intersected with the configured native MXC policy.<br>`[]` starts offline. `["*"]`, used alone, requests the full configured scope.<br>`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;<br>`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.<br>A bare host/IP requests only that target's configured protocols and ports.<br>Hosts resolve to IPs before startup; this does not isolate domains or URL<br>paths. DNS dependencies must also be allowed by the configured policy. |
 | `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
@@ -23967,30 +24028,146 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "$defs": {
     "ProcessShell": {
       "description": "Shell used to run a process.",
+      "type": "string",
       "enum": [
         "bash",
         "powershell"
       ],
-      "type": "string",
       "x-agena-order": "000000"
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "command"
+  ],
   "description": "A non-interactive command. The selected tool determines whether it waits\nfor completion (`shell.exec`) or returns a background receipt (`shell.spawn`).",
+  "type": "object",
+  "properties": {
+    "shell": {
+      "$ref": "#/$defs/ProcessShell",
+      "default": "bash"
+    },
+    "command": {
+      "type": "string",
+      "x-agena-order": "000001.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "description": {
+      "type": "string",
+      "default": "",
+      "x-agena-order": "000001.000001"
+    },
+    "timeout_ms": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 1,
+      "x-agena-order": "000001.000002",
+      "maximum": 86400000
+    },
+    "max_output_bytes": {
+      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1024,
+      "x-agena-order": "000001.000003",
+      "maximum": 16384
+    },
+    "workdir": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "reads": {
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000006"
+    },
+    "writes": {
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000007"
+    },
+    "network": {
+      "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "examples": [
+        [
+          "192.0.2.10:443"
+        ]
+      ],
+      "default": [],
+      "x-agena-order": "000001.000008"
+    }
+  },
+  "additionalProperties": false,
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "command": {}
           },
           "required": [
             "command"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "command": {
             "anyOf": [
@@ -23998,143 +24175,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "command"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "command": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000000"
-    },
-    "description": {
-      "default": "",
-      "type": "string",
-      "x-agena-order": "000001.000001"
-    },
-    "folder": {
-      "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000001"
-    },
-    "max_output_bytes": {
-      "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 1024,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000003"
-    },
-    "network": {
-      "default": [],
-      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
-      "examples": [
-        [
-          "<target>"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000008"
-    },
-    "reads": {
-      "default": [],
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
-      "examples": [
-        [
-          "src/lib.rs"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000006"
-    },
-    "shell": {
-      "$ref": "#/$defs/ProcessShell",
-      "default": "bash"
-    },
-    "timeout_ms": {
-      "format": "uint64",
-      "maximum": 86400000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001.000002"
-    },
-    "workdir": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001.000000"
-    },
-    "writes": {
-      "default": [],
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
-      "examples": [
-        [
-          "target/out.txt"
-        ]
-      ],
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000001.000007"
-    }
-  },
-  "required": [
-    "command"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -24154,21 +24215,38 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Input schema**:
 ```json
 {
+  "required": [
+    "process_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "process_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "process_id": {}
           },
           "required": [
             "process_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "process_id": {
             "anyOf": [
@@ -24176,44 +24254,27 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "process_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "process_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "process_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -24234,44 +24295,19 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "$defs": {
     "ProcessShell": {
       "description": "Shell used to run a process.",
+      "type": "string",
       "enum": [
         "bash",
         "powershell"
       ],
-      "type": "string",
       "x-agena-order": "000000"
     },
-    "ShellMonitorPatternKind": {
-      "description": "Applies consistently to all four patterns; regex is the default.",
-      "enum": [
-        "literal",
-        "regex"
-      ],
-      "type": "string",
-      "x-agena-order": "000001.000006"
-    },
-    "ShellWatchNotifications": {
-      "description": "Default once; on_change explicitly enables recurring changed matches.",
-      "oneOf": [
-        {
-          "const": "once",
-          "description": "Notify on the first include_pattern match per configuration.",
-          "type": "string"
-        },
-        {
-          "const": "on_change",
-          "description": "Notify on changed matches, deduplicated and rate limited.",
-          "type": "string"
-        }
-      ],
-      "x-agena-order": "000001.000004"
-    },
     "ShellWatchPolicy": {
-      "additionalProperties": false,
       "description": "Select output notifications and optional completion conditions. The\ncommand's timeout_ms is the only lifetime deadline; omitting it permits\nrunning until exit, stop or a completion condition.",
+      "type": "object",
       "properties": {
-        "failure_pattern": {
-          "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+        "ready_pattern": {
+          "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
           "type": [
             "string",
             "null"
@@ -24284,71 +24320,295 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
             "null"
           ]
         },
-        "notification_interval_ms": {
-          "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "notifications": {
-          "$ref": "#/$defs/ShellWatchNotifications",
-          "default": "once",
-          "description": "Default once; on_change explicitly enables recurring changed matches."
-        },
-        "pattern_kind": {
-          "$ref": "#/$defs/ShellMonitorPatternKind",
-          "default": "regex",
-          "description": "Applies consistently to all four patterns; regex is the default."
-        },
-        "quiet_period_ms": {
-          "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "ready_pattern": {
-          "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "success_pattern": {
           "description": "Stop the process tree successfully when an output line matches.",
           "type": [
             "string",
             "null"
           ]
+        },
+        "failure_pattern": {
+          "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notifications": {
+          "description": "Default once; on_change explicitly enables recurring changed matches.",
+          "$ref": "#/$defs/ShellWatchNotifications",
+          "default": "once"
+        },
+        "notification_interval_ms": {
+          "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "pattern_kind": {
+          "description": "Applies consistently to all four patterns; regex is the default.",
+          "$ref": "#/$defs/ShellMonitorPatternKind",
+          "default": "regex"
+        },
+        "quiet_period_ms": {
+          "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
         }
       },
-      "type": "object",
+      "additionalProperties": false,
       "x-agena-order": "000002"
+    },
+    "ShellWatchNotifications": {
+      "oneOf": [
+        {
+          "description": "Notify on the first include_pattern match per configuration.",
+          "type": "string",
+          "const": "once"
+        },
+        {
+          "description": "Notify on changed matches, deduplicated and rate limited.",
+          "type": "string",
+          "const": "on_change"
+        }
+      ],
+      "x-agena-order": "000001.000004",
+      "description": "Default once; on_change explicitly enables recurring changed matches."
+    },
+    "ShellMonitorPatternKind": {
+      "description": "Applies consistently to all four patterns; regex is the default.",
+      "type": "string",
+      "enum": [
+        "literal",
+        "regex"
+      ],
+      "x-agena-order": "000001.000006"
     }
   },
   "anyOf": [
     {
-      "additionalProperties": false,
       "description": "Input of a shell command execution.",
+      "type": "object",
+      "properties": {
+        "shell": {
+          "$ref": "#/$defs/ProcessShell",
+          "default": "bash"
+        },
+        "command": {
+          "type": "string",
+          "x-agena-order": "000001.000000",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
+        "description": {
+          "type": "string",
+          "default": "",
+          "x-agena-order": "000001.000001"
+        },
+        "timeout_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 1,
+          "x-agena-order": "000001.000002",
+          "maximum": 86400000
+        },
+        "max_output_bytes": {
+          "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 1024,
+          "x-agena-order": "000001.000003",
+          "maximum": 16384
+        },
+        "workdir": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-agena-order": "000001.000000",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
+        "folder": {
+          "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-agena-order": "000001.000001",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
+        "reads": {
+          "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "examples": [
+            [
+              "src/lib.rs"
+            ]
+          ],
+          "default": [],
+          "x-agena-order": "000001.000006"
+        },
+        "writes": {
+          "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "examples": [
+            [
+              "target/out.txt"
+            ]
+          ],
+          "default": [],
+          "x-agena-order": "000001.000007"
+        },
+        "network": {
+          "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "examples": [
+            [
+              "192.0.2.10:443"
+            ]
+          ],
+          "default": [],
+          "x-agena-order": "000001.000008"
+        },
+        "policy": {
+          "$ref": "#/$defs/ShellWatchPolicy",
+          "default": {
+            "notifications": "once",
+            "pattern_kind": "regex"
+          },
+          "properties": {
+            "ready_pattern": {
+              "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000000",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "include_pattern": {
+              "description": "Select which lines notify the AI. Omission disables ordinary output\nnotifications. All output remains available through shell.read/archive.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000001",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "success_pattern": {
+              "description": "Stop the process tree successfully when an output line matches.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000002",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "failure_pattern": {
+              "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000002.000003",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "notifications": {
+              "description": "Default once; on_change explicitly enables recurring changed matches.",
+              "$ref": "#/$defs/ShellWatchNotifications",
+              "default": "once"
+            },
+            "notification_interval_ms": {
+              "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 1000,
+              "x-agena-order": "000002.000005",
+              "maximum": 3600000
+            },
+            "pattern_kind": {
+              "description": "Applies consistently to all four patterns; regex is the default.",
+              "$ref": "#/$defs/ShellMonitorPatternKind",
+              "default": "regex"
+            },
+            "quiet_period_ms": {
+              "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 1,
+              "x-agena-order": "000002.000007",
+              "maximum": 3600000
+            }
+          },
+          "additionalProperties": false,
+          "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "command"
+      ],
       "not": {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "command": {}
               },
               "required": [
                 "command"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "command": {
                 "anyOf": [
@@ -24356,275 +24616,43 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "command"
-            ],
-            "type": "object"
+            ]
           }
         ]
-      },
-      "properties": {
-        "command": {
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": "string",
-          "x-agena-non-empty": true,
-          "x-agena-order": "000001.000000"
-        },
-        "description": {
-          "default": "",
-          "type": "string",
-          "x-agena-order": "000001.000001"
-        },
-        "folder": {
-          "description": "Base folder for this command when no `workdir` is given. Only global\n(Bot) sessions use it; a project session keeps its project root.",
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": [
-            "string",
-            "null"
-          ],
-          "x-agena-non-empty": true,
-          "x-agena-order": "000001.000001"
-        },
-        "max_output_bytes": {
-          "description": "Model output budget, including JSON escaping. Default/max 16384 bytes;\nminimum 1024. Capture and process lifetime are independent of this budget.",
-          "format": "uint32",
-          "maximum": 16384,
-          "minimum": 1024,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "x-agena-order": "000001.000003"
-        },
-        "network": {
-          "default": [],
-          "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
-          "examples": [
-            [
-              "<target>"
-            ]
-          ],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-agena-order": "000001.000008"
-        },
-        "policy": {
-          "$ref": "#/$defs/ShellWatchPolicy",
-          "additionalProperties": false,
-          "default": {
-            "notifications": "once",
-            "pattern_kind": "regex"
-          },
-          "properties": {
-            "failure_pattern": {
-              "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
-              "maxLength": 16384,
-              "minLength": 1,
-              "type": [
-                "string",
-                "null"
-              ],
-              "x-agena-order": "000002.000003"
-            },
-            "include_pattern": {
-              "description": "Select which lines notify the AI. Omission disables ordinary output\nnotifications. All output remains available through shell.read/archive.",
-              "maxLength": 16384,
-              "minLength": 1,
-              "type": [
-                "string",
-                "null"
-              ],
-              "x-agena-order": "000002.000001"
-            },
-            "notification_interval_ms": {
-              "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
-              "format": "uint64",
-              "maximum": 3600000,
-              "minimum": 1000,
-              "type": [
-                "integer",
-                "null"
-              ],
-              "x-agena-order": "000002.000005"
-            },
-            "notifications": {
-              "$ref": "#/$defs/ShellWatchNotifications",
-              "default": "once",
-              "description": "Default once; on_change explicitly enables recurring changed matches."
-            },
-            "pattern_kind": {
-              "$ref": "#/$defs/ShellMonitorPatternKind",
-              "default": "regex",
-              "description": "Applies consistently to all four patterns; regex is the default."
-            },
-            "quiet_period_ms": {
-              "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
-              "format": "uint64",
-              "maximum": 3600000,
-              "minimum": 1,
-              "type": [
-                "integer",
-                "null"
-              ],
-              "x-agena-order": "000002.000007"
-            },
-            "ready_pattern": {
-              "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
-              "maxLength": 16384,
-              "minLength": 1,
-              "type": [
-                "string",
-                "null"
-              ],
-              "x-agena-order": "000002.000000"
-            },
-            "success_pattern": {
-              "description": "Stop the process tree successfully when an output line matches.",
-              "maxLength": 16384,
-              "minLength": 1,
-              "type": [
-                "string",
-                "null"
-              ],
-              "x-agena-order": "000002.000002"
-            }
-          },
-          "type": "object"
-        },
-        "reads": {
-          "default": [],
-          "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
-          "examples": [
-            [
-              "src/lib.rs"
-            ]
-          ],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-agena-order": "000001.000006"
-        },
-        "shell": {
-          "$ref": "#/$defs/ProcessShell",
-          "default": "bash"
-        },
-        "timeout_ms": {
-          "format": "uint64",
-          "maximum": 86400000,
-          "minimum": 1,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "x-agena-order": "000001.000002"
-        },
-        "workdir": {
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": [
-            "string",
-            "null"
-          ],
-          "x-agena-non-empty": true,
-          "x-agena-order": "000001.000000"
-        },
-        "writes": {
-          "default": [],
-          "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
-          "examples": [
-            [
-              "target/out.txt"
-            ]
-          ],
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "x-agena-order": "000001.000007"
-        }
-      },
-      "required": [
-        "command"
-      ],
-      "type": "object"
+      }
     },
     {
-      "additionalProperties": false,
-      "not": {
-        "anyOf": [
-          {
-            "not": {
-              "properties": {
-                "process_id": {}
-              },
-              "required": [
-                "process_id"
-              ],
-              "type": "object"
-            }
-          },
-          {
-            "properties": {
-              "process_id": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
-                  },
-                  {
-                    "maxItems": 0,
-                    "type": "array"
-                  },
-                  {
-                    "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
-                  }
-                ]
-              }
-            },
-            "required": [
-              "process_id"
-            ],
-            "type": "object"
-          }
-        ]
-      },
+      "type": "object",
       "properties": {
+        "process_id": {
+          "type": "string",
+          "x-agena-order": "000000",
+          "x-agena-non-empty": true,
+          "minLength": 1,
+          "not": {
+            "type": "string",
+            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+          }
+        },
         "policy": {
-          "additionalProperties": false,
+          "description": "Replace the entire watch policy. Omit or pass null to remove it;\nremoving a watch leaves the process and completion notification intact.",
           "anyOf": [
             {
               "$ref": "#/$defs/ShellWatchPolicy"
@@ -24634,114 +24662,147 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
             }
           ],
           "default": null,
-          "description": "Replace the entire watch policy. Omit or pass null to remove it;\nremoving a watch leaves the process and completion notification intact.",
           "properties": {
-            "failure_pattern": {
-              "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
-              "maxLength": 16384,
-              "minLength": 1,
+            "ready_pattern": {
+              "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
               "type": [
                 "string",
                 "null"
               ],
-              "x-agena-order": "000001.000003"
+              "x-agena-order": "000001.000000",
+              "minLength": 1,
+              "maxLength": 16384
             },
             "include_pattern": {
               "description": "Select which lines notify the AI. Omission disables ordinary output\nnotifications. All output remains available through shell.read/archive.",
-              "maxLength": 16384,
-              "minLength": 1,
               "type": [
                 "string",
                 "null"
               ],
-              "x-agena-order": "000001.000001"
-            },
-            "notification_interval_ms": {
-              "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
-              "format": "uint64",
-              "maximum": 3600000,
-              "minimum": 1000,
-              "type": [
-                "integer",
-                "null"
-              ],
-              "x-agena-order": "000001.000005"
-            },
-            "notifications": {
-              "$ref": "#/$defs/ShellWatchNotifications",
-              "default": "once",
-              "description": "Default once; on_change explicitly enables recurring changed matches."
-            },
-            "pattern_kind": {
-              "$ref": "#/$defs/ShellMonitorPatternKind",
-              "default": "regex",
-              "description": "Applies consistently to all four patterns; regex is the default."
-            },
-            "quiet_period_ms": {
-              "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
-              "format": "uint64",
-              "maximum": 3600000,
-              "minimum": 1,
-              "type": [
-                "integer",
-                "null"
-              ],
-              "x-agena-order": "000001.000007"
-            },
-            "ready_pattern": {
-              "description": "Notify once when the service is ready, without stopping it. This is\nindependent of include notifications and final process completion.",
-              "maxLength": 16384,
+              "x-agena-order": "000001.000001",
               "minLength": 1,
-              "type": [
-                "string",
-                "null"
-              ],
-              "x-agena-order": "000001.000000"
+              "maxLength": 16384
             },
             "success_pattern": {
               "description": "Stop the process tree successfully when an output line matches.",
-              "maxLength": 16384,
-              "minLength": 1,
               "type": [
                 "string",
                 "null"
               ],
-              "x-agena-order": "000001.000002"
+              "x-agena-order": "000001.000002",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "failure_pattern": {
+              "description": "Stop the process tree with failure when an output line matches. Failure\ntakes precedence if both completion patterns match the same line.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "x-agena-order": "000001.000003",
+              "minLength": 1,
+              "maxLength": 16384
+            },
+            "notifications": {
+              "description": "Default once; on_change explicitly enables recurring changed matches.",
+              "$ref": "#/$defs/ShellWatchNotifications",
+              "default": "once"
+            },
+            "notification_interval_ms": {
+              "description": "Recurring notifications have at least this interval (default 30000 ms).\nReadiness and completion are never delayed by this throttle.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 1000,
+              "x-agena-order": "000001.000005",
+              "maximum": 3600000
+            },
+            "pattern_kind": {
+              "description": "Applies consistently to all four patterns; regex is the default.",
+              "$ref": "#/$defs/ShellMonitorPatternKind",
+              "default": "regex"
+            },
+            "quiet_period_ms": {
+              "description": "Stop successfully after this period with no stdout/stderr activity.\nExcluded output also resets this timer.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 1,
+              "x-agena-order": "000001.000007",
+              "maximum": 3600000
             }
           },
+          "additionalProperties": false,
           "type": "object",
           "x-agena-order": "000001"
         },
-        "process_id": {
-          "minLength": 1,
-          "not": {
-            "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-            "type": "string"
-          },
-          "type": "string",
-          "x-agena-non-empty": true,
-          "x-agena-order": "000000"
-        },
         "since_seq": {
           "description": "Optionally inspect retained output after this sequence on attachment.\nOmit for future output only; unavailable older output is not replayed.",
-          "format": "uint64",
-          "minimum": 0,
           "type": [
             "integer",
             "null"
           ],
+          "format": "uint64",
+          "minimum": 0,
           "x-agena-order": "000002"
         }
       },
+      "additionalProperties": false,
       "required": [
         "process_id"
       ],
-      "type": "object"
+      "not": {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "process_id": {}
+              },
+              "required": [
+                "process_id"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "process_id": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "process_id"
+            ]
+          }
+        ]
+      }
     }
   ],
   "description": "Either start a command with an atomic watch, or replace/remove the watch on\nan existing noninteractive process. A process target never starts a command.",
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -24763,7 +24824,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `event_offset` | `integer` | — | `0` |  |
 | `include_screen` | `boolean` | — | `false` |  |
 | `max_output_bytes` | `integer / null` | — | — |  |
-| `network` | `array<string>` | — | `[]` | Outbound targets the entered operation may contact. |
+| `network` | `array<string>` | — | `[]` | Network effects of the entered operation, bounded by the process's existing<br>sandbox and current policy. `[]` declares no network use; `["*"]`, alone,<br>requests the configured scope. `host:port`/`tcp://host:port` means TCP,<br>`udp://host:port` means UDP, and `icmp://host` means ICMP. Bare host/IP means<br>that target's configured protocols and ports; HTTP(S) URLs mean TCP.<br>Hostnames resolve to IPs; they do not provide domain isolation. This field<br>cannot expand or replace the sandbox established when the process started. |
 | `process_id` | `string` | ✓ | — |  |
 | `reads` | `array<string>` | — | `[]` | Paths the entered operation may read, relative to the Agena workspace. |
 | `since_seq` | `integer / null` | — | — | Output cursor from a previous result. Omit to consume the session's<br>unread output; explicit cursors permit replay without changing it. |
@@ -24773,22 +24834,114 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Input schema**:
 ```json
 {
+  "required": [
+    "process_id",
+    "chars"
+  ],
   "additionalProperties": false,
   "description": "Input is terminal data, not a new shell command. Never trim it or append a newline.",
+  "type": "object",
+  "properties": {
+    "process_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "chars": {
+      "description": "Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use\n\\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D; at most 65536 bytes.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "since_seq": {
+      "description": "Output cursor from a previous result. Omit to consume the session's\nunread output; explicit cursors permit replay without changing it.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "x-agena-order": "000002"
+    },
+    "event_offset": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000003"
+    },
+    "max_output_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1024,
+      "x-agena-order": "000004",
+      "maximum": 16384
+    },
+    "wait_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0,
+      "default": 250,
+      "x-agena-order": "000005",
+      "maximum": 30000
+    },
+    "include_screen": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000006"
+    },
+    "reads": {
+      "description": "Paths the entered operation may read, relative to the Agena workspace.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000007"
+    },
+    "writes": {
+      "description": "Paths the entered operation may modify, relative to the Agena workspace.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000008"
+    },
+    "network": {
+      "description": "Network effects of the entered operation, bounded by the process's existing\nsandbox and current policy. `[]` declares no network use; `[\"*\"]`, alone,\nrequests the configured scope. `host:port`/`tcp://host:port` means TCP,\n`udp://host:port` means UDP, and `icmp://host` means ICMP. Bare host/IP means\nthat target's configured protocols and ports; HTTP(S) URLs mean TCP.\nHostnames resolve to IPs; they do not provide domain isolation. This field\ncannot expand or replace the sandbox established when the process started.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-agena-order": "000009"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "process_id": {}
           },
           "required": [
             "process_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "process_id": {
             "anyOf": [
@@ -24796,127 +24949,37 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "process_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "chars": {
-      "description": "Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use\n\\r for Enter, \\u0003 for Ctrl-C, \\u0004 for Ctrl-D; at most 65536 bytes.",
-      "maxLength": 65536,
-      "minLength": 1,
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "event_offset": {
-      "default": 0,
-      "format": "uint32",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000003"
-    },
-    "include_screen": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000006"
-    },
-    "max_output_bytes": {
-      "format": "uint32",
-      "maximum": 16384,
-      "minimum": 1024,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "network": {
-      "default": [],
-      "description": "Outbound targets the entered operation may contact.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000009"
-    },
-    "process_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "reads": {
-      "default": [],
-      "description": "Paths the entered operation may read, relative to the Agena workspace.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000007"
-    },
-    "since_seq": {
-      "description": "Output cursor from a previous result. Omit to consume the session's\nunread output; explicit cursors permit replay without changing it.",
-      "format": "uint64",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "wait_ms": {
-      "default": 250,
-      "format": "uint64",
-      "maximum": 30000,
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000005"
-    },
-    "writes": {
-      "default": [],
-      "description": "Paths the entered operation may modify, relative to the Agena workspace.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array",
-      "x-agena-order": "000008"
-    }
-  },
-  "required": [
-    "process_id",
-    "chars"
-  ],
-  "type": "object"
+  }
 }
 ```
 
 ## agena.skills
 
-**Version** `0.1.0` · **Tools** 12
+**Version** `0.1.0` · **Tools** 12 · **Tags** `discovery` `filesystem` `skills`
 
 Discover, install, author, and manage complete Agent Skills packages.
+
+> Discover, install, create and update complete Agent Skills packages with their scripts, references and assets. Preview installations and validate SKILL.md before writing.
 
 ### create
 
@@ -24940,27 +25003,27 @@ Discover, install, author, and manage complete Agent Skills packages.
 {
   "$defs": {
     "SkillScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "document": {
-      "type": "string"
-    },
-    "scope": {
-      "$ref": "#/$defs/SkillScope",
-      "default": "workspace"
+      ]
     }
   },
   "required": [
     "document"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "scope": {
+      "$ref": "#/$defs/SkillScope",
+      "default": "workspace"
+    },
+    "document": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
@@ -24983,16 +25046,16 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "type": "string"
     }
-  },
-  "required": [
-    "id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -25020,181 +25083,181 @@ Discover, install, author, and manage complete Agent Skills packages.
 ```json
 {
   "$defs": {
-    "SkillInstallSource": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "github",
-              "type": "string"
-            },
-            "reference": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "subpath": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "url": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "url"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "folder",
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "data_base64": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "filename": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "const": "archive",
-              "type": "string"
-            },
-            "path": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "url": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "files": {
-              "items": {
-                "$ref": "#/$defs/SkillUploadFile"
-              },
-              "type": "array"
-            },
-            "kind": {
-              "const": "files",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "files"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {},
-      "type": "object"
-    },
     "SkillScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
+      ]
+    },
+    "SkillInstallSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "reference": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "subpath": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "github"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "folder"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "data_base64": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "archive"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SkillUploadFile"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "files"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "files"
+          ]
+        }
       ],
-      "type": "string"
+      "type": "object",
+      "properties": {}
     },
     "SkillUploadFile": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
+        "path": {
+          "type": "string"
+        },
         "content_base64": {
           "type": "string"
         },
         "executable": {
-          "default": false,
-          "type": "boolean"
-        },
-        "path": {
-          "type": "string"
+          "type": "boolean",
+          "default": false
         }
       },
+      "additionalProperties": false,
       "required": [
         "path",
         "content_base64"
-      ],
-      "type": "object"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "expected_source_revision": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
       ]
-    },
-    "replace": {
-      "default": false,
-      "type": "boolean"
-    },
-    "scope": {
-      "$ref": "#/$defs/SkillScope",
-      "default": "workspace"
-    },
-    "selected": {
-      "default": [],
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "source": {
-      "$ref": "#/$defs/SkillInstallSource"
     }
   },
   "required": [
     "source"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "scope": {
+      "$ref": "#/$defs/SkillScope",
+      "default": "workspace"
+    },
+    "source": {
+      "$ref": "#/$defs/SkillInstallSource"
+    },
+    "selected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "replace": {
+      "type": "boolean",
+      "default": false
+    },
+    "expected_source_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
@@ -25223,41 +25286,22 @@ Discover, install, author, and manage complete Agent Skills packages.
 {
   "$defs": {
     "SkillScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
-      ],
-      "type": "string"
+      ]
     }
   },
   "additionalProperties": false,
+  "type": "object",
   "properties": {
-    "include_inactive": {
-      "default": false,
-      "description": "Include disabled, invalid, and shadowed entries for management.",
-      "type": "boolean"
-    },
-    "limit": {
-      "default": null,
-      "format": "uint",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ]
-    },
-    "offset": {
-      "default": 0,
-      "format": "uint",
-      "minimum": 0,
-      "type": "integer"
-    },
     "query": {
-      "default": null,
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "default": null
     },
     "scope": {
       "anyOf": [
@@ -25269,9 +25313,28 @@ Discover, install, author, and manage complete Agent Skills packages.
         }
       ],
       "default": null
+    },
+    "include_inactive": {
+      "description": "Include disabled, invalid, and shadowed entries for management.",
+      "type": "boolean",
+      "default": false
+    },
+    "offset": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0,
+      "default": 0
+    },
+    "limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0,
+      "default": null
     }
-  },
-  "type": "object"
+  }
 }
 ```
 
@@ -25299,181 +25362,181 @@ Discover, install, author, and manage complete Agent Skills packages.
 ```json
 {
   "$defs": {
-    "SkillInstallSource": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "github",
-              "type": "string"
-            },
-            "reference": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "subpath": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "url": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "url"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "kind": {
-              "const": "folder",
-              "type": "string"
-            },
-            "path": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "path"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "data_base64": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "filename": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "kind": {
-              "const": "archive",
-              "type": "string"
-            },
-            "path": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "url": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "required": [
-            "kind"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "files": {
-              "items": {
-                "$ref": "#/$defs/SkillUploadFile"
-              },
-              "type": "array"
-            },
-            "kind": {
-              "const": "files",
-              "type": "string"
-            }
-          },
-          "required": [
-            "kind",
-            "files"
-          ],
-          "type": "object"
-        }
-      ],
-      "properties": {},
-      "type": "object"
-    },
     "SkillScope": {
+      "type": "string",
       "enum": [
         "global",
         "workspace"
+      ]
+    },
+    "SkillInstallSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "reference": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "subpath": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "github"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "folder"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "filename": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "data_base64": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "archive"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SkillUploadFile"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "files"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "files"
+          ]
+        }
       ],
-      "type": "string"
+      "type": "object",
+      "properties": {}
     },
     "SkillUploadFile": {
-      "additionalProperties": false,
+      "type": "object",
       "properties": {
+        "path": {
+          "type": "string"
+        },
         "content_base64": {
           "type": "string"
         },
         "executable": {
-          "default": false,
-          "type": "boolean"
-        },
-        "path": {
-          "type": "string"
+          "type": "boolean",
+          "default": false
         }
       },
+      "additionalProperties": false,
       "required": [
         "path",
         "content_base64"
-      ],
-      "type": "object"
-    }
-  },
-  "additionalProperties": false,
-  "properties": {
-    "expected_source_revision": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
       ]
-    },
-    "replace": {
-      "default": false,
-      "type": "boolean"
-    },
-    "scope": {
-      "$ref": "#/$defs/SkillScope",
-      "default": "workspace"
-    },
-    "selected": {
-      "default": [],
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "source": {
-      "$ref": "#/$defs/SkillInstallSource"
     }
   },
   "required": [
     "source"
   ],
-  "type": "object"
+  "type": "object",
+  "properties": {
+    "scope": {
+      "$ref": "#/$defs/SkillScope",
+      "default": "workspace"
+    },
+    "source": {
+      "$ref": "#/$defs/SkillInstallSource"
+    },
+    "selected": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "replace": {
+      "type": "boolean",
+      "default": false
+    },
+    "expected_source_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  },
+  "additionalProperties": false
 }
 ```
 
@@ -25497,7 +25560,12 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
+  "required": [
+    "id",
+    "path"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "id": {
       "type": "string"
@@ -25505,12 +25573,7 @@ Discover, install, author, and manage complete Agent Skills packages.
     "path": {
       "type": "string"
     }
-  },
-  "required": [
-    "id",
-    "path"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -25534,20 +25597,20 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "expected_revision": {
-      "type": "string"
-    },
-    "id": {
-      "type": "string"
-    }
-  },
   "required": [
     "id",
     "expected_revision"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  }
 }
 ```
 
@@ -25572,24 +25635,24 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "expected_revision": {
-      "type": "string"
-    },
-    "id": {
-      "type": "string"
-    },
-    "path": {
-      "type": "string"
-    }
-  },
   "required": [
     "id",
     "path",
     "expected_revision"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  }
 }
 ```
 
@@ -25614,24 +25677,24 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "enabled": {
-      "type": "boolean"
-    },
-    "expected_revision": {
-      "type": "string"
-    },
-    "id": {
-      "type": "string"
-    }
-  },
   "required": [
     "id",
     "enabled",
     "expected_revision"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  }
 }
 ```
 
@@ -25656,24 +25719,24 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "document": {
-      "type": "string"
-    },
-    "expected_revision": {
-      "type": "string"
-    },
-    "id": {
-      "type": "string"
-    }
-  },
   "required": [
     "id",
     "document",
     "expected_revision"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "document": {
+      "type": "string"
+    },
+    "expected_revision": {
+      "type": "string"
+    }
+  }
 }
 ```
 
@@ -25697,23 +25760,23 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
+  "required": [
+    "document"
+  ],
   "additionalProperties": false,
+  "type": "object",
   "properties": {
     "document": {
       "type": "string"
     },
     "name": {
-      "default": null,
       "type": [
         "string",
         "null"
-      ]
+      ],
+      "default": null
     }
-  },
-  "required": [
-    "document"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -25739,47 +25802,49 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Input schema**:
 ```json
 {
-  "additionalProperties": false,
-  "properties": {
-    "content": {
-      "type": "string"
-    },
-    "expected_revision": {
-      "default": null,
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "id": {
-      "type": "string"
-    },
-    "path": {
-      "type": "string"
-    }
-  },
   "required": [
     "id",
     "path",
     "content"
   ],
-  "type": "object"
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "type": "string"
+    },
+    "content": {
+      "type": "string"
+    },
+    "expected_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null
+    }
+  }
 }
 ```
 
 ## agena.telegram
 
-**Version** `0.1.0` · **Tools** 0
+**Version** `0.1.0` · **Tools** 0 · **Tags** `network` `interactive` `telegram`
 
 Telegram channel adapter: direct chats, groups and channels over the official Bot API.
 
-> Exports the agena.integration v1 channel service. Long polling needs no public endpoint. Set the token in the named environment variable and make account match the bot's own username; roles, tool grants and quotas stay in the host's channel policy.
+> Connect multiple BotFather tokens to local AI Bots. The Telegram manager discovers chats through one durable collector per token and applies private/group/channel switches plus chat allow or deny lists. Per-room tool grants remain available in advanced channel settings.
 
 ## agena.web
 
-**Version** `0.1.0` · **Tools** 16
+**Version** `0.1.0` · **Tools** 16 · **Tags** `network` `fetch` `discovery`
 
 Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.
+
+> Search, fetch and crawl web pages with a local crawl index. Deduplication and cached snapshots support later retrieval, with optional browser rendering for JavaScript pages.
 
 ### browser_click
 
@@ -25802,21 +25867,89 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 4096
+    },
+    "ref": {
+      "description": "Snapshot-local index returned by `browser_snapshot.elements[].ref`.\nIt is valid only while the page DOM has not materially changed.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 199,
+      "x-agena-order": "000003"
+    },
+    "snapshot_id": {
+      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "maxLength": 128
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000005"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "session_id": {}
           },
           "required": [
             "session_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "session_id": {
             "anyOf": [
@@ -25824,95 +25957,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "session_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "frame_selector": {
-      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
-      "maxLength": 4096,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "ref": {
-      "description": "Snapshot-local index returned by `browser_snapshot.elements[].ref`.\nIt is valid only while the page DOM has not materially changed.",
-      "format": "uint16",
-      "maximum": 199,
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "selector": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "session_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "snapshot_id": {
-      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
-      "maxLength": 128,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "timeout_ms": {
-      "default": 30000,
-      "format": "uint64",
-      "maximum": 120000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000005"
-    }
-  },
-  "required": [
-    "session_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -25932,21 +25997,38 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "session_id": {}
           },
           "required": [
             "session_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "session_id": {
             "anyOf": [
@@ -25954,44 +26036,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "session_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "session_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "session_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -26013,21 +26078,59 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id",
+    "url"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "description": "Existing managed browser page to use for the navigation. Its browser\nprofile (for example, authenticated cookies) remains intact.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "url": {
+      "description": "HTTP(S) download URL. The artifact is always written under the\nmanaged workspace artifact directory; callers cannot choose an\narbitrary destination path.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "session_id": {}
           },
           "required": [
             "session_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "session_id": {
             "anyOf": [
@@ -26035,40 +26138,40 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "session_id"
-        ],
-        "type": "object"
+        ]
       },
       {
         "anyOf": [
           {
             "not": {
+              "type": "object",
               "properties": {
                 "url": {}
               },
               "required": [
                 "url"
-              ],
-              "type": "object"
+              ]
             }
           },
           {
+            "type": "object",
             "properties": {
               "url": {
                 "anyOf": [
@@ -26076,67 +26179,29 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                     "type": "null"
                   },
                   {
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                    "type": "string"
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
                   },
                   {
-                    "maxItems": 0,
-                    "type": "array"
+                    "type": "array",
+                    "maxItems": 0
                   },
                   {
+                    "type": "object",
                     "maxProperties": 0,
-                    "properties": {},
-                    "type": "object"
+                    "properties": {}
                   }
                 ]
               }
             },
             "required": [
               "url"
-            ],
-            "type": "object"
+            ]
           }
         ]
       }
     ]
-  },
-  "properties": {
-    "session_id": {
-      "description": "Existing managed browser page to use for the navigation. Its browser\nprofile (for example, authenticated cookies) remains intact.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "timeout_ms": {
-      "default": 30000,
-      "format": "uint64",
-      "maximum": 120000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
-    "url": {
-      "description": "HTTP(S) download URL. The artifact is always written under the\nmanaged workspace artifact directory; callers cannot choose an\narbitrary destination path.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    }
-  },
-  "required": [
-    "session_id",
-    "url"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -26152,8 +26217,8 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -26180,41 +26245,41 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 {
   "additionalProperties": false,
   "properties": {
-    "preview_id": {
-      "description": "Running preview owned by this workspace and Agena session. Use browser_list\nto discover IDs. Private URLs are never accepted through the url field.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "timeout_ms": {
-      "default": 30000,
-      "format": "uint64",
-      "maximum": 120000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000002"
-    },
     "url": {
       "description": "Public HTTP(S) URL. Supply exactly one of url and preview_id.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
       "type": [
         "string",
         "null"
       ],
+      "x-agena-order": "000000",
       "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "preview_id": {
+      "description": "Running preview owned by this workspace and Agena session. Use browser_list\nto discover IDs. Private URLs are never accepted through the url field.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000002"
     }
   },
   "type": "object"
@@ -26239,55 +26304,21 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "full_page": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000002"
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "path": {
       "type": [
@@ -26296,21 +26327,55 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       ],
       "x-agena-order": "000001"
     },
-    "session_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
+    "full_page": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
     }
   },
-  "required": [
-    "session_id"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -26329,8 +26394,8 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 ```json
 {
   "additionalProperties": false,
-  "properties": {},
-  "type": "object"
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -26350,21 +26415,38 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "session_id": {}
           },
           "required": [
             "session_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "session_id": {
             "anyOf": [
@@ -26372,44 +26454,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "session_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "session_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "session_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -26436,21 +26501,99 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id",
+    "text"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 4096
+    },
+    "ref": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint16",
+      "minimum": 0,
+      "maximum": 199,
+      "x-agena-order": "000003"
+    },
+    "snapshot_id": {
+      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "maxLength": 128
+    },
+    "text": {
+      "type": "string",
+      "x-agena-order": "000003",
+      "maxLength": 65536
+    },
+    "press_enter": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000006"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000007"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "session_id": {}
           },
           "required": [
             "session_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "session_id": {
             "anyOf": [
@@ -26458,105 +26601,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "session_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "frame_selector": {
-      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
-      "maxLength": 4096,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "press_enter": {
-      "default": false,
-      "type": "boolean",
-      "x-agena-order": "000006"
-    },
-    "ref": {
-      "format": "uint16",
-      "maximum": 199,
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "selector": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "session_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "snapshot_id": {
-      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
-      "maxLength": 128,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "text": {
-      "maxLength": 65536,
-      "type": "string",
-      "x-agena-order": "000003"
-    },
-    "timeout_ms": {
-      "default": 30000,
-      "format": "uint64",
-      "maximum": 120000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000007"
-    }
-  },
-  "required": [
-    "session_id",
-    "text"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -26580,21 +26645,83 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "session_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_selector": {
+      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 4096
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000004"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "session_id": {}
           },
           "required": [
             "session_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "session_id": {
             "anyOf": [
@@ -26602,89 +26729,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "session_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "frame_selector": {
-      "description": "Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).",
-      "maxLength": 4096,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "selector": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "session_id": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "text": {
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000002"
-    },
-    "timeout_ms": {
-      "default": 30000,
-      "format": "uint64",
-      "maximum": 120000,
-      "minimum": 1,
-      "type": "integer",
-      "x-agena-order": "000004"
-    }
-  },
-  "required": [
-    "session_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -26713,79 +26778,50 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "start_url"
+  ],
   "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "start_url": {}
-          },
-          "required": [
-            "start_url"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "start_url": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "start_url"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "type": "object",
   "properties": {
-    "concurrency": {
-      "description": "Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.",
-      "format": "uint32",
-      "maximum": 8,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000006"
-    },
-    "max_depth": {
-      "format": "uint32",
-      "minimum": 0,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
+    "start_url": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
     },
     "max_pages": {
-      "format": "uint32",
-      "minimum": 0,
       "type": [
         "integer",
         "null"
       ],
+      "format": "uint32",
+      "minimum": 0,
       "x-agena-order": "000001"
+    },
+    "max_depth": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000002"
+    },
+    "same_host_only": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
+    "use_cache": {
+      "type": "boolean",
+      "x-agena-order": "000004"
     },
     "render_js": {
       "description": "Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.",
@@ -26795,32 +26831,61 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       ],
       "x-agena-order": "000005"
     },
-    "same_host_only": {
+    "concurrency": {
+      "description": "Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.",
       "type": [
-        "boolean",
+        "integer",
         "null"
       ],
-      "x-agena-order": "000003"
-    },
-    "start_url": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "use_cache": {
-      "type": "boolean",
-      "x-agena-order": "000004"
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 8,
+      "x-agena-order": "000006"
     }
   },
-  "required": [
-    "start_url"
-  ],
-  "type": "object"
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "start_url": {}
+          },
+          "required": [
+            "start_url"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "start_url": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "start_url"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -26850,58 +26915,53 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 {
   "$defs": {
     "ExtractionBackend": {
+      "type": "string",
       "enum": [
         "readability",
         "trafilatura"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "properties": {
-            "url": {}
-          },
-          "required": [
-            "url"
-          ],
-          "type": "object"
-        }
-      },
-      {
-        "properties": {
-          "url": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
-              },
-              {
-                "maxItems": 0,
-                "type": "array"
-              },
-              {
-                "maxProperties": 0,
-                "properties": {},
-                "type": "object"
-              }
-            ]
-          }
-        },
-        "required": [
-          "url"
-        ],
-        "type": "object"
-      }
-    ]
-  },
+  "required": [
+    "url"
+  ],
+  "type": "object",
   "properties": {
+    "url": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "prompt": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "use_cache": {
+      "type": "boolean",
+      "x-agena-order": "000002"
+    },
+    "render_js": {
+      "description": "Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    },
     "extractor": {
       "anyOf": [
         {
@@ -26915,55 +26975,60 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
     },
     "max_chars": {
       "description": "Initial Unicode-character preview. Default 8000, maximum 24000; use web.read for continuation.",
-      "format": "uint32",
-      "maximum": 24000,
-      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 24000,
       "x-agena-order": "000005"
-    },
-    "prompt": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-non-empty": true,
-      "x-agena-order": "000001"
-    },
-    "render_js": {
-      "description": "Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "url": {
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    },
-    "use_cache": {
-      "type": "boolean",
-      "x-agena-order": "000002"
     }
   },
-  "required": [
-    "url"
-  ],
-  "type": "object"
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "url": {}
+          },
+          "required": [
+            "url"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "url": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -26993,26 +27058,65 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 {
   "$defs": {
     "ExtractionBackend": {
+      "type": "string",
       "enum": [
         "readability",
         "trafilatura"
-      ],
-      "type": "string"
+      ]
     }
   },
-  "additionalProperties": false,
+  "required": [
+    "urls"
+  ],
+  "type": "object",
   "properties": {
+    "urls": {
+      "description": "One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 8,
+      "x-agena-order": "000000"
+    },
     "concurrency": {
-      "default": null,
       "description": "In-flight page reads, default 4, maximum 8. Per-host pacing still applies.",
-      "format": "uint32",
-      "maximum": 8,
-      "minimum": 1,
       "type": [
         "integer",
         "null"
       ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 8,
+      "default": null,
       "x-agena-order": "000001"
+    },
+    "max_chars": {
+      "description": "Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 8000,
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "use_cache": {
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000003"
+    },
+    "render_js": {
+      "description": "Omit for HTTP first with conditional rendering when browser.enabled; false forces HTTP; true forces browser.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000004"
     },
     "extractor": {
       "anyOf": [
@@ -27025,48 +27129,9 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       ],
       "default": null,
       "x-agena-order": "000005"
-    },
-    "max_chars": {
-      "default": null,
-      "description": "Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read.",
-      "format": "uint32",
-      "maximum": 8000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "render_js": {
-      "default": null,
-      "description": "Omit for HTTP first with conditional rendering when browser.enabled; false forces HTTP; true forces browser.",
-      "type": [
-        "boolean",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "urls": {
-      "description": "One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.",
-      "items": {
-        "type": "string"
-      },
-      "maxItems": 8,
-      "minItems": 1,
-      "type": "array",
-      "x-agena-order": "000000"
-    },
-    "use_cache": {
-      "default": true,
-      "type": "boolean",
-      "x-agena-order": "000003"
     }
   },
-  "required": [
-    "urls"
-  ],
-  "type": "object"
+  "additionalProperties": false
 }
 ```
 
@@ -27090,21 +27155,51 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "query"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "query": {
+      "description": "Search the local crawl index; does not search the public web or refresh stored pages.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "max_results": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 20,
+      "default": null,
+      "x-agena-order": "000001"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "query": {}
           },
           "required": [
             "query"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "query": {
             "anyOf": [
@@ -27112,57 +27207,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "query"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "max_results": {
-      "default": null,
-      "format": "uint32",
-      "maximum": 20,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "query": {
-      "description": "Search the local crawl index; does not search the public web or refresh stored pages.",
-      "maxLength": 4096,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "query"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -27187,21 +27252,59 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "page_id"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "page_id": {
+      "description": "Immutable snapshot handle returned by fetch, fetch_many, or query. Expires after 15 minutes or memory eviction.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "offset": {
+      "description": "Unicode character offset from next_offset; default 0. No network refetch.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000001"
+    },
+    "max_chars": {
+      "description": "Characters to return, default 8000, maximum 24000.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 24000,
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "page_id": {}
           },
           "required": [
             "page_id"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "page_id": {
             "anyOf": [
@@ -27209,65 +27312,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "page_id"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "max_chars": {
-      "default": null,
-      "description": "Characters to return, default 8000, maximum 24000.",
-      "format": "uint32",
-      "maximum": 24000,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "offset": {
-      "default": 0,
-      "description": "Unicode character offset from next_offset; default 0. No network refetch.",
-      "format": "uint",
-      "minimum": 0,
-      "type": "integer",
-      "x-agena-order": "000001"
-    },
-    "page_id": {
-      "description": "Immutable snapshot handle returned by fetch, fetch_many, or query. Expires after 15 minutes or memory eviction.",
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "page_id"
-  ],
-  "type": "object"
+  }
 }
 ```
 
@@ -27296,21 +27361,98 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Input schema**:
 ```json
 {
+  "required": [
+    "query"
+  ],
   "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "query": {
+      "type": "string",
+      "maxLength": 8192,
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "max_results": {
+      "description": "Maximum total results after domain filtering, URL deduplication and ranking.\nDefault 5, capped by search.max_limit (default 20). Does not increase HTML retrieval budgets.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 50,
+      "x-agena-order": "000001"
+    },
+    "max_results_per_engine": {
+      "description": "HTML only: distinct candidates to collect per engine before domain filtering.\nDefault 10 (configurable); independent of max_results and capped by search.max_results_per_engine.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 50,
+      "x-agena-order": "000002"
+    },
+    "max_pages_per_engine": {
+      "description": "HTML only: maximum pages per engine, including the first page; not a starting page or offset.\nDefault 1 (configurable), capped by search.max_pages_per_engine. Stops early when the candidate\nbudget is reached or a page has no new URLs. Increase both HTML budgets for deeper retrieval.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 5,
+      "x-agena-order": "000003"
+    },
+    "engine": {
+      "description": "Omit or use auto for the configured provider. HTML auto searches all eight engines concurrently.\nUse one name or a comma-separated list, e.g. \"baidu,google\", to query only those free HTML\nwebsites concurrently, overriding the configured API provider. Names: duckduckgo, bing, baidu,\nyandex, google, yahoo, brave, naver. Case and surrounding spaces are ignored; duplicates run\nonce, in first-occurrence order. auto must stand alone; empty or unknown names are errors.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "maxLength": 256,
+      "x-agena-order": "000004"
+    },
+    "allowed_domains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "x-agena-order": "000005"
+    },
+    "blocked_domains": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 64,
+      "x-agena-order": "000006"
+    }
+  },
   "not": {
     "anyOf": [
       {
         "not": {
+          "type": "object",
           "properties": {
             "query": {}
           },
           "required": [
             "query"
-          ],
-          "type": "object"
+          ]
         }
       },
       {
+        "type": "object",
         "properties": {
           "query": {
             "anyOf": [
@@ -27318,104 +27460,27 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
                 "type": "null"
               },
               {
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-                "type": "string"
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
               },
               {
-                "maxItems": 0,
-                "type": "array"
+                "type": "array",
+                "maxItems": 0
               },
               {
+                "type": "object",
                 "maxProperties": 0,
-                "properties": {},
-                "type": "object"
+                "properties": {}
               }
             ]
           }
         },
         "required": [
           "query"
-        ],
-        "type": "object"
+        ]
       }
     ]
-  },
-  "properties": {
-    "allowed_domains": {
-      "items": {
-        "type": "string"
-      },
-      "maxItems": 64,
-      "type": "array",
-      "x-agena-order": "000005"
-    },
-    "blocked_domains": {
-      "items": {
-        "type": "string"
-      },
-      "maxItems": 64,
-      "type": "array",
-      "x-agena-order": "000006"
-    },
-    "engine": {
-      "description": "Omit or use auto for the configured provider. HTML auto searches all eight engines concurrently.\nUse one name or a comma-separated list, e.g. \"baidu,google\", to query only those free HTML\nwebsites concurrently, overriding the configured API provider. Names: duckduckgo, bing, baidu,\nyandex, google, yahoo, brave, naver. Case and surrounding spaces are ignored; duplicates run\nonce, in first-occurrence order. auto must stand alone; empty or unknown names are errors.",
-      "maxLength": 256,
-      "minLength": 1,
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000004"
-    },
-    "max_pages_per_engine": {
-      "description": "HTML only: maximum pages per engine, including the first page; not a starting page or offset.\nDefault 1 (configurable), capped by search.max_pages_per_engine. Stops early when the candidate\nbudget is reached or a page has no new URLs. Increase both HTML budgets for deeper retrieval.",
-      "format": "uint32",
-      "maximum": 5,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000003"
-    },
-    "max_results": {
-      "description": "Maximum total results after domain filtering, URL deduplication and ranking.\nDefault 5, capped by search.max_limit (default 20). Does not increase HTML retrieval budgets.",
-      "format": "uint32",
-      "maximum": 50,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "max_results_per_engine": {
-      "description": "HTML only: distinct candidates to collect per engine before domain filtering.\nDefault 10 (configurable); independent of max_results and capped by search.max_results_per_engine.",
-      "format": "uint32",
-      "maximum": 50,
-      "minimum": 1,
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000002"
-    },
-    "query": {
-      "maxLength": 8192,
-      "minLength": 1,
-      "not": {
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$",
-        "type": "string"
-      },
-      "type": "string",
-      "x-agena-non-empty": true,
-      "x-agena-order": "000000"
-    }
-  },
-  "required": [
-    "query"
-  ],
-  "type": "object"
+  }
 }
 ```
 

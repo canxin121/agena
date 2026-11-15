@@ -547,6 +547,48 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertFalse(persistent.exists())
         self.assertEqual(self.calls("sudo"), [])
 
+    def test_existing_conntrack_entry_without_marker_is_preserved(self):
+        persistent = self.system / "etc/modules-load.d/agena-sandbox.conf"
+        for content in ("nf_conntrack\n\n", "# administrator configuration\n\tnf_conntrack \t\nother_module\n"):
+            with self.subTest(content=content):
+                persistent.write_text(content)
+                before = persistent.stat()
+                for mode in ("auto", "check"):
+                    self.run_setup(self.host(mode=mode) + "\n" + self.host(mode=mode))
+                self.assertEqual(persistent.read_text(), content)
+                self.assertEqual(persistent.stat().st_ino, before.st_ino)
+                self.assertEqual(persistent.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(self.calls("sudo"), [])
+        self.assertEqual(self.calls("install"), [])
+
+    def test_unmanaged_module_configuration_without_conntrack_is_preserved_and_rejected(self):
+        persistent = self.system / "etc/modules-load.d/agena-sandbox.conf"
+        for content in ("# nf_conntrack\n", "; nf_conntrack\n", "nf_conntrack_helper\n"):
+            with self.subTest(content=content):
+                persistent.write_text(content)
+                for mode in ("auto", "check"):
+                    result = self.run_setup(self.host(mode=mode), expected=1)
+                    self.assertIn("Preserving existing administrator configuration", result.stderr)
+                    self.assertEqual(persistent.read_text(), content)
+        self.assertEqual(self.calls("sudo"), [])
+        self.assertEqual(self.calls("install"), [])
+
+    def test_conntrack_configuration_symlink_is_rejected(self):
+        persistent = self.system / "etc/modules-load.d/agena-sandbox.conf"
+        target = self.root / "administrator-modules.conf"
+        content = "nf_conntrack\n"
+        target.write_text(content)
+        persistent.unlink()
+        persistent.symlink_to(target)
+        for mode in ("auto", "check"):
+            with self.subTest(mode=mode):
+                result = self.run_setup(self.host(mode=mode), expected=1)
+                self.assertIn("Refusing a symlink", result.stderr)
+                self.assertTrue(persistent.is_symlink())
+                self.assertEqual(target.read_text(), content)
+        self.assertEqual(self.calls("sudo"), [])
+        self.assertEqual(self.calls("install"), [])
+
     def test_failed_config_write_cannot_install_a_partial_file(self):
         target = self.system / "etc/agena-test.conf"
         body = r'''

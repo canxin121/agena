@@ -894,8 +894,16 @@ agena_setup_linux_runtime() {
   fi
   # A module already loaded by another process may disappear after reboot.
   # Persist the requirement even when no modprobe was necessary this time.
+  # Existing administrator or older installer files may omit our ownership
+  # marker. A valid module entry already meets the requirement; leave it intact.
+  path="$(agena_setup_system_path /etc/modules-load.d/agena-sandbox.conf)"
   body=$'# Managed by Agena installer.\nnf_conntrack'
-  agena_setup_managed_file "$(agena_setup_system_path /etc/modules-load.d/agena-sandbox.conf)" "$body" "$mode" || return
+  if [[ ! -L "$path" && -f "$path" && -r "$path" ]] &&
+     grep -Eq '^[[:space:]]*nf_conntrack[[:space:]]*$' "$path"; then
+    :
+  else
+    agena_setup_managed_file "$path" "$body" "$mode" || return
+  fi
   agena_setup_module_boot "$mode" || return
   agena_setup_apparmor "$mode" "$install_dir"
 }

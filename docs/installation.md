@@ -145,6 +145,10 @@ policy includes, and the full util-linux namespace tools. System preparation
 uses `sudo`, `doas`, or interactive `su` as available. Passwords are read by
 those programs. On OpenRC hosts it also ensures the module-loading service is
 enabled at boot; systemd hosts use `modules-load.d` directly.
+An existing `/etc/modules-load.d/agena-sandbox.conf` that already declares
+`nf_conntrack` is reused without changing its contents, including files without
+the Agena ownership comment. An unmanaged file that lacks the required entry is
+preserved and reported for administrator review.
 
 Alpine/musl source installs select native musl Rust/Bun artifacts and build
 against the system OpenSSL shared libraries. Published Linux releases currently

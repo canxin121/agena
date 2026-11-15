@@ -496,6 +496,7 @@ fn execute_spawn_prepared(
             }
             None => agena_tool::shell::shell_command_for_platform(&final_command),
         },
+        &final_cwd,
         command,
         &mut env,
     )?;

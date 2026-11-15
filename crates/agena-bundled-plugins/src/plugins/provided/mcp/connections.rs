@@ -490,6 +490,7 @@ impl McpPlugin {
     pub(super) async fn connection_test(&self, id: &str) -> SdkResult<ToolInvokeOutput> {
         let (store, name, config) = self.configured_connection(id, false).await?;
         let spec = self.authorize_connection(&store, &name, &config).await?;
+        let spec = self.prepare_probe_spec(spec).await?;
         let cloned = store.clone();
         let token_store_enabled = io(move || cloned.token_store_enabled()).await?;
         let timeout = config.timeouts();
@@ -509,7 +510,7 @@ impl McpPlugin {
     pub(super) async fn connection_reconnect(&self, id: &str) -> SdkResult<ToolInvokeOutput> {
         let (store, name, config) = self.configured_connection(id, true).await?;
         self.authorize_connection(&store, &name, &config).await?;
-        self.manager
+        self.authorize_server(&name).await?
             .reconnect(&name)
             .await
             .map_err(transport_error)?;
@@ -726,6 +727,10 @@ fn connection_spec(config: &McpServerConfig, root: &Path) -> SdkResult<ServerSpe
                 include: tools.include.clone(),
                 exclude: tools.exclude.clone(),
             },
+            resources: agena_mcp_client::StdioResourceDeclarations {
+                reads: process.reads.clone(), writes: process.writes.clone(), network: process.network.clone(),
+            },
+            sandbox: None,
         },
         McpServerConfig::Http {
             endpoint,

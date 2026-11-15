@@ -73,6 +73,8 @@ fn project_summary(summary: &mut McpConnectionSummary, status: Option<&McpServer
         summary.tool_count = status.tool_count;
         summary.state = if status.connected {
             "connected"
+        } else if status.scope_required {
+            "scoped"
         } else if status
             .oauth_health
             .as_ref()
@@ -196,6 +198,13 @@ pub async fn test_connection(
     token_store_enabled: bool,
 ) -> McpTestResult {
     let started = Instant::now();
+    if matches!(&spec, ServerSpec::Stdio { sandbox: None, .. }) {
+        return McpTestResult {
+            ok: false, elapsed_ms: 0, tool_count: 0, protocol_version: None,
+            server_info: None, capabilities: None,
+            error: Some("MCP stdio connection test requires a host-authorized sandbox scope.".into()),
+        };
+    }
     let mut probe = McpConnectionManager::new("agena-connection-test", env!("CARGO_PKG_VERSION"))
         .with_roots([workspace])
         .with_timeouts(

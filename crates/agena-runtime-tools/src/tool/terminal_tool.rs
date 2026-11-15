@@ -126,6 +126,7 @@ pub(super) fn start_prepared(
             }
             None => agena_tool::shell::shell_command_for_platform(&command),
         },
+        &workdir,
         &input.command,
         &mut env,
     )?;

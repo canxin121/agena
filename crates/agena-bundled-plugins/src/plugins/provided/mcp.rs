@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 mod connections;
+mod scoped;
 use connections::*;
 
 use crate::{
@@ -149,17 +150,6 @@ impl McpPlugin {
         }
     }
 
-    async fn authorize_server(&self, server: &str) -> SdkResult<()> {
-        if let Some(target) = self.manager.server_network_targets().await.get(server) {
-            let host = self
-                .host
-                .get()
-                .ok_or_else(|| PluginError::internal("MCP plugin invoked before initialization"))?;
-            host.require_network_permission(target.clone()).await?;
-        }
-        Ok(())
-    }
-
     #[hook(
         init,
         summary = "Initialize MCP connections",
@@ -251,9 +241,8 @@ impl McpPlugin {
         )
     )]
     async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        let result = self
-            .manager
+        let manager = self.authorize_server(&input.server).await?;
+        let result = manager
             .list_resources(&input.server, input.cursor.clone())
             .await
             .map_err(|err| {
@@ -295,9 +284,8 @@ impl McpPlugin {
         &self,
         input: &McpServerInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        let result = self
-            .manager
+        let manager = self.authorize_server(&input.server).await?;
+        let result = manager
             .list_resource_templates(&input.server, input.cursor.clone())
             .await
             .map_err(|err| {
@@ -330,9 +318,8 @@ impl McpPlugin {
         &self,
         input: &ReadResourceInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        let result = self
-            .manager
+        let manager = self.authorize_server(&input.server).await?;
+        let result = manager
             .read_resource(&input.server, input.uri.as_str())
             .await
             .map_err(|err| {
@@ -371,9 +358,8 @@ impl McpPlugin {
         )
     )]
     async fn invoke_prompts_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        let result = self
-            .manager
+        let manager = self.authorize_server(&input.server).await?;
+        let result = manager
             .list_prompts(&input.server, input.cursor.clone())
             .await
             .map_err(|err| {
@@ -400,9 +386,8 @@ impl McpPlugin {
         )
     )]
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        let result = self
-            .manager
+        let manager = self.authorize_server(&input.server).await?;
+        let result = manager
             .get_prompt(&input.server, input.name.as_str(), input.arguments.clone())
             .await
             .map_err(|err| {
@@ -432,9 +417,8 @@ impl McpPlugin {
         )
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        let result = self
-            .manager
+        let manager = self.authorize_server(&input.server).await?;
+        let result = manager
             .call_tool(
                 &input.server,
                 input.name.as_str(),
@@ -505,33 +489,34 @@ impl McpPlugin {
             .transpose()
             .map_err(|_| PluginError::internal("invalid channel tool discovery scope"))?;
         let query = input.query.trim().to_ascii_lowercase();
-        let mut tools =
-            self.manager
-                .all_tools()
-                .await
-                .into_iter()
-                .filter_map(|(server, tool)| {
-                    if channel.as_ref().is_some_and(|authority| {
-                        !authority.allows_mcp_tool(&server, &tool.name, chrono::Utc::now().timestamp_millis())
-                    }) {
-                        return None;
-                    }
-                    let haystack = format!(
-                        "{} {} {}",
-                        server,
-                        tool.name,
-                        tool.description.as_deref().unwrap_or_default()
+        let mut tools = self.scoped_tools(channel.as_ref()).await?
+            .into_iter()
+            .filter_map(|(server, tool)| {
+                if channel.as_ref().is_some_and(|authority| {
+                    !authority.allows_mcp_tool(
+                        &server,
+                        &tool.name,
+                        chrono::Utc::now().timestamp_millis(),
                     )
-                    .to_ascii_lowercase();
-                    if !query.is_empty() && !haystack.contains(query.as_str()) {
-                        return None;
-                    }
-                    let score = usize::from(tool.name.eq_ignore_ascii_case(query.as_str())) * 100
-                        + usize::from(tool.name.to_ascii_lowercase().contains(query.as_str())) * 10
-                        + usize::from(haystack.contains(query.as_str()));
-                    Some((score, server, tool))
-                })
-                .collect::<Vec<_>>();
+                }) {
+                    return None;
+                }
+                let haystack = format!(
+                    "{} {} {}",
+                    server,
+                    tool.name,
+                    tool.description.as_deref().unwrap_or_default()
+                )
+                .to_ascii_lowercase();
+                if !query.is_empty() && !haystack.contains(query.as_str()) {
+                    return None;
+                }
+                let score = usize::from(tool.name.eq_ignore_ascii_case(query.as_str())) * 100
+                    + usize::from(tool.name.to_ascii_lowercase().contains(query.as_str())) * 10
+                    + usize::from(haystack.contains(query.as_str()));
+                Some((score, server, tool))
+            })
+            .collect::<Vec<_>>();
         tools.sort_by(|left, right| {
             right
                 .0
@@ -634,7 +619,7 @@ impl McpPlugin {
         )
     )]
     async fn invoke_servers_status(&self) -> SdkResult<ToolInvokeOutput> {
-        let statuses = self.manager.statuses().await;
+        let statuses = self.scoped_statuses().await?;
         let text = if statuses.is_empty() {
             "No MCP servers configured.".to_string()
         } else {
@@ -754,15 +739,14 @@ impl McpPlugin {
         &self,
         input: &McpServerNameInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.authorize_server(&input.server).await?;
-        self.manager
+        let manager = self.authorize_server(&input.server).await?;
+        manager
             .reconnect(input.server.as_str())
             .await
             .map_err(|error| {
                 PluginError::internal(format!("mcp:{} reconnect failed: {error}", input.server))
             })?;
-        let status = self
-            .manager
+        let status = manager
             .statuses()
             .await
             .into_iter()
@@ -1027,7 +1011,7 @@ impl McpPlugin {
         if input.tool_name().starts_with("connections.") {
             return Ok(Some(ToolDefinitionPatch {
                 summary: None,
-                help: Some("Manage Agena connections to external MCP servers. Use connections.list and connections.get before editing; pass returned opaque IDs and current revisions. Global and server-workspace scopes are distinct; workspace copies override complete same-name global definitions. Native configs use transport=stdio with process={command,args,env,cwd}, or transport=http with endpoint={url,headers} and optional auth. Return config secrets are [REDACTED]; preserve only unchanged secret_paths explicitly, or replace/remove them. Import mcpServers or native servers JSON with import_preview, then import selected names using the original document and preview revision. Saved changes queue a runtime reload after the originating call; check status after it completes. Use connections.test for an isolated probe, including disabled copies. Use auth.start then auth.complete for OAuth; never infer sign-in success from opening a URL. These tools manage the running server workspace, independently of the selected chat directory.".into()),
+                help: Some("Manage Agena connections to external MCP servers. Use connections.list and connections.get before editing; pass returned opaque IDs and current revisions. Global and server-workspace scopes are distinct; workspace copies override complete same-name global definitions. Native configs use transport=stdio with process={command,args,env,cwd,reads,writes,network}, or transport=http with endpoint={url,headers} and optional auth. Return config secrets are [REDACTED]; preserve only unchanged secret_paths explicitly, or replace/remove them. Import mcpServers or native servers JSON with import_preview, then import selected names using the original document and preview revision. Saved changes queue a runtime reload after the originating call; check status after it completes. Use connections.test for an isolated probe, including disabled copies. Use auth.start then auth.complete for OAuth; never infer sign-in success from opening a URL. These tools manage the running server workspace, independently of the selected chat directory.".into()),
                 input_schema: None,
             }));
         }
@@ -1048,6 +1032,7 @@ impl McpPlugin {
             }
         }
         lines.push(format!("Currently discovered MCP tools: {tool_count}."));
+        lines.push("Stdio servers are discovered on demand inside the current authorized execution scope; use `tools.search` to populate that scope's catalog.".to_string());
         lines.push(
             "Use `tools.search` to retrieve matching MCP tool schemas from the fingerprinted dynamic index; the full catalog is intentionally not embedded in this help."
                 .to_string(),
@@ -1071,7 +1056,7 @@ impl McpPlugin {
                 "List MCP resources from one server. {server_count} server(s) currently available."
             )),
             "tools.call" => Some(format!(
-                "Call one discovered MCP tool. {tool_count} MCP tool(s) currently available."
+                "Call one discovered MCP tool from {server_count} configured server(s)."
             )),
             _ => None,
         };

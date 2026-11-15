@@ -7,6 +7,8 @@ use similar::TextDiff;
 
 mod edit;
 mod format;
+#[cfg(test)]
+mod sandbox_tests;
 use edit::apply_hunks;
 use format::parse_patch;
 use uuid::Uuid;
@@ -16,9 +18,9 @@ use crate::part::ApplyPatchToolInput;
 use super::{ToolError, ToolExecutor};
 use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};
 
-const MAX_PATCH_FILE_BYTES: u64 = 16 * 1024 * 1024;
-const MAX_PATCH_OPERATIONS: usize = 256;
-const MAX_PATCH_TRANSACTION_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_PATCH_FILE_BYTES: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_PATCH_OPERATIONS: usize = 256;
+pub(crate) const MAX_PATCH_TRANSACTION_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 enum PatchOp {
@@ -74,6 +76,32 @@ enum PreparedPatchOp {
         updated: String,
         permissions: Permissions,
     },
+}
+
+/// One host-bound target and the revisions captured around sandbox execution.
+/// Paths and original permissions must come from the host's fixed staging
+/// map, never from a worker-provided destination.
+#[derive(Debug)]
+pub(crate) struct SandboxFileChange {
+    pub path: PathBuf,
+    pub original: Option<Vec<u8>>,
+    pub updated: Option<Vec<u8>>,
+    pub permissions: Option<Permissions>,
+}
+
+/// Exercise the production capability broker with captured sandbox revisions.
+/// Production callers retain capabilities before the worker starts; this
+/// adapter exists only for publication tests that do not run a worker.
+#[cfg(test)]
+fn commit_sandbox_changes(changes: Vec<SandboxFileChange>) -> Result<(), ToolError> {
+    let changes = changes
+        .into_iter()
+        .map(|change| {
+            let capability = crate::fs_broker::FileCapability::open(&change.path, true)?;
+            Ok((capability, change))
+        })
+        .collect::<Result<Vec<_>, ToolError>>()?;
+    crate::fs_broker::commit(changes)
 }
 
 pub fn execute(
@@ -506,6 +534,22 @@ pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
         }
     }
     Ok(paths)
+}
+
+/// Trusted move identities for preserving source permissions when publishing
+/// a sandboxed patch. Reuses the same parser as planning and application.
+pub(crate) fn planned_moves(text: &str) -> Result<Vec<(String, String)>, ToolError> {
+    Ok(parse_patch(text)?
+        .into_iter()
+        .filter_map(|op| match op {
+            PatchOp::Update {
+                path,
+                move_to: Some(target),
+                ..
+            } => Some((path, target)),
+            _ => None,
+        })
+        .collect())
 }
 
 fn render_add_diff(path: &str, content: &str) -> String {

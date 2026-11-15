@@ -25,6 +25,7 @@ Engineering guides:
 - [Layered prompt fragments and inheritance](docs/prompt-layers.md)
 - [Skill libraries, installation, and authoring](docs/skills.md)
 - [Multi-user channel roles, privacy and permissions](docs/channel-access.md)
+- [Tool sandbox configuration and deployment](docs/sandbox.md)
 - [Plugin channels and event-driven automation](docs/integrations.md)
 - [Plugin Web pages and the client SDK](docs/plugin-web-pages.md)
 - [AI Bot: manage projects and ordinary conversations](docs/ai-bot.md)

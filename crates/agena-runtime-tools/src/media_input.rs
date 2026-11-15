@@ -3,13 +3,16 @@
 //! concrete provider route before placing it in a model request.
 use agena_domain::{AttachmentItem, AttachmentKind, AttachmentSource};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
 };
+
+#[cfg(test)]
+mod tests;
 
 pub const MAX_MEDIA_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_MEDIA_BATCH_BYTES: usize = 40 * 1024 * 1024;
@@ -28,6 +31,127 @@ pub struct PreparedMedia {
     #[serde(skip)]
     pub bytes: Vec<u8>,
 }
+
+/// Private IPC payload. Ordinary PreparedMedia serialization intentionally
+/// remains metadata-only so callers cannot accidentally log media bytes.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PreparedMediaTransfer {
+    pub filename: String,
+    pub mime: String,
+    pub kind: AttachmentKind,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub bytes_base64: String,
+}
+
+impl From<PreparedMedia> for PreparedMediaTransfer {
+    fn from(prepared: PreparedMedia) -> Self {
+        Self {
+            filename: prepared.filename,
+            mime: prepared.mime,
+            kind: prepared.kind,
+            size_bytes: prepared.size_bytes,
+            sha256: prepared.sha256,
+            width: prepared.width,
+            height: prepared.height,
+            bytes_base64: STANDARD.encode(prepared.bytes),
+        }
+    }
+}
+
+impl PreparedMediaTransfer {
+    /// Validate the untrusted worker envelope without running an image or
+    /// document decoder again in the host process.
+    pub(crate) fn into_prepared(self) -> Result<PreparedMedia, String> {
+        let max_encoded = MAX_MEDIA_BYTES.div_ceil(3) * 4;
+        if self.size_bytes == 0
+            || self.size_bytes > MAX_MEDIA_BYTES as u64
+            || self.bytes_base64.len() > max_encoded
+        {
+            return Err("sandbox media payload exceeds the 20 MiB limit or is empty".into());
+        }
+        if self.filename.is_empty()
+            || self.filename.len() > 1024
+            || agena_domain::safe_attachment_filename(&self.filename) != self.filename
+        {
+            return Err("sandbox media returned an invalid filename".into());
+        }
+        let valid_mime = match self.kind {
+            AttachmentKind::Image => matches!(
+                self.mime.as_str(),
+                "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+            ),
+            AttachmentKind::Audio => matches!(
+                self.mime.as_str(),
+                "audio/wav"
+                    | "audio/flac"
+                    | "audio/aiff"
+                    | "audio/aac"
+                    | "audio/mpeg"
+                    | "audio/ogg"
+                    | "audio/mp4"
+            ),
+            AttachmentKind::Video => matches!(
+                self.mime.as_str(),
+                "video/quicktime" | "video/mp4" | "video/avi" | "video/webm"
+            ),
+            AttachmentKind::Pdf => self.mime == "application/pdf",
+            AttachmentKind::File => self.mime == "text/plain",
+        };
+        if !valid_mime {
+            return Err("sandbox media returned an inconsistent kind or MIME type".into());
+        }
+        match (self.kind, self.width, self.height) {
+            (AttachmentKind::Image, Some(width), Some(height))
+                if width > 0
+                    && height > 0
+                    && width <= 16384
+                    && height <= 16384
+                    && u64::from(width) * u64::from(height) <= MAX_IMAGE_PIXELS => {}
+            (AttachmentKind::Image, _, _) => {
+                return Err("sandbox image dimensions exceed supported limits".into());
+            }
+            (_, None, None) => {}
+            _ => {
+                return Err("sandbox non-image input unexpectedly contains image dimensions".into());
+            }
+        }
+        let bytes = STANDARD
+            .decode(self.bytes_base64)
+            .map_err(|_| "sandbox media returned invalid base64".to_owned())?;
+        if bytes.len() as u64 != self.size_bytes {
+            return Err("sandbox media byte count does not match its metadata".into());
+        }
+        let sha256 = hex::encode(Sha256::digest(&bytes));
+        if !sha256.eq_ignore_ascii_case(&self.sha256) {
+            return Err("sandbox media SHA-256 does not match its contents".into());
+        }
+        if self.kind == AttachmentKind::File {
+            if bytes.len() > MAX_TEXT_BYTES {
+                return Err("sandbox text input exceeds the 1 MiB limit".into());
+            }
+            let text = std::str::from_utf8(&bytes)
+                .map_err(|_| "sandbox text input is not UTF-8".to_owned())?;
+            if text.contains('\0') {
+                return Err("sandbox text input contains binary NUL bytes".into());
+            }
+        }
+        Ok(PreparedMedia {
+            filename: self.filename,
+            mime: self.mime,
+            kind: self.kind,
+            size_bytes: self.size_bytes,
+            sha256,
+            width: self.width,
+            height: self.height,
+            bytes,
+        })
+    }
+}
+
 impl PreparedMedia {
     pub fn attachment(&self, route: Option<&str>) -> AttachmentItem {
         let data = STANDARD.encode(&self.bytes);

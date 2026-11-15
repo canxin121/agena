@@ -467,6 +467,31 @@ pub(crate) fn new_plugin() -> CodePlugin {
     }
 }
 
+/// The same parser and rewrite implementation used by the bundled plugin,
+/// callable by a confined worker without constructing a plugin or host client.
+pub(crate) fn execute_sandbox_tool(
+    operation: &str,
+    input: serde_json::Value,
+    workspace_root: &Path,
+    access: Option<agena_tool::path_filter::PathPredicate>,
+) -> SdkResult<ToolInvokeOutput> {
+    match operation {
+        "code.search_ast" => CodePlugin::invoke_search_ast_filtered(
+            &workspace_root.to_string_lossy(),
+            CodeSearchAstInput::parse_input(input)?,
+            access,
+        ),
+        "code.syntax_tree" => CodePlugin::invoke_syntax_tree(
+            &workspace_root.to_string_lossy(),
+            CodeSyntaxTreeInput::parse_input(input)?,
+        ),
+        "code.rewrite_ast" => invoke_rewrite(workspace_root, CodeRewriteInput::parse_input(input)?),
+        _ => Err(PluginError::invalid_params(format!(
+            "unsupported code worker operation: {operation}"
+        ))),
+    }
+}
+
 async fn run_code_blocking<T, F>(work: F) -> SdkResult<T>
 where
     T: Send + 'static,

@@ -20,7 +20,7 @@ pub use error::{McpError, McpResult};
 pub use manager::{
     ConnectedServer, HttpAuth, McpConnectionManager, McpCredentialConflict, McpCredentialState,
     McpServerAuthMode, McpServerStatus, McpToolPolicy, McpToolRisk, ReconnectPolicy, ServerSpec,
-    TokenStore,
+    TokenStore, McpSandboxContext, StdioResourceDeclarations,
 };
 pub use oauth::{
     McpOAuthRegistration, McpOAuthSessionManager, McpOAuthStart, oauth_credential_binding,

@@ -13,6 +13,7 @@ mod permissions;
 mod plugin_settings_docs;
 mod plugin_tool_docs;
 pub mod plugins;
+mod sandbox_worker;
 pub mod tool;
 pub mod web;
 
@@ -33,6 +34,7 @@ pub use capability_manifest::{
     bundled_capability_manifest,
 };
 pub use docs_reference::bundled_tools_markdown_reference;
+pub use sandbox_worker::{execute_sandbox_tool, execute_sandbox_tool_with_read_filter};
 
 pub use agena_runtime_config as config;
 pub use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig, MCP_PLUGIN_ID};

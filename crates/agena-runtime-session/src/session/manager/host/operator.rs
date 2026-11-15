@@ -143,10 +143,10 @@ impl SessionManager {
         let executor = authority
             .executor
             .clone()
-            .with_read_path_authorizer(Arc::new(move |path| {
+            .with_path_effect_authorizer(Arc::new(move |access, path| {
                 let check = authorizer
                     .executor
-                    .path_permission_check(agena_domain::AccessKind::Read, &path.to_string_lossy());
+                    .path_permission_check(access, &path.to_string_lossy());
                 runtime.block_on(manager.authorize_operator_checks(&authorizer, vec![check]))
             }));
 
@@ -167,6 +167,10 @@ impl SessionManager {
             .collect_permission_checks_for_invocation_in_session(&invocation, None)
             .await?;
         self.authorize_operator_checks(&authority, checks).await?;
+        let rules = self.kernel_runtime.permissions
+            .resolve_snapshot(None, Some(authority.workspace)).await
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+        let executor = executor.with_sandbox_persisted_rules(rules)?;
         let mut execution = executor
             .execute_invocation(
                 &invocation,

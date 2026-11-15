@@ -162,8 +162,8 @@ impl Inner {
             ));
         }
         *handler = Some(host.host_handler_for_process(Arc::clone(&scope), Arc::clone(&process)));
-        let successor = host.status_registry();
-        {
+        if !self.callback_boundary.is_restricted() {
+            let successor = host.status_registry();
             let mut binding = self
                 .status_sink
                 .write()

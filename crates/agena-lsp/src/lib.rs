@@ -20,7 +20,7 @@ pub use client::{
     DiagnosticReport, DocumentReceipt, DocumentSyncStatus, LspClient, ServerNotification,
 };
 pub use error::{LspError, LspResult};
-pub use registry::{LspRegistry, ResolveError};
+pub use registry::{LspRegistry, LspSandboxPolicyBuilder, LspScopedSandboxBuilder, ResolveError};
 pub use server_spec::LspServerSpec;
 pub use transport::{LspTransport, StdioTransport};
 

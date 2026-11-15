@@ -52,6 +52,7 @@ pub async fn build_mcp_manager(
         let name = name.clone();
         let timeouts = server_config.timeouts().clone();
         connections.spawn(async move {
+            let deferred = matches!(&spec, ServerSpec::Stdio { sandbox: None, .. });
             let result = manager.add_server_with_timeouts(
                 &name,
                 spec,
@@ -60,6 +61,8 @@ pub async fn build_mcp_manager(
             ).await;
             if let Err(error) = result {
                 tracing::warn!(target: "agena::mcp", server = %name, category = %error.user_message(), "failed to connect MCP server");
+            } else if deferred {
+                tracing::info!(target: "agena::mcp", server = %name, "MCP stdio configured for scoped sandbox launch");
             } else {
                 tracing::info!(target: "agena::mcp", server = %name, "connected MCP server");
             }
@@ -122,6 +125,10 @@ pub fn mcp_server_spec(
                 include: tools.include.clone(),
                 exclude: tools.exclude.clone(),
             },
+            resources: agena_mcp_client::StdioResourceDeclarations {
+                reads: process.reads.clone(), writes: process.writes.clone(), network: process.network.clone(),
+            },
+            sandbox: None,
         },
         McpServerConfig::Http {
             endpoint,

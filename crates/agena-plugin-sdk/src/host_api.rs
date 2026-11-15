@@ -37,6 +37,29 @@ pub use session::{
 };
 pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse};
 
+/// Resource effects requested by a native, host-managed child process.
+/// These declarations grant nothing until the current host scope approves them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct HostProcessResources {
+    pub cwd: Option<String>,
+    pub reads: Vec<String>,
+    pub writes: Vec<String>,
+    pub network: Vec<String>,
+}
+
+/// A native host result. Remote plugin RPC never accepts or returns this as
+/// an authorization capability; only the host constructs the policy value.
+#[derive(Debug, Clone)]
+pub struct HostPreparedProcessSandbox {
+    pub scope: String,
+    pub workspace_root: String,
+    pub cwd: String,
+    pub policy: serde_json::Value,
+    /// A one-call approval or operator scope must end with its originating call.
+    pub call_bound: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// MCP server specification for permission checks.
 pub enum HostMcpServerSpec {
@@ -455,6 +478,16 @@ pub trait HostClient: Send + Sync + 'static {
     /// Native host callback only; remote plugin transports do not expose this
     /// capability. Call before persisting an enabled connection or testing it.
     async fn require_mcp_server_permission(&self, _spec: HostMcpServerSpec) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Resolve and authorize a child process's effects under the current
+    /// validated host callback. Native host integrations only: this method is
+    /// deliberately absent from external plugin RPC transports.
+    async fn prepare_process_sandbox(
+        &self,
+        _resources: HostProcessResources,
+    ) -> Result<HostPreparedProcessSandbox> {
         Err(unavailable())
     }
 

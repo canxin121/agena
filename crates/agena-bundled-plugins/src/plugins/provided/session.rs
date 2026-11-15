@@ -12,7 +12,7 @@ use crate::plugins::provided::workflow::{
 };
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
-    HostClient, HostContextStatusRequest, HostContextStatusResponse,
+    HostClient, HostContextStatusRequest, HostContextStatusResponse, HostProcessResources,
 };
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
@@ -47,11 +47,17 @@ struct GitFacts {
     dirty: Option<bool>,
 }
 
-fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
+fn run_git(
+    workspace: &Path,
+    args: &[&str],
+    policy: &agena_process::sandbox::SandboxPolicy,
+) -> SdkResult<Option<String>> {
     const MAX_GIT_FACT_BYTES: usize = 4 * 1024 * 1024;
     let mut command = std::process::Command::new("git");
     command
         .arg("--no-optional-locks")
+        .args(["-c", "core.fsmonitor=false"])
+        .current_dir(workspace)
         .arg("-C")
         .arg(workspace)
         .args(args)
@@ -59,8 +65,10 @@ fn run_git(workspace: &Path, args: &[&str]) -> SdkResult<Option<String>> {
         .env("GCM_INTERACTIVE", "Never")
         .env("GIT_EDITOR", "true")
         .env("EDITOR", "true")
-        .env("GPG_TTY", "")
-        .stdin(Stdio::null());
+        .env("GPG_TTY", "");
+    agena_process::sandbox::wrap_std_command(&mut command, policy)
+        .map_err(|error| PluginError::internal_error(&error))?;
+    command.stdin(Stdio::null());
     let output = match agena_process::blocking::output(
         command,
         Duration::from_secs(15),
@@ -134,12 +142,17 @@ fn parse_git_facts(status: &str) -> Option<GitFacts> {
     (saw_oid && facts.branch.is_some()).then_some(facts)
 }
 
-fn git_facts(workspace: &Path) -> SdkResult<Option<GitFacts>> {
-    Ok(
-        run_git(workspace, &["status", "--porcelain=v2", "--branch", "-z"])?
-            .as_deref()
-            .and_then(parse_git_facts),
-    )
+fn git_facts(
+    workspace: &Path,
+    policy: &agena_process::sandbox::SandboxPolicy,
+) -> SdkResult<Option<GitFacts>> {
+    Ok(run_git(
+        workspace,
+        &["status", "--porcelain=v2", "--branch", "-z"],
+        policy,
+    )?
+    .as_deref()
+    .and_then(parse_git_facts))
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -306,17 +319,23 @@ impl SessionPlugin {
         )
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
-        if !context.is_global() {
-            self.host
+        let git_sandbox = if context.is_global() {
+            None
+        } else {
+            let prepared = self
+                .host
                 .get()
                 .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?
-                .require_path_permission(
-                    agena_plugin_host::sdk::host_api::PathPermissionQuery::read(
-                        context.workspace_root,
-                    ),
-                )
+                .prepare_process_sandbox(HostProcessResources {
+                    cwd: Some(context.workspace_root.to_string()),
+                    ..Default::default()
+                })
                 .await?;
-        }
+            let policy: agena_process::sandbox::SandboxPolicy =
+                serde_json::from_value(prepared.policy)
+                    .map_err(|error| PluginError::internal_error(&error))?;
+            Some((prepared.cwd, policy))
+        };
         let workspace_root = context.workspace_root.to_string();
         let mut lines = vec![if context.is_global() {
             "Working directory: none".into()
@@ -326,7 +345,6 @@ impl SessionPlugin {
         let mut git_branch = None::<String>;
         let mut git_short_sha = None::<String>;
         let mut git_dirty = None;
-        let git_workspace = workspace_root.clone();
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
@@ -336,13 +354,11 @@ impl SessionPlugin {
                     &error,
                 ))
             })?;
-        let is_global = context.is_global();
         let facts = tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
-            if is_global {
-                Ok(None)
-            } else {
-                git_facts(Path::new(&git_workspace))
+            match git_sandbox {
+                Some((workspace, policy)) => git_facts(Path::new(&workspace), &policy),
+                None => Ok(None),
             }
         })
         .await

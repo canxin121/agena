@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use agena_process::sandbox::SandboxPolicy;
 use agena_stdio_codec::ContentLengthCodec;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -53,6 +54,7 @@ const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BUFFERED_STREAMS: usize = 128;
 const MAX_BUFFERED_STREAM_CHUNKS: usize = 64;
 static JSON_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static SANDBOX_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 #[cfg(feature = "signing")]
 static VERIFICATION_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
@@ -79,6 +81,8 @@ async fn decode_frame(body: Bytes) -> Result<Frame, TransportError> {
 
 mod hosted;
 mod lifecycle;
+mod sandbox_scope;
+pub(crate) mod scoped;
 mod stderr;
 mod streams;
 #[cfg(feature = "signing")]
@@ -89,6 +93,7 @@ struct SpawnSpec {
     args: Vec<String>,
     env: HashMap<String, String>,
     cwd: Option<PathBuf>,
+    sandbox: SandboxPolicy,
     #[cfg(feature = "signing")]
     sha256: Option<String>,
     #[cfg(feature = "signing")]
@@ -102,6 +107,8 @@ pub struct StdioTransport {
 
 struct Inner {
     spawn_spec: SpawnSpec,
+    private_workdir: std::sync::Mutex<Option<tempfile::TempDir>>,
+    callback_boundary: Arc<sandbox_scope::CallbackBoundary>,
     restart_policy: RestartPolicy,
     /// Active child and its writer mailbox. `None` while a respawn is in
     /// flight. The writer task owns stdin so lifecycle code never waits for
@@ -166,6 +173,7 @@ fn remote_request(
     control: mpsc::UnboundedSender<WriteRequest>,
     id: RequestId,
     cancellation: CancellationToken,
+    authority: sandbox_scope::CallbackLease,
 ) -> Result<super::request::RemoteRequest, TransportError> {
     let body = serde_json::to_vec(&Notification {
         jsonrpc: JsonRpcVersion,
@@ -173,6 +181,7 @@ fn remote_request(
         params: Some(serde_json::to_value(crate::sdk::rpc::CancelRequest { id })?),
     })?;
     Ok(super::request::RemoteRequest::new(move || {
+        drop(authority);
         cancellation.cancel();
         // This mailbox belongs to the original child generation. It cannot
         // cancel an unrelated call after a reconnect, and bypasses ordinary
@@ -245,6 +254,69 @@ impl StdioTransport {
         log_sink: Option<Arc<PluginLogStore>>,
         sha256: Option<&str>,
     ) -> Result<Self, TransportError> {
+        // Standalone callers get an explicitly supplied read-only cwd, or an
+        // empty private cwd when none was supplied. Hosted plugins use the
+        // scoped constructor below with the current host-approved policy.
+        let private = if cwd.is_none() {
+            Some(
+                tempfile::Builder::new()
+                    .prefix("agena-plugin-bootstrap-")
+                    .tempdir()?,
+            )
+        } else {
+            None
+        };
+        let cwd = cwd
+            .cloned()
+            .or_else(|| {
+                private
+                    .as_ref()
+                    .map(|directory| directory.path().to_owned())
+            })
+            .ok_or_else(|| TransportError::Io("stdio cwd is unavailable".into()))?;
+        let cwd = std::fs::canonicalize(cwd)?;
+        let sandbox = SandboxPolicy {
+            readonly_paths: vec![cwd.clone()],
+            ..Default::default()
+        };
+        let transport = Self::spawn_with_sandbox_and_status(
+            command,
+            args,
+            env,
+            Some(&cwd),
+            host_handler,
+            restart_policy,
+            plugin_id,
+            status_sink,
+            log_sink,
+            sha256,
+            &sandbox,
+        )
+        .await?;
+        *transport
+            .inner
+            .private_workdir
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = private;
+        Ok(transport)
+    }
+
+    /// Start a process using an immutable, host-approved sandbox policy.
+    /// Every supervised restart uses this same policy.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_with_sandbox_and_status(
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        cwd: Option<&PathBuf>,
+        host_handler: Option<HostHandler>,
+        restart_policy: RestartPolicy,
+        plugin_id: Option<PluginKey>,
+        status_sink: Option<Arc<StatusRegistry>>,
+        log_sink: Option<Arc<PluginLogStore>>,
+        sha256: Option<&str>,
+        sandbox: &SandboxPolicy,
+    ) -> Result<Self, TransportError> {
         #[cfg(not(feature = "signing"))]
         if sha256.is_some() {
             return Err(TransportError::Io(
@@ -256,6 +328,7 @@ impl StdioTransport {
             args: args.to_vec(),
             env: env.clone(),
             cwd: cwd.cloned(),
+            sandbox: sandbox.clone(),
             #[cfg(feature = "signing")]
             sha256: sha256.map(str::to_owned),
             #[cfg(feature = "signing")]
@@ -264,6 +337,8 @@ impl StdioTransport {
 
         let inner = Arc::new(Inner {
             spawn_spec,
+            private_workdir: std::sync::Mutex::new(None),
+            callback_boundary: Arc::new(sandbox_scope::CallbackBoundary::default()),
             restart_policy,
             handles: Mutex::new(None),
             spawn_lock: Mutex::new(()),
@@ -289,6 +364,28 @@ impl StdioTransport {
 
     pub async fn set_host_handler(&self, handler: HostHandler) {
         *self.inner.host_handler.lock().await = Some(handler);
+    }
+
+    pub(crate) fn restrict_callback_scope(
+        &self,
+        context: &crate::sdk::host_api::HostCallbackContext,
+        call_bound: bool,
+    ) -> Result<(), TransportError> {
+        self.inner
+            .callback_boundary
+            .restrict(context, call_bound)
+            .map_err(TransportError::Plugin)
+    }
+
+    pub(crate) async fn is_running(&self) -> bool {
+        !self.inner.closed.load(Ordering::Acquire)
+            && self
+                .inner
+                .handles
+                .lock()
+                .await
+                .as_ref()
+                .is_some_and(|handles| handles.ready && !handles.stop.is_cancelled())
     }
 }
 
@@ -409,16 +506,31 @@ impl Inner {
         } else {
             None
         };
-        let mut cmd = Command::new(command);
-        cmd.args(&self.spawn_spec.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        for (k, v) in &self.spawn_spec.env {
-            cmd.env(k, v);
-        }
-        if let Some(cwd) = &cwd {
-            cmd.current_dir(cwd);
+        let arguments = self.spawn_spec.args.clone();
+        let environment = self.spawn_spec.env.clone();
+        let sandbox = self.spawn_spec.sandbox.clone();
+        let cmd = SANDBOX_WORKERS
+            .run(move || {
+                let mut command = Command::new(command);
+                command.args(arguments).envs(environment);
+                if let Some(cwd) = cwd {
+                    command.current_dir(cwd);
+                }
+                agena_process::sandbox::wrap_tokio_command(&mut command, &sandbox)?;
+                command
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+                Ok::<_, std::io::Error>(command)
+            })
+            .await
+            .map_err(|error| {
+                TransportError::Io(format!("stdio sandbox preparation failed: {error}"))
+            })??;
+        if self.closed.load(Ordering::Acquire) {
+            return Err(TransportError::disconnected(
+                "stdio plugin closed while preparing its sandbox",
+            ));
         }
         let mut child = match agena_process::spawn(cmd) {
             Ok(child) => child,
@@ -708,9 +820,11 @@ impl Inner {
                     let _callback_slot = callback_slot;
                     let id = req.id.clone();
                     let callback = async {
+                        let params = req.params.unwrap_or(serde_json::Value::Null);
+                        inner.callback_boundary.validate(&params)?;
                         let handler = { inner.host_handler.lock().await.clone() };
                         if let Some(handler) = handler {
-                            handler(req.method, req.params.unwrap_or(serde_json::Value::Null)).await
+                            handler(req.method, params).await
                         } else {
                             Err(PluginError::from_kind(
                                 crate::sdk::PluginErrorKind::HostUnavailable,
@@ -921,12 +1035,17 @@ impl Inner {
     ) -> Result<serde_json::Value, TransportError> {
         let id = self.next_id();
         let req_id = RequestId::Num(id);
+        let context = crate::sdk::host_api::current_host_callback_context();
+        let authority = self
+            .callback_boundary
+            .admit(context.as_ref())
+            .map_err(TransportError::Plugin)?;
         let req = Request {
             jsonrpc: JsonRpcVersion,
             id: req_id.clone(),
             method: method.to_string(),
             params: Some(params),
-            context: crate::sdk::host_api::current_host_callback_context(),
+            context,
         };
         let body = encode_frame(req).await?;
         let (tx, rx) = oneshot::channel();
@@ -935,7 +1054,7 @@ impl Inner {
             .await?;
         let _pending_guard = PendingRequestGuard::new(Arc::clone(self), req_id.clone());
         let cancellation = CancellationToken::new();
-        let mut request = remote_request(control, req_id.clone(), cancellation.clone())?;
+        let mut request = remote_request(control, req_id.clone(), cancellation.clone(), authority)?;
         self.write_cancellable_frame(&body, Some(generation), Some(cancellation))
             .await?;
         let response = tokio::select! {
@@ -1057,6 +1176,9 @@ impl Inner {
                 if let Some(handler) = handler {
                     let method = notif.method;
                     let params = notif.params.unwrap_or(serde_json::Value::Null);
+                    if self.callback_boundary.validate(&params).is_err() {
+                        return;
+                    }
                     tokio::select! {
                         biased;
                         _ = self.shutdown.cancelled() => {}
@@ -1160,6 +1282,11 @@ impl PluginTransport for StdioTransport {
         let id = self.inner.next_id();
         let req_id = RequestId::Num(id);
         let context = crate::sdk::host_api::current_host_callback_context();
+        let authority = self
+            .inner
+            .callback_boundary
+            .admit(context.as_ref())
+            .map_err(TransportError::Plugin)?;
         let request_id = req_id.clone();
         let body = JSON_WORKERS
             .run(move || {
@@ -1181,7 +1308,7 @@ impl PluginTransport for StdioTransport {
             self.inner.begin_request(req_id.clone(), tx, None).await?;
         let _pending_guard = PendingRequestGuard::new(Arc::clone(&self.inner), req_id.clone());
         let cancellation = CancellationToken::new();
-        let mut request = remote_request(control, req_id, cancellation.clone())?;
+        let mut request = remote_request(control, req_id, cancellation.clone(), authority)?;
         self.inner
             .write_cancellable_frame(&body, Some(generation), Some(cancellation))
             .await?;

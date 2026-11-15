@@ -612,6 +612,7 @@ pub(super) struct CloudToolAdapterGate {
 /// Executor that runs tools with permissions.
 pub struct ToolExecutor {
     pub(super) read_path_authorizer: Option<Arc<ReadPathAuthorizer>>,
+    pub(super) path_effect_authorizer: Option<Arc<PathEffectAuthorizer>>,
     pub(super) session_relation_kind: agena_domain::SessionRelationKind,
     /// The conversation kind this executor serves, derived once from the
     /// session context. It gates tool applicability: a tool declared for one
@@ -623,6 +624,10 @@ pub struct ToolExecutor {
     pub(super) global: bool,
     pub(super) session_id: Option<i64>,
     pub(super) principal: ExecutionPrincipal,
+    /// Persisted rules visible to this invocation's owning session. The
+    /// static principal is projected afresh when constructing a sandbox.
+    pub(super) sandbox_persisted_rules:
+        Arc<Vec<agena_runtime_contracts::authorization::SandboxPersistedRule>>,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
     /// AI-call execution guard only. Never used to filter tool discovery.
@@ -652,6 +657,10 @@ pub struct ToolExecutor {
 }
 
 pub type ReadPathAuthorizer = dyn Fn(&std::path::Path) -> Result<(), ToolError> + Send + Sync;
+
+/// Bound to one invocation's existing approval authority, never model input.
+pub type PathEffectAuthorizer = dyn Fn(agena_domain::AccessKind, &std::path::Path) -> Result<(), ToolError>
+    + Send + Sync;
 
 pub type MediaInputBinder = dyn Fn(agena_domain::AttachmentItem) -> Result<agena_domain::AttachmentItem, ToolError>
     + Send

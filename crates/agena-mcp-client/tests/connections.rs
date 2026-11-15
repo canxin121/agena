@@ -1,4 +1,6 @@
-//! End-to-end external-client fixtures. Python 3 is required by repository CI.
+//! End-to-end external-client fixtures. Python 3 and a working MXC backend are
+//! required. Point AGENA_TEST_SANDBOX_LAUNCHER at a built Agena executable;
+//! Rust's test harness does not implement the launcher's early-entry protocol.
 #![cfg(unix)]
 
 use std::collections::{BTreeMap, HashMap};
@@ -24,6 +26,13 @@ fn fixture_path() -> PathBuf {
 }
 
 fn stdio_spec(root: &Path, protocol: &str, capabilities: &str, notifications: bool) -> ServerSpec {
+    static LAUNCHER: std::sync::Once = std::sync::Once::new();
+    LAUNCHER.call_once(|| {
+        let path = std::env::var_os("AGENA_TEST_SANDBOX_LAUNCHER")
+            .expect("stdio integration tests require AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena and a working MXC backend");
+        agena_process::sandbox::configure_launcher(PathBuf::from(path))
+            .expect("invalid integration-test sandbox launcher");
+    });
     let mut args = vec![
         fixture_path().to_string_lossy().into_owned(),
         "--protocol".into(),
@@ -42,6 +51,12 @@ fn stdio_spec(root: &Path, protocol: &str, capabilities: &str, notifications: bo
         env: HashMap::new(),
         cwd: Some(root.to_path_buf()),
         tool_policy: McpToolPolicy::default(),
+        resources: Default::default(),
+        sandbox: Some(agena_process::sandbox::SandboxPolicy {
+            readonly_paths: vec![fixture_path()],
+            readwrite_paths: vec![root.to_path_buf()],
+            ..Default::default()
+        }),
     }
 }
 

@@ -4,6 +4,8 @@ mod executor_execution;
 mod executor_hooks;
 mod executor_paths;
 mod executor_permissions;
+mod executor_sandbox;
+mod executor_process_sandbox;
 use super::{
     AccessKind, Arc, BuiltinToolSet, ExecutionPrincipal, FilesystemEffects, MonitorService,
     NetworkTarget, Path, PathBuf, PermissionDecision, PluginHost, PluginShellEnvInput,

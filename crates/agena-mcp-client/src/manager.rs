@@ -43,6 +43,10 @@ use crate::{
     oauth_credential_binding,
 };
 
+mod scoped;
+pub use scoped::{McpSandboxContext, StdioResourceDeclarations};
+use scoped::ScopedServerKey;
+
 static TOOL_CATALOGS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static TOOL_SNAPSHOTS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static MCP_PAYLOADS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -94,6 +98,10 @@ pub enum ServerSpec {
         env: HashMap<String, String>,
         cwd: Option<PathBuf>,
         tool_policy: McpToolPolicy,
+        resources: StdioResourceDeclarations,
+        /// Host-compiled policy. Configured definitions remain deferred until
+        /// an authenticated execution scope supplies this value.
+        sandbox: Option<agena_process::sandbox::SandboxPolicy>,
     },
     Http {
         url: Url,
@@ -648,6 +656,8 @@ pub struct McpConnectionManager {
     lifecycle: RwLock<()>,
     reconnect_supervisor: std::sync::Mutex<Option<ReconnectSupervisor>>,
     oauth_sessions: crate::oauth::McpOAuthSessionManager,
+    scoped_servers: Mutex<HashMap<ScopedServerKey, Arc<McpConnectionManager>>>,
+    next_spec_revision: AtomicU64,
 }
 
 #[derive(Default)]
@@ -662,6 +672,7 @@ struct StoredServerSpec {
     spec: ServerSpec,
     connect_timeout: Duration,
     request_timeout: Duration,
+    revision: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -669,6 +680,9 @@ struct StoredServerSpec {
 pub struct McpServerStatus {
     pub name: String,
     pub connected: bool,
+    /// The definition is waiting for a caller's sandbox scope, rather than
+    /// maintaining a server-workspace-wide stdio process.
+    pub scope_required: bool,
     pub protocol_version: Option<String>,
     pub server_info: Option<Value>,
     pub capabilities: Option<Value>,
@@ -711,6 +725,8 @@ impl McpConnectionManager {
             lifecycle: RwLock::new(()),
             reconnect_supervisor: std::sync::Mutex::new(None),
             oauth_sessions: Default::default(),
+            scoped_servers: Mutex::new(HashMap::new()),
+            next_spec_revision: AtomicU64::new(1),
         }
     }
 
@@ -824,6 +840,7 @@ impl McpConnectionManager {
                 spec,
                 connect_timeout: connect_timeout.max(Duration::from_millis(1)),
                 request_timeout: request_timeout.max(Duration::from_millis(1)),
+                revision: self.next_spec_revision.fetch_add(1, Ordering::Relaxed),
             },
         )
         .await
@@ -845,6 +862,7 @@ impl McpConnectionManager {
     /// held. Reconnect resolves its stored definition under the same guard, so
     /// a concurrent removal cannot resurrect a deleted connection.
     async fn connect_server_locked(&self, name: &str, stored: StoredServerSpec) -> McpResult<()> {
+        self.retire_scoped_server(name).await;
         let connect_timeout = stored.connect_timeout;
         let request_timeout = stored.request_timeout;
         let spec = stored.spec.clone();
@@ -855,6 +873,12 @@ impl McpConnectionManager {
             inner.servers.remove(name)
         } {
             shutdown_server(existing).await;
+        }
+
+        // Config loading stores definitions without launching a global stdio
+        // process. A scoped manager supplies the immutable sandbox policy.
+        if matches!(&spec, ServerSpec::Stdio { sandbox: None, .. }) {
+            return Ok(());
         }
 
         let events = Arc::new(ServerEventState::default());
@@ -872,9 +896,10 @@ impl McpConnectionManager {
                     args,
                     env,
                     cwd,
+                    sandbox,
                     ..
                 } => Ok::<_, McpError>((
-                    connect_stdio(client_handler, command, args, env, cwd).await?,
+                    connect_stdio(client_handler, command, args, env, cwd, sandbox).await?,
                     None,
                 )),
                 ServerSpec::Http {
@@ -989,6 +1014,9 @@ impl McpConnectionManager {
             .get(name)
             .cloned()
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))?;
+        if matches!(&spec.spec, ServerSpec::Stdio { sandbox: None, .. }) {
+            return Err(scoped::missing_scope(name));
+        }
         self.connect_server_locked(name, spec).await
     }
 
@@ -996,6 +1024,7 @@ impl McpConnectionManager {
         let _lifecycle_guard = self.lifecycle.read().await;
         let operation_lock = self.server_operation_lock(name).await;
         let _operation_guard = operation_lock.lock().await;
+        self.retire_scoped_server(name).await;
         let removed = {
             let mut inner = self.inner.write().await;
             inner.specs.remove(name);
@@ -1050,6 +1079,7 @@ impl McpConnectionManager {
             statuses.push(McpServerStatus {
                 name: name.clone(),
                 connected,
+                scope_required: matches!(&spec, ServerSpec::Stdio { sandbox: None, .. }),
                 protocol_version: peer_info
                     .as_ref()
                     .map(|info| info.protocol_version.to_string()),
@@ -1404,10 +1434,25 @@ impl McpConnectionManager {
     pub async fn shutdown_all(&self) {
         self.stop_reconnect_supervisor();
         self.oauth_sessions.shutdown().await;
+        let _lifecycle_guard = self.lifecycle.write().await;
+        let scoped = std::mem::take(&mut *self.scoped_servers.lock().await);
+        for (_, manager) in scoped {
+            manager.shutdown_local().await;
+        }
+        self.shutdown_connections().await;
+    }
+
+    async fn shutdown_local(&self) {
+        self.stop_reconnect_supervisor();
+        self.oauth_sessions.shutdown().await;
         // Wait for in-flight add/remove transactions before draining. Without
         // this gate an add could finish after the drain and leave a live MCP
         // process in a manager that had already reported shutdown complete.
         let _lifecycle_guard = self.lifecycle.write().await;
+        self.shutdown_connections().await;
+    }
+
+    async fn shutdown_connections(&self) {
         let servers = {
             let mut inner = self.inner.write().await;
             inner.specs.clear();
@@ -1425,6 +1470,9 @@ impl McpConnectionManager {
 
     async fn get(&self, name: &str) -> McpResult<Arc<ConnectedServer>> {
         let inner = self.inner.read().await;
+        if inner.specs.get(name).is_some_and(|stored| matches!(&stored.spec, ServerSpec::Stdio { sandbox: None, .. })) {
+            return Err(scoped::missing_scope(name));
+        }
         inner
             .servers
             .get(name)
@@ -1437,7 +1485,9 @@ impl McpConnectionManager {
         let inner = self.inner.read().await;
         inner
             .specs
-            .keys()
+            .iter()
+            .filter(|(_, stored)| !matches!(&stored.spec, ServerSpec::Stdio { sandbox: None, .. }))
+            .map(|(name, _)| name)
             .filter(|name| {
                 inner
                     .servers
@@ -1797,6 +1847,7 @@ async fn connect_stdio(
     args: Vec<String>,
     env: HashMap<String, String>,
     cwd: Option<PathBuf>,
+    sandbox: Option<agena_process::sandbox::SandboxPolicy>,
 ) -> McpResult<RunningClient> {
     let mut cmd = Command::new(command);
     cmd.args(args);
@@ -1804,6 +1855,9 @@ async fn connect_stdio(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
+    let policy = sandbox.ok_or_else(|| McpError::Transport("MCP stdio requires a host-authorized sandbox scope".into()))?;
+    agena_process::sandbox::wrap_tokio_command(&mut cmd, &policy)
+        .map_err(|error| McpError::Transport(format!("MCP sandbox launch failed: {error}")))?;
     let transport = TokioChildProcess::new(agena_process::wrap_command(cmd))?;
     Ok(client_handler
         .serve_with_lifecycle(transport, client_lifecycle())

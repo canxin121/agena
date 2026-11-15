@@ -56,12 +56,12 @@ impl SessionManager {
         let manager = self.clone();
         let runtime = tokio::runtime::Handle::current();
         let cancel_for_reads = cancel.clone();
-        let executor = executor.with_read_path_authorizer(Arc::new(move |path| {
+        let executor = executor.with_path_effect_authorizer(Arc::new(move |access, path| {
             if cancel_for_reads.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
             let check = authorizer
-                .path_permission_check(agena_domain::AccessKind::Read, &path.to_string_lossy());
+                .path_permission_check(access, &path.to_string_lossy());
             runtime
                 .block_on(manager.authorize_session_scoped_checks(
                     session,
@@ -97,6 +97,8 @@ impl SessionManager {
         if cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
+        let executor = self.sandbox_executor_for_session(&executor, session)
+            .await.map_err(tool_error)?;
 
         let _permit = tokio::select! {
             biased;

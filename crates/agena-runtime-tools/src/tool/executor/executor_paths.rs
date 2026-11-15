@@ -6,6 +6,9 @@ impl ToolExecutor {
             if let Some(check) = executor.read_path_authorizer.as_ref() {
                 return check(path);
             }
+            if let Some(check) = executor.path_effect_authorizer.as_ref() {
+                return check(AccessKind::Read, path);
+            }
             let check = executor.path_permission_check(AccessKind::Read, &path.to_string_lossy());
             match check.decision {
                 agena_domain::PermissionDecision::Allow => Ok(()),
@@ -30,6 +33,29 @@ impl ToolExecutor {
             }
         })
     }
+    /// Called only on blocking workers; callbacks may await the host's
+    /// existing approval pipeline. Repeated approved effects reuse its cache.
+    pub(crate) fn authorize_sandbox_paths(&self, reads: &[PathBuf], writes: &[PathBuf]) -> Result<(), ToolError> {
+        let mut all_reads = reads.iter().chain(writes).collect::<Vec<_>>();
+        all_reads.sort();
+        all_reads.dedup();
+        for path in all_reads {
+            self.ensure_not_cancelled()?;
+            if let Some(check) = &self.path_effect_authorizer {
+                check(AccessKind::Read, path)?;
+            } else if let Some(check) = &self.read_path_authorizer {
+                check(path)?;
+            }
+        }
+        if let Some(check) = &self.path_effect_authorizer {
+            for path in writes {
+                self.ensure_not_cancelled()?;
+                check(AccessKind::Write, path)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve a plugin's concrete access using the same canonical paths and
     /// session principal as executor-owned tools. This does not grant access.
     pub fn path_permission_check(&self, access: AccessKind, path: &str) -> ToolPermissionCheck {
@@ -266,7 +292,8 @@ impl ToolExecutor {
     ) {
         for effect in effects.to_effects() {
             let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
-            if effect.access.includes_read() {
+            // MXC writable mounts also permit reads; approve both effects.
+            if effect.access.includes_read() || effect.access.includes_write() {
                 self.push_path_checks(checks, AccessKind::Read, target.as_path());
             }
             if effect.access.includes_write() {

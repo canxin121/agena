@@ -85,6 +85,14 @@ pub enum PluginPackage {
         env: BTreeMap<String, String>,
         #[serde(default)]
         cwd: Option<PathBuf>,
+        /// Filesystem and network effects requested from each calling session.
+        /// Declarations are approved by the host before a scoped process starts.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        reads: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        writes: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        network: Vec<String>,
         #[serde(default)]
         restart: RestartPolicy,
         /// Optional sha256 of the executable resolved using the child's PATH

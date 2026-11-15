@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agena_process::ManagedChild;
+use agena_process::sandbox::{SandboxPolicy, wrap_tokio_command};
 use agena_stdio_codec::ContentLengthCodec;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -48,18 +49,20 @@ impl StdioTransport {
         args: &[String],
         env: &HashMap<String, String>,
         cwd: Option<&Path>,
+        sandbox: &SandboxPolicy,
     ) -> LspResult<Arc<Self>> {
         let mut cmd = Command::new(command);
-        cmd.args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(args);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
         for (k, v) in env {
             cmd.env(k, v);
         }
+        wrap_tokio_command(&mut cmd, sandbox)?;
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         let mut child = agena_process::spawn(cmd)?;
         let stdin = child
             .stdin()

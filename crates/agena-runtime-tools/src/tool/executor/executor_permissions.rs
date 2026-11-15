@@ -149,6 +149,15 @@ impl ToolExecutor {
         resolution: &agena_plugin_host::registry::RegisteredTool,
         invocation: &ToolInvocation,
     ) -> Result<(), ToolError> {
+        if let Some(plan) = crate::sandbox_worker::plan(self, resolution, invocation)? {
+            for path in &plan.reads {
+                self.push_path_checks(checks, AccessKind::Read, path);
+            }
+            for path in &plan.writes {
+                self.push_path_checks(checks, AccessKind::Write, path);
+            }
+            return Ok(());
+        }
         if resolution.namespace() == "agena"
             && resolution.plugin_name() == "fs"
             && resolution.tool_name() == "read_media"
@@ -384,7 +393,7 @@ impl ToolExecutor {
             )?;
             self.push_declared_network_checks(checks, command, network)?;
         }
-        let base = if self.is_global() && input.launch_command().is_some() {
+        let base = if input.launch_command().is_some() {
             let base = crate::tool::shell_tools::resolve_workdir_in_folder(self, workdir, folder)?;
             self.push_path_checks(checks, AccessKind::Read, &base);
             base
@@ -436,7 +445,7 @@ impl ToolExecutor {
                 "shell network must declare at least one target because the command appears to use the network: {reason}"
             )));
         }
-        for target in targets {
+        for target in crate::shell_sandbox::declared_network_targets(targets)? {
             self.push_network_check(checks, target.as_str())?;
         }
         Ok(())
@@ -456,6 +465,51 @@ fn has_folder(folder: Option<&str>) -> bool {
         let value = value.trim();
         !value.is_empty() && std::path::Path::new(value).is_absolute()
     })
+}
+
+#[cfg(test)]
+mod sandbox_network_tests {
+    use super::*;
+    use crate::authorization::ExecutionPrincipal;
+    use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
+
+    #[test]
+    fn bare_hostname_approval_keeps_port_specific_ask() {
+        let principal = ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(), ToolPermissionPolicy::allow_all(),
+        ).try_apply_permission_config(&serde_json::from_value(serde_json::json!({
+            "network": { "internet": "deny", "rules": {
+                "example.test": "allow", "example.test:443": "ask"
+            }}
+        })).unwrap()).unwrap();
+        let executor = ToolExecutor::new(
+            std::env::temp_dir().join("agena-network-effect-test"), principal,
+            agena_plugin_host::PluginHost::new_empty(), None, None,
+        );
+        let mut checks = Vec::new();
+        executor.push_declared_network_checks(
+            &mut checks, "curl https://example.test", &["example.test".into()],
+        ).unwrap();
+        let https = checks.iter().find(|check| matches!(
+            &check.action, agena_domain::PermissionAction::NetworkAccess { host, port: Some(443), .. }
+                if host == "example.test"
+        )).expect("HTTPS port must have its own approval check");
+        assert!(matches!(https.decision, PermissionDecision::Ask { .. }));
+        assert!(checks.iter().any(|check| matches!(
+            &check.action, agena_domain::PermissionAction::NetworkAccess { port: Some(80), .. }
+        )));
+    }
+
+    #[test]
+    fn explicit_network_port_does_not_request_other_ports() {
+        let targets = crate::shell_sandbox::declared_network_targets(&[
+            "https://example.test:8443/data".into(), "[::1]:9000".into(),
+        ]).unwrap();
+        assert_eq!(targets.len(), 2);
+        let ports = targets.iter().map(|raw| raw.parse::<agena_domain::NetworkTarget>().unwrap().port())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ports, std::collections::BTreeSet::from([Some(8443), Some(9000)]));
+    }
 }
 
 #[cfg(test)]

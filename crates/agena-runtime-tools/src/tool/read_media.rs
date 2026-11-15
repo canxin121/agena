@@ -7,7 +7,7 @@ use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
     payload::ReadAttachmentOutput,
 };
-use crate::{media_input, part::ReadMediaInput};
+use crate::part::ReadMediaInput;
 
 static MEDIA_READ_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
@@ -31,15 +31,13 @@ pub(super) async fn execute(
     })?;
     // A global (Bot) session resolves relative paths against its named folder;
     // a project session keeps its project root and ignores the folder.
-    let root = executor.resolve_folder_base(input.folder.as_deref());
-    let display_path = executor.display_path(
-        &executor.resolve_target_path_in_folder(&input.path, input.folder.as_deref()),
-    );
+    let target = executor.resolve_target_path_in_folder(&input.path, input.folder.as_deref());
+    let display_path = executor.display_path(&target);
+    let prepared =
+        crate::sandbox_worker::read_media(executor, &target, input.expected_sha256.as_deref())
+            .await?;
     let (prepared, item) = MEDIA_READ_WORKERS
         .run(move || {
-            let prepared =
-                media_input::read_local(&root, &input.path, input.expected_sha256.as_deref())
-                    .map_err(ToolError::invalid_input)?;
             let item = binder(prepared.attachment(None))?;
             Ok::<_, ToolError>((prepared, item))
         })

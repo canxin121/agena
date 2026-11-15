@@ -312,6 +312,17 @@ impl ToolExecutor {
 
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
+        if let Some(plan) = crate::sandbox_worker::plan(self, &resolution, invocation)? {
+            let execution = crate::sandbox_worker::execute(self, plan).await?;
+            self.ensure_not_cancelled()?;
+            self.verify_channel_access().await?;
+            let payload = serde_json::Value::from(execution.output.payload.clone());
+            return self.finalize_execution_async(
+                invocation, session_id, resolution.canonical_name().as_str(), call_id,
+                execution, Some(&payload),
+            ).await;
+        }
+
         if resolution.namespace() == "agena"
             && resolution.plugin_name() == "fs"
             && resolution.tool_name() == "read_media"

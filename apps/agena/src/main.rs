@@ -30,6 +30,15 @@ use clap::Parser;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // Sandboxed helpers must run before configuration, credentials or plugins load.
+    if let Some(code) = agena_process::sandbox::try_run_launcher() {
+        std::process::exit(code);
+    }
+    if let Some(code) = agena_runtime_tools::sandbox_worker::try_run_worker(
+        agena_bundled_plugins::execute_sandbox_tool_with_read_filter,
+    ) {
+        std::process::exit(code);
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

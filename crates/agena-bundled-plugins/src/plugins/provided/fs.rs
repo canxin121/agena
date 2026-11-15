@@ -239,11 +239,15 @@ impl FsPlugin {
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
         require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
-        self.permissions
-            .path(agena_domain::PathKind::Read, &input.path)
-            .await?;
         let root = effective_root(context, input.folder.as_deref());
-        document::invoke(&root, input).await
+        let authorized_path = resolve_path(&root.display().to_string(), &input.path);
+        self.permissions
+            .path(
+                agena_domain::PathKind::Read,
+                &authorized_path.to_string_lossy(),
+            )
+            .await?;
+        document::invoke(&root, input, authorized_path).await
     }
 
     /// Streaming variant: extraction shells out to a local converter, so a
@@ -255,12 +259,16 @@ impl FsPlugin {
         input: document::DocumentInput,
     ) -> SdkResult<ToolInvokeOutput> {
         require_global_absolute_path_or_folder(context, &input.path, input.folder.as_deref())?;
+        let root = effective_root(context, input.folder.as_deref());
+        let authorized_path = resolve_path(&root.display().to_string(), &input.path);
         self.permissions
-            .path(agena_domain::PathKind::Read, &input.path)
+            .path(
+                agena_domain::PathKind::Read,
+                &authorized_path.to_string_lossy(),
+            )
             .await?;
         sink.text("Extracting document text…\n").await;
-        let root = effective_root(context, input.folder.as_deref());
-        document::invoke(&root, input).await
+        document::invoke(&root, input, authorized_path).await
     }
 
     #[tool(
@@ -533,144 +541,7 @@ impl FsPlugin {
             .to_string_lossy()
             .into_owned();
         let input = input.clone();
-        run_fs_blocking(move || {
-            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
-            agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&target), || {
-                if input.content.len() as u64 > MAX_MUTATING_TEXT_BYTES {
-                    return Err(PluginError::invalid_params(format!(
-                        "fs.write supports content up to {} MiB",
-                        MAX_MUTATING_TEXT_BYTES / 1024 / 1024
-                    )));
-                }
-                let existed = target.exists();
-                if existed {
-                    if !target.is_file() {
-                        return Err(PluginError::invalid_params(format!(
-                            "write target is not a file: {}",
-                            input.path
-                        )));
-                    }
-                    let expected = input.expected_sha256.as_deref().ok_or_else(|| {
-                        PluginError::invalid_params(
-                            "expected_sha256 is required when fs.write replaces an existing file",
-                        )
-                    })?;
-                    verify_expected_hash(&target, expected)?;
-                } else if input.expected_sha256.is_some() {
-                    return Err(PluginError::invalid_params(
-                        "expected_sha256 was supplied but the target does not exist",
-                    ));
-                }
-                // Capture the revision being replaced while holding the same mutation lock.
-                let (original, diff_unavailable_reason) = if existed {
-                    let mut bytes = Vec::new();
-                    agena_tool::file_io::open_regular_file(&target)
-                        .map_err(fs_error)?
-                        .take(MAX_MUTATING_TEXT_BYTES + 1)
-                        .read_to_end(&mut bytes)
-                        .map_err(fs_error)?;
-                    if bytes.len() as u64 > MAX_MUTATING_TEXT_BYTES {
-                        (None, Some("Previous file exceeds the text preview limit."))
-                    } else {
-                        match String::from_utf8(bytes) {
-                            Ok(text) if !text.contains('\0') => (Some(text), None),
-                            _ => (
-                                None,
-                                Some("Previous file is binary; text comparison is unavailable."),
-                            ),
-                        }
-                    }
-                } else {
-                    (Some(String::new()), None)
-                };
-                let preview = original.as_deref().map(|before| {
-                    agena_runtime_tools::file_diff_preview(
-                        &input.path,
-                        existed.then_some(before),
-                        Some(&input.content),
-                    )
-                });
-                if let Some(parent) = target.parent()
-                    && !parent.exists()
-                {
-                    if input.create_parents {
-                        std::fs::create_dir_all(parent).map_err(fs_error)?;
-                    } else {
-                        return Err(PluginError::invalid_params(format!(
-                            "parent directory does not exist: {}",
-                            parent.display()
-                        )));
-                    }
-                }
-                if existed {
-                    agena_runtime_tools::atomic_replace_file_with_check(
-                        &target,
-                        input.content.as_bytes(),
-                        || {
-                            verify_expected_hash(
-                                &target,
-                                input
-                                    .expected_sha256
-                                    .as_deref()
-                                    .expect("existing target requires revision"),
-                            )
-                            .map_err(|error| {
-                                std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    error.to_string(),
-                                )
-                            })
-                        },
-                    )
-                    .map_err(fs_error)?;
-                } else {
-                    agena_runtime_tools::atomic_create_file(
-                        &target,
-                        input.content.as_bytes(),
-                        None,
-                    )
-                    .map_err(fs_error)?;
-                }
-                let hash = sha256_bytes(input.content.as_bytes());
-                Ok(ToolInvokeOutput::from_parts(
-                    format!(
-                        "{} {}",
-                        if existed { "updated" } else { "created" },
-                        input.path
-                    ),
-                    format!(
-                        "{} · {} bytes",
-                        if existed { "Updated" } else { "Created" },
-                        input.content.len()
-                    ),
-                    format!(
-                        "{} '{}' ({} bytes, sha256={hash}).",
-                        if existed { "Updated" } else { "Created" },
-                        input.path,
-                        input.content.len()
-                    ),
-                    Some(serde_json::json!({
-                        "path": input.path,
-                        "kind": if existed { "updated" } else { "created" },
-                        "bytes": input.content.len(),
-                        "sha256": hash,
-                        "diff": preview.as_ref().map(|view| &view.diff),
-                        "diff_truncated": preview.as_ref().is_some_and(|view| view.diff_truncated),
-                        "additions": preview.as_ref().map(|view| view.additions),
-                        "deletions": preview.as_ref().map(|view| view.deletions),
-                        "diff_unavailable_reason": diff_unavailable_reason,
-                    })),
-                    std::collections::BTreeMap::from([
-                        ("agena.effect".to_string(), "file_changes".to_string()),
-                        ("path".to_string(), input.path.clone()),
-                        ("sha256".to_string(), hash),
-                    ]),
-                    Vec::new(),
-                ))
-            })
-            .map_err(fs_error)?
-        })
-        .await
+        run_fs_blocking(move || execute_write(workspace_root, input)).await
     }
 
     #[tool(
@@ -735,101 +606,7 @@ impl FsPlugin {
             .to_string_lossy()
             .into_owned();
         let input = input.clone();
-        run_fs_blocking(move || {
-            let target = resolve_path(workspace_root.as_str(), input.path.as_str());
-            agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&target), || {
-                if !target.is_file() {
-                    return Err(PluginError::invalid_params(format!(
-                        "replace target is not a file: {}",
-                        input.path
-                    )));
-                }
-                if input.old.is_empty() {
-                    return Err(PluginError::invalid_params("old text must contain at least one byte"));
-                }
-                let original = String::from_utf8(read_file_bounded(
-                    &target,
-                    MAX_MUTATING_TEXT_BYTES,
-                    "fs.replace",
-                )?)
-                .map_err(|_| {
-                    PluginError::invalid_params(format!(
-                        "replace target is not UTF-8 text: {}",
-                        input.path
-                    ))
-                })?;
-                let before_sha256 = sha256_bytes(original.as_bytes());
-                if let Some(expected) = input.expected_sha256.as_deref()
-                    && !before_sha256.eq_ignore_ascii_case(expected)
-                {
-                    return Err(PluginError::invalid_params(format!(
-                        "stale file revision for '{}': expected sha256 {}, actual {}",
-                        input.path, expected, before_sha256
-                    )));
-                }
-                let occurrences = original.match_indices(input.old.as_str()).count();
-                if occurrences != input.expected_occurrences as usize {
-                    return Err(PluginError::invalid_params(format!(
-                        "expected {} occurrence(s) of old text in '{}', found {occurrences}",
-                        input.expected_occurrences, input.path
-                    )));
-                }
-                let replacements = if input.replace_all { occurrences } else { 1 };
-                let result_bytes = original.len()
-                    .checked_sub(input.old.len().checked_mul(replacements).ok_or_else(|| PluginError::invalid_params("replacement size overflow"))?)
-                    .and_then(|size| input.new.len().checked_mul(replacements).and_then(|added| size.checked_add(added)))
-                    .filter(|size| *size as u64 <= MAX_MUTATING_TEXT_BYTES)
-                    .ok_or_else(|| PluginError::invalid_params("fs.replace result exceeds the 16 MiB limit"))?;
-                let updated = if input.replace_all {
-                    original.replace(input.old.as_str(), input.new.as_str())
-                } else {
-                    original.replacen(input.old.as_str(), input.new.as_str(), 1)
-                };
-                if updated.len() as u64 > MAX_MUTATING_TEXT_BYTES {
-                    return Err(PluginError::invalid_params(format!(
-                        "fs.replace result exceeds the {} MiB limit",
-                        MAX_MUTATING_TEXT_BYTES / 1024 / 1024
-                    )));
-                }
-                agena_runtime_tools::atomic_replace_file_with_check(&target, updated.as_bytes(), || {
-                    agena_runtime_tools::verify_file_contents(&target, original.as_bytes())
-                }).map_err(fs_error)?;
-                debug_assert_eq!(updated.len(), result_bytes);
-                let after_sha256 = sha256_bytes(updated.as_bytes());
-                let preview = agena_runtime_tools::file_diff_preview(&input.path, Some(&original), Some(&updated));
-                Ok(ToolInvokeOutput::from_parts(
-                    format!("replaced text in {}", input.path),
-                    format!(
-                        "{} replacements",
-                        if input.replace_all { occurrences } else { 1 }
-                    ),
-                    format!(
-                        "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
-                        if input.replace_all { occurrences } else { 1 },
-                        input.path
-                    ),
-                    Some(serde_json::json!({
-                        "path": input.path,
-                        "replacements": if input.replace_all { occurrences } else { 1 },
-                        "before_sha256": before_sha256,
-                        "after_sha256": after_sha256,
-                        "diff": preview.diff,
-                        "diff_truncated": preview.diff_truncated,
-                        "additions": preview.additions,
-                        "deletions": preview.deletions,
-                    })),
-                    std::collections::BTreeMap::from([
-                        ("agena.effect".to_string(), "file_changes".to_string()),
-                        ("path".to_string(), input.path.clone()),
-                        ("before_sha256".to_string(), before_sha256),
-                        ("after_sha256".to_string(), after_sha256),
-                    ]),
-                    Vec::new(),
-                ))
-            })
-            .map_err(fs_error)?
-        })
-        .await
+        run_fs_blocking(move || execute_replace(workspace_root, input)).await
     }
 
     #[tool(
@@ -883,72 +660,7 @@ impl FsPlugin {
             .to_string_lossy()
             .into_owned();
         let input = input.clone();
-        run_fs_blocking(move || {
-            let mut remaining = input.max_total_bytes as usize;
-            let mut sections = Vec::new();
-            let mut entries = Vec::new();
-            let mut truncated = false;
-            let mut succeeded = 0;
-            let mut failed = 0;
-            for path in &input.paths {
-                if remaining == 0 {
-                    truncated = true;
-                    entries.push(serde_json::json!({"path":path,"status":"not_read_budget","returned_bytes":0}));
-                    continue;
-                }
-                let target = resolve_path(workspace_root.as_str(), path);
-                let read = (|| {
-                    let metadata = std::fs::metadata(&target).map_err(fs_error)?;
-                    if !metadata.is_file() {
-                        return Err(PluginError::invalid_params("not a regular file"));
-                    }
-                    // Reserve source bytes even if UTF-8 validation or a
-                    // concurrent-change check fails after reading them.
-                    let reserved = remaining.min(usize::try_from(metadata.len()).unwrap_or(usize::MAX));
-                    remaining -= reserved;
-                    let (preview, returned_bytes, file_truncated) = read_utf8_prefix(&target, reserved, path)?;
-                    Ok((metadata.len(), preview, returned_bytes, file_truncated))
-                })();
-                match read {
-                    Ok((bytes, preview, returned_bytes, file_truncated)) => {
-                        sections.push(format!("===== {path} =====\n{preview}"));
-                        let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
-                        entries.push(serde_json::json!({"path":path,"status":"read","bytes":bytes,
-                            "returned_bytes":returned_bytes,"truncated":file_truncated,"sha256":hash,"content":preview}));
-                        truncated |= file_truncated;
-                        succeeded += 1;
-                    }
-                    Err(error) => {
-                        failed += 1;
-                        sections.push(format!("===== {path} =====\nRead failed: {error}"));
-                        entries.push(serde_json::json!({"path":path,"status":"error","error":error.to_string()}));
-                    }
-                }
-            }
-            Ok(ToolInvokeOutput::from_parts(
-                format!("read {succeeded} files · {failed} failed"),
-                if truncated {
-                    format!("{} files · truncated", entries.len())
-                } else {
-                    format!("{} files", entries.len())
-                },
-                sections.join("\n\n"),
-                Some(serde_json::json!({
-                    "files": entries,
-                    "success_count": succeeded,
-                    "error_count": failed,
-                    "max_total_bytes": input.max_total_bytes,
-                    "remaining_bytes": remaining,
-                    "truncated": truncated,
-                })),
-                std::collections::BTreeMap::from([
-                    ("file_count".to_string(), entries.len().to_string()),
-                    ("truncated".to_string(), truncated.to_string()),
-                ]),
-                Vec::new(),
-            ))
-        })
-        .await
+        run_fs_blocking(move || execute_read_many(workspace_root, input)).await
     }
 
     #[tool(
@@ -1004,108 +716,440 @@ impl FsPlugin {
             .to_string_lossy()
             .into_owned();
         let input = input.clone();
-        run_fs_blocking(move || {
-            let requested = Path::new(&input.path);
-            let target = if requested.is_absolute() {
-                requested.to_path_buf()
+        run_fs_blocking(move || execute_stat(workspace_root, input)).await
+    }
+}
+
+/// Execute one filesystem operation inside an already confined worker.
+/// The parent authorizes concrete paths before starting this process.
+pub(crate) fn execute_sandbox_tool(
+    operation: &str,
+    input: serde_json::Value,
+    workspace_root: &Path,
+) -> SdkResult<ToolInvokeOutput> {
+    let workspace_root = workspace_root.to_string_lossy().into_owned();
+    match operation {
+        "fs.write" => execute_write(workspace_root, WriteFileInput::parse_input(input)?),
+        "fs.replace" => execute_replace(workspace_root, ReplaceFileInput::parse_input(input)?),
+        "fs.read_many" => execute_read_many(workspace_root, ReadManyInput::parse_input(input)?),
+        "fs.stat" => execute_stat(workspace_root, StatInput::parse_input(input)?),
+        _ => Err(PluginError::invalid_params(format!(
+            "unsupported filesystem worker operation: {operation}"
+        ))),
+    }
+}
+
+fn execute_write(workspace_root: String, input: WriteFileInput) -> SdkResult<ToolInvokeOutput> {
+    let target = resolve_path(workspace_root.as_str(), input.path.as_str());
+    agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&target), || {
+        if input.content.len() as u64 > MAX_MUTATING_TEXT_BYTES {
+            return Err(PluginError::invalid_params(format!(
+                "fs.write supports content up to {} MiB",
+                MAX_MUTATING_TEXT_BYTES / 1024 / 1024
+            )));
+        }
+        let existed = target.exists();
+        if existed {
+            if !target.is_file() {
+                return Err(PluginError::invalid_params(format!(
+                    "write target is not a file: {}",
+                    input.path
+                )));
+            }
+            let expected = input.expected_sha256.as_deref().ok_or_else(|| {
+                PluginError::invalid_params(
+                    "expected_sha256 is required when fs.write replaces an existing file",
+                )
+            })?;
+            verify_expected_hash(&target, expected)?;
+        } else if input.expected_sha256.is_some() {
+            return Err(PluginError::invalid_params(
+                "expected_sha256 was supplied but the target does not exist",
+            ));
+        }
+        // Capture the revision being replaced while holding the same mutation lock.
+        let (original, diff_unavailable_reason) = if existed {
+            let mut bytes = Vec::new();
+            agena_tool::file_io::open_regular_file(&target)
+                .map_err(fs_error)?
+                .take(MAX_MUTATING_TEXT_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .map_err(fs_error)?;
+            if bytes.len() as u64 > MAX_MUTATING_TEXT_BYTES {
+                (None, Some("Previous file exceeds the text preview limit."))
             } else {
-                Path::new(&workspace_root).join(requested)
-            };
-            let mut metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
-            let mut hash_skipped = false;
-            let hash = if input.hash && metadata.is_file() {
-                let file = agena_tool::file_io::open_regular_file(&target).map_err(fs_error)?;
-                metadata = file.metadata().map_err(fs_error)?;
-                if !metadata.is_file() {
+                match String::from_utf8(bytes) {
+                    Ok(text) if !text.contains('\0') => (Some(text), None),
+                    _ => (
+                        None,
+                        Some("Previous file is binary; text comparison is unavailable."),
+                    ),
+                }
+            }
+        } else {
+            (Some(String::new()), None)
+        };
+        let preview = original.as_deref().map(|before| {
+            agena_runtime_tools::file_diff_preview(
+                &input.path,
+                existed.then_some(before),
+                Some(&input.content),
+            )
+        });
+        if let Some(parent) = target.parent()
+            && !parent.exists()
+        {
+            if input.create_parents {
+                std::fs::create_dir_all(parent).map_err(fs_error)?;
+            } else {
+                return Err(PluginError::invalid_params(format!(
+                    "parent directory does not exist: {}",
+                    parent.display()
+                )));
+            }
+        }
+        if existed {
+            agena_runtime_tools::atomic_replace_file_with_check(
+                &target,
+                input.content.as_bytes(),
+                || {
+                    verify_expected_hash(
+                        &target,
+                        input
+                            .expected_sha256
+                            .as_deref()
+                            .expect("existing target requires revision"),
+                    )
+                    .map_err(|error| {
+                        std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
+                    })
+                },
+            )
+            .map_err(fs_error)?;
+        } else {
+            agena_runtime_tools::atomic_create_file(&target, input.content.as_bytes(), None)
+                .map_err(fs_error)?;
+        }
+        let hash = sha256_bytes(input.content.as_bytes());
+        Ok(ToolInvokeOutput::from_parts(
+            format!(
+                "{} {}",
+                if existed { "updated" } else { "created" },
+                input.path
+            ),
+            format!(
+                "{} · {} bytes",
+                if existed { "Updated" } else { "Created" },
+                input.content.len()
+            ),
+            format!(
+                "{} '{}' ({} bytes, sha256={hash}).",
+                if existed { "Updated" } else { "Created" },
+                input.path,
+                input.content.len()
+            ),
+            Some(serde_json::json!({
+                "path": input.path,
+                "kind": if existed { "updated" } else { "created" },
+                "bytes": input.content.len(),
+                "sha256": hash,
+                "diff": preview.as_ref().map(|view| &view.diff),
+                "diff_truncated": preview.as_ref().is_some_and(|view| view.diff_truncated),
+                "additions": preview.as_ref().map(|view| view.additions),
+                "deletions": preview.as_ref().map(|view| view.deletions),
+                "diff_unavailable_reason": diff_unavailable_reason,
+            })),
+            std::collections::BTreeMap::from([
+                ("agena.effect".to_string(), "file_changes".to_string()),
+                ("path".to_string(), input.path.clone()),
+                ("sha256".to_string(), hash),
+            ]),
+            Vec::new(),
+        ))
+    })
+    .map_err(fs_error)?
+}
+
+fn execute_replace(workspace_root: String, input: ReplaceFileInput) -> SdkResult<ToolInvokeOutput> {
+    let target = resolve_path(workspace_root.as_str(), input.path.as_str());
+    agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&target), || {
+        if !target.is_file() {
+            return Err(PluginError::invalid_params(format!(
+                "replace target is not a file: {}",
+                input.path
+            )));
+        }
+        if input.old.is_empty() {
+            return Err(PluginError::invalid_params(
+                "old text must contain at least one byte",
+            ));
+        }
+        let original = String::from_utf8(read_file_bounded(
+            &target,
+            MAX_MUTATING_TEXT_BYTES,
+            "fs.replace",
+        )?)
+        .map_err(|_| {
+            PluginError::invalid_params(format!("replace target is not UTF-8 text: {}", input.path))
+        })?;
+        let before_sha256 = sha256_bytes(original.as_bytes());
+        if let Some(expected) = input.expected_sha256.as_deref()
+            && !before_sha256.eq_ignore_ascii_case(expected)
+        {
+            return Err(PluginError::invalid_params(format!(
+                "stale file revision for '{}': expected sha256 {}, actual {}",
+                input.path, expected, before_sha256
+            )));
+        }
+        let occurrences = original.match_indices(input.old.as_str()).count();
+        if occurrences != input.expected_occurrences as usize {
+            return Err(PluginError::invalid_params(format!(
+                "expected {} occurrence(s) of old text in '{}', found {occurrences}",
+                input.expected_occurrences, input.path
+            )));
+        }
+        let replacements = if input.replace_all { occurrences } else { 1 };
+        let result_bytes = original
+            .len()
+            .checked_sub(
+                input
+                    .old
+                    .len()
+                    .checked_mul(replacements)
+                    .ok_or_else(|| PluginError::invalid_params("replacement size overflow"))?,
+            )
+            .and_then(|size| {
+                input
+                    .new
+                    .len()
+                    .checked_mul(replacements)
+                    .and_then(|added| size.checked_add(added))
+            })
+            .filter(|size| *size as u64 <= MAX_MUTATING_TEXT_BYTES)
+            .ok_or_else(|| {
+                PluginError::invalid_params("fs.replace result exceeds the 16 MiB limit")
+            })?;
+        let updated = if input.replace_all {
+            original.replace(input.old.as_str(), input.new.as_str())
+        } else {
+            original.replacen(input.old.as_str(), input.new.as_str(), 1)
+        };
+        if updated.len() as u64 > MAX_MUTATING_TEXT_BYTES {
+            return Err(PluginError::invalid_params(format!(
+                "fs.replace result exceeds the {} MiB limit",
+                MAX_MUTATING_TEXT_BYTES / 1024 / 1024
+            )));
+        }
+        agena_runtime_tools::atomic_replace_file_with_check(&target, updated.as_bytes(), || {
+            agena_runtime_tools::verify_file_contents(&target, original.as_bytes())
+        })
+        .map_err(fs_error)?;
+        debug_assert_eq!(updated.len(), result_bytes);
+        let after_sha256 = sha256_bytes(updated.as_bytes());
+        let preview =
+            agena_runtime_tools::file_diff_preview(&input.path, Some(&original), Some(&updated));
+        Ok(ToolInvokeOutput::from_parts(
+            format!("replaced text in {}", input.path),
+            format!(
+                "{} replacements",
+                if input.replace_all { occurrences } else { 1 }
+            ),
+            format!(
+                "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
+                if input.replace_all { occurrences } else { 1 },
+                input.path
+            ),
+            Some(serde_json::json!({
+                "path": input.path,
+                "replacements": if input.replace_all { occurrences } else { 1 },
+                "before_sha256": before_sha256,
+                "after_sha256": after_sha256,
+                "diff": preview.diff,
+                "diff_truncated": preview.diff_truncated,
+                "additions": preview.additions,
+                "deletions": preview.deletions,
+            })),
+            std::collections::BTreeMap::from([
+                ("agena.effect".to_string(), "file_changes".to_string()),
+                ("path".to_string(), input.path.clone()),
+                ("before_sha256".to_string(), before_sha256),
+                ("after_sha256".to_string(), after_sha256),
+            ]),
+            Vec::new(),
+        ))
+    })
+    .map_err(fs_error)?
+}
+
+fn execute_read_many(workspace_root: String, input: ReadManyInput) -> SdkResult<ToolInvokeOutput> {
+    let mut remaining = input.max_total_bytes as usize;
+    let mut sections = Vec::new();
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    let mut succeeded = 0;
+    let mut failed = 0;
+    for path in &input.paths {
+        if remaining == 0 {
+            truncated = true;
+            entries.push(
+                serde_json::json!({"path":path,"status":"not_read_budget","returned_bytes":0}),
+            );
+            continue;
+        }
+        let target = resolve_path(workspace_root.as_str(), path);
+        let read = (|| {
+            let metadata = std::fs::metadata(&target).map_err(fs_error)?;
+            if !metadata.is_file() {
+                return Err(PluginError::invalid_params("not a regular file"));
+            }
+            // Reserve source bytes even if UTF-8 validation or a
+            // concurrent-change check fails after reading them.
+            let reserved = remaining.min(usize::try_from(metadata.len()).unwrap_or(usize::MAX));
+            remaining -= reserved;
+            let (preview, returned_bytes, file_truncated) =
+                read_utf8_prefix(&target, reserved, path)?;
+            Ok((metadata.len(), preview, returned_bytes, file_truncated))
+        })();
+        match read {
+            Ok((bytes, preview, returned_bytes, file_truncated)) => {
+                sections.push(format!("===== {path} =====\n{preview}"));
+                let hash = (!file_truncated).then(|| sha256_bytes(preview.as_bytes()));
+                entries.push(serde_json::json!({"path":path,"status":"read","bytes":bytes,
+                    "returned_bytes":returned_bytes,"truncated":file_truncated,"sha256":hash,"content":preview}));
+                truncated |= file_truncated;
+                succeeded += 1;
+            }
+            Err(error) => {
+                failed += 1;
+                sections.push(format!("===== {path} =====\nRead failed: {error}"));
+                entries.push(
+                    serde_json::json!({"path":path,"status":"error","error":error.to_string()}),
+                );
+            }
+        }
+    }
+    Ok(ToolInvokeOutput::from_parts(
+        format!("read {succeeded} files · {failed} failed"),
+        if truncated {
+            format!("{} files · truncated", entries.len())
+        } else {
+            format!("{} files", entries.len())
+        },
+        sections.join("\n\n"),
+        Some(serde_json::json!({
+            "files": entries,
+            "success_count": succeeded,
+            "error_count": failed,
+            "max_total_bytes": input.max_total_bytes,
+            "remaining_bytes": remaining,
+            "truncated": truncated,
+        })),
+        std::collections::BTreeMap::from([
+            ("file_count".to_string(), entries.len().to_string()),
+            ("truncated".to_string(), truncated.to_string()),
+        ]),
+        Vec::new(),
+    ))
+}
+
+fn execute_stat(workspace_root: String, input: StatInput) -> SdkResult<ToolInvokeOutput> {
+    let requested = Path::new(&input.path);
+    let target = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        Path::new(&workspace_root).join(requested)
+    };
+    let mut metadata = std::fs::symlink_metadata(&target).map_err(fs_error)?;
+    let mut hash_skipped = false;
+    let hash = if input.hash && metadata.is_file() {
+        let file = agena_tool::file_io::open_regular_file(&target).map_err(fs_error)?;
+        metadata = file.metadata().map_err(fs_error)?;
+        if !metadata.is_file() {
+            return Err(PluginError::invalid_params(
+                "stat target changed while opening it",
+            ));
+        }
+        if metadata.len() > MAX_STAT_HASH_BYTES {
+            hash_skipped = true;
+            None
+        } else {
+            let mut digest = Sha256::new();
+            let mut reader = (&file).take(MAX_STAT_HASH_BYTES + 1);
+            let mut bytes = 0_u64;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let count = reader.read(&mut buffer).map_err(fs_error)?;
+                if count == 0 {
+                    break;
+                }
+                bytes += count as u64;
+                if bytes > MAX_STAT_HASH_BYTES {
                     return Err(PluginError::invalid_params(
-                        "stat target changed while opening it",
+                        "stat file grew beyond its hash budget",
                     ));
                 }
-                if metadata.len() > MAX_STAT_HASH_BYTES {
-                    hash_skipped = true;
-                    None
-                } else {
-                    let mut digest = Sha256::new();
-                    let mut reader = (&file).take(MAX_STAT_HASH_BYTES + 1);
-                    let mut bytes = 0_u64;
-                    let mut buffer = [0_u8; 64 * 1024];
-                    loop {
-                        let count = reader.read(&mut buffer).map_err(fs_error)?;
-                        if count == 0 {
-                            break;
-                        }
-                        bytes += count as u64;
-                        if bytes > MAX_STAT_HASH_BYTES {
-                            return Err(PluginError::invalid_params(
-                                "stat file grew beyond its hash budget",
-                            ));
-                        }
-                        digest.update(&buffer[..count]);
-                    }
-                    let after = file.metadata().map_err(fs_error)?;
-                    if bytes != metadata.len()
-                        || after.len() != metadata.len()
-                        || after.modified().map_err(fs_error)?
-                            != metadata.modified().map_err(fs_error)?
-                    {
-                        return Err(PluginError::invalid_params(
-                            "stat file changed while hashing; retry the read",
-                        ));
-                    }
-                    Some(hex::encode(digest.finalize()))
-                }
-            } else {
-                None
-            };
-            let file_type = if metadata.file_type().is_symlink() {
-                "symlink"
-            } else if metadata.is_dir() {
-                "directory"
-            } else if metadata.is_file() {
-                "file"
-            } else {
-                "other"
-            };
-            let modified_at_ms = metadata
-                .modified()
+                digest.update(&buffer[..count]);
+            }
+            let after = file.metadata().map_err(fs_error)?;
+            if bytes != metadata.len()
+                || after.len() != metadata.len()
+                || after.modified().map_err(fs_error)? != metadata.modified().map_err(fs_error)?
+            {
+                return Err(PluginError::invalid_params(
+                    "stat file changed while hashing; retry the read",
+                ));
+            }
+            Some(hex::encode(digest.finalize()))
+        }
+    } else {
+        None
+    };
+    let file_type = if metadata.file_type().is_symlink() {
+        "symlink"
+    } else if metadata.is_dir() {
+        "directory"
+    } else if metadata.is_file() {
+        "file"
+    } else {
+        "other"
+    };
+    let modified_at_ms = metadata
+        .modified()
+        .map_err(fs_error)?
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| PluginError::internal_error(&error))?
+        .as_millis();
+    let modified_at_ms =
+        i64::try_from(modified_at_ms).map_err(|error| PluginError::internal_error(&error))?;
+    let symlink_target = if metadata.file_type().is_symlink() {
+        Some(
+            std::fs::read_link(&target)
                 .map_err(fs_error)?
-                .duration_since(UNIX_EPOCH)
-                .map_err(|error| PluginError::internal_error(&error))?
-                .as_millis();
-            let modified_at_ms = i64::try_from(modified_at_ms)
-                .map_err(|error| PluginError::internal_error(&error))?;
-            let symlink_target = if metadata.file_type().is_symlink() {
-                Some(
-                    std::fs::read_link(&target)
-                        .map_err(fs_error)?
-                        .display()
-                        .to_string(),
-                )
-            } else {
-                None
-            };
-            let payload = serde_json::json!({
-                "path": input.path,
-                "kind": file_type,
-                "size": metadata.len(),
-                "modified_at_ms": modified_at_ms,
-                "readonly": metadata.permissions().readonly(),
-                "sha256": hash,
-                "hash_skipped": hash_skipped,
-                "symlink_target": symlink_target,
-            });
-            Ok(ToolInvokeOutput::from_parts(
-                format!("stat {}", input.path),
-                format!("{file_type} · {} bytes", metadata.len()),
-                serde_json::to_string_pretty(&payload)
-                    .map_err(|error| PluginError::internal_error(&error))?,
-                Some(payload),
-                std::collections::BTreeMap::new(),
-                Vec::new(),
-            ))
-        })
-        .await
-    }
+                .display()
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    let payload = serde_json::json!({
+        "path": input.path,
+        "kind": file_type,
+        "size": metadata.len(),
+        "modified_at_ms": modified_at_ms,
+        "readonly": metadata.permissions().readonly(),
+        "sha256": hash,
+        "hash_skipped": hash_skipped,
+        "symlink_target": symlink_target,
+    });
+    Ok(ToolInvokeOutput::from_parts(
+        format!("stat {}", input.path),
+        format!("{file_type} · {} bytes", metadata.len()),
+        serde_json::to_string_pretty(&payload)
+            .map_err(|error| PluginError::internal_error(&error))?,
+        Some(payload),
+        std::collections::BTreeMap::new(),
+        Vec::new(),
+    ))
 }
 
 async fn invoke_internal<T: Serialize + Send + 'static>(

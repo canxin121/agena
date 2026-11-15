@@ -8,6 +8,7 @@ impl ToolExecutor {
     ) -> Self {
         Self {
             read_path_authorizer: None,
+            path_effect_authorizer: None,
             session_relation_kind: agena_domain::SessionRelationKind::Root,
             session_kind: agena_domain::SessionKind::default(),
             conversation: None,
@@ -15,6 +16,7 @@ impl ToolExecutor {
             global: false,
             session_id: None,
             principal,
+            sandbox_persisted_rules: Arc::new(Vec::new()),
             allowed_tool_names: None,
             model_id: None,
             cloud_tool_adapter_gate: None,
@@ -42,6 +44,15 @@ impl ToolExecutor {
         self
     }
 
+    /// Recheck resolved effects on a blocking worker immediately before use.
+    /// A path retargeted since preflight must pass this call's authority again.
+    pub fn with_path_effect_authorizer(
+        mut self, check: Arc<super::super::PathEffectAuthorizer>,
+    ) -> Self {
+        self.path_effect_authorizer = Some(check);
+        self
+    }
+
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
         self.scheduler.as_ref()
     }
@@ -65,6 +76,11 @@ impl ToolExecutor {
         session_context: &C,
     ) -> Self {
         let mut scoped = self.clone();
+        // Persisted decisions belong to an invocation's owning session and
+        // must never be inherited when selecting another session scope.
+        scoped.sandbox_persisted_rules = Arc::new(Vec::new());
+        scoped.read_path_authorizer = None;
+        scoped.path_effect_authorizer = None;
         scoped.session_relation_kind = session_context.relation_kind();
         scoped.session_kind = session_context.session_kind();
         scoped.conversation = session_context.conversation().cloned();

@@ -163,6 +163,13 @@ impl McpServerConfig {
                 }) {
                     return Err("MCP working directory must not be empty or contain NUL.".into());
                 }
+                if process.reads.len() + process.writes.len() > 512 || process.network.len() > 128 {
+                    return Err("MCP process has too many resource declarations.".into());
+                }
+                if process.reads.iter().chain(&process.writes).chain(&process.network)
+                    .any(|value| value.trim().is_empty() || value.contains('\0')) {
+                    return Err("MCP process resource declarations must be nonempty and contain no NUL.".into());
+                }
                 tools
             }
             Self::Http {
@@ -335,6 +342,14 @@ pub struct McpStdioProcessConfig {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    /// Declarations use the ordinary path/network permission service.
+    /// The working directory is always included as a read effect.
+    #[serde(default)]
+    pub reads: Vec<String>,
+    #[serde(default)]
+    pub writes: Vec<String>,
+    #[serde(default)]
+    pub network: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -391,6 +406,24 @@ pub fn mcp_config_from_plugins(plugins: &PluginsConfig) -> Result<McpConfig, Str
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn stdio_resource_declarations_round_trip_without_accepting_a_policy() {
+        let value = json!({"transport":"stdio", "process":{
+            "command":"node", "reads":["input"], "writes":["output"], "network":["example.com:443"]
+        }});
+        let config: McpServerConfig = serde_json::from_value(value.clone()).unwrap();
+        config.validate("fixture").unwrap();
+        let saved = serde_json::to_value(config).unwrap();
+        for field in ["reads", "writes", "network"] {
+            assert_eq!(saved["process"][field], value["process"][field]);
+        }
+        let mut injected = value;
+        injected["process"]["sandbox"] = json!({"readwrite_paths":["/"]});
+        assert!(serde_json::from_value::<McpServerConfig>(injected).is_err());
+        let default: McpStdioProcessConfig = serde_json::from_value(json!({"command":"node"})).unwrap();
+        assert!(default.reads.is_empty() && default.writes.is_empty() && default.network.is_empty());
+    }
 
     #[test]
     fn existing_definitions_keep_enabled_defaults_and_custom_timeouts_round_trip() {

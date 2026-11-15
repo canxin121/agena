@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 
+use agena_process::sandbox::SandboxPolicy;
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 
@@ -14,6 +15,136 @@ use crate::server_spec::LspServerSpec;
 use crate::transport::StdioTransport;
 
 static ROOT_RESOLVERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+
+/// Called after resolving the real project root and before looking up a cached
+/// process. The caller authorizes that root against its current session policy.
+/// It runs on the blocking policy worker so permission checks may wait for an
+/// approval without blocking Tokio's executor.
+pub type LspSandboxPolicyBuilder =
+    Arc<dyn Fn(&Path) -> std::io::Result<SandboxPolicy> + Send + Sync>;
+
+/// An allowed persistent scope may reuse a server; None confines its lifetime
+/// to the returned client handle, as required by one-invocation approval.
+pub type LspScopedSandboxBuilder =
+    Arc<dyn Fn(&Path) -> std::io::Result<(SandboxPolicy, Option<String>)> + Send + Sync>;
+
+fn registry_policy(builder: LspSandboxPolicyBuilder) -> LspScopedSandboxBuilder {
+    Arc::new(move |root| Ok((builder(root)?, Some("registry".into()))))
+}
+
+fn readonly_project_policy() -> LspSandboxPolicyBuilder {
+    Arc::new(|root| {
+        Ok(SandboxPolicy {
+            readonly_paths: vec![root.to_path_buf()],
+            ..Default::default()
+        })
+    })
+}
+
+/// Interpreter entry points come from trusted server configuration. Other
+/// arguments may name project data, so they never become runtime grants.
+fn configured_runtime_paths(spec: &LspServerSpec, root: &Path) -> Vec<PathBuf> {
+    let program = Path::new(&spec.command)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let python = program.starts_with("python");
+    let node = matches!(program.as_str(), "node" | "nodejs");
+    if !python && !node {
+        return Vec::new();
+    }
+    let mut arguments = spec.args.iter();
+    let entry = loop {
+        let Some(argument) = arguments.next() else {
+            return Vec::new();
+        };
+        if matches!(
+            argument.as_str(),
+            "-c" | "-m" | "-e" | "--eval" | "-p" | "--print"
+        ) || argument.starts_with("--eval=")
+            || argument.starts_with("--print=")
+        {
+            return Vec::new();
+        }
+        if argument == "--" {
+            break arguments.next();
+        }
+        if python && matches!(argument.as_str(), "-W" | "-X" | "--check-hash-based-pycs")
+            || node
+                && matches!(
+                    argument.as_str(),
+                    "-r" | "--require"
+                        | "--import"
+                        | "--loader"
+                        | "--experimental-loader"
+                        | "--conditions"
+                        | "--input-type"
+                )
+        {
+            if arguments.next().is_none() {
+                return Vec::new();
+            }
+            continue;
+        }
+        if argument.starts_with('-') {
+            let known_flag = if python {
+                matches!(
+                    argument.as_str(),
+                    "-I" | "-B"
+                        | "-E"
+                        | "-s"
+                        | "-S"
+                        | "-u"
+                        | "-O"
+                        | "-OO"
+                        | "-q"
+                        | "-v"
+                        | "-vv"
+                        | "-d"
+                        | "-b"
+                        | "-bb"
+                        | "-x"
+                        | "-P"
+                ) || argument.starts_with("-W")
+                    || argument.starts_with("-X")
+                    || argument.starts_with("--check-hash-based-pycs=")
+            } else {
+                matches!(
+                    argument.as_str(),
+                    "--no-warnings"
+                        | "--trace-warnings"
+                        | "--enable-source-maps"
+                        | "--experimental-modules"
+                ) || argument.contains('=')
+            };
+            if !known_flag {
+                return Vec::new();
+            }
+            continue;
+        }
+        break Some(argument);
+    };
+    let Some(entry) = entry else {
+        return Vec::new();
+    };
+    let path = root.join(entry);
+    if !path.is_file() {
+        return Vec::new();
+    }
+    let mut paths = vec![path.clone()];
+    // Installed language-server packages import sibling modules. Restrict this
+    // convenience grant to the conventional package directory, never HOME or
+    // an arbitrary parent of a user-configured script.
+    if let Some(packages) = path.ancestors().find(|path| {
+        path.file_name().is_some_and(|name| {
+            name == "node_modules" || name == "site-packages" || name == "dist-packages"
+        })
+    }) {
+        paths.push(packages.to_path_buf());
+    }
+    paths
+}
 
 #[derive(Debug, Error)]
 /// Error resolving an LSP server.
@@ -26,6 +157,10 @@ pub enum ResolveError {
 struct ClientKey {
     server: String,
     root: PathBuf,
+    scope: String,
+    // Keep the complete policy as part of equality, rather than relying on a
+    // lossy fingerprint. Different session capabilities never share a child.
+    sandbox: SandboxPolicy,
 }
 
 /// File-system discovery, not a claim that a server can initialize successfully.
@@ -137,6 +272,7 @@ impl LspRegistry {
                         .map(|key| key.root.clone())
                         .collect();
                     running_roots.sort();
+                    running_roots.dedup();
                     ServerStatus {
                         command_available: inspected.then_some(executable.is_some()),
                         executable,
@@ -191,8 +327,13 @@ impl LspRegistry {
         server_name: &str,
         hint_dir: &Path,
     ) -> LspResult<Arc<LspClient>> {
-        self.client_for_with_fallback(server_name, hint_dir, &self.workspace_root)
-            .await
+        self.client_for_with_fallback(
+            server_name,
+            hint_dir,
+            &self.workspace_root,
+            registry_policy(readonly_project_policy()),
+        )
+        .await
     }
 
     async fn client_for_with_fallback(
@@ -200,6 +341,7 @@ impl LspRegistry {
         server_name: &str,
         hint_dir: &Path,
         fallback: &Path,
+        policy_builder: LspScopedSandboxBuilder,
     ) -> LspResult<Arc<LspClient>> {
         // A shutdown takes the write side of this gate. Holding a read permit
         // makes spawn/initialize/insert one lifecycle transaction so shutdown
@@ -216,25 +358,33 @@ impl LspRegistry {
         let root_spec = spec.clone();
         let hint_dir = hint_dir.to_owned();
         let fallback = fallback.to_owned();
-        let root_dir = ROOT_RESOLVERS
+        let (root_dir, sandbox, cache_scope) = ROOT_RESOLVERS
             .run(move || {
                 let root = root_spec.resolve_root(&hint_dir, &fallback);
-                std::fs::canonicalize(&root).unwrap_or(root)
+                let root = std::fs::canonicalize(&root).unwrap_or(root);
+                let (mut sandbox, scope) = policy_builder(&root)?;
+                sandbox
+                    .runtime_paths
+                    .extend(configured_runtime_paths(&root_spec, &root));
+                Ok::<_, std::io::Error>((root, sandbox, scope))
             })
             .await
-            .map_err(|error| LspError::transport_error(&error))?;
+            .map_err(|error| LspError::transport_error(&error))??;
+        let cacheable = cache_scope.is_some();
         let key = ClientKey {
             server: server_name.to_owned(),
             root: root_dir.clone(),
+            scope: cache_scope.unwrap_or_default(),
+            sandbox: sandbox.clone(),
         };
-        if let Some(client) = self.spawned.read().await.get(&key).cloned() {
+        if cacheable && let Some(client) = self.spawned.read().await.get(&key).cloned() {
             return Ok(client);
         }
         // Only one task may perform the expensive spawn/initialize sequence
         // for a server/root pair. Without this keyed single-flight, concurrent first
         // requests launch duplicate children and overwrite all but one in the
         // registry, leaking their reader tasks and stdio pipes.
-        let start_lock = {
+        let start_lock = if cacheable {
             let mut starting = self.starting.lock().await;
             starting.retain(|_, lock| lock.strong_count() > 0);
             if let Some(lock) = starting.get(&key).and_then(Weak::upgrade) {
@@ -244,9 +394,11 @@ impl LspRegistry {
                 starting.insert(key.clone(), Arc::downgrade(&lock));
                 lock
             }
+        } else {
+            Arc::new(Mutex::new(()))
         };
         let _start_guard = start_lock.lock().await;
-        if let Some(client) = self.spawned.read().await.get(&key).cloned() {
+        if cacheable && let Some(client) = self.spawned.read().await.get(&key).cloned() {
             return Ok(client);
         }
         let env: HashMap<String, String> = spec
@@ -254,9 +406,15 @@ impl LspRegistry {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let transport =
-            StdioTransport::spawn(&spec.name, &spec.command, &spec.args, &env, Some(&root_dir))
-                .await?;
+        let transport = StdioTransport::spawn(
+            &spec.name,
+            &spec.command,
+            &spec.args,
+            &env,
+            Some(&root_dir),
+            &sandbox,
+        )
+        .await?;
         let client = LspClient::new(transport);
         let root_uri = url::Url::from_directory_path(&root_dir)
             .ok()
@@ -279,8 +437,9 @@ impl LspRegistry {
             }
             return Err(error);
         }
-        let mut spawned = self.spawned.write().await;
-        spawned.insert(key, client.clone());
+        if cacheable {
+            self.spawned.write().await.insert(key, client.clone());
+        }
         Ok(client)
     }
 
@@ -297,6 +456,42 @@ impl LspRegistry {
     /// Resolve an explicitly selected absolute file without using the registry's
     /// workspace as a fallback. If no marker is found, use the file's parent.
     pub async fn client_for_path_global(&self, file_path: &Path) -> LspResult<Arc<LspClient>> {
+        self.client_for_path_sandboxed(file_path, None, readonly_project_policy())
+            .await
+    }
+
+    /// Resolve a file using project or global-session semantics, authorize the
+    /// resolved root, and reuse only a process with the same sandbox policy.
+    /// MXC creates the process's private writable home/cache; the supplied
+    /// project grants can remain read-only.
+    pub async fn client_for_path_sandboxed(
+        &self,
+        file_path: &Path,
+        workspace_root: Option<&Path>,
+        policy_builder: LspSandboxPolicyBuilder,
+    ) -> LspResult<Arc<LspClient>> {
+        self.client_for_path_scoped(file_path, workspace_root, registry_policy(policy_builder))
+            .await
+    }
+
+    /// Session-owned clients must supply their actual authority scope. A None
+    /// scope creates an uncached client that is removed when its caller drops it.
+    pub async fn client_for_path_scoped(
+        &self,
+        file_path: &Path,
+        workspace_root: Option<&Path>,
+        policy_builder: LspScopedSandboxBuilder,
+    ) -> LspResult<Arc<LspClient>> {
+        if let Some(workspace_root) = workspace_root {
+            let spec = self
+                .server_for_path(file_path)
+                .await
+                .ok_or_else(|| LspError::UnknownServer(file_path.display().to_string()))?;
+            let parent = file_path.parent().unwrap_or(workspace_root);
+            return self
+                .client_for_with_fallback(&spec.name, parent, workspace_root, policy_builder)
+                .await;
+        }
         if !file_path.is_absolute() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -316,7 +511,7 @@ impl LspRegistry {
             .server_for_path(file_path)
             .await
             .ok_or_else(|| LspError::UnknownServer(file_path.display().to_string()))?;
-        self.client_for_with_fallback(&spec.name, &parent, &parent)
+        self.client_for_with_fallback(&spec.name, &parent, &parent, policy_builder)
             .await
     }
 
@@ -384,6 +579,154 @@ async fn shutdown_clients(clients: Vec<Arc<LspClient>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_spec(command: &str, args: Vec<String>) -> LspServerSpec {
+        LspServerSpec {
+            name: "sandbox-test".into(),
+            command: command.into(),
+            args,
+            env: Default::default(),
+            file_extensions: vec![],
+            root_markers: vec![],
+            initialization_options: None,
+        }
+    }
+
+    struct IdleTransport;
+
+    #[async_trait::async_trait]
+    impl crate::transport::LspTransport for IdleTransport {
+        async fn send(&self, _: serde_json::Value) -> LspResult<()> {
+            Ok(())
+        }
+
+        async fn recv(&self) -> LspResult<crate::protocol::InboundMessage> {
+            std::future::pending().await
+        }
+
+        async fn close(&self) -> LspResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn current_session_policy_is_checked_before_reusing_a_cached_client() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = std::fs::canonicalize(directory.path()).unwrap();
+        let file = project.join("sample.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let registry = LspRegistry::new(project.join("unrelated"), "test", "1");
+        registry
+            .register(test_spec("agena-test-missing-language-server", vec![]))
+            .await;
+        let policy = SandboxPolicy {
+            readonly_paths: vec![project.clone()],
+            ..Default::default()
+        };
+        let cached = LspClient::new(Arc::new(IdleTransport));
+        registry.spawned.write().await.insert(
+            ClientKey {
+                server: "sandbox-test".into(),
+                root: project.clone(),
+                scope: "registry".into(),
+                sandbox: policy.clone(),
+            },
+            Arc::clone(&cached),
+        );
+        let expected = project.clone();
+        let allowed = policy.clone();
+        let client = registry
+            .client_for_path_sandboxed(
+                &file,
+                Some(&project),
+                Arc::new(move |root| {
+                    assert_eq!(root, expected);
+                    Ok(allowed.clone())
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&client, &cached));
+
+        let error = registry
+            .client_for_path_sandboxed(
+                &file,
+                Some(&project),
+                Arc::new(|_| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "project access was revoked",
+                    ))
+                }),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, LspError::Io(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+
+        for scope in [Some("session:7".to_string()), None] {
+            let allowed = policy.clone();
+            // Identical kernel grants cannot borrow a different session's
+            // server or turn a one-call approval into a cached process.
+            assert!(
+                registry
+                    .client_for_path_scoped(
+                        &file,
+                        Some(&project),
+                        Arc::new(move |_| Ok((allowed.clone(), scope.clone()))),
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+        let mut restricted = policy;
+        restricted.denied_paths.push(project.join("secrets"));
+        // A different policy must try to start its own child. The intentionally
+        // missing executable makes that observable without starting a server.
+        assert!(
+            registry
+                .client_for_path_sandboxed(
+                    &file,
+                    Some(&project),
+                    Arc::new(move |_| Ok(restricted.clone())),
+                )
+                .await
+                .is_err()
+        );
+        cached.close_transport().await.unwrap();
+    }
+
+    #[test]
+    fn interpreter_data_arguments_do_not_become_runtime_grants() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let entry = root.join("server.py");
+        let data = root.join("private.json");
+        std::fs::write(&entry, "").unwrap();
+        std::fs::write(&data, "secret").unwrap();
+        let spec = test_spec(
+            "python3",
+            vec!["-I".into(), "server.py".into(), "private.json".into()],
+        );
+        assert_eq!(configured_runtime_paths(&spec, root), vec![entry]);
+        let inline = test_spec(
+            "python3",
+            vec!["-c".into(), "print('ok')".into(), "private.json".into()],
+        );
+        assert!(configured_runtime_paths(&inline, root).is_empty());
+        let module = test_spec(
+            "python3",
+            vec!["-m".into(), "server".into(), "private.json".into()],
+        );
+        assert!(configured_runtime_paths(&module, root).is_empty());
+        let node_inline = test_spec(
+            "node",
+            vec!["--eval=console.log('ok')".into(), "private.json".into()],
+        );
+        assert!(configured_runtime_paths(&node_inline, root).is_empty());
+    }
 
     #[tokio::test]
     async fn global_file_root_never_falls_back_to_registry_workspace() {

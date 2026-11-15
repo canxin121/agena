@@ -1,8 +1,9 @@
 use super::*;
+use agena_process::sandbox::{SandboxPolicy, wrap_tokio_command};
 use regex::{Regex, RegexBuilder};
 use std::time::Duration;
 
-const MAX_SOURCE: u64 = 32 * 1024 * 1024;
+const MAX_SOURCE: usize = 32 * 1024 * 1024;
 const MAX_CONVERTED: usize = 2 * 1024 * 1024;
 const MAX_RECORDS: usize = 128 * 1024;
 static CONVERTERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -56,8 +57,8 @@ struct Source {
     sha256: String,
 }
 
-fn prepare(workspace: &Path, path: &str) -> SdkResult<Source> {
-    let path = resolve_path(&workspace.display().to_string(), path);
+fn prepare(authorized_path: &Path) -> SdkResult<Source> {
+    let path = authorized_path;
     let extension = path
         .extension()
         .and_then(|value| value.to_str())
@@ -68,8 +69,18 @@ fn prepare(workspace: &Path, path: &str) -> SdkResult<Source> {
             "document format must be pdf, docx, pptx or xlsx",
         ));
     }
-    let bytes = read_file_bounded(&path, MAX_SOURCE, "fs.document")?;
-    let directory = tempfile::tempdir().map_err(fs_error)?;
+    let bytes =
+        agena_runtime_tools::read_regular_file_nofollow(path, MAX_SOURCE).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::InvalidData {
+                PluginError::invalid_params_error(&error)
+            } else {
+                fs_error(error)
+            }
+        })?;
+    let directory = tempfile::Builder::new()
+        .prefix("agena-media-worker-document-")
+        .tempdir()
+        .map_err(fs_error)?;
     let target = directory.path().join(format!("source.{extension}"));
     std::fs::write(&target, &bytes).map_err(fs_error)?;
     Ok(Source {
@@ -160,23 +171,36 @@ fn command(
     };
     command
         .current_dir(source._directory.path())
-        .stdin(std::process::Stdio::null())
         .env("PYTHONIOENCODING", "utf-8")
         .env("NO_COLOR", "1");
+    // Conversion only needs the bounded copy prepared above. MXC supplies a
+    // private writable home/cache/temp directory and denies network access.
+    // The original document and the surrounding project are not exposed.
+    let policy = SandboxPolicy {
+        private_paths: vec![source._directory.path().to_path_buf()],
+        readonly_paths: vec![source._directory.path().to_path_buf()],
+        timeout_ms: Some(30_000),
+        ..Default::default()
+    };
+    wrap_tokio_command(&mut command, &policy).map_err(fs_error)?;
+    command.stdin(std::process::Stdio::null());
     Ok((command, backend))
 }
 
-pub(super) async fn invoke(workspace: &Path, input: DocumentInput) -> SdkResult<ToolInvokeOutput> {
+pub(super) async fn invoke(
+    workspace: &Path,
+    input: DocumentInput,
+    authorized_path: PathBuf,
+) -> SdkResult<ToolInvokeOutput> {
     let regex = matcher(&input)?;
     let _permit = CONVERTERS
         .acquire()
         .await
         .map_err(|error| PluginError::internal_error(&error))?;
     let root = workspace.to_owned();
-    let path = input.path.clone();
     let selected = input.backend;
     let (source, command, backend) = run_fs_blocking(move || {
-        let source = prepare(&root, &path)?;
+        let source = prepare(&authorized_path)?;
         let (command, backend) = command(&root, &source, selected)?;
         Ok((source, command, backend))
     })
@@ -280,4 +304,62 @@ fn project(text: &str, regex: Option<&Regex>, input: &DocumentInput) -> Projecti
         out.lines.push(line);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_prepare_copies_the_approved_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let input = root.join("source.PDF");
+        let bytes = b"%PDF-1.7\napproved document bytes";
+        std::fs::write(&input, bytes).unwrap();
+        let source = prepare(&input).unwrap();
+        assert_eq!(source.extension, "pdf");
+        assert_eq!(source.sha256, sha256_bytes(bytes));
+        assert_eq!(std::fs::read(&source.path).unwrap(), bytes);
+        assert!(
+            source
+                ._directory
+                .path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("agena-media-worker-document-")
+        );
+        std::fs::write(input, b"changed original").unwrap();
+        assert_eq!(std::fs::read(source.path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn document_prepare_keeps_the_source_size_bound() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let input = root.join("large.pdf");
+        std::fs::File::create(&input)
+            .unwrap()
+            .set_len(MAX_SOURCE as u64 + 1)
+            .unwrap();
+        assert!(prepare(&input).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn document_prepare_does_not_resolve_a_replacement_link_after_approval() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let input = root.join("approved.pdf");
+        let outside = root.join("private.pdf");
+        std::fs::write(&input, b"approved document").unwrap();
+        std::fs::write(&outside, b"private document").unwrap();
+        let approved = std::fs::canonicalize(&input).unwrap();
+        std::fs::remove_file(&input).unwrap();
+        symlink(&outside, &input).unwrap();
+        assert!(prepare(&approved).is_err());
+        assert_eq!(std::fs::read(outside).unwrap(), b"private document");
+    }
 }

@@ -14,7 +14,7 @@ use crate::sdk::rpc::method;
 use crate::sdk::{PluginKey, PluginManifest};
 use crate::transport::{
     PluginTransport, cdylib::CdylibTransport, http::HttpTransport, quiescent::QuiescentTransport,
-    stdio::StdioTransport,
+    stdio::scoped::ScopedStdioTransport,
 };
 
 const TRANSPORT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -176,45 +176,12 @@ pub async fn prepare_entry(
                 })?;
             Arc::new(t)
         }
-        PluginPackage::Stdio {
-            command,
-            args,
-            env,
-            cwd,
-            restart,
-            sha256,
-            ..
-        } => {
-            #[cfg(not(feature = "signing"))]
-            {
-                if sha256.is_some() {
-                    return Err(HostError::Load {
-                        plugin: plugin_id.to_string(),
-                        message: "stdio.sha256 set but the `signing` feature is disabled".into(),
-                    });
-                }
-                let _ = sha256;
-            }
-            let env_map: std::collections::HashMap<String, String> =
-                env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let host_handler = host_handle.host_handler_for(plugin_id.to_string());
-            let status_sink = host_handle.status_registry();
-            let log_sink = host_handle.log_store();
-            let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
-                plugin: plugin_id.to_string(),
-                message: format!("invalid plugin id `{plugin_id}`: {err}"),
-            })?;
-            let t = StdioTransport::spawn_with_policy_and_status(
-                command,
-                args,
-                &env_map,
-                cwd.as_ref(),
-                Some(host_handler),
-                restart.clone(),
-                Some(plugin_key),
-                Some(status_sink),
-                Some(log_sink),
-                sha256.as_deref(),
+        PluginPackage::Stdio { .. } => {
+            let t = ScopedStdioTransport::spawn(
+                plugin_id,
+                configured_plugin,
+                workspace_root,
+                &host_handle,
             )
             .await
             .map_err(|e| HostError::Load {

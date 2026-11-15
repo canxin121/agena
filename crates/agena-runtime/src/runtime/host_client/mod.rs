@@ -1480,6 +1480,24 @@ impl HostClient for RuntimeHostClient {
         Ok(HostLspListServersResponse { servers })
     }
 
+    async fn prepare_process_sandbox(
+        &self,
+        resources: agena_plugin_sdk::host_api::HostProcessResources,
+    ) -> Result<agena_plugin_sdk::host_api::HostPreparedProcessSandbox, PluginError> {
+        let (session, call) = self.callback_scope()?;
+        let mut prepared = self.session_manager()?
+            .prepare_host_process_sandbox(session, call, resources)
+            .await
+            .map_err(plugin_error_from_app)?;
+        if prepared.call_bound {
+            let completion = agena_plugin_host::current_plugin_call_completion()
+                .ok_or_else(|| host_unavailable("process approval requires a live originating call"))?;
+            prepared.scope.push_str(":origin:");
+            prepared.scope.push_str(completion.id());
+        }
+        Ok(prepared)
+    }
+
     async fn require_mcp_server_permission(
         &self,
         spec: HostMcpServerSpec,

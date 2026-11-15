@@ -27,6 +27,23 @@ impl PluginInitialization {
         &self,
         transport: &T,
     ) -> Result<InitOutcome, TransportError> {
+        self.initialize_in_context(
+            transport,
+            HostCallbackContext {
+                workspace_root: Some(self.workspace_root.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Initialize a per-session process under the active originating authority.
+    /// Dynamic registrations then use that session's scoped overlay.
+    pub(crate) async fn initialize_in_context<T: PluginTransport + ?Sized>(
+        &self,
+        transport: &T,
+        callback_context: HostCallbackContext,
+    ) -> Result<InitOutcome, TransportError> {
         let host = self.host.upgrade().ok_or_else(|| {
             TransportError::disconnected("plugin initialization host was dropped")
         })?;
@@ -41,10 +58,7 @@ impl PluginInitialization {
         };
         let request = host.run_in_authorized_callback_context(
             &self.plugin_id,
-            HostCallbackContext {
-                workspace_root: Some(self.workspace_root.to_string_lossy().into_owned()),
-                ..Default::default()
-            },
+            callback_context,
             transport.dispatch(method::META_INIT, serde_json::to_value(context)?),
         );
         let result = tokio::time::timeout(Duration::from_secs(30), request)

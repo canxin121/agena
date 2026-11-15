@@ -1,4 +1,5 @@
 use crate::{CrawlError, FetchedPage};
+use agena_process::sandbox::{SandboxPolicy, wrap_tokio_command};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -37,11 +38,30 @@ pub async fn extract_with_backend(
             })?;
             let python = std::env::var_os("AGENA_EXTRACT_PYTHON")
                 .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into());
-            let python = tokio::task::spawn_blocking(move || which::which(python)).await
-                .map_err(|error| CrawlError::InvalidInput(format!("extractor discovery task failed: {error}")))?
-                .map_err(|_| CrawlError::InvalidInput("Trafilatura needs Python with trafilatura installed; set AGENA_EXTRACT_PYTHON".into()))?;
+            let (python, directory) = tokio::task::spawn_blocking(move || {
+                let python = which::which(python).map_err(|_| {
+                    CrawlError::InvalidInput("Trafilatura needs Python with trafilatura installed; set AGENA_EXTRACT_PYTHON".into())
+                })?;
+                let directory = tempfile::Builder::new()
+                    .prefix("agena-media-worker-extract-")
+                    .tempdir()?;
+                Ok::<_, CrawlError>((python, directory))
+            }).await
+                .map_err(|error| CrawlError::InvalidInput(format!("extractor discovery task failed: {error}")))??;
             let mut command = tokio::process::Command::new(python);
-            command.args(["-I", "-X", "utf8", "-c", include_str!("trafilatura.py")]);
+            command
+                .args(["-I", "-X", "utf8", "-c", include_str!("trafilatura.py")])
+                .current_dir(directory.path());
+            // HTML travels through stdin. Only an empty working directory and
+            // the interpreter runtime are readable; MXC provides private
+            // writable temporary storage and blocks network access.
+            let policy = SandboxPolicy {
+                private_paths: vec![directory.path().to_path_buf()],
+                readonly_paths: vec![directory.path().to_path_buf()],
+                timeout_ms: Some(20_000),
+                ..Default::default()
+            };
+            wrap_tokio_command(&mut command, &policy)?;
             let output = agena_process::output_with_input(
                 command,
                 html.as_bytes(),

@@ -807,9 +807,9 @@ impl SessionManager {
             model.clone(),
             state.providers.clone(),
         ));
-        let executor = executor.with_read_path_authorizer(Arc::new(move |path| {
+        let executor = executor.with_path_effect_authorizer(Arc::new(move |access, path| {
             let check = authorizer
-                .path_permission_check(agena_domain::AccessKind::Read, &path.to_string_lossy());
+                .path_permission_check(access, &path.to_string_lossy());
             runtime.block_on(agena_async::permission_wait::scope(
                 Some(key),
                 agena_async::permission_wait::waiting(manager.authorize_checks(
@@ -826,6 +826,7 @@ impl SessionManager {
             let (invocation,shell)=executor.prepare_shell_invocation(&prepared.invocation,key.0,key.1).await?;
             applied_invocation=invocation.clone();
             self.authorize_tool(&tool,&invocation,&executor,&control,&state).await?;
+            let executor = self.sandbox_executor_for_session(&executor, key.0).await?;
             if control.cancel.is_cancelled(){return Err(ToolError::Cancelled);}
             let kind=executor.streaming_content_kind(&invocation)?;
             let output=match kind {Some(kind)=>Some(crate::tool::ToolOutputStreams::open(&tool,kind).await.map_err(|e|ToolError::invalid_input(e.to_string()))?),None=>None};
@@ -907,6 +908,22 @@ impl SessionManager {
             Err(error) => Err(kernel_error(error)),
         }
     }
+    /// Bind current stored resource decisions before launching any direct or
+    /// delegated tool. Ownership follows the session, not the command cwd.
+    pub(super) async fn sandbox_executor_for_session(
+        &self,
+        executor: &ToolExecutor,
+        session: i64,
+    ) -> Result<ToolExecutor, ToolError> {
+        let session_key = session_id(session)
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+        let workspace = self.kernel().reader.metadata(session_key).await
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?.workspace_id;
+        let rules = self.kernel_runtime.permissions.resolve_snapshot(Some(session), workspace).await
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+        executor.clone().with_sandbox_persisted_rules(rules)
+    }
+
     pub(super) async fn authorize_tool(
         &self,
         tool: &ToolHandle,

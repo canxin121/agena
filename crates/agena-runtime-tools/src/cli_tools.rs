@@ -212,8 +212,9 @@ pub async fn discover(workspace: &Path, refresh: bool) -> std::io::Result<CliInv
     .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
-/// Explicit probes only; callers bound the number of selected tools. No shell,
-/// package installation, model download or arbitrary arguments are involved.
+/// Explicit probes use fixed version arguments in a private working directory.
+/// Their only readable inputs are the selected executable and its runtime;
+/// MXC denies network access and supplies private writable temporary storage.
 pub async fn probe_version(tool: &mut CliAvailability, workspace: &Path) {
     tool.version = None;
     tool.probe_error = None;
@@ -230,14 +231,44 @@ pub async fn probe_version(tool: &mut CliAvailability, workspace: &Path) {
             return;
         }
     };
-    let mut command = tokio::process::Command::new(path);
-    command
-        .args(spec.version_args)
-        .current_dir(workspace)
-        .stdin(std::process::Stdio::null())
-        .env("NO_COLOR", "1")
-        .env("PAGER", "cat")
-        .env("GIT_PAGER", "cat");
+    let executable = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        workspace.join(path)
+    };
+    let version_args = spec.version_args;
+    let prepared = tokio::task::spawn_blocking(move || {
+        let directory = tempfile::Builder::new()
+            .prefix("agena-cli-version-")
+            .tempdir()?;
+        let mut command = tokio::process::Command::new(executable);
+        command
+            .args(version_args)
+            .current_dir(directory.path())
+            .env("NO_COLOR", "1")
+            .env("PAGER", "cat")
+            .env("GIT_PAGER", "cat");
+        let policy = agena_process::sandbox::SandboxPolicy {
+            readonly_paths: vec![directory.path().to_path_buf()],
+            timeout_ms: Some(2_000),
+            ..Default::default()
+        };
+        agena_process::sandbox::wrap_tokio_command(&mut command, &policy)?;
+        command.stdin(std::process::Stdio::null());
+        Ok::<_, std::io::Error>((command, directory))
+    })
+    .await;
+    let (command, _directory) = match prepared {
+        Ok(Ok(prepared)) => prepared,
+        Ok(Err(error)) => {
+            tool.probe_error = Some(format!("Version sandbox preparation failed: {error}"));
+            return;
+        }
+        Err(error) => {
+            tool.probe_error = Some(format!("Version probe worker failed: {error}"));
+            return;
+        }
+    };
     match agena_process::output(command, Duration::from_secs(2), 8192).await {
         Ok(output) if output.status.success() => {
             let bytes = if output.stdout.is_empty() {

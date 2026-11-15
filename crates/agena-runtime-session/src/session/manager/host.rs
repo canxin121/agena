@@ -7,6 +7,7 @@ use agena_domain::{
 use agena_plugin_host::sdk::host_api::AskUserResponse;
 
 mod operator;
+mod process_sandbox;
 mod session_scope;
 
 // ToolInvokeInput uses this existing wire sentinel for a call without a
@@ -363,6 +364,22 @@ impl SessionManager {
             .for_session_context_async(&context)
             .await
             .with_cancellation_token(Some(control.cancel.clone()));
+        let manager = self.clone();
+        let authorizer = executor.clone();
+        let authority_tool = tool.clone();
+        let authority_control = control.clone();
+        let authority_state = state.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let executor = executor.with_path_effect_authorizer(Arc::new(move |access, path| {
+            let check = authorizer.path_permission_check(access, &path.to_string_lossy());
+            runtime.block_on(agena_async::permission_wait::scope(
+                Some((session, call)),
+                agena_async::permission_wait::waiting(manager.authorize_checks(
+                    &authority_tool, vec![check], &authorizer,
+                    &authority_control, &authority_state,
+                )),
+            ))
+        }));
         let prepared = executor
             .prepare_invocation(&invocation, session, call)
             .await
@@ -374,6 +391,8 @@ impl SessionManager {
         self.authorize_tool(&tool, &invocation, &executor, &control, &state)
             .await
             .map_err(tool_error)?;
+        let executor = self.sandbox_executor_for_session(&executor, session)
+            .await.map_err(tool_error)?;
         let output = match executor
             .streaming_content_kind(&invocation)
             .map_err(tool_error)?
@@ -460,6 +479,8 @@ impl crate::SessionToolExecutionService for SessionManager {
                 .prepare_shell_invocation(&prepared.invocation, id, -1)
                 .await
                 .map_err(tool_error)?;
+            let executor = self.sandbox_executor_for_session(&executor, id)
+                .await.map_err(tool_error)?;
             executor
                 .execute_invocation(
                     &invocation,

@@ -242,6 +242,14 @@ pub(crate) async fn read_media(
     WORKERS
         .run(move || {
             executor.authorize_sandbox_paths(std::slice::from_ref(&target), &[])?;
+            if !executor.sandbox_enabled() {
+                return crate::media_input::read_local(
+                    Path::new(""),
+                    &target.to_string_lossy(),
+                    expected_sha256.as_deref(),
+                )
+                .map_err(ToolError::invalid_input);
+            }
             let mut policy = crate::shell_sandbox::policy_for_paths(
                 &executor,
                 std::slice::from_ref(&target),

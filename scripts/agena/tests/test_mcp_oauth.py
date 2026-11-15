@@ -10,6 +10,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import re
+import select
+import shlex
 from pathlib import Path
 import socket
 import sqlite3
@@ -174,6 +176,133 @@ class McpOAuthTests(unittest.TestCase):
             self.assertEqual(status, 200)
         challenged = 'mcp/www_authenticate' in body.get('result', {}).get('_meta', {})
         self.assertEqual(challenged, not expected)
+
+    @unittest.skipUnless(os.name == 'posix' and os.uname().sysname == 'Linux', 'Exercises the Linux MXC backend')
+    def test_mcp_transports_run_directly_and_global_switch_preserves_operator_default(self):
+        self.stop()
+        backend_dir = self.root / 'backend'
+        backend_dir.mkdir()
+        trace = self.root / 'bwrap-invocations'
+        backend = backend_dir / 'bwrap'
+        backend.write_text(
+            '#!/bin/sh\n'
+            f'printf x >> {shlex.quote(str(trace))}\n'
+            'if [ "$1" = "--version" ]; then echo "bubblewrap 0.11.0"; exit 0; fi\n'
+            'echo "deliberately unavailable sandbox backend" >&2\nexit 125\n'
+        )
+        backend.chmod(0o700)
+        environment = {'PATH': str(backend_dir) + os.pathsep + os.environ.get('PATH', ''),
+                       'AGENA_SANDBOX': 'enabled'}
+        self.start(extra_environment=environment)
+        (self.workspace / 'Cargo.toml').write_text(
+            '[package]\nname = "mcp-direct-execution-marker"\nversion = "0.1.0"\n'
+        )
+        subprocess.run(['git', 'init', '--quiet', str(self.workspace)], check=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        subprocess.run([
+            'git', '-C', str(self.workspace), '-c', 'user.name=Agena Test',
+            '-c', 'user.email=agena-test@example.invalid', '-c', 'commit.gpgsign=false',
+            '-c', 'core.hooksPath=/dev/null', 'commit', '--allow-empty', '--quiet',
+            '-m', 'Initialize sandbox integration fixture',
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.json_request('/api/v1/server/mcp', 'PUT', {'enabled': True})
+        _, tokens = self.authorize(self.password)
+        tools = self.json_request('/api/v1/operator/tools', headers=self.management_headers)
+        read_tool = next((tool['name'] for tool in tools
+                          if tool['plugin_id'] == 'agena.fs' and tool['name'].endswith('.read')), None)
+        shell_tool = next((tool['name'] for tool in tools
+                           if tool['plugin_id'] == 'agena.shell' and tool['name'].endswith('.exec')), None)
+        self.assertIsNotNone(read_tool, tools)
+        self.assertIsNotNone(shell_tool, tools)
+        before = trace.read_bytes() if trace.exists() else b''
+        probes = [
+            ({'name': read_tool, 'arguments': {'file_path': 'Cargo.toml'}}, 'mcp-direct-execution-marker'),
+            ({'name': shell_tool, 'arguments': {
+                'command': 'git status --short', 'workdir': str(self.workspace),
+                'reads': [str(self.workspace)], 'writes': [], 'network': [], 'timeout_ms': 10000,
+            }}, '?? Cargo.toml'),
+        ]
+        for params, expected in probes:
+            with self.subTest(transport='http', tool=params['name']):
+                response = self.json_request('/mcp', 'POST', {
+                    'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                    'params': params | {'_meta': {'io.modelcontextprotocol/protocolVersion': '2025-11-25'}},
+                }, headers={'Authorization': 'Bearer ' + tokens['access_token'],
+                            'Accept': 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25'})
+                self.assertIn('result', response)
+                self.assertFalse(response['result'].get('isError', False), response)
+                self.assertIn(expected, json.dumps(response))
+
+        bridge_env = os.environ | {'AGENA_SERVER_PASSWORD': self.password}
+        with (self.root / 'bridge.log').open('w') as log:
+            bridge = subprocess.Popen([
+                str(Path(os.environ['AGENA_TEST_BINARY']).resolve()), '--server', self.base,
+                '--data-dir', str(self.root / 'data'), 'mcp-server', '--workspace', str(self.workspace),
+            ], env=bridge_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, text=True)
+            try:
+                def rpc(message):
+                    bridge.stdin.write(json.dumps(message) + '\n')
+                    bridge.stdin.flush()
+                    if 'id' not in message:
+                        return None
+                    deadline = time.monotonic() + 15
+                    while time.monotonic() < deadline:
+                        ready, _, _ = select.select([bridge.stdout], [], [], max(0, deadline - time.monotonic()))
+                        self.assertTrue(ready, 'MCP stdio response timed out')
+                        line = bridge.stdout.readline()
+                        self.assertTrue(line, 'MCP stdio bridge exited before replying: '
+                                        + (self.root / 'bridge.log').read_text())
+                        reply = json.loads(line)
+                        if reply.get('id') == message['id']:
+                            return reply
+                    self.fail('MCP stdio response timed out')
+
+                initialized = rpc({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
+                    'protocolVersion': '2025-11-25', 'capabilities': {},
+                    'clientInfo': {'name': 'sandbox-integration-test', 'version': '1'},
+                }})
+                self.assertIn('result', initialized)
+                rpc({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+                for request_id, (params, expected) in enumerate(probes, start=2):
+                    with self.subTest(transport='stdio', tool=params['name']):
+                        response = rpc({'jsonrpc': '2.0', 'id': request_id,
+                                        'method': 'tools/call', 'params': params})
+                        self.assertIn('result', response)
+                        self.assertFalse(response['result'].get('isError', False), response)
+                        self.assertIn(expected, json.dumps(response))
+            finally:
+                bridge.stdin.close()
+                bridge.terminate()
+                try:
+                    bridge.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    bridge.kill()
+                    bridge.wait(timeout=5)
+                bridge.stdout.close()
+        self.assertEqual(trace.read_bytes() if trace.exists() else b'', before)
+
+        workspace = self.json_request('/api/v1/workspaces/resolve', 'POST', {
+            'path': str(self.workspace), 'create_if_missing': True,
+        }, headers=self.management_headers)
+        for params, expected in probes:
+            with self.subTest(sandbox='default', tool=params['name']):
+                before_default = trace.read_bytes() if trace.exists() else b''
+                request = {'workspace_id': workspace['id'], 'tool': params['name'], 'input': params['arguments']}
+                _, _, response = self.request('/api/v1/operator/tools/invoke', 'POST', request,
+                                               headers=self.management_headers)
+                self.assertNotIn(expected, json.dumps(response), 'ordinary operator calls unexpectedly bypassed MXC')
+                self.assertGreater(len(trace.read_bytes()), len(before_default))
+
+        self.stop()
+        self.start(extra_environment=environment | {'AGENA_SANDBOX': 'disabled'})
+        before = trace.read_bytes() if trace.exists() else b''
+        for params, expected in probes:
+            with self.subTest(sandbox='disabled', tool=params['name']):
+                request = {'workspace_id': workspace['id'], 'tool': params['name'], 'input': params['arguments']}
+                response = self.json_request('/api/v1/operator/tools/invoke', 'POST', request,
+                                             headers=self.management_headers)
+                self.assertIn(expected, json.dumps(response))
+        self.assertEqual(trace.read_bytes() if trace.exists() else b'', before)
 
     def test_authorization_rotation_revocation_and_single_address_control(self):
         control_path = '/api/v1/server/mcp'

@@ -1261,11 +1261,12 @@ impl McpServerBackend for ApplicationMcpBackend {
         let result = self
             .state
             .application
-            .invoke_operator_tool(
+            .invoke_operator_tool_with_sandbox(
                 self.state.workspace_id,
                 params.name.as_str(),
                 params.arguments,
                 self.state.next_call_id(),
+                false,
             )
             .await;
         match result {

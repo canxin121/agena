@@ -15,11 +15,9 @@ use std::{
 
 static POLICY_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 
-/// Model-owned execution always requires isolation. Backend startup errors are
-/// returned to the caller; neither model arguments nor inherited environment
-/// can opt a tool out of the sandbox.
+/// Trusted process default; individual MCP invocations can also disable MXC.
 pub fn enabled() -> Result<bool, ToolError> {
-    Ok(true)
+    Ok(agena_process::sandbox::enabled())
 }
 
 pub(crate) async fn protect_async(
@@ -30,6 +28,9 @@ pub(crate) async fn protect_async(
     env: HashMap<String, String>,
 ) -> Result<(Vec<String>, HashMap<String, String>), ToolError> {
     executor.ensure_not_cancelled()?;
+    if !executor.sandbox_enabled() {
+        return Ok((command, env));
+    }
     let cancel = executor.cancellation_token().cloned();
     let deadline =
         std::time::Duration::from_millis(input.timeout_ms.unwrap_or(30_000).min(30_000).max(1));
@@ -60,6 +61,9 @@ pub(crate) fn protect(
 ) -> Result<Vec<String>, ToolError> {
     let began = std::time::Instant::now();
     executor.ensure_not_cancelled()?;
+    if !executor.sandbox_enabled() {
+        return Ok(command);
+    }
     let mut reads = input
         .reads
         .iter()
@@ -107,6 +111,14 @@ pub(crate) fn policy_for_paths(
     writes: &[PathBuf],
     network: &[String],
 ) -> Result<SandboxPolicy, ToolError> {
+    if !executor.sandbox_enabled() {
+        return Ok(SandboxPolicy {
+            disabled: true,
+            readonly_paths: reads.to_vec(),
+            readwrite_paths: writes.to_vec(),
+            ..Default::default()
+        });
+    }
     let snapshot = executor.sandbox_permission_snapshot();
     for path in reads.iter().chain(writes) {
         if !path.is_absolute() || crate::canonicalize_mutation_path(path) != *path {
@@ -267,6 +279,44 @@ fn deny_network(decision: PermissionDecision, target: &str) -> Result<(), ToolEr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn direct_shell_skips_mount_and_dns_requirements_without_changing_other_executors() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let ordinary = ToolExecutor::new(
+            &root,
+            crate::authorization::ExecutionPrincipal::new(
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        );
+        let direct = ordinary.clone().with_sandbox_enabled(false);
+        assert!(!direct.sandbox_enabled());
+        assert_eq!(
+            ordinary.sandbox_enabled(),
+            agena_process::sandbox::enabled()
+        );
+        let input: ShellCommandInput = serde_json::from_value(serde_json::json!({
+            "command": "echo direct", "writes": ["does-not-exist"],
+            "network": ["no-dns-needed.invalid"]
+        }))
+        .unwrap();
+        let argv = vec!["/bin/sh".into(), "-c".into(), "echo direct".into()];
+        let env = HashMap::from([("HOME".into(), "original-home".into())]);
+        let (protected, environment) =
+            protect_async(&direct, argv.clone(), &root, &input, env.clone())
+                .await
+                .unwrap();
+        assert_eq!(protected, argv);
+        assert_eq!(environment, env);
+        let policy = policy_for_paths(&direct, &[root.clone()], &[], &input.network).unwrap();
+        assert!(policy.disabled);
+        assert_eq!(policy.readonly_paths, vec![root]);
+    }
     #[cfg(unix)]
     #[test]
     fn sandbox_mount_retargeting_is_rejected_after_authorization() {

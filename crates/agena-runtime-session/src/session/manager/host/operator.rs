@@ -28,6 +28,18 @@ impl SessionManager {
         invocation: ToolInvocation,
         call_id: i64,
     ) -> Result<crate::SessionToolExecutionOutcome, AppError> {
+        self.execute_unscoped_tool_with_sandbox(invocation, call_id, true)
+            .await
+    }
+
+    /// MCP callers execute directly; this selection belongs only to the
+    /// invocation's frozen executor and is retained by its host callbacks.
+    pub async fn execute_unscoped_tool_with_sandbox(
+        &self,
+        invocation: ToolInvocation,
+        call_id: i64,
+        sandbox_enabled: bool,
+    ) -> Result<crate::SessionToolExecutionOutcome, AppError> {
         let _admission = self.reserve_execution()?;
         let state = self.state.load_full();
         // Resolve the identity from the same frozen executor as the policy.
@@ -43,7 +55,11 @@ impl SessionManager {
             .await
             .map_err(|error| AppError::internal_error(&error))?;
         let scope = self
-            .begin_operator_invocation(call_id, state.executor.clone(), workspace)
+            .begin_operator_invocation(
+                call_id,
+                state.executor.clone().with_sandbox_enabled(sandbox_enabled),
+                workspace,
+            )
             .map_err(tool_error)?;
         let _permit = tokio::select! {
             biased;
@@ -167,8 +183,11 @@ impl SessionManager {
             .collect_permission_checks_for_invocation_in_session(&invocation, None)
             .await?;
         self.authorize_operator_checks(&authority, checks).await?;
-        let rules = self.kernel_runtime.permissions
-            .resolve_snapshot(None, Some(authority.workspace)).await
+        let rules = self
+            .kernel_runtime
+            .permissions
+            .resolve_snapshot(None, Some(authority.workspace))
+            .await
             .map_err(|error| ToolError::invalid_input(error.to_string()))?;
         let executor = executor.with_sandbox_persisted_rules(rules)?;
         let mut execution = executor

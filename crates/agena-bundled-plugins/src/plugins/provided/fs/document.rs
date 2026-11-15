@@ -123,6 +123,7 @@ fn command(
     workspace: &Path,
     source: &Source,
     backend: Backend,
+    sandbox_enabled: bool,
 ) -> SdkResult<(tokio::process::Command, &'static str)> {
     let path = std::env::var_os("PATH");
     let poppler = || which::which_in("pdftotext", path.as_ref(), workspace).ok();
@@ -177,6 +178,7 @@ fn command(
     // private writable home/cache/temp directory and denies network access.
     // The original document and the surrounding project are not exposed.
     let policy = SandboxPolicy {
+        disabled: !sandbox_enabled,
         private_paths: vec![source._directory.path().to_path_buf()],
         readonly_paths: vec![source._directory.path().to_path_buf()],
         timeout_ms: Some(30_000),
@@ -199,9 +201,10 @@ pub(super) async fn invoke(
         .map_err(|error| PluginError::internal_error(&error))?;
     let root = workspace.to_owned();
     let selected = input.backend;
+    let sandbox_enabled = agena_process::sandbox::enabled();
     let (source, command, backend) = run_fs_blocking(move || {
         let source = prepare(&authorized_path)?;
-        let (command, backend) = command(&root, &source, selected)?;
+        let (command, backend) = command(&root, &source, selected, sandbox_enabled)?;
         Ok((source, command, backend))
     })
     .await?;

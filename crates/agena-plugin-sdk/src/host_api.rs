@@ -167,6 +167,21 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Check one numeric DNS result against the already-approved hostname and
+    /// port, including IP/CIDR rules and inherited authority ceilings.
+    /// Call `require_network_permission` first and pin the permitted addresses
+    /// in the actual transport; this query does not grant hostname approval.
+    async fn check_resolved_network_permission(
+        &self,
+        _original: String,
+        _resolved: String,
+    ) -> Result<PermissionQuery> {
+        Err(PluginError::from_kind(
+            crate::PluginErrorKind::HostUnavailable,
+            "the host cannot validate resolved network addresses",
+        ))
+    }
+
     /// Authorize an access before performing I/O. Runtime hosts resolve remembered
     /// rules, automatically review `auto`, and wait for approval for `ask`.
     /// The default supports explicit allow/deny only; hosts without an approval
@@ -603,6 +618,10 @@ pub struct EventSubscription {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 /// Context of a host callback executed on behalf of a plugin.
 pub struct HostCallbackContext {
+    /// Trusted host execution mode. This travels with callback authority and
+    /// is independent of the model's tool arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -643,6 +662,9 @@ where
     F: Future,
 {
     let mut current = current_host_callback_context().unwrap_or_default();
+    if let Some(enabled) = patch.sandbox_enabled {
+        current.sandbox_enabled = Some(enabled);
+    }
     if let Some(plugin_id) = patch.plugin_id {
         current.plugin_id = Some(plugin_id);
     }

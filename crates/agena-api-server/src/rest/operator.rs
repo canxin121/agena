@@ -8,10 +8,11 @@ pub async fn invoke_operator_tool(
     State(state): State<AppState>,
     Json(request): Json<OperatorToolInvokeRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.application().execute_operator_tool(
+    json_http(state.application().execute_operator_tool_with_sandbox(
         request.workspace_id,
         request.tool.as_str(),
         request.input,
+        request.sandbox_enabled,
     ))
     .await
 }

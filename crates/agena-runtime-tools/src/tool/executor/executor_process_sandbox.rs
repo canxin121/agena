@@ -36,7 +36,7 @@ impl ToolExecutor {
             .iter()
             .map(|path| self.process_resource_path(path, &cwd))
             .collect::<Result<Vec<_>, _>>()?;
-        if writes.iter().any(|path| !path.exists()) {
+        if self.sandbox_enabled() && writes.iter().any(|path| !path.exists()) {
             return Err(ToolError::invalid_input(
                 "process writable mounts must already exist; declare an existing output directory",
             ));
@@ -243,14 +243,28 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         std::fs::create_dir(root.join("secret")).unwrap();
-        let executor = executor(&root).with_permission_config(
-            &serde_json::from_value(serde_json::json!({
-                "path": {"workspace": {"read": "ask", "write": "allow"}, "rules": {
-                    "<workspace>/secret": {"read": "deny", "write": "deny"},
-                    "<workspace>/secret/**": {"read": "deny", "write": "deny"}
-                }}
-            }))
-            .unwrap(),
+        // Public path settings contain concrete modes only. Build the
+        // transient approval policy directly to retain the one-call grant
+        // regression without accepting ask/auto as persisted path modes.
+        let mut policy = PermissionPolicy::new(
+            agena_domain::PermissionMode::Ask,
+            agena_domain::PermissionMode::Allow,
+        );
+        for pattern in ["<workspace>/secret", "<workspace>/secret/**"] {
+            policy
+                .add_path_pattern_rule(
+                    agena_domain::AccessSelector::Any,
+                    agena_domain::PermissionMode::Deny,
+                    pattern,
+                )
+                .unwrap();
+        }
+        let executor = ToolExecutor::new(
+            root.clone(),
+            ExecutionPrincipal::new(policy, ToolPermissionPolicy::allow_all()),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
         );
         let resources = executor
             .resolve_process_sandbox_resources(Default::default())
@@ -268,7 +282,7 @@ mod tests {
         ));
         let executor = executor.with_permission_config(
             &serde_json::from_value(serde_json::json!({
-                "path": {"workspace": {"read": "allow", "write": "allow"}}
+                "path": {"workspace": "readwrite"}
             }))
             .unwrap(),
         );

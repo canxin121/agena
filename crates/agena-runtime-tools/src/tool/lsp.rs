@@ -483,10 +483,18 @@ mod tests {
         let mut allowed = executor(&root);
         assert_eq!(lsp_cache_scope(&allowed, &root), None);
         allowed.session_id = Some(42);
-        assert_eq!(lsp_cache_scope(&allowed, &root).as_deref(), Some("session:42"));
-        allowed.principal = allowed.principal.clone().try_apply_permission_config(
-            &serde_json::from_value(serde_json::json!({"path":{"workspace":{"read":"ask"}}})).unwrap(),
-        ).unwrap();
+        assert_eq!(
+            lsp_cache_scope(&allowed, &root).as_deref(),
+            Some("session:42")
+        );
+        // One-call approval is transient authority, not a persisted path mode.
+        allowed.principal = ExecutionPrincipal::new(
+            PermissionPolicy::new(
+                agena_domain::PermissionMode::Ask,
+                agena_domain::PermissionMode::Allow,
+            ),
+            ToolPermissionPolicy::allow_all(),
+        );
         assert_eq!(lsp_cache_scope(&allowed, &root), None);
     }
 

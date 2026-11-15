@@ -1479,6 +1479,16 @@ mod permission_tests {
                     .unwrap(),
                 PermissionQuery::Ask { .. }
             ));
+            assert!(matches!(
+                client
+                    .check_resolved_network_permission(
+                        "https://example.org".into(),
+                        "8.8.8.8:443".into()
+                    )
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
             assert_eq!(
                 client
                     .require_path_permission(PathPermissionQuery::read("file"))
@@ -1503,6 +1513,7 @@ mod permission_tests {
             [
                 method::HOST_PERMISSION_CHECK_PATH,
                 method::HOST_PERMISSION_CHECK_NETWORK,
+                method::HOST_PERMISSION_CHECK_RESOLVED_NETWORK,
                 method::HOST_PERMISSION_REQUIRE_PATH,
                 method::HOST_PERMISSION_REQUIRE_NETWORK
             ]

@@ -166,6 +166,31 @@ async fn child(mode: &str, urls: &str, proxy: &str) {
 }
 
 #[tokio::test]
+async fn operator_invocation_transmits_sandbox_mode_separately_from_tool_input() {
+    let fixture = Fixture::new("127.0.0.1:0", "sandbox-mode", Some("{}")).await;
+    let client = AgenaClient::new(&fixture.url).unwrap();
+    client
+        .invoke_operator_tool_with_sandbox(
+            42,
+            "agena.fs.read",
+            Some(serde_json::json!({"file_path": "input"})),
+            false,
+        )
+        .await
+        .unwrap();
+    client
+        .invoke_operator_tool(42, "agena.fs.read", None)
+        .await
+        .unwrap();
+    let bodies = fixture.request_bodies.lock().unwrap();
+    let direct: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+    assert_eq!(direct["sandbox_enabled"], false);
+    assert_eq!(direct["input"], serde_json::json!({"file_path": "input"}));
+    let ordinary: serde_json::Value = serde_json::from_slice(&bodies[1]).unwrap();
+    assert_eq!(ordinary["sandbox_enabled"], true);
+}
+
+#[tokio::test]
 async fn local_auth_api_and_live_streams_bypass_proxy_but_remote_servers_use_it() {
     let local = Fixture::new("127.0.0.1:0", "local", None).await;
     let proxy = Fixture::new("127.0.0.1:0", "proxy", None).await;

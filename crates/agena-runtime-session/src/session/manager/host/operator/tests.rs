@@ -196,10 +196,15 @@ impl Fixture {
             .unwrap();
         let permissions: agena_domain::PermissionConfig = serde_json::from_value(json!({
             "path": {
-                "workspace": {"read": "allow", "write": write_mode},
-                "external": {"read": "deny", "write": "deny"}
+                "workspace": if write_mode == "deny" { "readonly" } else { "readwrite" },
+                "external": "deny"
             },
-            "tools": {"default": "allow"}
+            "tools": {
+                "default": "allow",
+                "names": {
+                    "test.operator.write": if matches!(write_mode, "ask" | "auto") { write_mode } else { "allow" }
+                }
+            }
         }))
         .unwrap();
         let executor = ToolExecutor::new(
@@ -273,6 +278,57 @@ fn invocation(tool: &str, input: Value) -> ToolInvocation {
         format!("test.operator.{tool}"),
         StructuredObject::try_from(input).unwrap(),
     )
+}
+
+#[tokio::test]
+async fn direct_operator_mode_reaches_plugins_and_does_not_leak_or_bypass_permissions() {
+    let fixture = Fixture::new("allow").await;
+    fixture
+        .manager
+        .execute_unscoped_tool_with_sandbox(
+            invocation("read_many", json!({"paths": ["one.txt"]})),
+            100,
+            false,
+        )
+        .await
+        .unwrap();
+    let direct = fixture
+        .plugin
+        .contexts
+        .lock()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(direct.sandbox_enabled, Some(false));
+    fixture.assert_revoked(direct).await;
+    fixture
+        .call("read_many", json!({"paths": ["two.txt"]}), 101)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .plugin
+            .contexts
+            .lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .sandbox_enabled,
+        Some(fixture.manager.state.load().executor.sandbox_enabled())
+    );
+    assert!(
+        fixture
+            .manager
+            .execute_unscoped_tool_with_sandbox(
+                invocation("read_many", json!({"paths": ["../outside.txt"]})),
+                102,
+                false,
+            )
+            .await
+            .is_err()
+    );
+    fixture.shutdown().await;
 }
 
 #[tokio::test]
@@ -468,8 +524,8 @@ async fn operator_scope_preserves_its_policy_when_runtime_is_reconfigured() {
 
     let permissions: agena_domain::PermissionConfig = serde_json::from_value(json!({
         "path": {
-            "workspace": {"read": "allow", "write": "deny"},
-            "external": {"read": "deny", "write": "deny"}
+            "workspace": "readonly",
+            "external": "deny"
         },
         "tools": {"default": "allow"}
     }))
@@ -525,8 +581,8 @@ async fn operator_scope_reload_does_not_inherit_another_workspaces_permission_ru
     let state = fixture.manager.state.load_full();
     let permissions: agena_domain::PermissionConfig = serde_json::from_value(json!({
         "path": {
-            "workspace": {"read": "allow", "write": "deny"},
-            "external": {"read": "deny", "write": "deny"}
+            "workspace": "readonly",
+            "external": "deny"
         },
         // ReadOnly tools have a built-in Allow class above tools.default.
         // An explicit tool name takes precedence and makes this test Ask.

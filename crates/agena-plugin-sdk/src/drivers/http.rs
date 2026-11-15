@@ -1231,6 +1231,16 @@ mod permission_tests {
                     .unwrap(),
                 PermissionQuery::Ask { .. }
             ));
+            assert!(matches!(
+                proxy
+                    .check_resolved_network_permission(
+                        "https://example.org".into(),
+                        "8.8.8.8:443".into()
+                    )
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
             assert_eq!(
                 proxy
                     .require_path_permission(PathPermissionQuery::read("file"))

@@ -68,6 +68,8 @@ fn run() -> error::Result<()> {
     // constructed (including clients created during runtime bootstrap).
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = AgenaCli::parse();
+    // Capture trusted sandbox configuration before plugins or tools run.
+    let _ = agena_process::sandbox::enabled();
     let root = cli.data_dir.clone().unwrap_or_else(|| {
         agena_storage_layout::StorageLayout::from_env()
             .root()

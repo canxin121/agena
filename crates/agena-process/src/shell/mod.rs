@@ -10,7 +10,7 @@
 //! - [`SHELL_SNAPSHOT_ENV`] (`AGENA_SHELL_SNAPSHOT`) selects snapshot behavior.
 //!
 //! Trusted process configuration selects the mode; model input cannot change it,
-//! matching the existing `AGENA_SHELL_SANDBOX` policy surface. Command-line
+//! matching the trusted `AGENA_SANDBOX` policy surface. Command-line
 //! construction stays in `agena-tool::shell`; interactive startup capture lives
 //! in [`snapshot`].
 

@@ -658,6 +658,7 @@ fn tool_hook_context(
         ),
         authority_token: None,
         http_binding_id: None,
+        sandbox_enabled: None,
     }
 }
 

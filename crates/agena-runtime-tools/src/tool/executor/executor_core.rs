@@ -16,6 +16,7 @@ impl ToolExecutor {
             global: false,
             session_id: None,
             principal,
+            sandbox_enabled: true,
             sandbox_persisted_rules: Arc::new(Vec::new()),
             allowed_tool_names: None,
             model_id: None,
@@ -47,7 +48,8 @@ impl ToolExecutor {
     /// Recheck resolved effects on a blocking worker immediately before use.
     /// A path retargeted since preflight must pass this call's authority again.
     pub fn with_path_effect_authorizer(
-        mut self, check: Arc<super::super::PathEffectAuthorizer>,
+        mut self,
+        check: Arc<super::super::PathEffectAuthorizer>,
     ) -> Self {
         self.path_effect_authorizer = Some(check);
         self
@@ -55,6 +57,17 @@ impl ToolExecutor {
 
     pub fn scheduler(&self) -> Option<&Arc<agena_scheduler::Scheduler>> {
         self.scheduler.as_ref()
+    }
+
+    /// Select isolation for this trusted invocation without changing other
+    /// executors or the process-wide default. Permission checks still apply.
+    pub fn with_sandbox_enabled(mut self, enabled: bool) -> Self {
+        self.sandbox_enabled = enabled;
+        self
+    }
+
+    pub fn sandbox_enabled(&self) -> bool {
+        self.sandbox_enabled && agena_process::sandbox::enabled()
     }
 
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {

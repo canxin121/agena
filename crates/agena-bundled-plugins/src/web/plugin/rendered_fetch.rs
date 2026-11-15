@@ -25,6 +25,7 @@ pub(super) async fn search_source(
     url: &url::Url,
     remaining: Duration,
 ) -> SdkResult<agena_web::WebSearchPage> {
+    require_browser_sandbox()?;
     let mut options = plugin.spider_fetch_options(true)?;
     options.timeout = remaining;
     options.max_body_bytes = 4 * 1024 * 1024;
@@ -56,6 +57,7 @@ async fn fetch_source(
     options: &SpiderFetchOptions,
     search_origin: Option<url::Origin>,
 ) -> SdkResult<fetch_transport::Source> {
+    require_browser_sandbox()?;
     let operation = async {
         let _slot = RENDERS
             .acquire()
@@ -93,7 +95,7 @@ async fn fetch_source(
                         ));
                     }
                     host.require_network_permission(target.to_string()).await?;
-                    validate_public_network_target(&target, &network).await?;
+                    validate_authorized_network_target(&target, &network, host.as_ref()).await?;
                     if document && options.respect_robots_txt {
                         let origin = target.origin().ascii_serialization();
                         let mut policies = robots.lock().await;
@@ -105,7 +107,8 @@ async fn fetch_source(
                                 async move {
                                     host.require_network_permission(target.to_string()).await?;
                                     pacing.wait_for_url_host(&target).await;
-                                    resolve_public_http_route(&target, &network).await
+                                    resolve_public_http_route(&target, &network, host.as_ref())
+                                        .await
                                 }
                             })
                             .await?;

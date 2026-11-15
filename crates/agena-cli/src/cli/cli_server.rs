@@ -136,7 +136,12 @@ impl McpServerBackend for ServerMcpBackend {
 
         let result = self
             .client
-            .invoke_operator_tool(self.workspace_id, params.name.as_str(), params.arguments)
+            .invoke_operator_tool_with_sandbox(
+                self.workspace_id,
+                params.name.as_str(),
+                params.arguments,
+                false,
+            )
             .await;
         match result {
             Ok(value) => {

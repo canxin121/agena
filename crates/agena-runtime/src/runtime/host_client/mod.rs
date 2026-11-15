@@ -584,6 +584,25 @@ impl HostClient for RuntimeHostClient {
         Ok(permission_query(decision))
     }
 
+    async fn check_resolved_network_permission(
+        &self,
+        original: String,
+        resolved: String,
+    ) -> Result<PermissionQuery, PluginError> {
+        let original = original
+            .parse::<agena_domain::NetworkTarget>()
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let resolved = resolved
+            .parse::<agena_domain::NetworkTarget>()
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        Ok(permission_query(
+            executor
+                .sandbox_permission_snapshot()
+                .authorize_resolved_network_address(&original, &resolved),
+        ))
+    }
+
     async fn require_path_permission(
         &self,
         request: PathPermissionQuery,
@@ -1485,13 +1504,16 @@ impl HostClient for RuntimeHostClient {
         resources: agena_plugin_sdk::host_api::HostProcessResources,
     ) -> Result<agena_plugin_sdk::host_api::HostPreparedProcessSandbox, PluginError> {
         let (session, call) = self.callback_scope()?;
-        let mut prepared = self.session_manager()?
+        let mut prepared = self
+            .session_manager()?
             .prepare_host_process_sandbox(session, call, resources)
             .await
             .map_err(plugin_error_from_app)?;
         if prepared.call_bound {
-            let completion = agena_plugin_host::current_plugin_call_completion()
-                .ok_or_else(|| host_unavailable("process approval requires a live originating call"))?;
+            let completion =
+                agena_plugin_host::current_plugin_call_completion().ok_or_else(|| {
+                    host_unavailable("process approval requires a live originating call")
+                })?;
             prepared.scope.push_str(":origin:");
             prepared.scope.push_str(completion.id());
         }

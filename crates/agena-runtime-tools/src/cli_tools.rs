@@ -237,6 +237,7 @@ pub async fn probe_version(tool: &mut CliAvailability, workspace: &Path) {
         workspace.join(path)
     };
     let version_args = spec.version_args;
+    let sandbox_enabled = agena_process::sandbox::enabled();
     let prepared = tokio::task::spawn_blocking(move || {
         let directory = tempfile::Builder::new()
             .prefix("agena-cli-version-")
@@ -249,6 +250,7 @@ pub async fn probe_version(tool: &mut CliAvailability, workspace: &Path) {
             .env("PAGER", "cat")
             .env("GIT_PAGER", "cat");
         let policy = agena_process::sandbox::SandboxPolicy {
+            disabled: !sandbox_enabled,
             readonly_paths: vec![directory.path().to_path_buf()],
             timeout_ms: Some(2_000),
             ..Default::default()

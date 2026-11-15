@@ -39,6 +39,8 @@ macro_rules! impl_callback_host_client {
                 -> $crate::host_api::PermissionQuery = HOST_PERMISSION_CHECK_PATH { "request": request };
             check_network_permission(target: String)
                 -> $crate::host_api::PermissionQuery = HOST_PERMISSION_CHECK_NETWORK { "target": target };
+            check_resolved_network_permission(original: String, resolved: String)
+                -> $crate::host_api::PermissionQuery = HOST_PERMISSION_CHECK_RESOLVED_NETWORK { "original": original, "resolved": resolved };
             request_config_reload()
                 -> $crate::host_api::HostConfigReloadRequestResponse = HOST_CONFIG_RELOAD_REQUEST {};
             config_reload_status(request: $crate::host_api::HostConfigReloadStatusRequest)

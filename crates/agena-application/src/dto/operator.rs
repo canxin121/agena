@@ -40,4 +40,32 @@ pub struct OperatorToolInvokeRequest {
     pub tool: String,
     #[serde(default)]
     pub input: Option<serde_json::Value>,
+    /// Trusted API caller's execution mode, outside the tool input object.
+    /// Ordinary operator calls preserve isolation; MCP bridges send false.
+    #[serde(default = "operator_sandbox_enabled")]
+    pub sandbox_enabled: bool,
+}
+
+fn operator_sandbox_enabled() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_sandbox_defaults_to_isolation_and_accepts_explicit_direct_execution() {
+        let ordinary: OperatorToolInvokeRequest = serde_json::from_value(serde_json::json!({
+            "workspace_id": 1, "tool": "agena.fs.read"
+        }))
+        .unwrap();
+        assert!(ordinary.sandbox_enabled);
+        let direct: OperatorToolInvokeRequest = serde_json::from_value(serde_json::json!({
+            "workspace_id": 1, "tool": "agena.fs.read", "sandbox_enabled": false,
+            "input": {"sandbox_enabled": true}
+        }))
+        .unwrap();
+        assert!(!direct.sandbox_enabled);
+    }
 }

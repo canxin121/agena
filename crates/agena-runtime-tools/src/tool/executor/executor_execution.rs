@@ -269,7 +269,17 @@ impl ToolExecutor {
             ));
         }
         let writer = context.output.clone();
-        let mut result = executor.execute_invocation_inner(invocation, context).await;
+        let mut result = agena_process::sandbox::scope_enabled(
+            executor.sandbox_enabled(),
+            agena_plugin_host::sdk::host_api::run_in_host_callback_context(
+                agena_plugin_host::sdk::host_api::HostCallbackContext {
+                    sandbox_enabled: Some(executor.sandbox_enabled()),
+                    ..Default::default()
+                },
+                executor.execute_invocation_inner(invocation, context),
+            ),
+        )
+        .await;
         if let Some(error) = writer.and_then(|output| output.capture_diagnostic())
             && let Ok(execution) = &mut result
         {
@@ -312,15 +322,23 @@ impl ToolExecutor {
 
         self.check_cloud_tool_adapter(&resolution.canonical_name())?;
 
-        if let Some(plan) = crate::sandbox_worker::plan(self, &resolution, invocation)? {
+        if self.sandbox_enabled()
+            && let Some(plan) = crate::sandbox_worker::plan(self, &resolution, invocation)?
+        {
             let execution = crate::sandbox_worker::execute(self, plan).await?;
             self.ensure_not_cancelled()?;
             self.verify_channel_access().await?;
             let payload = serde_json::Value::from(execution.output.payload.clone());
-            return self.finalize_execution_async(
-                invocation, session_id, resolution.canonical_name().as_str(), call_id,
-                execution, Some(&payload),
-            ).await;
+            return self
+                .finalize_execution_async(
+                    invocation,
+                    session_id,
+                    resolution.canonical_name().as_str(),
+                    call_id,
+                    execution,
+                    Some(&payload),
+                )
+                .await;
         }
 
         if resolution.namespace() == "agena"

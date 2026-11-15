@@ -53,6 +53,16 @@ impl HostClient for PermissionHost {
         self.check_path_permission(PathPermissionQuery::read("unused"))
             .await
     }
+    async fn check_resolved_network_permission(
+        &self,
+        original: String,
+        resolved: String,
+    ) -> crate::sdk::Result<PermissionQuery> {
+        assert_eq!(original, "https://example.org");
+        assert_eq!(resolved, "8.8.8.8:443");
+        self.check_path_permission(PathPermissionQuery::read("unused"))
+            .await
+    }
     async fn require_path_permission(&self, _: PathPermissionQuery) -> crate::sdk::Result<()> {
         let context = host_api::current_host_callback_context().unwrap();
         assert_eq!(
@@ -268,6 +278,16 @@ async fn scoped_queries_are_read_only_and_requirements_preserve_declines() {
                     .unwrap(),
                 PermissionQuery::Ask { .. }
             ));
+            assert!(matches!(
+                scoped
+                    .check_resolved_network_permission(
+                        "https://example.org".into(),
+                        "8.8.8.8:443".into()
+                    )
+                    .await
+                    .unwrap(),
+                PermissionQuery::Ask { .. }
+            ));
             assert_eq!(
                 inner
                     .requirements
@@ -292,13 +312,71 @@ async fn scoped_queries_are_read_only_and_requirements_preserve_declines() {
             );
         })
         .await;
-    assert_eq!(inner.queries.load(std::sync::atomic::Ordering::Relaxed), 2);
+    assert_eq!(inner.queries.load(std::sync::atomic::Ordering::Relaxed), 3);
     assert_eq!(
         inner
             .requirements
             .load(std::sync::atomic::Ordering::Relaxed),
         2
     );
+}
+
+#[tokio::test]
+async fn resolved_network_rpc_preserves_authority_and_rejects_forged_or_expired_context() {
+    let inner = Arc::new(PermissionHost {
+        allowed_query_session: Some(78135),
+        ..Default::default()
+    });
+    let handle = HostHandle::new(inner.clone());
+    let plugin: PluginKey = "test.permissions".parse().unwrap();
+    handle.begin_plugin_instance(plugin.clone());
+    let (authorized, lease) = handle.issue_callback_authority(&plugin, context());
+    let params = json!({
+        "original": "https://example.org",
+        "resolved": "8.8.8.8:443",
+        "context": authorized,
+    });
+    let result = handle
+        .handle_call_for_plugin(
+            &plugin.to_string(),
+            method::HOST_PERMISSION_CHECK_RESOLVED_NETWORK,
+            params.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result["verdict"], "allow");
+    assert_eq!(
+        inner.query_contexts.lock().unwrap()[0].session_id,
+        Some(78135)
+    );
+    let mut forged = params.clone();
+    forged["context"]["call_id"] = json!(13);
+    assert_eq!(
+        handle
+            .handle_call_for_plugin(
+                &plugin.to_string(),
+                method::HOST_PERMISSION_CHECK_RESOLVED_NETWORK,
+                forged,
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PluginErrorKind::PolicyDenied,
+    );
+    drop(lease);
+    assert_eq!(
+        handle
+            .handle_call_for_plugin(
+                &plugin.to_string(),
+                method::HOST_PERMISSION_CHECK_RESOLVED_NETWORK,
+                params,
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        PluginErrorKind::PolicyDenied,
+    );
+    assert_eq!(inner.queries.load(std::sync::atomic::Ordering::Relaxed), 1);
 }
 
 #[tokio::test]

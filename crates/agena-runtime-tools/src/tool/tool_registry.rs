@@ -624,6 +624,7 @@ pub struct ToolExecutor {
     pub(super) global: bool,
     pub(super) session_id: Option<i64>,
     pub(super) principal: ExecutionPrincipal,
+    pub(super) sandbox_enabled: bool,
     /// Persisted rules visible to this invocation's owning session. The
     /// static principal is projected afresh when constructing a sandbox.
     pub(super) sandbox_persisted_rules:
@@ -659,8 +660,8 @@ pub struct ToolExecutor {
 pub type ReadPathAuthorizer = dyn Fn(&std::path::Path) -> Result<(), ToolError> + Send + Sync;
 
 /// Bound to one invocation's existing approval authority, never model input.
-pub type PathEffectAuthorizer = dyn Fn(agena_domain::AccessKind, &std::path::Path) -> Result<(), ToolError>
-    + Send + Sync;
+pub type PathEffectAuthorizer =
+    dyn Fn(agena_domain::AccessKind, &std::path::Path) -> Result<(), ToolError> + Send + Sync;
 
 pub type MediaInputBinder = dyn Fn(agena_domain::AttachmentItem) -> Result<agena_domain::AttachmentItem, ToolError>
     + Send

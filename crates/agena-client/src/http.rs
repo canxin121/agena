@@ -2048,12 +2048,24 @@ impl AgenaClient {
         tool: &str,
         input: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, ClientError> {
+        self.invoke_operator_tool_with_sandbox(workspace_id, tool, input, true)
+            .await
+    }
+
+    pub async fn invoke_operator_tool_with_sandbox(
+        &self,
+        workspace_id: i64,
+        tool: &str,
+        input: Option<serde_json::Value>,
+        sandbox_enabled: bool,
+    ) -> Result<serde_json::Value, ClientError> {
         self.post_json(
             "/api/v1/operator/tools/invoke",
             serde_json::json!({
                 "workspace_id": workspace_id,
                 "tool": tool,
-                "input": input
+                "input": input,
+                "sandbox_enabled": sandbox_enabled
             }),
         )
         .await

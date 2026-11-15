@@ -1249,13 +1249,24 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
         call_id: i64,
     ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::RuntimeToolExecutionError>
     {
+        self.execute_runtime_tool_with_sandbox(invocation, call_id, true)
+            .await
+    }
+
+    async fn execute_runtime_tool_with_sandbox(
+        &self,
+        invocation: &agena_domain::ToolInvocation,
+        call_id: i64,
+        sandbox_enabled: bool,
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::RuntimeToolExecutionError>
+    {
         let manager = self.current_snapshot().session_manager().ok_or_else(|| {
             agena_runtime::RuntimeToolExecutionError::new(
                 "session manager is unavailable for authorization",
             )
         })?;
         manager
-            .execute_unscoped_tool(invocation.clone(), call_id)
+            .execute_unscoped_tool_with_sandbox(invocation.clone(), call_id, sandbox_enabled)
             .await
             .map_err(|error| agena_runtime::RuntimeToolExecutionError::from_error(&error))
     }

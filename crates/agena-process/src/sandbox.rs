@@ -3,7 +3,7 @@
 //! Permission decisions belong to the caller. This module transports an already
 //! approved policy to a short-lived launcher, so existing Tokio pipes, PTYs and
 //! process-tree ownership continue to work. Launch failures never run the command
-//! outside the sandbox.
+//! outside the sandbox unless isolation was explicitly disabled by the host.
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -27,12 +27,50 @@ const PAYLOAD_ARGUMENT: &str = "--agena-sandbox-payload";
 const PAYLOAD_ENV_PREFIX: &str = "AGENA_SANDBOX_PAYLOAD_ENV_";
 const LAUNCH_FAILURE: i32 = 125;
 static LAUNCHER_PATH: OnceLock<PathBuf> = OnceLock::new();
+static SANDBOX_ENABLED: OnceLock<bool> = OnceLock::new();
+
+tokio::task_local! {
+    static INVOCATION_SANDBOX_ENABLED: bool;
+}
+
+/// Trusted process setting, captured once rather than read from tool environments.
+/// `AGENA_SANDBOX=disabled` disables MXC for this Agena process. The historical
+/// shell setting remains an alias when the process-wide setting is absent.
+pub fn enabled() -> bool {
+    *SANDBOX_ENABLED.get_or_init(|| enabled_from_lookup(|key| std::env::var(key).ok()))
+        && INVOCATION_SANDBOX_ENABLED
+            .try_with(|enabled| *enabled)
+            .unwrap_or(true)
+}
+
+/// Apply a trusted invocation's mode to async helpers without changing other
+/// requests. Blocking work and cached processes must carry `policy.disabled`
+/// explicitly, since Tokio task-local values do not cross task boundaries.
+pub async fn scope_enabled<F: std::future::Future>(enabled: bool, future: F) -> F::Output {
+    INVOCATION_SANDBOX_ENABLED.scope(enabled, future).await
+}
+
+fn enabled_from_lookup(lookup: impl Fn(&str) -> Option<String>) -> bool {
+    lookup("AGENA_SANDBOX")
+        .or_else(|| lookup("AGENA_SHELL_SANDBOX"))
+        .is_none_or(|value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "disabled" | "false" | "0" | "off"
+            )
+        })
+}
 
 /// Concrete permissions for one process tree. Values are supplied by trusted
 /// runtime code after the normal permission/approval flow.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxPolicy {
+    /// Host-selected execution mode, never populated from model tool input.
+    /// Included in policy equality so isolated and direct processes cannot share
+    /// a cached LSP, MCP connection or plugin process.
+    #[serde(default)]
+    pub disabled: bool,
     #[serde(default)]
     pub readonly_paths: Vec<PathBuf>,
     #[serde(default)]
@@ -128,7 +166,6 @@ struct ProxyCredentials {
 
 /// Set a trusted launcher executable for embedders and integration-test helpers.
 /// The executable must call try_run_launcher before its ordinary argument parser.
-/// There is deliberately no environment variable which disables the sandbox.
 pub fn configure_launcher(path: impl Into<PathBuf>) -> io::Result<()> {
     let path = path.into();
     if !path.is_absolute() || !path.is_file() {
@@ -210,14 +247,20 @@ fn safe_environment_name(name: &str) -> bool {
         )
 }
 
-/// Replace an argv with the sandbox launcher argv. The environment is reduced to
-/// safe runtime settings; the launcher gives the workload a private home/cache/tmp.
+/// When isolation is enabled, replace argv with the sandbox launcher argv and
+/// reduce the environment. Direct execution keeps argv and environment intact.
 pub fn wrap_argv(
     argv: &[String],
     cwd: &Path,
     environment: &mut HashMap<String, String>,
     policy: &SandboxPolicy,
 ) -> io::Result<Vec<String>> {
+    if !enabled() || policy.disabled {
+        if argv.is_empty() {
+            return Err(invalid("process argv must not be empty"));
+        }
+        return Ok(argv.to_vec());
+    }
     let mut safe = sanitize_environment(environment);
     // Rustup's shims find installed toolchains through RUSTUP_HOME even though
     // the workload's HOME and CARGO_HOME are private.
@@ -227,7 +270,7 @@ pub fn wrap_argv(
     Ok(wrapped)
 }
 
-/// Construct a sandboxed Tokio command. Set stdio on the returned command.
+/// Construct a Tokio command in the selected mode. Set stdio on the result.
 pub fn command(
     program: &str,
     args: &[String],
@@ -235,6 +278,11 @@ pub fn command(
     environment: &HashMap<String, String>,
     policy: &SandboxPolicy,
 ) -> io::Result<tokio::process::Command> {
+    if !enabled() || policy.disabled {
+        let mut command = tokio::process::Command::new(program);
+        command.args(args).current_dir(cwd).envs(environment);
+        return Ok(command);
+    }
     let mut argv = vec![program.to_owned()];
     argv.extend_from_slice(args);
     let mut environment = environment.clone();
@@ -255,6 +303,9 @@ pub fn wrap_tokio_command(
     command: &mut tokio::process::Command,
     policy: &SandboxPolicy,
 ) -> io::Result<()> {
+    if !enabled() || policy.disabled {
+        return Ok(());
+    }
     let captured = capture_command(command.as_std(), policy)?;
     let (argv, launcher_environment) = launcher_argv(
         &captured.argv,
@@ -277,6 +328,9 @@ pub fn wrap_std_command(
     command: &mut std::process::Command,
     policy: &SandboxPolicy,
 ) -> io::Result<()> {
+    if !enabled() || policy.disabled {
+        return Ok(());
+    }
     let captured = capture_command(command, policy)?;
     let (argv, launcher_environment) = launcher_argv(
         &captured.argv,
@@ -1635,6 +1689,123 @@ fn install_termination_handlers() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn invocation_sandbox_mode_is_isolated_and_restored_after_awaits() {
+        let ordinary = enabled();
+        tokio::join!(
+            scope_enabled(false, async {
+                tokio::task::yield_now().await;
+                assert!(!enabled());
+            }),
+            async {
+                tokio::task::yield_now().await;
+                assert_eq!(enabled(), ordinary);
+            },
+        );
+        assert_eq!(enabled(), ordinary);
+    }
+
+    #[test]
+    fn trusted_switch_defaults_to_isolation_and_process_setting_overrides_legacy_alias() {
+        assert!(enabled_from_lookup(|_| None));
+        for value in ["disabled", "false", "0", "off", " Disabled "] {
+            assert!(!enabled_from_lookup(
+                |key| (key == "AGENA_SANDBOX").then(|| value.into())
+            ));
+        }
+        assert!(!enabled_from_lookup(
+            |key| (key == "AGENA_SHELL_SANDBOX").then(|| "disabled".into())
+        ));
+        assert!(enabled_from_lookup(|key| Some(
+            if key == "AGENA_SANDBOX" {
+                "enabled"
+            } else {
+                "disabled"
+            }
+            .into()
+        )));
+        assert!(enabled_from_lookup(|_| Some("misspelled".into())));
+    }
+
+    #[test]
+    fn direct_argv_keeps_environment_and_skips_mxc_policy_preparation() {
+        let argv = vec!["program".into(), "a b".into()];
+        let mut environment = HashMap::from([
+            ("HOME".into(), "/actual/home".into()),
+            ("AGENA_SANDBOX".into(), "enabled".into()),
+        ]);
+        let original = environment.clone();
+        let policy = SandboxPolicy {
+            disabled: true,
+            readonly_paths: vec![PathBuf::from("relative-not-a-mount")],
+            ..Default::default()
+        };
+        assert_eq!(
+            wrap_argv(&argv, Path::new("."), &mut environment, &policy).unwrap(),
+            argv
+        );
+        assert_eq!(environment, original);
+        assert_ne!(policy, SandboxPolicy::default());
+        assert!(
+            !serde_json::from_str::<SandboxPolicy>("{}")
+                .unwrap()
+                .disabled
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_commands_keep_cwd_environment_and_preconfigured_stdio() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("input"), "host-file").unwrap();
+        let policy = SandboxPolicy {
+            disabled: true,
+            denied_paths: vec![dir.path().to_path_buf()],
+            ..Default::default()
+        };
+        let args = vec![
+            "-c".into(),
+            "cat input; printf '%s' \"$AGENA_DIRECT_TEST_MARKER\"".into(),
+        ];
+        let env = HashMap::from([("AGENA_DIRECT_TEST_MARKER".into(), "-direct".into())]);
+        let output = command("/bin/sh", &args, dir.path(), &env, &policy)
+            .unwrap()
+            .output()
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"host-file-direct");
+
+        let mut standard = std::process::Command::new("/bin/sh");
+        standard
+            .args(&args)
+            .current_dir(dir.path())
+            .env_clear()
+            .envs(&env)
+            .stdout(std::process::Stdio::piped());
+        wrap_std_command(&mut standard, &policy).unwrap();
+        let output = standard.spawn().unwrap().wait_with_output().unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"host-file-direct");
+
+        let mut asynchronous = tokio::process::Command::new("/bin/sh");
+        asynchronous
+            .args(&args)
+            .current_dir(dir.path())
+            .env_clear()
+            .envs(&env)
+            .stdout(std::process::Stdio::piped());
+        wrap_tokio_command(&mut asynchronous, &policy).unwrap();
+        let output = asynchronous
+            .spawn()
+            .unwrap()
+            .wait_with_output()
+            .await
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"host-file-direct");
+    }
 
     #[test]
     fn parent_credentials_and_proxy_overrides_are_not_inherited() {

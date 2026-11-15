@@ -47,6 +47,47 @@ use agena_plugin_host::sdk::{
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
 
+/// Chromium currently lacks a per-call MXC policy and an identity-bound
+/// transport that pins every connection. Keep rendering closed until that
+/// boundary exists; request interception alone cannot prevent DNS rebinding.
+fn require_browser_sandbox() -> SdkResult<()> {
+    if !agena_process::sandbox::enabled()
+        || agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .is_some_and(|context| context.sandbox_enabled == Some(false))
+    {
+        return Ok(());
+    }
+    Err(PluginError::from_kind(
+        agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
+        "rendered browser isolation is not supported by the current MXC integration; use HTTP fetch with render_js=false",
+    ))
+}
+
+#[cfg(test)]
+mod browser_sandbox_mode_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn direct_browser_calls_skip_mxc_requirement_and_restore_enclosing_scope() {
+        use agena_plugin_host::sdk::host_api::{
+            HostCallbackContext, run_in_isolated_host_callback_context,
+        };
+        let previous = require_browser_sandbox().is_err();
+        run_in_isolated_host_callback_context(
+            HostCallbackContext {
+                sandbox_enabled: Some(false),
+                ..Default::default()
+            },
+            async {
+                require_browser_sandbox().unwrap();
+            },
+        )
+        .await;
+        assert_eq!(require_browser_sandbox().is_err(), previous);
+        assert_eq!(previous, agena_process::sandbox::enabled());
+    }
+}
+
 fn browser_owner(context: &ToolInvokeContext<'_>) -> SdkResult<agena_runtime_tools::TerminalOwner> {
     Ok(agena_runtime_tools::TerminalOwner {
         workspace: if context.is_global() {
@@ -1740,7 +1781,12 @@ impl WebPlugin {
             .host
             .require_network_permission(url.to_string())
             .await?;
-        validate_public_network_target(url, &self.config()?.network).await
+        validate_authorized_network_target(
+            url,
+            &self.config()?.network,
+            self.state()?.host.as_ref(),
+        )
+        .await
     }
 
     /// Resolve ordinary HTTP redirect hops before a managed browser target is
@@ -1761,7 +1807,12 @@ impl WebPlugin {
             let mut checked = Vec::new();
             for _ in 0..=MAX_REDIRECTS {
                 self.validate_network_target(&current).await?;
-                let route = resolve_public_http_route(&current, &self.config()?.network).await?;
+                let route = resolve_public_http_route(
+                    &current,
+                    &self.config()?.network,
+                    self.state()?.host.as_ref(),
+                )
+                .await?;
                 let client = route
                     .apply(
                         reqwest::Client::builder()
@@ -1840,6 +1891,7 @@ impl WebPlugin {
     where
         F: std::future::Future<Output = SdkResult<T>>,
     {
+        require_browser_sandbox()?;
         self.require_browser_owner(context, target).await?;
         let gate = self.browser_state.action_gate(target).await;
         let _guard = gate.lock().await;
@@ -1983,6 +2035,7 @@ impl WebPlugin {
     }
 
     async fn browser_endpoint(&self) -> SdkResult<String> {
+        require_browser_sandbox()?;
         let options = self.local_browser_options()?;
         let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
@@ -2101,7 +2154,7 @@ impl WebPlugin {
                     return Ok(());
                 }
                 host.require_network_permission(raw_url).await?;
-                validate_public_network_target(&url, &network).await
+                validate_authorized_network_target(&url, &network, host.as_ref()).await
             })
         });
         let client =
@@ -2335,6 +2388,9 @@ impl WebPlugin {
         render_js: bool,
         extractor: agena_web::ExtractionBackend,
     ) -> SdkResult<FetchedPage> {
+        if render_js {
+            require_browser_sandbox()?;
+        }
         let state = self.state()?;
         if !state.config.fetch.enabled {
             return Err(PluginError::internal(
@@ -2366,7 +2422,12 @@ impl WebPlugin {
                             .require_network_permission(target.to_string())
                             .await?;
                         state.fetch_coordinator.wait_for_url_host(&target).await;
-                        resolve_public_http_route(&target, &state.config.network).await
+                        resolve_public_http_route(
+                            &target,
+                            &state.config.network,
+                            state.host.as_ref(),
+                        )
+                        .await
                     })
                     .await?;
                     fetch_transport::extract(source, url.clone(), extractor).await
@@ -2875,6 +2936,7 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserOpenInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_browser_sandbox()?;
         let owner = browser_owner(context)?;
         let (url, preview) = match managed_preview::open_target(input)? {
             managed_preview::OpenTarget::Public(raw_url) => {
@@ -3993,6 +4055,7 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserDownloadInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        require_browser_sandbox()?;
         let action_guard = self
             .browser_state
             .action_gate(&input.session_id)
@@ -4146,7 +4209,9 @@ impl WebPlugin {
             .host
             .require_network_permission(engine_url.to_string())
             .await?;
-        let route = resolve_public_http_route(&engine_url, &state.config.network).await?;
+        let route =
+            resolve_public_http_route(&engine_url, &state.config.network, state.host.as_ref())
+                .await?;
         // Reserve a small completion margin inside the aggregate deadline so
         // a timed-out later page can return its already collected results.
         let deadline = tokio::time::Instant::now()
@@ -4182,16 +4247,70 @@ impl WebPlugin {
 async fn resolve_public_http_route(
     url: &url::Url,
     network: &network_policy::WebNetworkConfig,
+    host: &dyn HostClient,
 ) -> SdkResult<agena_web::WebHttpRoute> {
     let route = agena_web::WebHttpRoute::for_url(url, network.proxy.as_deref())
         .map_err(crawl_error_to_plugin)?;
     if route.remote_dns() {
-        network_policy::validate_proxy_target(url)?;
-        Ok(route)
-    } else {
-        let addresses = resolve_public_network_target(url, network).await?;
-        Ok(route.with_addresses(addresses))
+        return Err(PluginError::from_kind(
+            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+            "the web proxy uses remote DNS, so approved destination IPs cannot be pinned; configure a direct route or a SOCKS proxy with local DNS",
+        ));
     }
+    let addresses = resolve_public_network_target(url, network).await?;
+    let addresses = authorized_network_addresses(url, addresses, host, false).await?;
+    Ok(route.with_addresses(addresses))
+}
+
+/// Transports without a pinned resolver may not select a denied member of a
+/// mixed DNS answer. This is an extra check; the browser sandbox gate remains
+/// closed until the real connection can enforce the same pinned destinations.
+async fn validate_authorized_network_target(
+    url: &url::Url,
+    network: &network_policy::WebNetworkConfig,
+    host: &dyn HostClient,
+) -> SdkResult<()> {
+    let addresses = resolve_network_addresses(url).await?;
+    network_policy::validate_addresses(url, addresses.clone(), network)?;
+    authorized_network_addresses(url, addresses, host, true).await?;
+    Ok(())
+}
+
+async fn authorized_network_addresses(
+    url: &url::Url,
+    addresses: Vec<std::net::SocketAddr>,
+    host: &dyn HostClient,
+    require_all: bool,
+) -> SdkResult<Vec<std::net::SocketAddr>> {
+    use agena_plugin_host::sdk::host_api::PermissionQuery;
+
+    let mut permitted = Vec::new();
+    for address in addresses {
+        match host
+            .check_resolved_network_permission(url.to_string(), address.to_string())
+            .await?
+        {
+            PermissionQuery::Allow {} => permitted.push(address),
+            PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
+                if require_all {
+                    return Err(PluginError::from_kind(
+                        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                        format!("resolved address {address} is not permitted: {reason}"),
+                    ));
+                }
+            }
+        }
+    }
+    if permitted.is_empty() {
+        return Err(PluginError::from_kind(
+            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+            format!(
+                "no resolved IP address for {} is allowed by the active network permissions",
+                url.host_str().unwrap_or_default(),
+            ),
+        ));
+    }
+    Ok(permitted)
 }
 
 async fn validate_public_network_target(
@@ -5657,3 +5776,5 @@ fn domain_allowed(url: &str, allow: &[String], block: &[String]) -> bool {
 
 #[cfg(test)]
 mod permission_tests;
+#[cfg(test)]
+mod sandbox_network_tests;

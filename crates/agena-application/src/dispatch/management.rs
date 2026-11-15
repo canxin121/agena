@@ -229,9 +229,20 @@ impl Application {
         tool: &str,
         input: Option<Value>,
     ) -> Result<agena_tool::ToolExecutionSummary, ApplicationError> {
+        self.execute_operator_tool_with_sandbox(workspace_id, tool, input, true)
+            .await
+    }
+
+    pub async fn execute_operator_tool_with_sandbox(
+        &self,
+        workspace_id: i64,
+        tool: &str,
+        input: Option<Value>,
+        sandbox_enabled: bool,
+    ) -> Result<agena_tool::ToolExecutionSummary, ApplicationError> {
         static NEXT_CALL_ID: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
         let call_id = NEXT_CALL_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.invoke_operator_tool(workspace_id, tool, input, call_id)
+        self.invoke_operator_tool_with_sandbox(workspace_id, tool, input, call_id, sandbox_enabled)
             .await
     }
 }

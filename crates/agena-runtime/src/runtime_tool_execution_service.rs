@@ -87,6 +87,22 @@ pub trait RuntimeToolExecutionService: Send + Sync {
         call_id: i64,
     ) -> Result<crate::SessionToolExecutionOutcome, RuntimeToolExecutionError>;
 
+    /// Select the host sandbox mode for a session-free call. Adapters without
+    /// direct execution support must report that limitation explicitly.
+    async fn execute_runtime_tool_with_sandbox(
+        &self,
+        invocation: &ToolInvocation,
+        call_id: i64,
+        sandbox_enabled: bool,
+    ) -> Result<crate::SessionToolExecutionOutcome, RuntimeToolExecutionError> {
+        if !sandbox_enabled {
+            return Err(RuntimeToolExecutionError::new(
+                "direct tool execution is unavailable",
+            ));
+        }
+        self.execute_runtime_tool(invocation, call_id).await
+    }
+
     /// Render one invocation/result pair at the read boundary. Concrete
     /// runtimes delegate to the owning plugin/tool first. The default uses
     /// the same built-in renderer as the concrete executor, so lightweight

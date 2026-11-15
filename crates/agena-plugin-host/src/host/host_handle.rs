@@ -354,6 +354,9 @@ impl HostHandle {
         plugin_id: &PluginKey,
         mut context: HostCallbackContext,
     ) -> (HostCallbackContext, CallbackAuthorityLease) {
+        context.sandbox_enabled = context.sandbox_enabled.or_else(|| {
+            host_api::current_host_callback_context().and_then(|context| context.sandbox_enabled)
+        });
         let generation = self
             .effect_scope(plugin_id)
             .map(|scope| scope.generation())
@@ -993,6 +996,20 @@ impl HostHandle {
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
                             inner.check_network_permission(p.target),
+                        )
+                        .await?;
+                        serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))
+                    }
+                    method::HOST_PERMISSION_CHECK_RESOLVED_NETWORK => {
+                        #[derive(serde::Deserialize)]
+                        struct Params {
+                            original: String,
+                            resolved: String,
+                        }
+                        let p: Params = parse(params)?;
+                        let out = host_api::run_in_host_callback_context(
+                            scoped_context(plugin_id, None),
+                            inner.check_resolved_network_permission(p.original, p.resolved),
                         )
                         .await?;
                         serde_json::to_value(out).map_err(|e| PluginError::invalid_params_error(&e))

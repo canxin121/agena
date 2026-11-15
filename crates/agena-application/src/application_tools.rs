@@ -704,6 +704,18 @@ impl Application {
         input: Option<serde_json::Value>,
         call_id: i64,
     ) -> Result<agena_tool::ToolExecutionSummary, ApplicationError> {
+        self.invoke_operator_tool_with_sandbox(workspace_id, tool, input, call_id, true)
+            .await
+    }
+
+    pub async fn invoke_operator_tool_with_sandbox(
+        &self,
+        workspace_id: i64,
+        tool: &str,
+        input: Option<serde_json::Value>,
+        call_id: i64,
+        sandbox_enabled: bool,
+    ) -> Result<agena_tool::ToolExecutionSummary, ApplicationError> {
         self.ensure_operator_workspace(workspace_id).await?;
         let tool = tool.trim();
         if tool.is_empty() {
@@ -715,7 +727,7 @@ impl Application {
         })?;
         let invocation = agena_domain::ToolInvocation::new(tool.to_owned(), input);
         self.runtime_tools()
-            .execute_runtime_tool(&invocation, call_id)
+            .execute_runtime_tool_with_sandbox(&invocation, call_id, sandbox_enabled)
             .await
             .map(agena_runtime::SessionToolExecutionOutcome::into_summary)
             .map_err(|error| ApplicationError::internal_error(&error))

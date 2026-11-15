@@ -134,8 +134,7 @@ mod tests {
             None,
         )
         .with_permission_config(
-            &serde_json::from_value(serde_json::json!({"path":{"workspace":{"read":"deny"}}}))
-                .unwrap(),
+            &serde_json::from_value(serde_json::json!({"path":{"workspace":"deny"}})).unwrap(),
         );
         assert!(matches!(
             executor

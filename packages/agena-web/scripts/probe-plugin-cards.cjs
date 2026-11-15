@@ -22,12 +22,69 @@ async function main() {
     externalRequests: [],
     unexpectedApiRequests: [],
     requests: [],
+    layouts: {},
   }
   let browser, server, page
   const check = (condition, description) => {
     assert(condition, description)
     report.checks.push(description)
     console.log('PASS ' + description)
+  }
+  const checkCardLayout = async (viewport) => {
+    const layout = await page.locator('[data-plugin-card]').evaluateAll((cards) => {
+      const bounds = (element) => {
+        if (!element) return null
+        const { x, y, width, height } = element.getBoundingClientRect()
+        return { x, y, width, height }
+      }
+      const longCard = cards.find((card) => card.dataset.pluginCard.includes('very-long-plugin-identifier'))
+      const title = longCard.querySelector('h2')
+      const summary = longCard.querySelector(':scope > p')
+      const titleStyle = getComputedStyle(title)
+      const summaryStyle = getComputedStyle(summary)
+      return {
+        cards: cards.map((card) => ({
+          id: card.dataset.pluginCard,
+          ...bounds(card),
+          interaction: bounds(card.querySelector('[data-plugin-interaction]')),
+          settings: bounds(card.querySelector('[data-plugin-open-settings]')),
+        })),
+        titleEllipsis:
+          titleStyle.textOverflow === 'ellipsis' &&
+          titleStyle.whiteSpace === 'nowrap' &&
+          title.scrollWidth > title.clientWidth,
+        summaryClamped:
+          summaryStyle.webkitLineClamp === '3' &&
+          summaryStyle.overflow === 'hidden' &&
+          summary.scrollHeight > summary.clientHeight,
+      }
+    })
+    report.layouts[viewport] = layout
+    const first = layout.cards[0]
+    check(
+      layout.cards.every((card) => Math.abs(card.width - first.width) < 1 && Math.abs(card.height - first.height) < 1),
+      viewport + ' cards have identical width and height across rows',
+    )
+    if (viewport === 'desktop') {
+      check(
+        new Set(layout.cards.map((card) => Math.round(card.y))).size > 1,
+        'desktop uniform size check spans multiple card rows',
+      )
+    }
+    const interactions = layout.cards.filter((card) => card.interaction)
+    check(
+      interactions.length === 3 &&
+        interactions.every(
+          ({ interaction, settings }) =>
+            interaction.x + interaction.width <= settings.x + 1 &&
+            Math.abs(interaction.y + interaction.height / 2 - settings.y - settings.height / 2) < 1,
+        ),
+      viewport + ' interaction buttons sit to the left of settings on the same row',
+    )
+    check(
+      layout.titleEllipsis && layout.summaryClamped,
+      viewport + ' long plugin titles and descriptions are truncated without growing cards',
+    )
   }
   const statuses = [
     {
@@ -57,7 +114,7 @@ async function main() {
       state: 'failed',
       restart_count: 0,
       summary:
-        'A long description with enough information to verify wrapping on small screens and readable card actions.',
+        'A long description with enough information to verify ellipsis on small screens and readable card actions. Additional details explain the plugin features, supported integrations, configuration options, history views, and workspace activity. This intentionally extended description remains longer than three lines on desktop and mobile so every card keeps the same fixed height while its actions stay aligned.',
     },
   ]
   const webPage = (pluginId, pageId, title, scope = 'instance') => ({
@@ -276,6 +333,7 @@ app.mount('#app')
       (await page.locator('[data-plugin-card="fixture.board"]').innerText()).includes('project dashboard'),
       'cards display plugin descriptions',
     )
+    await checkCardLayout('desktop')
     await page.screenshot({ path: path.join(screenshotDir, 'desktop.png'), fullPage: true })
 
     const search = page.getByRole('textbox', { name: 'Search plugins', exact: true })
@@ -351,14 +409,39 @@ app.mount('#app')
       await page.locator('[data-plugin-card="fixture.stopped"] [data-plugin-open-page]').isDisabled(),
       'stopped plugins keep interaction launch disabled',
     )
-    await page.locator(board + ' [data-plugin-app="dashboard"]').click()
+    await page.locator(board + ' [data-plugin-interaction]').focus()
+    await page.locator(board + ' [data-plugin-interaction]').press('Enter')
+    await page.locator('[data-option-menu-item]').first().waitFor()
+    check(
+      (await page.locator('[data-option-menu-item]').count()) === 2,
+      'multiple interaction pages share one card action and remain available in its menu',
+    )
+    check(
+      await page.locator('[data-option-menu-item]').evaluateAll((items) =>
+        items.every((item) => {
+          const rect = item.getBoundingClientRect()
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            rect.top >= 0 &&
+            rect.bottom <= innerHeight &&
+            item.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2))
+          )
+        }),
+      ),
+      'interaction menu options remain visible and clickable outside the clipped card',
+    )
+    await page.screenshot({ path: path.join(screenshotDir, 'desktop-menu.png'), fullPage: true })
+    await page.locator('[data-option-menu-item]').filter({ hasText: 'Dashboard' }).focus()
+    await page.locator('[data-option-menu-item]').filter({ hasText: 'Dashboard' }).press('Enter')
     await page.locator('[data-fixture-application]').waitFor()
     check(
       await page.evaluate(() => window.__pluginCardsProbe.route().path === '/plugins/fixture.board/dashboard'),
-      'card interaction action navigates to the plugin application',
+      'keyboard interaction action and menu selection navigate to the plugin application',
     )
     await page.locator('[data-fixture-return]').click()
-    await page.locator(board + ' [data-plugin-app="history"]').click()
+    await page.locator(board + ' [data-plugin-interaction]').click()
+    await page.locator('[data-option-menu-item]').filter({ hasText: 'History' }).click()
     await page.locator('[data-fixture-application]').waitFor()
     check(
       await page.evaluate(() => !window.__pluginCardsProbe.route().query.sessionId),
@@ -379,6 +462,7 @@ app.mount('#app')
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       'mobile plugin cards fit the viewport without horizontal overflow',
     )
+    await checkCardLayout('mobile')
     await page.screenshot({ path: path.join(screenshotDir, 'mobile.png'), fullPage: true })
     await page.locator(board + ' [data-plugin-open-settings]').click()
     await page.locator('[data-plugin-detail] input[type="text"]').first().waitFor()

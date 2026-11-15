@@ -400,12 +400,12 @@ Write-Output ("RESULT:" + (@{ errors = $errors } | ConvertTo-Json -Compress))
             "checks": [
                 {"name": "offline", "required": True, "status": "passed" if ok else "failed",
                  "detail": "fixture offline isolation" if ok else "fixture AppContainer failure"},
-                {"name": "http_proxy", "required": False, "status": "unsupported",
-                 "detail": "AppContainer identity-bound HTTP proxy is not implemented"},
+                {"name": "native_network", "required": True, "status": "passed",
+                 "detail": "Native MXC IP and port allow/deny rules passed"},
             ],
         }
 
-    def test_windows_optional_proxy_failure_is_reported_after_required_probe(self):
+    def test_windows_native_network_is_verified_before_start(self):
         report = json.dumps(self.sandbox_report())
         result = self.run_helpers(
             ["Test-InstalledSandbox", "Save-SandboxReport", "Complete-Replacement"],
@@ -428,7 +428,7 @@ Write-Output ("RESULT:" + (@{ events = $script:events } | ConvertTo-Json -Compre
 ''',
         )
         self.assertEqual(self.result_json(result)["events"], ["--agena-sandbox-check", "start", "save", "path"])
-        self.assertIn("identity-bound HTTP proxy", result.stdout)
+        self.assertIn("Sandbox native_network: passed", result.stdout)
         self.assertEqual(json.loads((self.root / "sandbox-report.json").read_text()), self.sandbox_report())
         self.assertFalse(any(self.root.glob(".sandbox-report-*.tmp")))
 
@@ -447,6 +447,8 @@ Write-Output ("RESULT:" + (@{ events = $script:events } | ConvertTo-Json -Compre
             (json.dumps({**good, "checks": good["checks"] + good["checks"][:1]}), 0),
             (json.dumps({**good, "checks": [{**good["checks"][0], "required": "true"}, good["checks"][1]]}), 0),
             (json.dumps({**good, "checks": [{**good["checks"][0], "status": "PASSED"}, good["checks"][1]]}), 0),
+            (json.dumps({**good, "checks": [good["checks"][0], {**good["checks"][1], "required": False}]}), 0),
+            (json.dumps({**good, "checks": [good["checks"][0], {**good["checks"][1], "status": "unsupported"}]}), 0),
         ]
         for report, code in cases:
             with self.subTest(report=report, code=code):

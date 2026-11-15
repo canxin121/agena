@@ -2,7 +2,8 @@ use std::fs;
 
 use agena_runtime_config::{
     ConfigEnvironment, ConfigSettingsEditOptions, ConfigSettingsLayer, ConfigSettingsSetInput,
-    RuntimeConfigSettingsError, set_runtime_file_setting, validate_layered_config_text,
+    RuntimeConfigSettingsError, set_layered_file_setting, set_runtime_file_setting,
+    validate_layered_config_text,
 };
 use serde_json::{Value, json};
 
@@ -42,6 +43,16 @@ fn invalid_permission_never_replaces_the_file_even_when_validation_is_disabled()
         json!({"path":{"rules":{"<workspace>/secret":"deny","<workspace>/secret/file":"readwrite"}}}),
         json!({"path":{"rules":{"<workspace>/data":"readwrite","<workspace>/data/reference":"readonly"}}}),
         json!({"network":{"rules":{"https://example.com/private":"allow"}}}),
+        json!({"network":{"internet":"allow"}}),
+        json!({"network":{"egress":{"default":"ask"}}}),
+        json!({"network":{"egress":{"allow":[{"to":[{"cidr":"example.com"}]}]}}}),
+        json!({"network":{"egress":{"allow":[{"to":[{"cidr":"192.0.2.1"}]}]}}}),
+        json!({"network":{"egress":{"allow":[{"to":[]}]}}}),
+        json!({"network":{"egress":{"allow":[{"ports":[]}]}}}),
+        json!({"network":{"egress":{"allow":[{"ports":[{"protocol":"tcp","port":0}]}]}}}),
+        json!({"network":{"egress":{"allow":[{"ports":[{"protocol":"tcp","port":443,"endPort":80}]}]}}}),
+        json!({"network":{"egress":{"allow":[{"ports":[{"protocol":"icmp","port":53}]}]}}}),
+        json!({"network":{"egress":{"deny":[{"to":[{"cidr":"192.0.2.0/24","except":["198.51.100.0/24"]}]}]}}}),
         json!({"tools":{"rules":{"agena.fs.read":{"**/secret/**":"deny"}}}}),
         json!({"tools":{"names":{"shell.exec":"allow","agena.shell.exec":"deny"}}}),
     ] {
@@ -60,6 +71,61 @@ fn dry_run_still_rejects_unsupported_permissions_without_creating_a_file() {
     let error = set_runtime_file_setting(&path, update, None).unwrap_err();
     assert!(error.diagnostic().contains("permission"));
     assert!(!path.exists());
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn explicit_empty_native_arrays_are_saved_and_clear_inherited_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global.json");
+    let workspace = root.path().join("workspace/.agena/agena.json");
+    set_runtime_file_setting(
+        &global,
+        input(json!({"network":{"egress":{
+            "default":"deny",
+            "allow":[{"to":[{"cidr":"192.0.2.0/24"}]}],
+            "deny":[{"to":[{"cidr":"192.0.2.128/25"}]}]
+        }}})),
+        None,
+    )
+    .unwrap();
+    set_layered_file_setting(
+        &global,
+        &workspace,
+        ConfigSettingsLayer::Workspace,
+        input(json!({"network":{"egress":{"allow":[],"deny":[]}}})),
+    )
+    .unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&workspace).unwrap()).unwrap();
+    assert_eq!(
+        saved["permission"]["network"]["egress"],
+        json!({"allow":[],"deny":[]})
+    );
+    let global_value: Value = serde_json::from_slice(&fs::read(&global).unwrap()).unwrap();
+    let mut merged: agena_domain::PermissionConfig =
+        serde_json::from_value(global_value["permission"].clone()).unwrap();
+    merged.merge_from(serde_json::from_value(saved["permission"].clone()).unwrap());
+    let egress = merged.network.unwrap().egress.unwrap();
+    assert_eq!(egress.default, Some(agena_domain::NetworkAction::Deny));
+    assert_eq!(egress.allow, Some(vec![]));
+    assert_eq!(egress.deny, Some(vec![]));
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn unsupported_native_backend_policy_cannot_be_saved() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("agena.json");
+    let before = b"{}\n";
+    fs::write(&path, before).unwrap();
+    let invalid = if cfg!(target_os = "linux") {
+        json!({"network":{"ingress":{"default":"allow"}}})
+    } else {
+        json!({"network":{"egress":{"allow":[{"to":[{"cidr":"192.0.2.1/32"}]}]}}})
+    };
+    let error = set_runtime_file_setting(&path, input(invalid), None).unwrap_err();
+    assert!(error.diagnostic().contains("permission.network"), "{error}");
+    assert_eq!(fs::read(&path).unwrap(), before);
 }
 
 #[test]

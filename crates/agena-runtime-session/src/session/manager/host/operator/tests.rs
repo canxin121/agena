@@ -281,6 +281,205 @@ fn invocation(tool: &str, input: Value) -> ToolInvocation {
 }
 
 #[tokio::test]
+async fn operator_callback_network_snapshot_keeps_captured_principal_and_revokes() {
+    use agena_domain::{NetworkPermissionConfig, PermissionConfig, PermissionDecision};
+
+    let fixture = Fixture::new("allow").await;
+    let workspace = fixture.manager.current_workspace_id().await.unwrap();
+    let state = fixture.manager.state.load_full();
+    let denied = PermissionConfig {
+        network: Some(NetworkPermissionConfig::offline()),
+        ..Default::default()
+    };
+    let scope = fixture
+        .manager
+        .begin_operator_invocation(
+            200,
+            state.executor.clone().with_permission_config(&denied),
+            workspace,
+        )
+        .unwrap();
+    let allowed = PermissionConfig {
+        network: Some(NetworkPermissionConfig::allow_all()),
+        ..Default::default()
+    };
+    fixture.manager.reconfigure(
+        state.providers.clone(),
+        state.governor.clone(),
+        state.processor.clone(),
+        state.executor.clone().with_permission_config(&allowed),
+        state.config.clone(),
+    );
+    let original = "example.test:443".parse().unwrap();
+    let resolved = "192.0.2.30:443".parse().unwrap();
+    let (current, _) = fixture
+        .manager
+        .host_callback_executor(None, None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        current
+            .sandbox_permission_snapshot()
+            .authorize_resolved_network_address(&original, &resolved),
+        PermissionDecision::Allow
+    ));
+    let (captured, context) = fixture
+        .manager
+        .host_callback_executor(Some(OPERATOR_SESSION), Some(200))
+        .await
+        .unwrap();
+    assert!(context.is_none());
+    assert!(matches!(
+        captured
+            .sandbox_permission_snapshot()
+            .authorize_resolved_network_address(&original, &resolved),
+        PermissionDecision::Deny { .. }
+    ));
+    assert!(
+        fixture
+            .manager
+            .require_host_network_permission(OPERATOR_SESSION, 200, "192.0.2.30:443".into())
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .manager
+            .host_callback_executor(Some(OPERATOR_SESSION), None)
+            .await
+            .is_err()
+    );
+    drop(scope);
+    assert!(
+        fixture
+            .manager
+            .host_callback_executor(Some(OPERATOR_SESSION), Some(200))
+            .await
+            .is_err()
+    );
+    fixture.shutdown().await;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn operator_callback_network_snapshot_uses_captured_workspace_after_reload() {
+    use agena_domain::{
+        NetworkPermissionConfig, PermissionAction, PermissionConfig, PermissionDecision,
+        PermissionMode, PermissionScope,
+    };
+
+    let fixture = Fixture::new("allow").await;
+    let workspace = fixture.manager.current_workspace_id().await.unwrap();
+    let state = fixture.manager.state.load_full();
+    let permission = PermissionConfig {
+        network: Some(NetworkPermissionConfig::allow_all()),
+        ..Default::default()
+    };
+    let scope = fixture
+        .manager
+        .begin_operator_invocation(
+            201,
+            state.executor.clone().with_permission_config(&permission),
+            workspace,
+        )
+        .unwrap();
+    let other_path = fixture.root.join("network-other-workspace");
+    tokio::fs::create_dir_all(&other_path).await.unwrap();
+    let other_path = tokio::fs::canonicalize(other_path).await.unwrap();
+    let other_workspace = fixture
+        .manager
+        .kernel_runtime
+        .workspaces
+        .ensure_id(&other_path.to_string_lossy())
+        .await
+        .unwrap();
+    for (workspace_id, address) in [(workspace, "192.0.2.31"), (other_workspace, "192.0.2.32")] {
+        fixture
+            .manager
+            .kernel_runtime
+            .permissions
+            .upsert(&agena_storage::PersistedPermissionRule {
+                id: None,
+                created_at_ms: None,
+                updated_at_ms: None,
+                action_key: serde_json::to_string(&PermissionAction::NetworkAccess {
+                    target: address.into(),
+                    host: address.into(),
+                    port: None,
+                })
+                .unwrap(),
+                mode: PermissionMode::Deny,
+                scope: PermissionScope::Workspace,
+                session_id: None,
+                workspace_id: Some(workspace_id),
+                source: "operator-network-callback-test".into(),
+                reason: None,
+                operator: None,
+                revoked_at_ms: None,
+                revoked_reason: None,
+                revoked_by: None,
+            })
+            .await
+            .unwrap();
+    }
+    let current_executor = ToolExecutor::new(
+        other_path,
+        crate::authorization::ExecutionPrincipal::new(
+            crate::permission::PermissionPolicy::allow_all(),
+            crate::permission::ToolPermissionPolicy::allow_all(),
+        ),
+        state.executor.plugin_manager().clone(),
+        None,
+        None,
+    )
+    .with_permission_config(&permission);
+    fixture.manager.reconfigure(
+        state.providers.clone(),
+        state.governor.clone(),
+        state.processor.clone(),
+        current_executor,
+        state.config.clone(),
+    );
+    let original = "example.test:443".parse().unwrap();
+    for (session, call, denied_octet) in [(Some(OPERATOR_SESSION), Some(201), 31), (None, None, 32)]
+    {
+        let (executor, _) = fixture
+            .manager
+            .host_callback_executor(session, call)
+            .await
+            .unwrap();
+        let snapshot = executor.sandbox_permission_snapshot();
+        for octet in [31, 32] {
+            let resolved = format!("192.0.2.{octet}:443").parse().unwrap();
+            let decision = snapshot.authorize_resolved_network_address(&original, &resolved);
+            assert_eq!(
+                matches!(decision, PermissionDecision::Deny { .. }),
+                octet == denied_octet,
+                "session {session:?}, {resolved:?}: {decision:?}"
+            );
+        }
+    }
+    assert!(
+        fixture
+            .manager
+            .require_host_network_permission(
+                OPERATOR_SESSION,
+                201,
+                "https://[::ffff:192.0.2.31]/".into()
+            )
+            .await
+            .is_err()
+    );
+    fixture
+        .manager
+        .require_host_network_permission(OPERATOR_SESSION, 201, "192.0.2.32:443".into())
+        .await
+        .unwrap();
+    drop(scope);
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn direct_operator_mode_reaches_plugins_and_does_not_leak_or_bypass_permissions() {
     let fixture = Fixture::new("allow").await;
     fixture

@@ -575,6 +575,21 @@ impl Plugin for SkillsPlugin {
                                 SkillSourceAccess::Network(url) => {
                                     host.require_network_permission(url).await
                                 }
+                                SkillSourceAccess::ResolvedNetwork { original, address } => {
+                                    use agena_plugin_host::sdk::host_api::PermissionQuery;
+                                    match host
+                                        .check_resolved_network_permission(original, address.to_string())
+                                        .await?
+                                    {
+                                        PermissionQuery::Allow {} => Ok(()),
+                                        PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
+                                            Err(PluginError::from_kind(
+                                                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                                                format!("skill source address {address} is not permitted: {reason}"),
+                                            ))
+                                        }
+                                    }
+                                }
                             }
                         }
                     },

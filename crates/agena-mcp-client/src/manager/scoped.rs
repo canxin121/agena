@@ -34,6 +34,42 @@ pub(super) fn missing_scope(server: &str) -> McpError {
 }
 
 impl McpConnectionManager {
+    /// Make a disconnected, call-owned HTTP manager. The caller registers its
+    /// lifetime cleanup before connecting, including failure and cancellation.
+    /// No live connection or callback authority is taken from the shared manager.
+    pub async fn for_http_scope(
+        &self,
+        name: &str,
+        authorizer: Arc<dyn crate::McpHttpNetworkAuthorizer>,
+    ) -> McpResult<Arc<Self>> {
+        let _lifecycle = self.lifecycle.read().await;
+        let stored = self
+            .inner
+            .read()
+            .await
+            .specs
+            .get(name)
+            .cloned()
+            .ok_or_else(|| McpError::ServerNotConnected(name.to_owned()))?;
+        if !matches!(&stored.spec, ServerSpec::Http { .. }) {
+            return Err(McpError::Transport(
+                "MCP HTTP scope requires an HTTP server".into(),
+            ));
+        }
+        let mut manager = Self::new(&self.client_name, &self.client_version)
+            .with_timeouts(stored.connect_timeout, stored.request_timeout)
+            .with_http_network_authorizer(authorizer);
+        manager.token_store = self.token_store.clone();
+        manager.roots = Arc::new(RwLock::new(self.roots.read().await.clone()));
+        manager
+            .inner
+            .write()
+            .await
+            .specs
+            .insert(name.to_owned(), stored);
+        Ok(Arc::new(manager))
+    }
+
     pub async fn server_spec(&self, name: &str) -> McpResult<ServerSpec> {
         self.inner
             .read()
@@ -73,7 +109,11 @@ impl McpConnectionManager {
         };
         let mut spec = stored.spec;
         match &mut spec {
-            ServerSpec::Http { .. } => return Ok(Arc::clone(self)),
+            ServerSpec::Http { .. } => {
+                return Err(McpError::Transport(
+                    "MCP HTTP servers require a call-owned authorized HTTP scope".into(),
+                ));
+            }
             ServerSpec::Stdio { cwd, sandbox, .. } => {
                 if sandbox.is_some() {
                     return Err(McpError::Transport(
@@ -330,5 +370,61 @@ mod tests {
         .await;
         assert!(!result.ok);
         assert!(result.error.unwrap().contains("sandbox scope"));
+    }
+    struct HttpAuthority;
+
+    #[async_trait::async_trait]
+    impl crate::McpHttpNetworkAuthorizer for HttpAuthority {
+        async fn authorize(&self, _target: &str) -> McpResult<()> {
+            Ok(())
+        }
+    }
+
+    struct FixtureTokens;
+    impl TokenStore for FixtureTokens {
+        fn bearer(&self, _server: &str) -> Option<String> {
+            Some("fixture-token".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn http_scopes_are_disconnected_isolated_and_keep_auth_configuration() {
+        let mut owner = McpConnectionManager::default();
+        owner.set_token_store(Arc::new(FixtureTokens));
+        owner.inner.write().await.specs.insert(
+            "http".into(),
+            StoredServerSpec {
+                spec: ServerSpec::Http {
+                    url: Url::parse("http://scope-fixture.invalid/mcp").unwrap(),
+                    headers: HashMap::new(),
+                    auth: Some(HttpAuth::BearerFromStore),
+                    tool_policy: Default::default(),
+                },
+                connect_timeout: Duration::from_millis(17),
+                request_timeout: Duration::from_millis(19),
+                revision: 7,
+            },
+        );
+        let authority: Arc<dyn crate::McpHttpNetworkAuthorizer> = Arc::new(HttpAuthority);
+        let first = owner
+            .for_http_scope("http", authority.clone())
+            .await
+            .unwrap();
+        let second = owner.for_http_scope("http", authority).await.unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&owner.inner, &first.inner));
+        assert!(first.inner.read().await.servers.is_empty());
+        assert!(first.http_network_authorizer.is_some());
+        assert!(owner.http_network_authorizer.is_none());
+        assert!(Arc::ptr_eq(
+            first.token_store.as_ref().unwrap(),
+            owner.token_store.as_ref().unwrap()
+        ));
+        assert_eq!(first.connect_timeout, Duration::from_millis(17));
+        assert_eq!(first.request_timeout, Duration::from_millis(19));
+        first.shutdown_all().await;
+        assert!(second.server_spec("http").await.is_ok());
+        assert!(owner.server_spec("http").await.is_ok());
     }
 }

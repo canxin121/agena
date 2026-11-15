@@ -44,8 +44,8 @@ use crate::{
 };
 
 mod scoped;
-pub use scoped::{McpSandboxContext, StdioResourceDeclarations};
 use scoped::ScopedServerKey;
+pub use scoped::{McpSandboxContext, StdioResourceDeclarations};
 
 static TOOL_CATALOGS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static TOOL_SNAPSHOTS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
@@ -649,6 +649,7 @@ pub struct McpConnectionManager {
     client_name: String,
     client_version: String,
     token_store: Option<Arc<dyn TokenStore>>,
+    http_network_authorizer: Option<Arc<dyn crate::McpHttpNetworkAuthorizer>>,
     connect_timeout: Duration,
     request_timeout: Duration,
     roots: Arc<RwLock<Vec<Root>>>,
@@ -718,6 +719,7 @@ impl McpConnectionManager {
             client_name: client_name.into(),
             client_version: client_version.into(),
             token_store: None,
+            http_network_authorizer: None,
             connect_timeout: Duration::from_secs(20),
             request_timeout: Duration::from_secs(60),
             roots: Arc::new(RwLock::new(Vec::new())),
@@ -733,6 +735,15 @@ impl McpConnectionManager {
     pub fn with_timeouts(mut self, connect_timeout: Duration, request_timeout: Duration) -> Self {
         self.connect_timeout = connect_timeout.max(Duration::from_millis(1));
         self.request_timeout = request_timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    /// Bind HTTP I/O to one live call. Do not install this on a shared catalog.
+    pub fn with_http_network_authorizer(
+        mut self,
+        authorizer: Arc<dyn crate::McpHttpNetworkAuthorizer>,
+    ) -> Self {
+        self.http_network_authorizer = Some(authorizer);
         self
     }
 
@@ -913,6 +924,7 @@ impl McpConnectionManager {
                         headers,
                         auth,
                         self.token_store.clone(),
+                        self.http_network_authorizer.clone(),
                     )
                     .await?;
                     Ok::<_, McpError>((running, target))
@@ -1470,7 +1482,11 @@ impl McpConnectionManager {
 
     async fn get(&self, name: &str) -> McpResult<Arc<ConnectedServer>> {
         let inner = self.inner.read().await;
-        if inner.specs.get(name).is_some_and(|stored| matches!(&stored.spec, ServerSpec::Stdio { sandbox: None, .. })) {
+        if inner
+            .specs
+            .get(name)
+            .is_some_and(|stored| matches!(&stored.spec, ServerSpec::Stdio { sandbox: None, .. }))
+        {
             return Err(scoped::missing_scope(name));
         }
         inner
@@ -1855,7 +1871,9 @@ async fn connect_stdio(
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
-    let policy = sandbox.ok_or_else(|| McpError::Transport("MCP stdio requires a host-authorized sandbox scope".into()))?;
+    let policy = sandbox.ok_or_else(|| {
+        McpError::Transport("MCP stdio requires a host-authorized sandbox scope".into())
+    })?;
     agena_process::sandbox::wrap_tokio_command(&mut cmd, &policy)
         .map_err(|error| McpError::Transport(format!("MCP sandbox launch failed: {error}")))?;
     let transport = TokioChildProcess::new(agena_process::wrap_command(cmd))?;
@@ -1871,6 +1889,7 @@ async fn connect_http(
     mut headers: HashMap<String, String>,
     auth: Option<HttpAuth>,
     token_store: Option<Arc<dyn TokenStore>>,
+    network_authorizer: Option<Arc<dyn crate::McpHttpNetworkAuthorizer>>,
 ) -> McpResult<RunningClient> {
     let credential_name = credential_store_name(server_name, &url);
     let has_authorization = headers
@@ -1927,9 +1946,13 @@ async fn connect_http(
         let store = FileOAuthCredentialStore::new(&credential_name)
             .map_err(|error| McpError::auth_error(&error))?
             .with_binding(binding);
-        let mut manager = AuthorizationManager::new(url.clone())
-            .await
-            .map_err(|error| McpError::auth_error(&error))?;
+        let oauth_client = Arc::new(crate::oauth_http::AuthorizedOAuthHttpClient::for_transport(
+            network_authorizer.clone(),
+        ));
+        let mut manager =
+            AuthorizationManager::new_with_oauth_http_client(url.clone(), oauth_client)
+                .await
+                .map_err(|error| McpError::auth_error(&error))?;
         manager.set_credential_store(store);
         if !manager
             .initialize_from_store()
@@ -1940,13 +1963,19 @@ async fn connect_http(
                 "OAuth authorization is required for MCP server '{server_name}'; sign in from MCP connections settings"
             )));
         }
-        let http_client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| McpError::http_error(&error))?;
-        manager
-            .with_client(http_client.clone())
-            .map_err(|error| McpError::auth_error(&error))?;
+        if let Some(authorizer) = network_authorizer {
+            let transport = StreamableHttpClientTransport::with_client(
+                AuthClient::new(
+                    crate::http_transport::AuthorizedMcpHttpClient::new(authorizer),
+                    manager,
+                ),
+                config,
+            );
+            return Ok(client_handler
+                .serve_with_lifecycle(transport, client_lifecycle())
+                .await?);
+        }
+        let http_client = crate::http_transport::trusted_client()?;
         let transport = StreamableHttpClientTransport::with_client(
             AuthClient::new(http_client, manager),
             config,
@@ -1959,10 +1988,16 @@ async fn connect_http(
         Some(token) => config.auth_header(token),
         None => config,
     };
-    let http_client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| McpError::http_error(&error))?;
+    if let Some(authorizer) = network_authorizer {
+        let transport = StreamableHttpClientTransport::with_client(
+            crate::http_transport::AuthorizedMcpHttpClient::new(authorizer),
+            config,
+        );
+        return Ok(client_handler
+            .serve_with_lifecycle(transport, client_lifecycle())
+            .await?);
+    }
+    let http_client = crate::http_transport::trusted_client()?;
     let transport = StreamableHttpClientTransport::with_client(http_client, config);
     Ok(client_handler
         .serve_with_lifecycle(transport, client_lifecycle())

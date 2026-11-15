@@ -16,25 +16,27 @@ pub fn permission_studio_mode_target_value(
         PermissionStudioModeTarget::PathWorkspace
         | PermissionStudioModeTarget::PathExternal
         | PermissionStudioModeTarget::PathRule { .. } => None,
-        PermissionStudioModeTarget::NetworkInternet => permission
+        PermissionStudioModeTarget::NetworkEgressDefault => permission
             .network
             .as_ref()
-            .and_then(|network| network.internet),
-        PermissionStudioModeTarget::NetworkPrivate => permission
+            .and_then(|network| network.egress.as_ref())
+            .and_then(|egress| egress.default)
+            .map(network_action_mode),
+        PermissionStudioModeTarget::NetworkIngressDefault => permission
             .network
             .as_ref()
-            .and_then(|network| network.private),
-        PermissionStudioModeTarget::NetworkLoopback => permission
+            .and_then(|network| network.ingress.as_ref())
+            .and_then(|ingress| ingress.default)
+            .map(network_action_mode),
+        PermissionStudioModeTarget::NetworkHostLoopback => permission
             .network
             .as_ref()
-            .and_then(|network| network.loopback),
+            .and_then(|network| network.ingress.as_ref())
+            .and_then(|ingress| ingress.host_loopback)
+            .map(network_action_mode),
         PermissionStudioModeTarget::ToolDefault => {
             permission.tools.as_ref().and_then(|tools| tools.default)
         }
-        PermissionStudioModeTarget::NetworkRule { target } => permission
-            .network
-            .as_ref()
-            .and_then(|network| network.rules.get(target.as_str()).copied()),
         PermissionStudioModeTarget::ToolName { key } => permission
             .tools
             .as_ref()
@@ -56,6 +58,13 @@ pub fn permission_studio_mode_target_value(
                 ToolPermissionRules::Mode(mode) if pattern == "*" => Some(*mode),
                 ToolPermissionRules::Mode(_) => None,
             }),
+    }
+}
+
+fn network_action_mode(action: agena_domain::NetworkAction) -> PermissionMode {
+    match action {
+        agena_domain::NetworkAction::Allow => PermissionMode::Allow,
+        agena_domain::NetworkAction::Deny => PermissionMode::Deny,
     }
 }
 
@@ -124,18 +133,6 @@ pub fn rename_path_rule(permission: &mut PermissionConfig, from: &str, to: &str)
     };
     if let Some(rule) = path.rules.shift_remove(from) {
         path.rules.insert(to.to_string(), rule);
-    }
-}
-
-pub fn rename_network_rule(permission: &mut PermissionConfig, from: &str, to: &str) {
-    if from == to {
-        return;
-    }
-    let Some(network) = permission.network.as_mut() else {
-        return;
-    };
-    if let Some((index, _, mode)) = network.rules.shift_remove_full(from) {
-        network.rules.shift_insert(index, to.to_string(), mode);
     }
 }
 
@@ -262,27 +259,6 @@ fn parse_permission_mode_token(i18n: &I18n, token: &str) -> Result<PermissionMod
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn network_rule_rename_preserves_later_restrictions() {
-        let mut permission = PermissionConfig::default();
-        let network = permission.network.get_or_insert_with(Default::default);
-        network
-            .rules
-            .insert("10.0.0.0/8".to_string(), PermissionMode::Allow);
-        network
-            .rules
-            .insert("10.0.0.1:443".to_string(), PermissionMode::Deny);
-
-        rename_network_rule(&mut permission, "10.0.0.0/8", "10.0.0.0/16");
-
-        let rules = &permission.network.as_ref().unwrap().rules;
-        assert_eq!(
-            rules.keys().map(String::as_str).collect::<Vec<_>>(),
-            vec!["10.0.0.0/16", "10.0.0.1:443"]
-        );
-        assert_eq!(rules["10.0.0.1:443"], PermissionMode::Deny);
-    }
 
     #[test]
     fn path_editor_accepts_only_mxc_modes_and_clear() {

@@ -673,9 +673,7 @@ permission-studio-field-path-external = Externe Trassenausfälle
 
 permission-studio-field-path-rules = Trasseregeln
 
-permission-studio-field-network-defaults = Netzausfälle
 
-permission-studio-field-network-rules = Netzregeln
 
 permission-studio-field-tool-names = Werkzeugnamen
 
@@ -735,7 +733,6 @@ permission-studio-mode-read = Lesen Sie {$value}
 
 permission-studio-mode-write = Schreibe {$value}
 
-permission-studio-network-default = {$label} {$value}
 
 permission-studio-page-overview = Übersicht
 
@@ -745,11 +742,10 @@ permission-studio-page-path-defaults = Dateisystem / Standardzonen
 
 permission-studio-page-path-rules = Dateisystem / Pfadregeln
 
-permission-studio-page-network = Netz
 
-permission-studio-page-network-zones = Netzwerk / Netzwerkzonen
+permission-studio-page-network-defaults = Netzwerk / Native Vorgaben
 
-permission-studio-page-network-rules = Netzwerk / Domainregeln
+permission-studio-page-network-rules = Netzwerk / Native Regeln
 
 permission-studio-page-tools = Werkzeuge
 
@@ -773,9 +769,9 @@ permission-studio-nav-path-rules = Pfadregeln
 
 permission-studio-nav-network = Netzwerk
 
-permission-studio-nav-network-zones = Netzwerkzonen
+permission-studio-nav-network-defaults = Native Vorgaben
 
-permission-studio-nav-domain-rules = Domainregeln
+permission-studio-nav-network-rules = Native Regeln
 
 permission-studio-nav-tool-access = Werkzeugzugriff
 
@@ -795,11 +791,11 @@ permission-studio-path-rule-read = Lesemodus
 
 permission-studio-path-rule-write = Schreibmodus
 
-permission-studio-network-internet = Internet
+permission-studio-network-egress-default = Ausgehende Standardaktion
 
-permission-studio-network-private = Privat
+permission-studio-network-ingress-default = Eingehende Standardaktion
 
-permission-studio-network-loopback = Loopback
+permission-studio-network-host-loopback = Host-Loopback
 
 permission-studio-tool-default = Werkzeugstandard
 
@@ -807,7 +803,6 @@ permission-studio-tool-default-summary = Standard {$value}
 
 permission-studio-add-path-rule = Add Path Rule
 
-permission-studio-add-network-rule = Netzwerkziel hinzufügen
 
 permission-studio-add-name = Name angeben
 
@@ -817,7 +812,6 @@ permission-studio-rule-key = Schlüssel
 
 permission-studio-rule-pattern = Muster
 
-permission-studio-rule-target = Ziel
 
 permission-studio-rule-mode = Modus
 
@@ -1123,6 +1117,7 @@ overlay-permission-rule-choice-scope-session-detail = nur diese Sitzung
 overlay-permission-rule-choice-scope-workspace-detail = Alle Sitzungen in diesem Arbeitsbereich
 overlay-permission-rule-choice-scope-global-detail = alle Arbeitsbereiche
 overlay-permission-rule-choice-mode-title = Wählen Sie den Regelmodus
+overlay-permission-rule-network-mode-detail = Netzwerkentscheidungen erlauben allow oder deny. Allow bleibt durch die nativen Einstellungen begrenzt; deny schränkt sie weiter ein.
 overlay-permission-rule-choice-mode-prompt = Wählen Sie „Zulassen“, „Fragen“ oder „Ablehnen“.
 overlay-permission-rule-choice-mode-allow-detail = immer passende Aktionen zulassen
 overlay-permission-rule-choice-mode-auto-detail = Lassen Sie das konfigurierte Genehmigungsmodell entscheiden. Greifen Sie auf eine Eingabeaufforderung zurück, wenn diese nicht verfügbar ist
@@ -1138,7 +1133,7 @@ overlay-permission-rule-editor-workspace-root-prompt = Geben Sie optional ein wo
 overlay-permission-rule-editor-target-path-title = Zielpfad bearbeiten
 overlay-permission-rule-editor-target-path-prompt = Geben Sie den Zielpfad oder das Zielmuster ein.
 overlay-permission-rule-editor-network-target-title = Netzwerkziel bearbeiten
-overlay-permission-rule-editor-network-target-prompt = Geben Sie einen Host, Host:Port oder eine URL ein.
+overlay-permission-rule-editor-network-target-prompt = Geben Sie eine IP-Adresse oder IP:Port ein, z. B. 192.0.2.10:443 oder [2001:db8::10]:443. tcp://, udp:// oder icmp:// wählt das Protokoll.
 overlay-permission-rule-editor-session-id-title = Sitzungs-ID bearbeiten
 overlay-permission-rule-editor-session-id-prompt = Geben Sie die Zielsitzungs-ID ein.
 overlay-permission-rule-browser-workspace-root-title = Wählen Sie Workspace Root
@@ -1166,14 +1161,14 @@ overlay-permission-rule-item-target-path-detail = Pfadmuster oder genauer Pfad z
 overlay-permission-rule-item-workspace-root = Arbeitsbereichsstamm
 overlay-permission-rule-item-workspace-root-detail = Optionales Basisverzeichnis, das zur Interpretation relativer Zielpfade verwendet wird.
 overlay-permission-rule-item-network-target = Netzwerkziel
-overlay-permission-rule-item-network-target-detail = Passender Host, Host:Port oder URL-Ziel.
+overlay-permission-rule-item-network-target-detail = Geben Sie eine IP-Adresse oder IP:Port ein, z. B. 192.0.2.10:443 oder [2001:db8::10]:443. tcp://, udp:// oder icmp:// wählt das Protokoll.
 overlay-permission-rule-detail-subject-kind = Werkzeugregeln stimmen nach Werkzeugname und optionalem Qualifikationsmerkmal überein. Pfadregeln entsprechen dem Dateisystemzugriff. Netzwerkregeln entsprechen dem Host- oder URL-Zugriff.
 overlay-permission-rule-detail-tool-name = Werkzeugregeln erfordern einen genauen Werkzeugnamen, zum Beispiel `shell`, `read` oder `web_search`.
 overlay-permission-rule-detail-qualifier = Der Qualifizierer ist optional. Lassen Sie es leer, es sei denn, das Werkzeug oder die Aktion erfordert eine engere Übereinstimmung.
 overlay-permission-rule-detail-path-access-kind = Verwenden Sie `read`, `write` oder `read_write`, je nachdem, welchen Dateisystemzugriff Sie anpassen möchten.
 overlay-permission-rule-detail-workspace-root = Lassen Sie „workspace_root“ leer, um das Stammverzeichnis des Laufzeit-Arbeitsbereichs zu erben. Legen Sie es explizit fest, wenn der geschützte Pfad anderswo liegt.
 overlay-permission-rule-detail-target-path = Geben Sie einen Pfad oder ein Muster ein. Relative Pfade werden bei der Festlegung anhand von workspace_root interpretiert.
-overlay-permission-rule-detail-network-target = Geben Sie einen Host, `host:port`, oder eine vollständige URL ein, je nachdem, wie spezifisch die Regel sein soll.
+overlay-permission-rule-detail-network-target = Verwenden Sie IP-Adressen. Eine IP ohne Port umfasst alle Protokolle und Ports; tcp:// und udp:// können einen Port angeben, icmp:// nicht. CIDRs werden unter permission.network konfiguriert. macOS lehnt genaue IP-Entscheidungen ab. Bestehende Einträge bleiben einsehbar, widerrufbar und löschbar.
 overlay-permission-rule-detail-scope = Der Sitzungsbereich eignet sich am besten für vorübergehende Außerkraftsetzungen. Arbeitsbereiche und globale Bereiche bleiben länger bestehen.
 overlay-permission-rule-detail-session-id = Sitzungsbezogene Regeln erfordern eine konkrete Sitzungs-ID.
 overlay-permission-rule-detail-mode = „Zulassen“ lässt die Aktion durch, bittet um Genehmigung und „Verweigern“ blockiert sie.
@@ -3441,3 +3436,9 @@ permission-studio-path-help = Geben Sie eine konkrete Datei oder ein Verzeichnis
 permission-studio-rule-path = Pfad
 permission-studio-path-duplicate = Für diesen Pfad besteht bereits eine Regel.
 permission-studio-rule-duplicate = Die Regel besteht bereits.
+
+permission-studio-network-json = Native Netzwerkrichtlinie als JSON
+
+permission-studio-network-json-help = MXC-Objekte egress und ingress mit CIDRs, except, Protokollen und Portbereichen verwenden. Verbote haben Vorrang. Fehlende Felder werden geerbt; [] leert eine geerbte Liste.
+
+permission-studio-network-invalid-action = Netzwerkaktionen müssen allow, deny oder nicht gesetzt sein.

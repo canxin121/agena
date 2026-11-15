@@ -1,5 +1,8 @@
 //! Multi-user channel security at the real signed HTTP / plugin / model / tool
 //! boundary. Each test owns its isolated process, workspace and gateway.
+#[cfg(not(target_os = "macos"))]
+mod native_mcp_fixture;
+
 use super::fixture;
 use agena_api::integrations::*;
 use agena_testkit::{
@@ -1204,14 +1207,21 @@ async fn native_permission_reply_cannot_resurrect_a_revoked_channel_write() -> T
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(not(target_os = "macos"))]
 async fn channel_mcp_gateway_allows_only_the_authorized_server_and_remote_tool() -> TestResult {
     let replies: Replies = Default::default();
     let calls: Replies = Default::default();
     let peer_calls = calls.clone();
-    channel_fixture(replies.clone()).before_start(move|case|async move{
+    native_mcp_fixture::fixture(replies.clone()).before_start(move|case|async move{
         use axum::http::StatusCode;
         use axum::response::IntoResponse;
-        let peer=case.serve_http(Router::new().route("/mcp",post(|State(calls):State<Replies>,Json(request):Json<Value>|async move{
+        // Native Linux sandbox policies keep host loopback closed. Bind the
+        // controlled peer to a local interface without sending external traffic.
+        let route=std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED,0))?;
+        route.connect((std::net::Ipv4Addr::new(192,0,2,1),9))?;
+        let interface=route.local_addr()?.ip();
+        ensure!(!interface.is_loopback()&&!interface.is_unspecified());
+        let peer=case.serve_http_on(interface,Router::new().route("/mcp",post(|State(calls):State<Replies>,Json(request):Json<Value>|async move{
             let Some(id)=request.get("id") else{return StatusCode::ACCEPTED.into_response();};
             let result=match request["method"].as_str().unwrap_or("") {
                 "initialize"=>Some(json!({"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"channel-mcp-fixture","version":"1"}})),
@@ -1232,8 +1242,10 @@ async fn channel_mcp_gateway_allows_only_the_authorized_server_and_remote_tool()
     }).run(move|case|async move{
         let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ConversationKind::Group);
         let url=reqwest::Url::parse(&tokio::fs::read_to_string(case.workspace().join("channel-mcp-url")).await?)?;
-        let network_target=format!("{}:{}",url.host_str().unwrap(),url.port().unwrap());
-        source.client().set_session_permission(source.id(),serde_json::from_value(json!({"network":{"rules":{(network_target):"allow"}}}))?).await?;
+        source.client().set_session_permission(source.id(),serde_json::from_value(json!({"network":{
+            "egress":{"default":"deny","allow":[{"to":[{"cidr":format!("{}/32",url.host_str().unwrap())}],"ports":[{"protocol":"tcp","port":url.port().unwrap()}]}],"deny":[]},
+            "ingress":{"default":"deny","hostLoopback":"deny"}
+        }}))?).await?;
         p.grant=ChannelGrant{mcp_tools:BTreeMap::from([("authorized-server".into(),BTreeSet::from(["echo".into()]))]),network_hosts:BTreeSet::from([format!("{}:{}",url.host_str().unwrap(),url.port().unwrap())]),..Default::default()};
         bind(&source,"mcp-pair-authority",p.clone()).await?;
         let search=model.expect(RequestMatch::user_text("查看当前可用的 MCP 工具"))

@@ -83,7 +83,7 @@ pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage)
     match page {
         PermissionStudioPage::PathDefaults
         | PermissionStudioPage::PathRules
-        | PermissionStudioPage::NetworkZones
+        | PermissionStudioPage::NetworkDefaults
         | PermissionStudioPage::NetworkRules
         | PermissionStudioPage::ToolNames
         | PermissionStudioPage::ToolCommandRules => {
@@ -104,8 +104,8 @@ pub(crate) fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioP
             ui_text::t(i18n, "permission-studio-page-path-defaults")
         }
         PermissionStudioPage::PathRules => ui_text::t(i18n, "permission-studio-page-path-rules"),
-        PermissionStudioPage::NetworkZones => {
-            ui_text::t(i18n, "permission-studio-page-network-zones")
+        PermissionStudioPage::NetworkDefaults => {
+            ui_text::t(i18n, "permission-studio-page-network-defaults")
         }
         PermissionStudioPage::NetworkRules => {
             ui_text::t(i18n, "permission-studio-page-network-rules")

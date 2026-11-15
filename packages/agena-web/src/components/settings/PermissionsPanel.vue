@@ -114,6 +114,9 @@ const modeOptions = computed(() => [
   { value: 'ask', label: st('Ask'), description: st('Request confirmation before running.') },
   { value: 'deny', label: st('Deny'), description: st('Block matching tool calls.') },
 ])
+const networkModeOptions = computed(() =>
+  modeOptions.value.filter((option) => ['allow', 'deny'].includes(option.value)),
+)
 
 const canCreate = computed(() => canEdit.value && !createBusy.value && newToolName.value.trim().length > 0)
 
@@ -137,6 +140,14 @@ const filteredRules = computed(() =>
 const selectableRules = computed(() => filteredRules.value.filter((rule) => canRemoveRule(rule)))
 const selectedRules = computed(() => selectableRules.value.filter((rule) => selectedIds.value.has(rule.id)))
 const selectedActiveRules = computed(() => selectedRules.value.filter((rule) => !rule.revoked_at))
+const bulkModeOptions = computed(() =>
+  selectedActiveRules.value.some((rule) => rule.subject_kind === 'network_access')
+    ? networkModeOptions.value
+    : modeOptions.value,
+)
+watch(bulkModeOptions, (options) => {
+  if (!options.some((option) => option.value === bulkMode.value)) bulkMode.value = 'deny'
+})
 const allSelected = computed(
   () => selectableRules.value.length > 0 && selectableRules.value.every((rule) => selectedIds.value.has(rule.id)),
 )
@@ -181,6 +192,8 @@ watch(
 
 async function setRuleMode(rule: PermissionRule, mode: string) {
   if (!canRemoveRule(rule) || rule.revoked_at || rowBusy.value !== null || bulkBusy.value || mode === rule.mode) return
+  if (rule.subject_kind === 'network_access' && !networkModeOptions.value.some((option) => option.value === mode))
+    return
   rowBusy.value = rule.id
   try {
     await apiJson('/api/v1/permission-rules/batch', {
@@ -225,6 +238,7 @@ function clearFilters() {
 async function applyBulkOperation(action: 'delete' | 'set_mode') {
   const targetRules = action === 'set_mode' ? selectedActiveRules.value : selectedRules.value
   if (!targetRules.length || bulkBusy.value || rowBusy.value !== null) return
+  if (action === 'set_mode' && !bulkModeOptions.value.some((option) => option.value === bulkMode.value)) return
   const ruleIds = targetRules.map((rule) => rule.id)
   const scope = props.scope
   const sessionId = activeSessionId.value
@@ -339,6 +353,16 @@ async function removeRule(id: number) {
     <p v-if="scope === 'workspace' && !activeWorkspaceId" class="mb-3 text-xs text-muted-foreground">
       {{ $st('Select a workspace to view and manage its permission rules.') }}
     </p>
+    <p
+      v-if="sortedRules.some((rule) => rule.subject_kind === 'network_access')"
+      class="mb-3 text-xs text-muted-foreground"
+    >
+      {{
+        $st(
+          'Network decisions accept allow or deny and literal IP targets such as 192.0.2.10:443. Use tcp://, udp:// or icmp:// for a protocol; bare IP covers configured protocols and ports. Configure CIDRs in Native network policy JSON.',
+        )
+      }}
+    </p>
     <div v-if="sortedRules.length" class="mb-3 flex flex-wrap items-center gap-2">
       <SearchInput
         v-model="query"
@@ -379,7 +403,7 @@ async function removeRule(id: number) {
         <div class="w-32">
           <OptionPicker
             v-model="bulkMode"
-            :options="modeOptions"
+            :options="bulkModeOptions"
             :include-empty="false"
             :title="$st('Set mode for selected rules')"
             :disabled="!selectedActiveRules.length || bulkBusy || rowBusy !== null"
@@ -450,6 +474,7 @@ async function removeRule(id: number) {
             <span>{{ scopeLabel(rule.scope) }}</span
             ><span aria-hidden="true">·</span><span>#{{ rule.id }}</span
             ><span v-if="rule.source" :title="$st('Source')">{{ rule.source }}</span
+            ><span v-if="rule.subject_kind === 'network_access'">{{ $st('Mode') }}: {{ rule.mode }}</span
             ><span v-if="rule.revoked_at" class="text-destructive">{{ $st('revoked') }}</span>
           </div>
         </div>
@@ -457,7 +482,7 @@ async function removeRule(id: number) {
           <OptionPicker
             v-if="canRemoveRule(rule) && !rule.revoked_at"
             :model-value="rule.mode"
-            :options="modeOptions"
+            :options="rule.subject_kind === 'network_access' ? networkModeOptions : modeOptions"
             :include-empty="false"
             :title="$st('Permission mode')"
             :disabled="bulkBusy || rowBusy !== null"

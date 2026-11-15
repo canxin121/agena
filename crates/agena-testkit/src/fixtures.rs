@@ -311,7 +311,19 @@ impl TestCase {
     /// the handler. Raw Axum on_upgrade callbacks still only have their sockets
     /// tracked. No handler or HostClient behavior is simulated here.
     pub async fn serve_http(&self, router: Router) -> Result<HttpFixture> {
-        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        self.serve_http_on(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), router)
+            .await
+    }
+
+    /// Serve a case-owned fixture on a selected local interface. Native sandbox
+    /// tests use a non-loopback address because host-loopback access is separate
+    /// from an ordinary IP/port grant. Shutdown owns connections as in serve_http.
+    pub async fn serve_http_on(
+        &self,
+        interface: std::net::IpAddr,
+        router: Router,
+    ) -> Result<HttpFixture> {
+        let listener = TcpListener::bind((interface, 0)).await?;
         let address = listener.local_addr()?;
         let stop = self.service_cancellation_token().child_token();
         let (finished, ended) = watch::channel(None);

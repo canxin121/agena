@@ -146,7 +146,12 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
             "http"
         })
         .map_err(|_| invalid("invalid permission URL"))?;
-    official_service::validate_provider_endpoint(service.host, permission_url.as_str()).await?;
+    let addresses = official_service::authorized_provider_addresses(
+        service.host,
+        permission_url.as_str(),
+        std::time::Duration::from_secs(service.connection.connect_timeout_secs.max(1).min(30)),
+    )
+    .await?;
     let mut request = url
         .as_str()
         .into_client_request()
@@ -172,10 +177,14 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
     let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
         .max_message_size(Some(8 * 1024 * 1024))
         .max_frame_size(Some(8 * 1024 * 1024));
-    let (mut socket, _) = tokio::time::timeout_at(
-        connect_deadline,
-        tokio_tungstenite::connect_async_with_config(request, Some(config), false),
-    )
+    let (mut socket, _) = tokio::time::timeout_at(connect_deadline, async {
+        let stream = tokio::net::TcpStream::connect(addresses.as_slice())
+            .await
+            .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+        // Keep the original hostname for Host and TLS SNI while connecting
+        // only to the addresses approved for this invocation.
+        tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None).await
+    })
     .await
     .map_err(|_| invalid("voice connection deadline exceeded"))?
     .map_err(|_| PluginError::internal("voice WebSocket connection failed"))?;

@@ -26,15 +26,18 @@ if behavior == "malformed":
     sys.exit(0)
 checks = [
     {"name": "offline", "required": True, "status": "passed", "detail": detail},
-    {"name": "http_proxy", "required": True, "status": "passed", "detail": detail},
+    {"name": "native_network", "required": True, "status": "passed", "detail": detail},
 ]
 report = {"schema_version": 1, "ok": True, "platform": os.environ.get("TEST_PROBE_PLATFORM", "macos" if sys.platform == "darwin" else "linux"), "duration_ms": 1, "checks": checks}
+if report["platform"] == "macos":
+    checks[1].update(required=False, status="unsupported", detail="Seatbelt supports network defaults without IP/protocol/port rules")
 if behavior == "missing_network":
     checks.pop()
 elif behavior == "network_failed":
     checks[1]["status"] = "failed"
 elif behavior == "optional_network":
     checks[1]["required"] = False
+    checks[1]["status"] = "passed"
 elif behavior == "duplicate":
     checks.append(checks[0].copy())
 elif behavior == "wrong_platform":
@@ -896,7 +899,19 @@ class InstallerStorageTests(unittest.TestCase):
         self.assertEqual(events[probe][1], str(self.install_dir / "bin/agena"))
         report = json.loads((self.install_dir / "sandbox-report.json").read_text())
         self.assertTrue(report["ok"])
-        self.assertEqual({check["name"] for check in report["checks"]}, {"offline", "http_proxy"})
+        self.assertEqual({check["name"] for check in report["checks"]}, {"offline", "native_network"})
+
+    def test_macos_records_native_network_limitations_after_offline_check(self):
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--service-mode", "detached",
+            environment={"TEST_PROBE_PLATFORM": "macos"},
+        )
+        report = json.loads((self.install_dir / "sandbox-report.json").read_text())
+        native = next(check for check in report["checks"] if check["name"] == "native_network")
+        self.assertFalse(native["required"])
+        self.assertEqual(native["status"], "unsupported")
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
 
     def test_check_mode_still_runs_and_records_the_native_probe(self):
         self.invoke(

@@ -195,12 +195,6 @@ impl RuntimeHostClient {
             .ok_or_else(|| host_unavailable("session manager is not enabled in this runtime"))
     }
 
-    fn optional_session_manager(&self) -> Option<Arc<crate::session::SessionManager>> {
-        self.snapshot()
-            .ok()
-            .and_then(|snapshot| snapshot.session_manager())
-    }
-
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {
         Ok(self.session_manager()?.tool_executor())
     }
@@ -228,27 +222,6 @@ impl RuntimeHostClient {
         Ok((executor, feature))
     }
 
-    async fn callback_session_context(
-        &self,
-    ) -> Result<Option<crate::session::model::SessionExecutionContext>, PluginError> {
-        let Some(session_id) =
-            current_host_callback_context().and_then(|context| context.session_id)
-        else {
-            return Ok(None);
-        };
-        if session_id < 0 {
-            return Ok(None);
-        }
-        let Some(manager) = self.optional_session_manager() else {
-            return Ok(None);
-        };
-        let session = manager
-            .get_session(session_id)
-            .await
-            .map_err(plugin_error)?;
-        Ok(Some(session.execution.clone()))
-    }
-
     async fn callback_scoped_tool_executor(
         &self,
     ) -> Result<
@@ -258,13 +231,14 @@ impl RuntimeHostClient {
         ),
         PluginError,
     > {
-        let executor = self.tool_executor()?;
-        let session_context = self.callback_session_context().await?;
-        let executor = match session_context.as_ref() {
-            Some(context) => executor.for_session_context_async(context).await,
-            None => executor,
-        };
-        Ok((executor, session_context))
+        let callback = current_host_callback_context();
+        self.session_manager()?
+            .host_callback_executor(
+                callback.as_ref().and_then(|context| context.session_id),
+                callback.as_ref().and_then(|context| context.call_id),
+            )
+            .await
+            .map_err(plugin_error_from_app)
     }
 
     async fn require_callback_invocation(
@@ -567,21 +541,12 @@ impl HostClient for RuntimeHostClient {
         &self,
         target: String,
     ) -> Result<PermissionQuery, PluginError> {
-        let (executor, context) = self.callback_scoped_tool_executor().await?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
         let check = executor
-            .network_permission_check(&target)
-            .map_err(|error| error.into_plugin_error())?;
-        let decision = self
-            .session_manager()?
-            .query_host_permission(
-                context
-                    .as_ref()
-                    .and_then(|context| context.scope_session_id),
-                check,
-            )
+            .network_permission_check_async(&target)
             .await
-            .map_err(plugin_error_from_app)?;
-        Ok(permission_query(decision))
+            .map_err(|error| error.into_plugin_error())?;
+        Ok(permission_query(check.decision))
     }
 
     async fn check_resolved_network_permission(
@@ -595,6 +560,8 @@ impl HostClient for RuntimeHostClient {
         let resolved = resolved
             .parse::<agena_domain::NetworkTarget>()
             .map_err(|error| PluginError::invalid_params_error(&error))?;
+        // Reload all current numeric-IP decisions in the original callback
+        // authority; an exact lookup by the hostname cannot find these denies.
         let (executor, _) = self.callback_scoped_tool_executor().await?;
         Ok(permission_query(
             executor

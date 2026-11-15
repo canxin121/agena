@@ -140,3 +140,78 @@ async fn reload_queue_failure_reports_saved_state_without_losing_the_persisted_c
     );
     assert!(plugin.manager.statuses().await.is_empty());
 }
+
+#[derive(Default)]
+struct NetworkEvents(Mutex<Vec<(String, Option<i64>)>>);
+
+#[async_trait::async_trait]
+impl HostClient for NetworkEvents {
+    async fn log(&self, _: LogLevel, _: String, _: Value) {}
+    async fn publish_event(&self, _: EventEnvelope) -> Result<()> {
+        Ok(())
+    }
+    async fn subscribe_events(&self, _: EventFilter) -> Result<EventSubscription> {
+        Ok(EventSubscription {
+            id: "network-events".into(),
+        })
+    }
+    async fn read_config(&self, _: Option<String>) -> Result<Value> {
+        Ok(Value::Null)
+    }
+    async fn invoke_tool(&self, _: String, _: Value) -> Result<ToolInvokeOutput> {
+        unreachable!("permission checks do not invoke tools")
+    }
+    async fn require_network_permission(&self, target: String) -> Result<()> {
+        self.0.lock().unwrap().push((
+            target,
+            agena_plugin_sdk::host_api::current_host_callback_context()
+                .and_then(|context| context.call_id),
+        ));
+        Err(PluginError::internal("fixture policy denied"))
+    }
+    async fn check_resolved_network_permission(
+        &self,
+        target: String,
+        _: String,
+    ) -> Result<agena_plugin_sdk::host_api::PermissionQuery> {
+        self.0.lock().unwrap().push((
+            target,
+            agena_plugin_sdk::host_api::current_host_callback_context()
+                .and_then(|context| context.call_id),
+        ));
+        Ok(agena_plugin_sdk::host_api::PermissionQuery::Deny {
+            reason: "fixture policy denied".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn http_permission_events_hide_query_and_restore_the_original_call() {
+    use agena_mcp_client::McpHttpNetworkAuthorizer;
+    let host = Arc::new(NetworkEvents::default());
+    let authority = super::ConnectionNetworkAuthority {
+        host: host.clone(),
+        context: agena_plugin_sdk::host_api::HostCallbackContext {
+            call_id: Some(71),
+            session_id: Some(17),
+            ..Default::default()
+        },
+        denial: Default::default(),
+    };
+    let target = "https://api.example:8443/mcp/private?api_key=secret#secret";
+    assert!(authority.authorize(target).await.is_err());
+    assert!(
+        !authority
+            .authorize_resolved(target, "192.0.2.10:8443".parse().unwrap())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        *host.0.lock().unwrap(),
+        vec![
+            ("https://api.example:8443".into(), Some(71)),
+            ("https://api.example:8443".into(), Some(71)),
+        ]
+    );
+    assert!(super::network_permission_target("https://user:secret@api.example/mcp").is_err());
+}

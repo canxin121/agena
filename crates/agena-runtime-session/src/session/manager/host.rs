@@ -6,6 +6,7 @@ use agena_domain::{
 };
 use agena_plugin_host::sdk::host_api::AskUserResponse;
 
+mod callback_executor;
 mod operator;
 mod process_sandbox;
 mod session_scope;
@@ -138,7 +139,7 @@ impl SessionManager {
         kind: agena_domain::PathKind,
         path: String,
     ) -> Result<(), AppError> {
-        self.require_host_permission(session, call, move |executor| {
+        self.require_host_permission(session, call, move |executor| async move {
             if executor.is_global() && !std::path::Path::new(&path).is_absolute() {
                 return Err(ToolError::invalid_input(
                     "Global sessions require a full absolute path",
@@ -159,21 +160,28 @@ impl SessionManager {
         call: i64,
         target: String,
     ) -> Result<(), AppError> {
-        self.require_host_permission(session, call, move |executor| {
-            executor.network_permission_check(&target)
+        self.require_host_permission(session, call, move |executor| async move {
+            executor.network_permission_check_async(&target).await
         })
         .await
     }
 
-    async fn require_host_permission(
+    async fn require_host_permission<F>(
         &self,
         session: i64,
         call: i64,
-        check: impl FnOnce(&ToolExecutor) -> Result<agena_tool::ToolPermissionCheck, ToolError>,
-    ) -> Result<(), AppError> {
+        check: impl FnOnce(ToolExecutor) -> F,
+    ) -> Result<(), AppError>
+    where
+        F: std::future::Future<Output = Result<agena_tool::ToolPermissionCheck, ToolError>>,
+    {
         if session == OPERATOR_SESSION {
             let authority = self.operator_invocation(call).map_err(tool_error)?;
-            let check = check(&authority.executor).map_err(tool_error)?;
+            let executor = self
+                .sandbox_executor_for_operator(&authority)
+                .await
+                .map_err(tool_error)?;
+            let check = check(executor).await.map_err(tool_error)?;
             return self
                 .authorize_operator_checks(&authority, vec![check])
                 .await
@@ -183,27 +191,38 @@ impl SessionManager {
         // grant cache or the approval interaction. Authorize each concrete
         // target against the session policy instead.
         if call < 0 {
-            let state = self.state_for_session(session_id(session)?).await?;
-            let context = self.execution_context_value(session_id(session)?).await?;
+            let key = session_id(session)?;
+            let state = self.state_for_session(key).await?;
+            let context = self.execution_context_with_state(key, &state).await?;
             let executor = state
                 .executor
                 .for_session_context_async(&context)
                 .await
                 .with_cancellation_token(Some(self.shutdown.child_token()));
-            let check = check(&executor).map_err(tool_error)?;
+            let executor = self
+                .sandbox_executor_for_session(&executor, session)
+                .await
+                .map_err(tool_error)?;
+            let check = check(executor.clone()).await.map_err(tool_error)?;
             return self
                 .authorize_session_scoped_checks(session, &executor, vec![check])
                 .await;
         }
         let (tool, control) = self.live_tool(session, call)?;
         let state = control.state.clone();
-        let context = self.execution_context_value(session_id(session)?).await?;
+        let context = self
+            .execution_context_with_state(session_id(session)?, &state)
+            .await?;
         let executor = state
             .executor
             .for_session_context_async(&context)
             .await
             .with_cancellation_token(Some(control.cancel.clone()));
-        let check = check(&executor).map_err(tool_error)?;
+        let executor = self
+            .sandbox_executor_for_session(&executor, session)
+            .await
+            .map_err(tool_error)?;
+        let check = check(executor.clone()).await.map_err(tool_error)?;
         self.authorize_checks(&tool, vec![check], &executor, &control, &state)
             .await
             .map_err(tool_error)
@@ -375,8 +394,11 @@ impl SessionManager {
             runtime.block_on(agena_async::permission_wait::scope(
                 Some((session, call)),
                 agena_async::permission_wait::waiting(manager.authorize_checks(
-                    &authority_tool, vec![check], &authorizer,
-                    &authority_control, &authority_state,
+                    &authority_tool,
+                    vec![check],
+                    &authorizer,
+                    &authority_control,
+                    &authority_state,
                 )),
             ))
         }));
@@ -391,8 +413,10 @@ impl SessionManager {
         self.authorize_tool(&tool, &invocation, &executor, &control, &state)
             .await
             .map_err(tool_error)?;
-        let executor = self.sandbox_executor_for_session(&executor, session)
-            .await.map_err(tool_error)?;
+        let executor = self
+            .sandbox_executor_for_session(&executor, session)
+            .await
+            .map_err(tool_error)?;
         let output = match executor
             .streaming_content_kind(&invocation)
             .map_err(tool_error)?
@@ -479,8 +503,10 @@ impl crate::SessionToolExecutionService for SessionManager {
                 .prepare_shell_invocation(&prepared.invocation, id, -1)
                 .await
                 .map_err(tool_error)?;
-            let executor = self.sandbox_executor_for_session(&executor, id)
-                .await.map_err(tool_error)?;
+            let executor = self
+                .sandbox_executor_for_session(&executor, id)
+                .await
+                .map_err(tool_error)?;
             executor
                 .execute_invocation(
                     &invocation,

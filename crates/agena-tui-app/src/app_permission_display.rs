@@ -374,7 +374,14 @@ pub(crate) fn permission_rule_choice_overlay_spec(
         ),
         PermissionRuleStudioChoiceField::Mode => (
             ui_text::t(i18n, "overlay-permission-rule-choice-mode-title"),
-            ui_text::t(i18n, "overlay-permission-rule-choice-mode-prompt"),
+            ui_text::t(
+                i18n,
+                if draft.subject_kind == PermissionRuleSubjectKind::NetworkAccess {
+                    "overlay-permission-rule-network-mode-detail"
+                } else {
+                    "overlay-permission-rule-choice-mode-prompt"
+                },
+            ),
             Editor::from_text(permission_rule_mode_label(draft.mode).to_string()),
             vec![
                 choice_item(
@@ -393,7 +400,13 @@ pub(crate) fn permission_rule_choice_overlay_spec(
                     "deny",
                     ui_text::t(i18n, "overlay-permission-rule-choice-mode-deny-detail"),
                 ),
-            ],
+            ]
+            .into_iter()
+            .filter(|item| {
+                draft.subject_kind != PermissionRuleSubjectKind::NetworkAccess
+                    || matches!(item.value.as_str(), "allow" | "deny")
+            })
+            .collect(),
             false,
         ),
     }
@@ -486,7 +499,11 @@ pub(crate) fn permission_rule_studio_items(
             i18n,
             "overlay-permission-rule-item-mode",
             permission_mode_display(i18n, draft.mode),
-            "overlay-permission-rule-item-mode-detail",
+            if draft.subject_kind == PermissionRuleSubjectKind::NetworkAccess {
+                "overlay-permission-rule-network-mode-detail"
+            } else {
+                "overlay-permission-rule-item-mode-detail"
+            },
             PermissionRuleStudioAction::Mode,
         ),
         permission_rule_studio_item(
@@ -584,7 +601,7 @@ pub(crate) fn refresh_permission_rule_studio_dialog(
 
 pub(crate) fn permission_rule_studio_detail_text(
     i18n: &I18n,
-    _draft: &PermissionRuleDraft,
+    draft: &PermissionRuleDraft,
     item: &PermissionRuleStudioItem<PermissionRuleStudioAction>,
 ) -> String {
     match item.action {
@@ -615,7 +632,14 @@ pub(crate) fn permission_rule_studio_detail_text(
         PermissionRuleStudioAction::SessionId => {
             ui_text::t(i18n, "overlay-permission-rule-detail-session-id")
         }
-        PermissionRuleStudioAction::Mode => ui_text::t(i18n, "overlay-permission-rule-detail-mode"),
+        PermissionRuleStudioAction::Mode => ui_text::t(
+            i18n,
+            if draft.subject_kind == PermissionRuleSubjectKind::NetworkAccess {
+                "overlay-permission-rule-network-mode-detail"
+            } else {
+                "overlay-permission-rule-detail-mode"
+            },
+        ),
     }
 }
 use crate::{

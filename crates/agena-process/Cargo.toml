@@ -8,13 +8,12 @@ description = "Cross-platform Tokio subprocess lifecycle policy for Agena"
 
 [dependencies]
 agena-async = { workspace = true }
+agena-domain = { workspace = true }
 base64 = { workspace = true }
-ipnet = { workspace = true }
 mxc-sdk = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-url = { workspace = true }
 uuid = { workspace = true }
 which = { workspace = true }
 portable-pty = { workspace = true }

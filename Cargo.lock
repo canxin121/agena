@@ -451,6 +451,7 @@ dependencies = [
  "chrono",
  "comrak",
  "indexmap",
+ "ipnet",
  "schemars",
  "serde",
  "serde_json",
@@ -589,6 +590,7 @@ dependencies = [
  "agena-secret-store",
  "async-trait",
  "chrono",
+ "futures",
  "http 1.5.0",
  "oauth2",
  "portable-atomic",
@@ -597,6 +599,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "sse-stream",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -790,8 +793,8 @@ name = "agena-process"
 version = "0.1.0"
 dependencies = [
  "agena-async",
+ "agena-domain",
  "base64 0.22.1",
- "ipnet",
  "libc",
  "mxc-sdk",
  "portable-pty",
@@ -801,7 +804,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "url",
  "uuid",
  "which",
  "windows-sys 0.61.2",
@@ -999,6 +1001,7 @@ dependencies = [
  "agena-tool",
  "async-trait",
  "indexmap",
+ "ipnet",
  "mxc-sdk",
  "path-clean",
  "schemars",
@@ -1227,6 +1230,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

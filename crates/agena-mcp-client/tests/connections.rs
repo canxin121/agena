@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use agena_mcp_client::{
     ContentBlock, FileOAuthCredentialStore, FileTokenStore, HttpAuth, McpConnectionManager,
-    McpError, McpOAuthNetworkAuthorizer, McpOAuthRegistration, McpOAuthSessionManager,
+    McpError, McpHttpNetworkAuthorizer, McpOAuthRegistration, McpOAuthSessionManager,
     McpToolPolicy, OAuthCredentialState, ReconnectPolicy, ServerSpec, credential_store_name,
     oauth_credential_binding,
 };
@@ -322,7 +322,13 @@ async fn closed_stdio_transport_is_hidden_and_supervisor_reconnects_it() {
         .add_server("restart", stdio_spec(root.path(), "legacy", "tools", false))
         .await
         .unwrap();
-    let first = text_content(manager.call_tool("restart", "ping", None).await.unwrap());
+    let first_instance = text_content(manager.call_tool("restart", "ping", None).await.unwrap());
+    assert!(!first_instance.is_empty());
+    assert_eq!(
+        first_instance,
+        text_content(manager.call_tool("restart", "ping", None).await.unwrap()),
+        "the startup instance ID stays stable within one child process"
+    );
     assert!(
         manager
             .call_tool("restart", "disconnect", None)
@@ -346,7 +352,7 @@ async fn closed_stdio_transport_is_hidden_and_supervisor_reconnects_it() {
         Duration::from_millis(40),
         Duration::from_millis(10),
     ));
-    let second = tokio::time::timeout(Duration::from_secs(5), async {
+    let second_instance = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Ok(result) = manager.call_tool("restart", "ping", None).await {
                 break text_content(result);
@@ -356,7 +362,11 @@ async fn closed_stdio_transport_is_hidden_and_supervisor_reconnects_it() {
     })
     .await
     .expect("closed transport was reconnected");
-    assert_ne!(first, second, "reconnect launched a fresh child process");
+    assert!(!second_instance.is_empty());
+    assert_ne!(
+        first_instance, second_instance,
+        "reconnect launched a child with a new startup instance ID"
+    );
     manager.remove_server("restart").await.unwrap();
     tokio::time::sleep(Duration::from_millis(80)).await;
     assert!(manager.statuses().await.is_empty());
@@ -785,7 +795,7 @@ struct OAuthNetworkPolicy {
 }
 
 #[async_trait::async_trait]
-impl McpOAuthNetworkAuthorizer for OAuthNetworkPolicy {
+impl McpHttpNetworkAuthorizer for OAuthNetworkPolicy {
     async fn authorize(&self, target: &str) -> agena_mcp_client::McpResult<()> {
         self.targets.lock().unwrap().push(target.to_owned());
         if self
@@ -797,6 +807,23 @@ impl McpOAuthNetworkAuthorizer for OAuthNetworkPolicy {
         } else {
             Err(McpError::PermissionDenied)
         }
+    }
+
+    async fn authorize_resolved(
+        &self,
+        target: &str,
+        address: std::net::SocketAddr,
+    ) -> agena_mcp_client::McpResult<bool> {
+        let url = Url::parse(target).unwrap();
+        Ok(self
+            .allowed_origin
+            .as_ref()
+            .is_some_and(|origin| *origin == url.origin())
+            && url
+                .host_str()
+                .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+                == Some(address.ip())
+            && url.port_or_known_default() == Some(address.port()))
     }
 }
 

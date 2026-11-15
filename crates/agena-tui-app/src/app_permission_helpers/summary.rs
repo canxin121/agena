@@ -48,19 +48,23 @@ pub(crate) fn permission_resource_override_summary(
     }
     if let Some(network) = permission.network.as_ref() {
         let mut labels = Vec::new();
-        if network.internet.is_some() {
-            labels.push(ui_text::t(i18n, "value-internet"));
+        if network.egress.is_some() {
+            labels.push(i18n.text("permission-studio-network-egress-default"));
         }
-        if network.private.is_some() {
-            labels.push(ui_text::t(i18n, "value-private"));
+        if network.ingress.is_some() {
+            labels.push(i18n.text("permission-studio-network-ingress-default"));
         }
-        if network.loopback.is_some() {
-            labels.push(ui_text::t(i18n, "value-loopback"));
-        }
-        if !network.rules.is_empty() {
+        let rules = network
+            .egress
+            .as_ref()
+            .map(|egress| {
+                egress.allow.as_ref().map_or(0, Vec::len) + egress.deny.as_ref().map_or(0, Vec::len)
+            })
+            .unwrap_or_default();
+        if rules > 0 {
             labels.push(i18n.text_args(
                 "value-rule-count",
-                &agena_tui::fl_args!("count" => network.rules.len() as i64),
+                &agena_tui::fl_args!("count" => rules as i64),
             ));
         }
         parts.push(if labels.is_empty() {

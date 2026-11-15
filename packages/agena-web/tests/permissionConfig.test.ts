@@ -3,30 +3,23 @@ import { describe, expect, test } from 'bun:test'
 import {
   canonicalPermissionPath,
   parsePermissionConfig,
+  parseNetworkPermissionConfig,
   permissionConfigErrorMessage,
   renamePermissionRule,
   type PermissionMode,
 } from '../src/lib/permissionConfig'
 
 describe('sandbox-compatible permission configuration', () => {
-  test('renaming a command or network rule preserves later restrictions', () => {
+  test('renaming a command rule preserves later restrictions', () => {
     const commands: Record<string, PermissionMode> = { 'git *': 'allow', 'git push *': 'deny' }
-    const network: Record<string, PermissionMode> = { '10.0.0.0/8': 'allow', '10.0.0.1:443': 'deny' }
     const config = parsePermissionConfig({
       tools: { rules: { 'agena.shell.exec': renamePermissionRule(commands, 'git *', 'git p*') } },
-      network: { rules: renamePermissionRule(network, '10.0.0.0/8', '10.0.0.0/16') },
     })
-    const saved = JSON.parse(JSON.stringify(config))
-    expect(Object.entries(saved.tools.rules['agena.shell.exec'])).toEqual([
+    expect(Object.entries(config.tools!.rules!['agena.shell.exec']!)).toEqual([
       ['git p*', 'allow'],
       ['git push *', 'deny'],
     ])
-    expect(Object.entries(saved.network.rules)).toEqual([
-      ['10.0.0.0/16', 'allow'],
-      ['10.0.0.1:443', 'deny'],
-    ])
     expect(Object.keys(commands)).toEqual(['git *', 'git push *'])
-    expect(Object.keys(network)).toEqual(['10.0.0.0/8', '10.0.0.1:443'])
   })
 
   test('keeps canonical path strings and unrelated tool approval', () => {
@@ -40,7 +33,7 @@ describe('sandbox-compatible permission configuration', () => {
           '<workspace>/secrets': 'deny',
         },
       },
-      network: { internet: 'deny', private: 'deny', loopback: 'deny' },
+      network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
       tools: { names: { 'agena.shell.exec': 'ask' } },
     }
     expect(parsePermissionConfig(config)).toEqual(config)
@@ -208,6 +201,73 @@ describe('sandbox-compatible permission configuration', () => {
       expect(permissionConfigErrorMessage(reason, (key, params) => `translated:${key}:${params?.field}`)).toContain(
         'translated:Invalid permission value',
       )
+    }
+  })
+})
+
+describe('native MXC network configuration', () => {
+  test('preserves complex policies and explicit empty override lists', () => {
+    const network = {
+      egress: {
+        default: 'deny',
+        allow: [
+          {
+            to: [
+              { cidr: '10.20.0.0/16', except: ['10.20.10.0/24'] },
+              { cidr: 'fd20:20::/48', except: ['fd20:20:0:10::/64'] },
+            ],
+            ports: [
+              { protocol: 'tcp', port: 443 },
+              { protocol: 'udp', port: 8000, endPort: 8099 },
+            ],
+          },
+        ],
+        deny: [],
+      },
+      ingress: { default: 'deny', hostLoopback: 'deny' },
+    }
+    expect(parseNetworkPermissionConfig(network)).toEqual(network)
+    expect(parseNetworkPermissionConfig({})).toEqual({})
+    expect(parseNetworkPermissionConfig({ egress: { allow: [{}] } })).toEqual({ egress: { allow: [{}] } })
+  })
+
+  test.each([
+    { internet: 'allow' },
+    { rules: { 'example.com': 'allow' } },
+    { egress: { default: 'ask' } },
+    { ingress: { host_loopback: 'deny' } },
+    { egress: { allow: [{ to: [] }] } },
+    { egress: { allow: [{ ports: [] }] } },
+    { egress: { allow: [{ to: [{ cidr: 'example.com/32' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: 'https://example.com' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '127.0.0.1' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '10.0.0.0/8', except: ['192.168.0.0/16'] }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '10.0.0.0/8', except: ['::/0'] }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '::/129' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '1::2::3/128' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '10.00.0.1/32' }] }] } },
+    { egress: { allow: [{ ports: [{ port: 0 }] }] } },
+    { egress: { allow: [{ ports: [{ port: 65536 }] }] } },
+    { egress: { allow: [{ ports: [{ port: 443.5 }] }] } },
+    { egress: { allow: [{ ports: [{ port: '443' }] }] } },
+    { egress: { allow: [{ ports: [{ endPort: 443 }] }] } },
+    { egress: { allow: [{ ports: [{ port: 443, endPort: 80 }] }] } },
+    { egress: { allow: [{ ports: [{ protocol: 'icmp', port: 443 }] }] } },
+    { egress: { allow: [{ ports: [{ protocol: 'sctp' }] }] } },
+  ])('rejects unsupported native policy without silently deleting it: %p', (network) => {
+    const before = JSON.stringify(network)
+    expect(() => parseNetworkPermissionConfig(network)).toThrow()
+    expect(JSON.stringify(network)).toBe(before)
+  })
+
+  test('accepts full IPv4/IPv6 ranges, literal hosts, ICMP and any protocol', () => {
+    for (const cidr of ['0.0.0.0/0', '192.0.2.1/32', '::/0', '2001:db8::1/128', '::ffff:192.0.2.1/128']) {
+      expect(
+        parseNetworkPermissionConfig({ egress: { allow: [{ to: [{ cidr }] }] } }).egress?.allow?.[0]?.to?.[0]?.cidr,
+      ).toBe(cidr)
+    }
+    for (const ports of [[{ protocol: 'icmp' }], [{ protocol: 'any' }], [{ port: 53 }]]) {
+      expect(parseNetworkPermissionConfig({ egress: { allow: [{ ports }] } }).egress?.allow?.[0]?.ports).toEqual(ports)
     }
   })
 })

@@ -5,7 +5,12 @@
 //! and grants nothing on its own: launch paths still require normal approval.
 
 use super::*;
+use agena_domain::{
+    NetworkEgressConfig, NetworkPeerConfig, NetworkPermissionConfig, NetworkPortConfig,
+    NetworkProtocol, NetworkRuleConfig,
+};
 use serde::{Deserialize, Serialize};
+use std::net::IpAddr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,7 +19,7 @@ pub struct SandboxPermissionSnapshot {
     pub workspace_root: PathBuf,
     /// The base policy followed by every independent authority ceiling.
     pub path_layers: Vec<SandboxPathPolicy>,
-    pub network_layers: Vec<SandboxNetworkPolicy>,
+    pub network_layers: Vec<NetworkPermissionConfig>,
     /// Effective persisted decisions, ordered from global to session scope.
     #[serde(default)]
     pub persisted_rules: Vec<SandboxPersistedRule>,
@@ -88,22 +93,6 @@ pub enum SandboxPathPattern {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SandboxNetworkPolicy {
-    pub internet_default: PermissionMode,
-    pub private_default: PermissionMode,
-    pub loopback_default: PermissionMode,
-    pub rules: Vec<SandboxNetworkRule>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SandboxNetworkRule {
-    pub pattern: String,
-    pub mode: PermissionMode,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SandboxFilesystemRestrictions {
@@ -117,6 +106,8 @@ pub struct SandboxFilesystemRestrictions {
 pub enum SandboxPolicyError {
     #[error("sandbox execution principal is blocked")]
     Blocked,
+    #[error("native MXC network policy cannot be compiled: {0}")]
+    Network(String),
     #[error("sandbox path must be absolute: {path:?}")]
     RelativePath { path: PathBuf },
     #[error("sandbox policy denies {access} access to {path:?}")]
@@ -199,21 +190,7 @@ impl SandboxPermissionSnapshot {
                         .collect(),
                 })
                 .collect(),
-            network_layers: network
-                .map(|policy| SandboxNetworkPolicy {
-                    internet_default: policy.internet_default,
-                    private_default: policy.private_default,
-                    loopback_default: policy.loopback_default,
-                    rules: policy
-                        .rules
-                        .iter()
-                        .map(|rule| SandboxNetworkRule {
-                            pattern: rule.pattern.clone(),
-                            mode: rule.mode,
-                        })
-                        .collect(),
-                })
-                .collect(),
+            network_layers: network.map(|policy| policy.config.clone()).collect(),
             workspace_root,
             persisted_rules: Vec::new(),
         }
@@ -249,114 +226,133 @@ impl SandboxPermissionSnapshot {
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
-        if self.blocked {
-            return denied("execution principal is blocked");
+        let config = match self.native_network_policy(None) {
+            Ok(config) => config,
+            Err(error) => return denied(error.to_string()),
+        };
+        match NetworkPermissionPolicy::from_config(&config) {
+            Ok(policy) => policy.check_connect(target),
+            Err(error) => denied(format!("invalid native network policy: {error}")),
         }
-        let mut decision = PermissionDecision::Allow;
-        for layer in &self.network_layers {
-            let mut policy = NetworkPermissionPolicy::new(layer.internet_default);
-            policy.private_default = layer.private_default;
-            policy.loopback_default = layer.loopback_default;
-            for rule in &layer.rules {
-                if let Err(error) = policy.add_rule(&rule.pattern, rule.mode) {
-                    return denied(format!("invalid sandbox network policy: {error}"));
-                }
-            }
-            decision = intersect(decision, policy.check_connect(target));
-        }
-        self.apply_persisted(decision, |action| matches!(action,
-            PermissionAction::NetworkAccess { target: original, host, port }
-                if original == target.original() && host == target.host() && *port == target.port()
-        ))
     }
 
-    /// Check a DNS result for an already-approved concrete hostname and port.
-    /// Domain approval survives an internet default deny, while numeric IP
-    /// fences and a transition into another network class retain authority.
+    /// DNS names carry no authority. Every concrete result is checked against
+    /// every native IP policy and the same persisted decisions as literal IPs.
     pub fn authorize_resolved_network_address(
         &self,
         original: &NetworkTarget,
         resolved: &NetworkTarget,
     ) -> PermissionDecision {
-        if self.blocked {
-            return denied("execution principal is blocked");
-        }
         if original.port() != resolved.port() {
             return denied("resolved network address changed the approved port");
         }
         let Some(address) = numeric_host(resolved.host()) else {
             return denied("resolved network target must be a numeric IP address");
         };
-        let resolved_text = match (address, resolved.port()) {
-            (IpAddr::V4(address), Some(port)) => format!("{address}:{port}"),
-            (IpAddr::V6(address), Some(port)) => format!("[{address}]:{port}"),
-            (address, None) => address.to_string(),
-        };
-        let resolved: NetworkTarget = match resolved_text.parse() {
-            Ok(target) => target,
-            Err(error) => return denied(format!("invalid resolved network address: {error}")),
-        };
-        let original_decision = self.authorize_network_connect(original);
-        if matches!(original_decision, PermissionDecision::Deny { .. }) {
-            return original_decision;
+        if numeric_host(original.host()).is_some_and(|original| original != address) {
+            return denied("resolved network address changed the literal IP identity");
         }
-        let original_address = numeric_host(original.host());
-        let original_class =
-            original_address.map_or_else(|| classify_network_target(original), classify_ip_addr);
-        let resolved_class = classify_ip_addr(address);
-        let mut decision = if original_class == resolved_class {
-            let mut decision = PermissionDecision::Allow;
-            for layer in &self.network_layers {
-                let mut address_decision = PermissionDecision::Allow;
-                for rule in layer.rules.iter().rev() {
-                    let matcher = match NetworkRuleMatcher::new(&rule.pattern) {
-                        Ok(matcher) => matcher,
-                        Err(error) => {
-                            return denied(format!("invalid sandbox network policy: {error}"));
-                        }
-                    };
-                    // Only concrete address rules add a DNS-result
-                    // constraint. Hostname decisions already participated in
-                    // approval of the original destination.
-                    if matcher.matches(&resolved) {
-                        address_decision =
-                            decide_from_mode(rule.mode, "matched resolved IP address rule");
-                        break;
-                    }
-                }
-                decision = intersect(decision, address_decision);
-            }
-            if original_address == Some(address)
-                && !matches!(decision, PermissionDecision::Deny { .. })
-            {
-                PermissionDecision::Allow
-            } else {
-                decision
-            }
+        let host = if address.is_ipv6() {
+            format!("[{address}]")
         } else {
-            // DNS must not borrow hostname approval to cross into another
-            // address class. Only an explicit resolved Allow is usable.
-            self.authorize_network_connect(&resolved)
+            address.to_string()
         };
-        for rule in &self.persisted_rules {
-            let PermissionAction::NetworkAccess { host, port, .. } = &rule.action else {
+        let endpoint = original
+            .port()
+            .map_or_else(|| host.clone(), |port| format!("{host}:{port}"));
+        let endpoint = match super::network::target_protocol(original) {
+            NetworkProtocol::Udp => format!("udp://{endpoint}"),
+            NetworkProtocol::Icmp => format!("icmp://{endpoint}"),
+            NetworkProtocol::Tcp => format!("tcp://{endpoint}"),
+            NetworkProtocol::Any => endpoint,
+        };
+        let numeric = match endpoint.parse::<NetworkTarget>() {
+            Ok(target) => target,
+            Err(error) => return denied(format!("invalid numeric network identity: {error}")),
+        };
+        let decision = self.authorize_network_connect(&numeric);
+        self.apply_persisted(decision, |action| matches!(action,
+            PermissionAction::NetworkAccess { target, host, port }
+                if target == original.original() && host == original.host() && *port == original.port()
+        ))
+    }
+
+    /// Compile independent ceilings and the optional invocation scope with AND
+    /// semantics. Persisted denials are native deny rules, never proxy checks.
+    pub fn native_network_policy(
+        &self,
+        scope: Option<&NetworkPermissionConfig>,
+    ) -> Result<NetworkPermissionConfig, SandboxPolicyError> {
+        if self.blocked {
+            return Err(SandboxPolicyError::Blocked);
+        }
+        let mut layers = self.network_layers.clone();
+        if let Some(scope) = scope {
+            layers.push(scope.clone());
+        }
+        if layers.is_empty() {
+            layers.push(NetworkPermissionConfig::offline());
+        }
+        let mut result =
+            super::network::intersect_policies(&layers).map_err(SandboxPolicyError::Network)?;
+        let mut persisted = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        // The snapshot is ordered from global to session scope. Validate the
+        // final decision for each action, including modes that cannot be
+        // represented natively; an obsolete Ask/Auto must not disappear.
+        for rule in self.persisted_rules.iter().rev() {
+            let PermissionAction::NetworkAccess { target, host, port } = &rule.action else {
                 continue;
             };
-            if rule.mode != PermissionMode::Deny
-                || *port != resolved.port()
-                || numeric_host(host) != Some(address)
-            {
+            if !seen.insert((target.as_str(), host.as_str(), *port)) {
                 continue;
             }
-            // Resolve scope overrides per stored action key; a separate URL
-            // spelling cannot accidentally erase another key's active deny.
-            let stored =
-                self.apply_persisted(PermissionDecision::Allow, |action| action == &rule.action);
-            if matches!(stored, PermissionDecision::Deny { .. }) {
-                decision = intersect(decision, stored);
+            agena_domain::validate_persisted_network_decision(
+                &rule.action,
+                rule.mode,
+                std::env::consts::OS,
+            ).map_err(|reason| SandboxPolicyError::Network(format!(
+                "stored network decision is incompatible with native MXC: {reason}; replace or remove this saved decision before retrying"
+            )))?;
+            if rule.mode != PermissionMode::Deny {
+                // Remembered allows never broaden the configured policy.
+                continue;
             }
+            let address = numeric_host(host).ok_or_else(|| {
+                SandboxPolicyError::Network(
+                    "stored network decision must use a numeric IP address".into(),
+                )
+            })?;
+            let target = target.parse::<NetworkTarget>().map_err(|error| {
+                SandboxPolicyError::Network(format!("stored network target is invalid: {error}"))
+            })?;
+            let protocol = super::network::target_protocol(&target);
+            persisted.push(NetworkRuleConfig {
+                to: Some(vec![NetworkPeerConfig {
+                    cidr: format!("{address}/{}", if address.is_ipv4() { 32 } else { 128 }),
+                    except: vec![],
+                }]),
+                ports: (protocol != NetworkProtocol::Any || port.is_some()).then(|| {
+                    vec![NetworkPortConfig {
+                        protocol: Some(protocol),
+                        port: *port,
+                        end_port: None,
+                    }]
+                }),
+            });
         }
-        decision
+        if !persisted.is_empty() {
+            result
+                .egress
+                .get_or_insert_with(NetworkEgressConfig::default)
+                .deny
+                .get_or_insert_with(Vec::new)
+                .extend(persisted);
+        }
+        result
+            .validate_for_platform(std::env::consts::OS)
+            .map_err(SandboxPolicyError::Network)?;
+        Ok(result)
     }
 
     fn apply_persisted(

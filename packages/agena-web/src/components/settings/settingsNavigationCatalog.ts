@@ -48,8 +48,8 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     {
       id: 'network',
       label: () => st('Network'),
-      description: () => st('Configure internet, private-network, and host access for each permission scope.'),
-      keywords: ['network', 'internet', 'private', 'host', 'domain'],
+      description: () => st('Configure native MXC outbound, inbound, and IP rules for each permission scope.'),
+      keywords: ['network', 'mxc', 'egress', 'ingress', 'cidr', 'protocol', 'port', 'hostLoopback'],
     },
     {
       id: 'tools',

@@ -16,6 +16,7 @@ agena-provider = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-tool = { workspace = true }
 indexmap = { workspace = true }
+ipnet = { workspace = true }
 path-clean = { workspace = true }
 schemars = { workspace = true }
 sea-orm = { workspace = true }

@@ -608,8 +608,8 @@ impl App {
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }
-            ConfirmAction::PermissionStudioDeleteNetworkRule { target } => {
-                self.delete_permission_studio_network_rule(target.as_str())
+            ConfirmAction::PermissionStudioDeleteNetworkPolicy => {
+                self.delete_permission_studio_network_policy()
             }
             ConfirmAction::PermissionStudioDeleteToolName { key } => {
                 self.delete_permission_studio_tool_name(key.as_str())

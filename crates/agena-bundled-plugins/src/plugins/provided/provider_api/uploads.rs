@@ -29,7 +29,12 @@ pub(super) async fn file_search(
         .strip_prefix(base.path().trim_end_matches('/'))
         .ok_or_else(|| invalid("invalid File Search upload path"))?;
     start.set_path(&format!("{prefix}/upload/v1beta{resource}"));
-    official_service::validate_provider_endpoint(service.host, start.as_str()).await?;
+    let client = official_service::authorized_provider_http_client(
+        service.host,
+        start.as_str(),
+        &service.connection,
+    )
+    .await?;
     let filename = std::path::Path::new(path)
         .file_name()
         .and_then(|s| s.to_str())
@@ -43,8 +48,7 @@ pub(super) async fn file_search(
     metadata
         .entry("displayName".into())
         .or_insert_with(|| json!(filename));
-    let begin = service
-        .client
+    let begin = client
         .post(start)
         .headers(official_service::provider_headers(&service.connection)?)
         .header("x-agena-provider-api", "gemini")
@@ -98,9 +102,13 @@ pub(super) async fn file_search(
             "resumable upload changed the approved provider origin; file bytes were not sent",
         ));
     }
-    official_service::validate_provider_endpoint(service.host, target.as_str()).await?;
-    let response = service
-        .client
+    let client = official_service::authorized_provider_http_client(
+        service.host,
+        target.as_str(),
+        &service.connection,
+    )
+    .await?;
+    let response = client
         .post(target)
         .headers(official_service::provider_headers(&service.connection)?)
         .header("x-agena-provider-api", "gemini")

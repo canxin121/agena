@@ -253,6 +253,15 @@ impl App {
                                     "network_access" => PermissionRuleSubjectKind::NetworkAccess,
                                     _ => PermissionRuleSubjectKind::Tool,
                                 };
+                                if parent.draft.subject_kind
+                                    == PermissionRuleSubjectKind::NetworkAccess
+                                    && !matches!(
+                                        parent.draft.mode,
+                                        PermissionMode::Allow | PermissionMode::Deny
+                                    )
+                                {
+                                    parent.draft.mode = PermissionMode::Deny;
+                                }
                             }
                             PermissionRuleStudioChoiceField::PathAccessKind => {
                                 if !value.trim().is_empty() {
@@ -277,6 +286,7 @@ impl App {
                                 parent.draft.mode = match value.as_str() {
                                     "allow" => PermissionMode::Allow,
                                     "auto" => PermissionMode::Auto,
+                                    "ask" => PermissionMode::Ask,
                                     "deny" => PermissionMode::Deny,
                                     _ => PermissionMode::Auto,
                                 };
@@ -312,15 +322,6 @@ impl App {
                             .is_some_and(|path| path.rules.contains_key(pattern)) =>
                     {
                         Some((PermissionStudioEditorAction::AddPathRule, pattern.clone()))
-                    }
-                    crate::PermissionStudioModeTarget::NetworkRule { target }
-                        if !parent
-                            .permission
-                            .network
-                            .as_ref()
-                            .is_some_and(|network| network.rules.contains_key(target)) =>
-                    {
-                        Some((PermissionStudioEditorAction::AddNetworkRule, target.clone()))
                     }
                     _ => None,
                 };

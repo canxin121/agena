@@ -27,7 +27,7 @@ impl PluginCallCompletion {
         self.finished.cancelled().await;
     }
 
-    pub(super) async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
+    pub(crate) async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
         CURRENT_CALL.scope(self.clone(), future).await
     }
 }

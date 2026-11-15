@@ -1,5 +1,7 @@
 //! Generic plugin → JSON dispatch trampoline. Used by every driver.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -447,9 +449,26 @@ impl<P: Plugin> PluginDispatcher<P> {
         request: &RequestScope,
         lifetime: impl Send + 'static,
     ) -> StreamHandle {
+        self.dispatch_stream_request_with_scope(input, request, lifetime, |task| task)
+    }
+
+    /// Run the stream worker inside a transport-supplied future scope. This
+    /// carries host-local task context across the spawn without coupling the
+    /// SDK to a host implementation or creating a new authority lifetime.
+    pub fn dispatch_stream_request_with_scope<F, Scoped>(
+        self: &Arc<Self>,
+        input: ToolInvokeInput,
+        request: &RequestScope,
+        lifetime: impl Send + 'static,
+        scope: F,
+    ) -> StreamHandle
+    where
+        F: FnOnce(Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> Scoped,
+        Scoped: Future<Output = ()> + Send + 'static,
+    {
         // The transport retains the request through terminal delivery. Ending
         // plugin execution only cancels its child work, not buffered output.
-        self.dispatch_stream_scoped(input, request.token().child_token(), lifetime)
+        self.dispatch_stream_scoped(input, request.token().child_token(), lifetime, scope)
     }
 
     pub(crate) fn dispatch_stream_with_lifetime(
@@ -460,22 +479,27 @@ impl<P: Plugin> PluginDispatcher<P> {
         let token = crate::current_cancellation_token()
             .map(|token| token.child_token())
             .unwrap_or_default();
-        self.dispatch_stream_scoped(input, token, lifetime)
+        self.dispatch_stream_scoped(input, token, lifetime, |task| task)
     }
 
-    fn dispatch_stream_scoped(
+    fn dispatch_stream_scoped<F, Scoped>(
         self: &Arc<Self>,
         input: ToolInvokeInput,
         cancellation: crate::CancellationToken,
         lifetime: impl Send + 'static,
-    ) -> StreamHandle {
+        scope: F,
+    ) -> StreamHandle
+    where
+        F: FnOnce(Pin<Box<dyn Future<Output = ()> + Send + 'static>>) -> Scoped,
+        Scoped: Future<Output = ()> + Send + 'static,
+    {
         let stream_id = format!("stream-{}", _random_id());
         let (tx, rx) = tokio::sync::mpsc::channel::<ToolStreamChunk>(64);
         let (mut end_tx, end_rx) = tokio::sync::oneshot::channel::<Result<ToolStreamEnd>>();
         let sink = ToolStreamSink::new(stream_id.clone(), tx);
         let plugin = std::sync::Arc::clone(&self.plugin);
         let inherited_context = crate::host_api::current_host_callback_context();
-        tokio::spawn(async move {
+        tokio::spawn(scope(Box::pin(async move {
             // Lifecycle owners wait until the plugin future itself is dropped,
             // including cancellation triggered by a closed terminal receiver.
             let _lifetime = lifetime;
@@ -504,7 +528,7 @@ impl<P: Plugin> PluginDispatcher<P> {
             if end_tx.send(result).is_err() {
                 tracing::debug!("plugin stream terminal-result receiver was dropped");
             }
-        });
+        })));
         StreamHandle {
             stream_id,
             chunks: rx,

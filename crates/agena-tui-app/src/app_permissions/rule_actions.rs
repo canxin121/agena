@@ -147,11 +147,28 @@ impl App {
                     )));
                 }
             }
-            PermissionRuleSubjectKind::NetworkAccess if draft.network_target.trim().is_empty() => {
-                return Err(crate::UiFailure::message(ui_text::t(
-                    &self.i18n,
-                    "permission-rule-error-network-target-required",
-                )));
+            PermissionRuleSubjectKind::NetworkAccess => {
+                let target = draft.network_target.trim();
+                if target.is_empty() {
+                    return Err(crate::UiFailure::message(ui_text::t(
+                        &self.i18n,
+                        "permission-rule-error-network-target-required",
+                    )));
+                }
+                let endpoint = target
+                    .parse::<agena_domain::NetworkTarget>()
+                    .map_err(|error| crate::UiFailure::message(error.to_string()))?;
+                let action = agena_domain::PermissionAction::NetworkAccess {
+                    target: target.to_string(),
+                    host: endpoint.host().to_string(),
+                    port: endpoint.port(),
+                };
+                agena_domain::validate_persisted_network_decision(
+                    &action,
+                    draft.mode,
+                    std::env::consts::OS,
+                )
+                .map_err(crate::UiFailure::message)?;
             }
             _ => {}
         }

@@ -39,11 +39,13 @@ import {
   canonicalPermissionPath,
   isPathPermissionMode,
   parsePermissionConfig,
+  parseNetworkPermissionConfig,
   permissionConfigErrorMessage,
   renamePermissionRule,
   type PathPermissionMode,
   type PermissionConfig,
   type PermissionMode,
+  type NetworkAction,
 } from '@/lib/permissionConfig'
 
 type PermissionSource = 'global' | 'workspace' | 'session' | 'effective'
@@ -77,9 +79,12 @@ const savedConfig = ref<PermissionConfig>({})
 const rawEditorOpen = ref(false)
 const rulesPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const rawPending = computed(() => rawJson.value !== JSON.stringify(config.value, null, 2))
-const dirty = computed(() => JSON.stringify(config.value) !== JSON.stringify(savedConfig.value) || rawPending.value)
+const networkPending = computed(() => networkJson.value !== JSON.stringify(config.value.network || {}, null, 2))
+const dirty = computed(
+  () => JSON.stringify(config.value) !== JSON.stringify(savedConfig.value) || rawPending.value || networkPending.value,
+)
 const editingDisabled = computed(() => !canEdit.value || !loaded.value || loading.value || saving.value)
-const formDisabled = computed(() => editingDisabled.value || rawPending.value)
+const formDisabled = computed(() => editingDisabled.value || rawPending.value || networkPending.value)
 // The workbench owns source selection; this editor only normalizes the layer.
 const selectedSource = computed<PermissionSource>(() => normalizePermissionSource(props.scope))
 
@@ -94,26 +99,23 @@ const selectedSection = computed<PermissionSection>(() => {
 const config = ref<PermissionConfig>({})
 const rawJson = ref('{}')
 const rawJsonError = ref('')
+const networkJson = ref('{}')
+const networkJsonError = ref('')
 const toolCatalog = ref<Array<{ name: string; summary: string }>>([])
 const newPath = ref('')
 const newPathMode = ref<PathPermissionMode>('readonly')
-const newNetworkRule = ref('')
-const newNetworkRuleMode = ref<PermissionMode>('auto')
 const newToolName = ref('')
 const newToolNameMode = ref<PermissionMode>('ask')
 const newCommandTool = ref<string>(SHELL_LAUNCH_TOOLS[0])
 const newCommandPattern = ref('')
 const newCommandMode = ref<PermissionMode>('ask')
 const selectedPathRuleKeys = ref<Set<string>>(new Set())
-const selectedNetworkRuleKeys = ref<Set<string>>(new Set())
 const selectedToolNameRuleKeys = ref<Set<string>>(new Set())
 const selectedCommandRuleKeys = ref<Set<string>>(new Set())
 const bulkPathMode = ref<PathPermissionMode>('readonly')
-const bulkNetworkMode = ref<PermissionMode>('auto')
 const bulkToolNameMode = ref<PermissionMode>('auto')
 const bulkCommandMode = ref<PermissionMode>('ask')
 const pathQuery = ref('')
-const networkQuery = ref('')
 const toolQuery = ref('')
 const commandQuery = ref('')
 
@@ -145,17 +147,21 @@ const pathScopes = computed(() => [
   { id: 'workspace' as const, label: st('Workspace files'), description: st('Files inside the current project.') },
   { id: 'external' as const, label: st('External files'), description: st('Files outside the current project.') },
 ])
-const networkZones = computed(() => [
-  { id: 'internet' as const, label: st('Internet'), description: st('Public websites and services.') },
+const networkActionOptions = computed(() => [
+  { value: 'allow', label: st('Allow'), description: st('Allow matching network traffic.') },
+  { value: 'deny', label: st('Deny'), description: st('Block matching network traffic.') },
+])
+const networkDefaults = computed(() => [
+  { id: 'egress' as const, label: st('Outbound default'), description: st('Action when no outbound rule matches.') },
   {
-    id: 'private' as const,
-    label: st('Private network'),
-    description: st('Devices and services on your local network.'),
+    id: 'ingress' as const,
+    label: st('Inbound default'),
+    description: st('Whether external peers can initiate connections.'),
   },
   {
-    id: 'loopback' as const,
-    label: st('This device'),
-    description: st('Local services on localhost or loopback addresses.'),
+    id: 'hostLoopback' as const,
+    label: st('Host loopback'),
+    description: st('Access to services on the host loopback interface.'),
   },
 ])
 const commandClasses = computed(() => [
@@ -165,7 +171,6 @@ const commandClasses = computed(() => [
 ])
 
 const pathRules = computed(() => Object.entries(config.value.path?.rules || {}))
-const networkRules = computed(() => Object.entries(config.value.network?.rules || {}))
 const toolNameRules = computed(() => Object.entries(config.value.tools?.names || {}))
 const commandRules = computed(() => {
   const rows: Array<{ tool: string; command: string; mode: PermissionMode }> = []
@@ -191,9 +196,6 @@ const customCommandRules = computed(() =>
   commandRules.value.filter((row) => row.tool !== '*' && !isCommandClass(row.tool, row.command)),
 )
 const visiblePathRules = computed(() => pathRules.value.filter(([path]) => matchesQuery(path, pathQuery.value)))
-const visibleNetworkRules = computed(() =>
-  networkRules.value.filter(([target]) => matchesQuery(target, networkQuery.value)),
-)
 const visibleToolNameRules = computed(() => toolNameRules.value.filter(([name]) => matchesQuery(name, toolQuery.value)))
 const visibleCommandRules = computed(() =>
   customCommandRules.value.filter((row) => matchesQuery(`${row.tool} ${row.command}`, commandQuery.value)),
@@ -210,9 +212,6 @@ function classMode(tool: string, command: string): PermissionMode | '' {
   return rules && typeof rules === 'object' && isMode(rules[command]) ? rules[command] : ''
 }
 const selectedPathRules = computed(() => pathRules.value.filter(([path]) => selectedPathRuleKeys.value.has(path)))
-const selectedNetworkRules = computed(() =>
-  networkRules.value.filter(([target]) => selectedNetworkRuleKeys.value.has(target)),
-)
 const selectedToolNameRules = computed(() =>
   toolNameRules.value.filter(([name]) => selectedToolNameRuleKeys.value.has(name)),
 )
@@ -223,12 +222,6 @@ const allPathRulesSelected = computed(() =>
   areAllSelected(
     visiblePathRules.value.map(([path]) => path),
     selectedPathRuleKeys.value,
-  ),
-)
-const allNetworkRulesSelected = computed(() =>
-  areAllSelected(
-    visibleNetworkRules.value.map(([target]) => target),
-    selectedNetworkRuleKeys.value,
   ),
 )
 const allToolNameRulesSelected = computed(() =>
@@ -281,9 +274,6 @@ function pruneSelection(selection: Ref<Set<string>>, keys: string[]) {
 function togglePathRule(path: string, event: Event) {
   toggleSelection(selectedPathRuleKeys, path, event)
 }
-function toggleNetworkRule(target: string, event: Event) {
-  toggleSelection(selectedNetworkRuleKeys, target, event)
-}
 function toggleToolNameRule(name: string, event: Event) {
   toggleSelection(selectedToolNameRuleKeys, name, event)
 }
@@ -294,12 +284,6 @@ function toggleAllPathRules() {
   toggleAllSelection(
     selectedPathRuleKeys,
     visiblePathRules.value.map(([path]) => path),
-  )
-}
-function toggleAllNetworkRules() {
-  toggleAllSelection(
-    selectedNetworkRuleKeys,
-    visibleNetworkRules.value.map(([target]) => target),
   )
 }
 function toggleAllToolNameRules() {
@@ -317,9 +301,6 @@ function toggleAllCommandRules() {
 function clearPathRuleSelection() {
   clearSelection(selectedPathRuleKeys)
 }
-function clearNetworkRuleSelection() {
-  clearSelection(selectedNetworkRuleKeys)
-}
 function clearToolNameRuleSelection() {
   clearSelection(selectedToolNameRuleKeys)
 }
@@ -331,21 +312,16 @@ function applySelectedPathMode() {
 }
 function clearAllRuleSelections() {
   clearSelection(selectedPathRuleKeys)
-  clearSelection(selectedNetworkRuleKeys)
   clearSelection(selectedToolNameRuleKeys)
   clearSelection(selectedCommandRuleKeys)
 }
 
 watch(
-  [visiblePathRules, visibleNetworkRules, visibleToolNameRules, visibleCommandRules],
+  [visiblePathRules, visibleToolNameRules, visibleCommandRules],
   () => {
     pruneSelection(
       selectedPathRuleKeys,
       visiblePathRules.value.map(([path]) => path),
-    )
-    pruneSelection(
-      selectedNetworkRuleKeys,
-      visibleNetworkRules.value.map(([target]) => target),
     )
     pruneSelection(
       selectedToolNameRuleKeys,
@@ -393,6 +369,8 @@ function asConfig(value: unknown): PermissionConfig {
 function syncRaw() {
   rawJson.value = JSON.stringify(config.value, null, 2)
   rawJsonError.value = ''
+  networkJson.value = JSON.stringify(config.value.network || {}, null, 2)
+  networkJsonError.value = ''
 }
 
 function mutate(mutator: (next: PermissionConfig) => void): boolean {
@@ -512,97 +490,62 @@ function renamePathRule(path: string, event: Event) {
   input.value = nextPath
 }
 
-function networkMode(zone: 'internet' | 'private' | 'loopback'): PermissionMode | '' {
-  return config.value.network?.[zone] || ''
+type NetworkDefault = 'egress' | 'ingress' | 'hostLoopback'
+
+function networkMode(field: NetworkDefault): NetworkAction | '' {
+  if (field === 'egress') return config.value.network?.egress?.default || ''
+  if (field === 'ingress') return config.value.network?.ingress?.default || ''
+  return config.value.network?.ingress?.hostLoopback || ''
 }
 
-function setNetworkMode(zone: 'internet' | 'private' | 'loopback', value: string) {
+function setNetworkMode(field: NetworkDefault, value: string) {
   mutate((next) => {
-    next.network ||= {}
-    if (isMode(value)) next.network[zone] = value
-    else delete next.network[zone]
-    if (
-      !next.network.internet &&
-      !next.network.private &&
-      !next.network.loopback &&
-      !Object.keys(next.network.rules || {}).length
-    )
-      delete next.network
+    const network = (next.network ||= {})
+    const section = field === 'egress' ? (network.egress ||= {}) : (network.ingress ||= {})
+    const key = field === 'hostLoopback' ? 'hostLoopback' : 'default'
+    if (value === 'allow' || value === 'deny') (section as Record<string, NetworkAction>)[key] = value
+    else delete (section as Record<string, NetworkAction>)[key]
+    if (network.egress && Object.keys(network.egress).length === 0) delete network.egress
+    if (network.ingress && Object.keys(network.ingress).length === 0) delete network.ingress
+    if (Object.keys(network).length === 0) delete next.network
   })
 }
 
-function setNetworkRule(target: string, value: string) {
-  mutate((next) => {
-    next.network ||= {}
-    next.network.rules ||= {}
-    if (isMode(value)) next.network.rules[target] = value
-  })
-}
-
-function removeNetworkRule(target: string) {
-  mutate((next) => {
-    if (next.network?.rules) delete next.network.rules[target]
-    if (
-      next.network &&
-      !next.network.internet &&
-      !next.network.private &&
-      !next.network.loopback &&
-      !Object.keys(next.network.rules || {}).length
-    ) {
-      delete next.network
-    }
-  })
-}
-
-function setSelectedNetworkMode(value: string) {
-  const targets = selectedNetworkRules.value.map(([target]) => target)
-  if (!targets.length || !isMode(value)) return
-  mutate((next) => {
-    next.network ||= {}
-    next.network.rules ||= {}
-    for (const target of targets) next.network.rules[target] = value
-  })
-}
-
-function removeSelectedNetworkRules() {
-  const targets = selectedNetworkRules.value.map(([target]) => target)
-  if (!targets.length) return
-  mutate((next) => {
-    for (const target of targets) {
-      if (next.network?.rules) delete next.network.rules[target]
-    }
-    if (
-      next.network &&
-      !next.network.internet &&
-      !next.network.private &&
-      !next.network.loopback &&
-      !Object.keys(next.network.rules || {}).length
-    ) {
-      delete next.network
-    }
-  })
-  clearSelection(selectedNetworkRuleKeys)
-}
-
-function renameNetworkRule(target: string, event: Event) {
-  const input = event.target as HTMLInputElement
-  const nextTarget = input.value.trim()
-  if (!nextTarget || nextTarget === target) {
-    input.value = target
-    return
+function applyNetworkJson(): boolean {
+  if (editingDisabled.value || rawPending.value) return false
+  try {
+    const next = clone(config.value)
+    const network = parseNetworkPermissionConfig(JSON.parse(networkJson.value))
+    if (Object.keys(network).length) next.network = network
+    else delete next.network
+    config.value = parsePermissionConfig(next)
+    syncRaw()
+    return true
+  } catch (reason) {
+    networkJsonError.value = permissionConfigErrorMessage(reason, st)
+    return false
   }
-  if (Object.prototype.hasOwnProperty.call(config.value.network?.rules || {}, nextTarget)) {
-    error.value = st('Network rule already exists: {nextTarget}', { nextTarget: nextTarget })
-    input.value = target
-    return
-  }
-  mutate((next) => {
-    const rules = next.network?.rules
-    if (!rules || !Object.prototype.hasOwnProperty.call(rules, target)) return
-    next.network!.rules = renamePermissionRule(rules, target, nextTarget)
-  })
-  error.value = ''
-  input.value = nextTarget
+}
+
+function useNetworkExample() {
+  networkJson.value = JSON.stringify(
+    {
+      egress: {
+        default: 'deny',
+        allow: [
+          {
+            to: [{ cidr: '192.0.2.10/32' }, { cidr: '2001:db8::10/128' }],
+            ports: [{ protocol: 'tcp', port: 443 }],
+          },
+        ],
+        deny: [],
+      },
+      ingress: { default: 'deny', hostLoopback: 'deny' },
+    },
+    null,
+    2,
+  )
+  networkJsonError.value = ''
 }
 
 function setToolDefault(value: string) {
@@ -775,22 +718,6 @@ function addPathRule() {
   if (accepted) newPath.value = ''
 }
 
-function addNetworkRule() {
-  const target = newNetworkRule.value.trim()
-  if (!target) return
-  if (Object.prototype.hasOwnProperty.call(config.value.network?.rules || {}, target)) {
-    error.value = st('Network rule already exists: {target}', { target: target })
-    return
-  }
-  mutate((next) => {
-    next.network ||= {}
-    next.network.rules ||= {}
-    next.network.rules[target] = newNetworkRuleMode.value
-  })
-  error.value = ''
-  newNetworkRule.value = ''
-}
-
 function addToolName() {
   const name = newToolName.value.trim()
   if (!name) return
@@ -825,7 +752,7 @@ function addCommandRule() {
 }
 
 function applyRawJson(): boolean {
-  if (editingDisabled.value) return false
+  if (editingDisabled.value || networkPending.value) return false
   try {
     const parsed = JSON.parse(rawJson.value) as JsonValue
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
@@ -843,7 +770,7 @@ function applyRawJson(): boolean {
 const contextKey = computed(() =>
   JSON.stringify([selectedSource.value, activeSessionId.value, directory.currentDirectory]),
 )
-type PermissionDraft = { config: PermissionConfig; saved: PermissionConfig; raw: string }
+type PermissionDraft = { config: PermissionConfig; saved: PermissionConfig; raw: string; network: string }
 const drafts = new Map<string, PermissionDraft>()
 let loadedContext = ''
 let loadGeneration = 0
@@ -852,7 +779,12 @@ let loadController: AbortController | undefined
 function rememberDraft() {
   if (!loadedContext || !loaded.value) return
   if (dirty.value)
-    drafts.set(loadedContext, { config: clone(config.value), saved: clone(savedConfig.value), raw: rawJson.value })
+    drafts.set(loadedContext, {
+      config: clone(config.value),
+      saved: clone(savedConfig.value),
+      raw: rawJson.value,
+      network: networkJson.value,
+    })
   else drafts.delete(loadedContext)
 }
 
@@ -895,7 +827,10 @@ async function load() {
     config.value = clone(draft?.config || {})
     savedConfig.value = clone(draft?.saved || {})
     syncRaw()
-    if (draft) rawJson.value = draft.raw
+    if (draft) {
+      rawJson.value = draft.raw
+      networkJson.value = draft.network
+    }
     loaded.value = Boolean(draft)
     clearAllRuleSelections()
   }
@@ -948,6 +883,7 @@ function discard() {
 
 async function save() {
   if (editingDisabled.value || !dirty.value) return
+  if (networkPending.value && !applyNetworkJson()) return
   if (rawPending.value && !applyRawJson()) return
   const key = contextKey.value
   const source = selectedSource.value
@@ -1266,157 +1202,79 @@ onBeforeUnmount(() => {
       </template>
       <template v-else-if="selectedSection === 'network'">
         <PermissionSettingsCard
-          :title="$st('Network Zones')"
-          :description="$st('Control internet, private-network, and loopback access, then add domain/host rules.')"
+          :title="$st('Native network defaults')"
+          :description="
+            $st('Rules are enforced directly by MXC. Unsupported platform policies are rejected when saving.')
+          "
           :icon="RiGlobalLine"
         >
           <div class="policy-grid network-policies">
-            <div v-for="zone in networkZones" :key="zone.id" class="policy-item">
+            <div v-for="field in networkDefaults" :key="field.id" class="policy-item">
               <div>
-                <h3 class="text-sm font-medium">{{ zone.label }}</h3>
-                <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ zone.description }}</p>
+                <h3 class="text-sm font-medium">{{ field.label }}</h3>
+                <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ field.description }}</p>
               </div>
               <OptionPicker
-                :model-value="networkMode(zone.id)"
-                :options="modeOptions"
+                :model-value="networkMode(field.id)"
+                :options="networkActionOptions"
                 :empty-label="$st('Inherit')"
-                :title="zone.label"
+                :title="field.label"
                 :disabled="formDisabled"
-                @update:model-value="setNetworkMode(zone.id, $event)"
+                @update:model-value="setNetworkMode(field.id, $event)"
               />
             </div>
           </div>
         </PermissionSettingsCard>
-        <PermissionRuleCard
-          :title="$st('Domain Rules')"
+        <PermissionSettingsCard
+          :title="$st('Native network policy JSON')"
           :description="
             $st(
-              'Use a concrete domain, IP, or CIDR, optionally with a port from 1 to 65535. Wildcards and URLs are unsupported.',
+              'Use IP CIDRs, excluded subnets, protocols and port ranges. Deny rules override allow rules. Domains and URLs are not supported.',
             )
           "
-          :icon="RiGlobalLine"
-          :count="networkRules.length"
-          :visible-count="visibleNetworkRules.length"
-          v-model:query="networkQuery"
-          :selected-count="selectedNetworkRules.length"
-          :all-selected="allNetworkRulesSelected"
-          :editable="canEdit"
-          :disabled="formDisabled"
-          @toggle-all="toggleAllNetworkRules"
-          @clear-selection="clearNetworkRuleSelection"
+          :icon="RiCodeSSlashLine"
         >
-          <template #bulk>
-            <div class="w-32">
-              <OptionPicker
-                v-model="bulkNetworkMode"
-                :options="modeOptions"
-                :include-empty="false"
-                :title="$st('Network rule mode')"
-                size="sm"
-                :disabled="formDisabled"
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              :disabled="formDisabled"
-              @click="setSelectedNetworkMode(bulkNetworkMode)"
-              >{{ $st('Apply') }}</Button
-            >
-            <Button
-              variant="ghost"
-              size="sm"
-              class="text-destructive"
-              :disabled="formDisabled"
-              @click="removeSelectedNetworkRules"
-              >{{ $st('Remove selected') }}</Button
-            >
-          </template>
-          <div class="permission-rule-labels" aria-hidden="true">
-            <span class="rule-target">{{ $st('Domain or host') }}</span>
-            <div class="rule-modes" data-single-mode>
-              <span>{{ $st('Mode') }}</span>
-            </div>
-          </div>
-          <fieldset
-            v-for="[target, mode] in visibleNetworkRules"
-            :key="target"
-            :disabled="formDisabled"
-            class="permission-rule"
-          >
-            <label v-if="canEdit" class="rule-select"
-              ><input
-                type="checkbox"
-                class="accent-primary"
-                :checked="selectedNetworkRuleKeys.has(target)"
-                @change="toggleNetworkRule(target, $event)"
-              /><span class="sr-only">{{ target }}</span></label
-            >
-            <div class="rule-target">
-              <input
-                :value="target"
-                type="text"
-                class="permission-target-input"
-                :aria-label="$st('Rename network rule {target}', { target })"
-                :title="$st('Rename network rule {target}', { target })"
-                :readonly="formDisabled"
-                @change="renameNetworkRule(target, $event)"
-              />
-            </div>
-            <div class="rule-modes" data-single-mode>
-              <label class="permission-control"
-                ><span>{{ $st('Mode') }}</span
-                ><OptionPicker
-                  :model-value="mode"
-                  :options="modeOptions"
-                  :include-empty="false"
-                  :title="$st('Network rule mode')"
-                  :disabled="formDisabled"
-                  @update:model-value="setNetworkRule(target, $event)"
-              /></label>
-            </div>
-            <div v-if="canEdit" class="rule-remove">
-              <IconButton
-                class="text-muted-foreground hover:text-destructive"
-                variant="ghost"
-                size="sm"
-                :tooltip="$st('Remove network rule')"
-                :aria-label="$st('Remove network rule')"
-                @click="removeNetworkRule(target)"
-                ><RiDeleteBinLine class="h-4 w-4"
-              /></IconButton>
-            </div>
-          </fieldset>
-          <template #create>
-            <form class="rule-create" @submit.prevent="addNetworkRule">
-              <label class="permission-control"
-                ><span>{{ $st('Domain or host') }}</span
-                ><Input
-                  v-model="newNetworkRule"
-                  class="font-mono text-xs"
-                  placeholder="api.example.com:443 · 10.0.0.0/8"
-                  :aria-label="$st('Domain or host')"
-              /></label>
-              <label class="permission-control"
-                ><span>{{ $st('Mode') }}</span
-                ><OptionPicker
-                  v-model="newNetworkRuleMode"
-                  :options="modeOptions"
-                  :include-empty="false"
-                  :title="$st('Network rule mode')"
-                  :disabled="formDisabled"
-              /></label>
+          <div class="space-y-3">
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              {{
+                $st(
+                  'Omitted fields inherit. An empty allow or deny list replaces the inherited list. Unset defaults resolve to deny.',
+                )
+              }}
+            </p>
+            <textarea
+              v-model="networkJson"
+              class="w-full rounded-lg border border-border bg-background p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-ring"
+              rows="22"
+              spellcheck="false"
+              :readonly="editingDisabled || rawPending"
+              :aria-label="$st('Native network policy JSON')"
+              :aria-invalid="Boolean(networkJsonError)"
+              @input="networkJsonError = ''"
+            />
+            <p v-if="networkJsonError" class="text-xs text-destructive" role="alert">{{ networkJsonError }}</p>
+            <div v-if="canEdit" class="flex flex-wrap gap-2">
               <Button
-                type="submit"
                 variant="outline"
                 size="sm"
-                class="h-9"
-                :disabled="formDisabled || !newNetworkRule.trim()"
-                ><RiAddLine class="mr-1.5 h-4 w-4" />{{ $st('Add domain rule') }}</Button
+                :disabled="editingDisabled || rawPending || !networkPending"
+                @click="applyNetworkJson"
               >
-            </form>
-          </template>
-        </PermissionRuleCard>
+                {{ $st('Apply JSON') }}
+              </Button>
+              <Button variant="ghost" size="sm" :disabled="editingDisabled || rawPending" @click="useNetworkExample">
+                {{ $st('Load CIDR example') }}
+              </Button>
+            </div>
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              {{
+                $st(
+                  'macOS does not support per-destination outbound rules. Linux requires inbound and host-loopback access to remain denied.',
+                )
+              }}
+            </p>
+          </div>
+        </PermissionSettingsCard>
       </template>
       <template v-else>
         <PermissionSettingsCard
@@ -1802,7 +1660,7 @@ onBeforeUnmount(() => {
             spellcheck="false"
             class="w-full min-w-0 resize-y rounded-lg border border-input bg-background/40 p-3 font-mono text-xs leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
             :aria-label="$st('Raw PermissionConfig')"
-            :readonly="editingDisabled"
+            :readonly="editingDisabled || networkPending"
             :aria-invalid="Boolean(rawJsonError)"
           />
           <p v-if="rawJsonError" class="text-xs text-destructive" role="alert">{{ rawJsonError }}</p>

@@ -114,17 +114,36 @@ fn output<T: Serialize>(label: &str, value: T) -> SdkResult<ToolInvokeOutput> {
     ))
 }
 
-struct ConnectionOAuthAuthority {
+pub(super) fn network_permission_target(target: &str) -> SdkResult<String> {
+    let url = url::Url::parse(target)
+        .map_err(|_| PluginError::invalid_params("MCP endpoint must be a valid HTTP(S) URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(PluginError::invalid_params(
+            "MCP endpoint must be HTTP(S) without embedded credentials",
+        ));
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+pub(super) struct ConnectionNetworkAuthority {
     host: Arc<dyn HostClient>,
+    context: agena_plugin_host::sdk::host_api::HostCallbackContext,
     denial: std::sync::Mutex<Option<PluginError>>,
 }
 #[async_trait::async_trait]
-impl agena_mcp_client::McpOAuthNetworkAuthorizer for ConnectionOAuthAuthority {
+impl agena_mcp_client::McpHttpNetworkAuthorizer for ConnectionNetworkAuthority {
     async fn authorize(&self, target: &str) -> agena_mcp_client::McpResult<()> {
-        if let Err(error) = self
-            .host
-            .require_network_permission(target.to_owned())
-            .await
+        let target = network_permission_target(target)
+            .map_err(|_| agena_mcp_client::McpError::PermissionDenied)?;
+        if let Err(error) = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            self.context.clone(),
+            self.host.require_network_permission(target),
+        )
+        .await
         {
             if let Ok(mut denial) = self.denial.lock() {
                 *denial = Some(error);
@@ -133,9 +152,34 @@ impl agena_mcp_client::McpOAuthNetworkAuthorizer for ConnectionOAuthAuthority {
         }
         Ok(())
     }
+
+    async fn authorize_resolved(
+        &self,
+        target: &str,
+        address: std::net::SocketAddr,
+    ) -> agena_mcp_client::McpResult<bool> {
+        let target = network_permission_target(target)
+            .map_err(|_| agena_mcp_client::McpError::PermissionDenied)?;
+        let result = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            self.context.clone(),
+            self.host
+                .check_resolved_network_permission(target, address.to_string()),
+        )
+        .await;
+        match result {
+            Ok(agena_plugin_host::sdk::host_api::PermissionQuery::Allow {}) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) => {
+                if let Ok(mut denial) = self.denial.lock() {
+                    *denial = Some(error);
+                }
+                Err(agena_mcp_client::McpError::PermissionDenied)
+            }
+        }
+    }
 }
-impl ConnectionOAuthAuthority {
-    fn finish<T>(&self, result: agena_mcp_client::McpResult<T>) -> SdkResult<T> {
+impl ConnectionNetworkAuthority {
+    pub(super) fn finish<T>(&self, result: agena_mcp_client::McpResult<T>) -> SdkResult<T> {
         if let Some(error) = self.denial.lock().ok().and_then(|mut denial| denial.take()) {
             return Err(error);
         }
@@ -203,9 +247,14 @@ impl McpPlugin {
         self.connection_store(Some(scope)).await
     }
 
-    fn connection_oauth_authority(&self) -> SdkResult<Arc<ConnectionOAuthAuthority>> {
-        Ok(Arc::new(ConnectionOAuthAuthority {
+    pub(super) fn connection_network_authority(
+        &self,
+    ) -> SdkResult<Arc<ConnectionNetworkAuthority>> {
+        Ok(Arc::new(ConnectionNetworkAuthority {
             host: Arc::clone(self.connection_host()?),
+            context: agena_plugin_host::sdk::host_api::current_host_callback_context().ok_or_else(
+                || PluginError::internal("MCP HTTP requires an active host callback context"),
+            )?,
             denial: Default::default(),
         }))
     }
@@ -247,7 +296,7 @@ impl McpPlugin {
                 cwd: cwd.as_ref().map(|p| p.to_string_lossy().into_owned()),
             },
             ServerSpec::Http { url, .. } => HostMcpServerSpec::Http {
-                url: url.to_string(),
+                url: network_permission_target(url.as_str())?,
                 bearer: None,
                 headers: BTreeMap::new(),
             },
@@ -496,13 +545,14 @@ impl McpPlugin {
         let timeout = config.timeouts();
         output(
             "MCP connection test",
-            management::test_connection(
+            management::test_connection_authorized(
                 &name,
                 spec,
                 store.workspace_root,
                 timeout.connect_ms,
                 timeout.request_ms,
                 token_store_enabled,
+                self.connection_network_authority()?,
             )
             .await,
         )
@@ -510,7 +560,8 @@ impl McpPlugin {
     pub(super) async fn connection_reconnect(&self, id: &str) -> SdkResult<ToolInvokeOutput> {
         let (store, name, config) = self.configured_connection(id, true).await?;
         self.authorize_connection(&store, &name, &config).await?;
-        self.authorize_server(&name).await?
+        self.authorize_server(&name)
+            .await?
             .reconnect(&name)
             .await
             .map_err(transport_error)?;
@@ -592,7 +643,7 @@ impl McpPlugin {
         let endpoint = url::Url::parse(&endpoint.url)
             .map_err(|_| PluginError::invalid_params("Invalid HTTP endpoint."))?;
         let binding = format!("{}:{}", detail.summary.id, detail.summary.revision);
-        let authority = self.connection_oauth_authority()?;
+        let authority = self.connection_network_authority()?;
         let result = self
             .manager
             .oauth_sessions()
@@ -619,7 +670,7 @@ impl McpPlugin {
         let (store, name, config) = self.configured_connection(&input.id, false).await?;
         self.authorize_connection(&store, &name, &config).await?;
         let detail = self.connection_detail(&input.id).await?;
-        let authority = self.connection_oauth_authority()?;
+        let authority = self.connection_network_authority()?;
         let result = self
             .manager
             .oauth_sessions()
@@ -728,7 +779,9 @@ fn connection_spec(config: &McpServerConfig, root: &Path) -> SdkResult<ServerSpe
                 exclude: tools.exclude.clone(),
             },
             resources: agena_mcp_client::StdioResourceDeclarations {
-                reads: process.reads.clone(), writes: process.writes.clone(), network: process.network.clone(),
+                reads: process.reads.clone(),
+                writes: process.writes.clone(),
+                network: process.network.clone(),
             },
             sandbox: None,
         },

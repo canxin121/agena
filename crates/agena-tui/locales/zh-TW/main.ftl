@@ -882,9 +882,7 @@ permission-studio-field-path-external = 路徑外部預設值
 
 permission-studio-field-path-rules = 路徑規則
 
-permission-studio-field-network-defaults = 網路預設值
 
-permission-studio-field-network-rules = 網路規則
 
 permission-studio-field-tool-names = 工具名稱
 
@@ -952,7 +950,6 @@ permission-studio-mode-read = 讀 {$value}
 
 permission-studio-mode-write = 寫 {$value}
 
-permission-studio-network-default = {$label} {$value}
 
 permission-studio-page-overview = 概覽
 
@@ -962,11 +959,10 @@ permission-studio-page-path-defaults = 檔案系統 / 預設區域
 
 permission-studio-page-path-rules = 檔案系統 / 路徑規則
 
-permission-studio-page-network = 網路
 
-permission-studio-page-network-zones = 網路 / 網路區域
+permission-studio-page-network-defaults = 網路 / 原生預設設定
 
-permission-studio-page-network-rules = 網路 / 域名規則
+permission-studio-page-network-rules = 網路 / 原生規則
 
 permission-studio-page-tools = 工具
 
@@ -990,9 +986,9 @@ permission-studio-nav-path-rules = 路徑規則
 
 permission-studio-nav-network = 網路
 
-permission-studio-nav-network-zones = 網路區域
+permission-studio-nav-network-defaults = 原生預設設定
 
-permission-studio-nav-domain-rules = 域名規則
+permission-studio-nav-network-rules = 原生規則
 
 permission-studio-nav-tool-access = 工具權限
 
@@ -1012,11 +1008,11 @@ permission-studio-path-rule-read = 讀 mode
 
 permission-studio-path-rule-write = 寫 mode
 
-permission-studio-network-internet = 公網
+permission-studio-network-egress-default = 輸出預設動作
 
-permission-studio-network-private = 私網
+permission-studio-network-ingress-default = 輸入預設動作
 
-permission-studio-network-loopback = 迴環
+permission-studio-network-host-loopback = 主機回環
 
 permission-studio-tool-default = 工具預設值
 
@@ -1024,7 +1020,6 @@ permission-studio-tool-default-summary = 預設 {$value}
 
 permission-studio-add-path-rule = 新增路徑規則
 
-permission-studio-add-network-rule = 新增網路目標
 
 permission-studio-add-name = 新增名稱
 
@@ -1034,7 +1029,6 @@ permission-studio-rule-key = 鍵
 
 permission-studio-rule-pattern = 模式
 
-permission-studio-rule-target = 目標
 
 permission-studio-rule-mode = 權限模式
 
@@ -1404,6 +1398,7 @@ overlay-permission-rule-choice-scope-session-detail = 僅此一屆
 overlay-permission-rule-choice-scope-workspace-detail = 此工作區中的所有會話
 overlay-permission-rule-choice-scope-global-detail = 所有工作區
 overlay-permission-rule-choice-mode-title = 選擇規則模式
+overlay-permission-rule-network-mode-detail = 網路決定僅接受 allow 或 deny。allow 仍受原生設定限制；deny 進一步縮小範圍。
 overlay-permission-rule-choice-mode-prompt = 選擇允許、詢問或拒絕。
 overlay-permission-rule-choice-mode-allow-detail = 始終允許相符的操作
 overlay-permission-rule-choice-mode-auto-detail = 讓設定的審批模型決定；不可用時退回到提示
@@ -1419,7 +1414,7 @@ overlay-permission-rule-editor-workspace-root-prompt = 輸入可選的workspace_
 overlay-permission-rule-editor-target-path-title = 編輯目標路徑
 overlay-permission-rule-editor-target-path-prompt = 輸入目標路徑或模式。
 overlay-permission-rule-editor-network-target-title = 編輯網路目標
-overlay-permission-rule-editor-network-target-prompt = 輸入主機、主機:連接埠或 URL。
+overlay-permission-rule-editor-network-target-prompt = 輸入數值 IP 或 IP:port，例如 192.0.2.10:443、[2001:db8::10]:443。以 tcp://、udp:// 或 icmp:// 指定協定。
 overlay-permission-rule-editor-session-id-title = 編輯會話 ID
 overlay-permission-rule-editor-session-id-prompt = 輸入目標會話 ID。
 overlay-permission-rule-browser-workspace-root-title = 選擇工作區根目錄
@@ -1447,14 +1442,14 @@ overlay-permission-rule-item-target-path-detail = 要保護的路徑模式或確
 overlay-permission-rule-item-workspace-root = 工作區根目錄
 overlay-permission-rule-item-workspace-root-detail = 用於解釋相對目標路徑的可選基底目錄。
 overlay-permission-rule-item-network-target = 網路目標
-overlay-permission-rule-item-network-target-detail = 要相符的主機、主機:連接埠或 URL 目標。
+overlay-permission-rule-item-network-target-detail = 輸入數值 IP 或 IP:port，例如 192.0.2.10:443、[2001:db8::10]:443。以 tcp://、udp:// 或 icmp:// 指定協定。
 overlay-permission-rule-detail-subject-kind = 工具規則按工具名稱和可選限定符進行比對。路徑規則符合檔案系統存取。網路規則符合主機或 URL 存取。
 overlay-permission-rule-detail-tool-name = 工具規則需要準確的工具名稱，例如 `shell`、`read` 或 `web_search`。
 overlay-permission-rule-detail-qualifier = 限定符是可選的。將其保留為空，除非工具或操作需要更窄的符合。
 overlay-permission-rule-detail-path-access-kind = 根據您要符合的檔案系統存取權限，使用 `read`、`write` 或 `read_write`。
 overlay-permission-rule-detail-workspace-root = 將workspace_root 留空以繼承執行階段工作區根。當受保護的路徑位於其他地方時明確設定它。
 overlay-permission-rule-detail-target-path = 輸入路徑或模式。相對路徑在設定時根據workspace_root 進行解釋。
-overlay-permission-rule-detail-network-target = 輸入主機、`host:port` 或完整 URL，取決於規則的具體程度。
+overlay-permission-rule-detail-network-target = 使用數值 IP 目標。單獨 IP 涵蓋全部協定與連接埠；tcp://、udp:// 可指定連接埠；icmp:// 不含連接埠。CIDR 請在 permission.network 設定。macOS 拒絕精確 IP 決定。歷史紀錄仍可檢視、撤銷或刪除。
 overlay-permission-rule-detail-scope = 會話範圍最適合臨時覆蓋。工作區和全域作用域持續時間較長。
 overlay-permission-rule-detail-session-id = 會話範圍的規則需要具體的會話 ID。
 overlay-permission-rule-detail-mode = 「允許」允許操作通過，要求提示批准，「拒絕」則阻止操作。
@@ -3346,3 +3341,9 @@ permission-studio-path-help = 填寫具體檔案或目錄。目錄權限涵蓋�
 permission-studio-rule-path = 路徑
 permission-studio-path-duplicate = 此路徑已有規則。
 permission-studio-rule-duplicate = 此規則已存在。
+
+permission-studio-network-json = 原生網路原則 JSON
+
+permission-studio-network-json-help = 使用 MXC 的 egress 和 ingress 物件，可設定網段、except、通訊協定與連接埠範圍。拒絕規則優先。省略欄位表示繼承，[] 清空繼承的清單。
+
+permission-studio-network-invalid-action = 網路動作只能為 allow、deny 或未設定。

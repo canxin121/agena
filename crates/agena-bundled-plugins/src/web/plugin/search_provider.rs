@@ -159,16 +159,15 @@ async fn resolve_endpoint(
     network: &network_policy::WebNetworkConfig,
     url: &url::Url,
     timeout: Duration,
+    permission_host: &dyn HostClient,
 ) -> SdkResult<agena_web::WebHttpRoute> {
     let route = agena_web::WebHttpRoute::for_url(url, network.proxy.as_deref())
         .map_err(crawl_error_to_plugin)?;
-    let allow_private =
-        config.provider == WebSearchBackend::Searxng && config.allow_private_endpoint;
     if route.remote_dns() {
-        if !allow_private {
-            network_policy::validate_proxy_target(url)?;
-        }
-        return Ok(route);
+        return Err(PluginError::from_kind(
+            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+            "the search proxy uses remote DNS, so approved destination IPs cannot be pinned; configure a direct route or a SOCKS proxy with local DNS",
+        ));
     }
     let host = url
         .host_str()
@@ -194,6 +193,7 @@ async fn resolve_endpoint(
     if !(config.provider == WebSearchBackend::Searxng && config.allow_private_endpoint) {
         addresses = network_policy::permitted_addresses(url, addresses, network)?;
     }
+    addresses = authorized_network_addresses(url, addresses, permission_host, false).await?;
     Ok(route.with_addresses(addresses))
 }
 
@@ -236,7 +236,14 @@ impl WebPlugin {
             })
             .transpose()?;
         state.fetch_coordinator.wait_for_url_host(&url).await;
-        let route = resolve_endpoint(&config.search, &config.network, &url, timeout).await?;
+        let route = resolve_endpoint(
+            &config.search,
+            &config.network,
+            &url,
+            timeout,
+            state.host.as_ref(),
+        )
+        .await?;
         let result = search_api(
             &input.query,
             &SearchApiOptions {
@@ -281,5 +288,56 @@ impl WebPlugin {
             BTreeMap::new(),
             Vec::new(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod native_route_tests {
+    use super::*;
+    use agena_plugin_host::sdk::{PluginErrorKind, host_api::NoopHostClient};
+
+    #[tokio::test]
+    async fn private_search_endpoint_still_requires_numeric_host_authority() {
+        let config = WebSearchConfig {
+            provider: WebSearchBackend::Searxng,
+            allow_private_endpoint: true,
+            ..Default::default()
+        };
+        let network = network_policy::WebNetworkConfig {
+            proxy: Some(String::new()),
+            ..Default::default()
+        };
+        let url = url::Url::parse("http://127.0.0.1:9/search").unwrap();
+        let error = resolve_endpoint(
+            &config,
+            &network,
+            &url,
+            Duration::from_secs(1),
+            &NoopHostClient,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind, PluginErrorKind::HostUnavailable);
+        assert!(error.to_string().contains("resolved network addresses"));
+    }
+
+    #[tokio::test]
+    async fn remote_dns_search_proxy_is_rejected_before_resolving_or_connecting() {
+        let network = network_policy::WebNetworkConfig {
+            proxy: Some("http://127.0.0.1:9".into()),
+            ..Default::default()
+        };
+        let url = url::Url::parse("https://search-proxy-dns.example.invalid/search").unwrap();
+        let error = resolve_endpoint(
+            &WebSearchConfig::default(),
+            &network,
+            &url,
+            Duration::from_secs(1),
+            &NoopHostClient,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind, PluginErrorKind::PolicyDenied);
+        assert!(error.to_string().contains("remote DNS"));
     }
 }

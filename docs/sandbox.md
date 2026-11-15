@@ -1,8 +1,8 @@
 # 工具沙盒：配置、执行与部署
 
-Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作。作为 MCP 服务提供工具时，调用默认关闭 MXC，直接在宿主执行。路径权限继续放在 `permission.path`，网络和工具审批继续沿用现有设置；启用沙盒时，调用会把获准的具体资源转换为 MXC 策略。
+Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作。作为 MCP 服务提供工具时，调用默认关闭 MXC，直接在宿主执行。路径权限放在 `permission.path`，网络权限使用 `permission.network` 的原生 `egress` / `ingress` 结构，工具审批放在 `permission.tools`；启用沙盒时，调用把获准资源直接转换为 MXC 策略。
 
-路径规则的值只接受 `readonly`、`readwrite`、`deny`。它们分别对应 MXC 的只读、读写和拒绝路径。`ask`、`auto` 属于 Agena 的工具或网络授权流程，不是文件系统资源模式。
+路径规则的值只接受 `readonly`、`readwrite`、`deny`。它们分别对应 MXC 的只读、读写和拒绝路径。`ask`、`auto` 属于 Agena 的工具审批流程；路径与网络资源权限必须是能够执行的具体模式。
 
 ## 关闭沙盒
 
@@ -18,13 +18,13 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 
 `agena mcp-server` 是常驻服务的 stdio 桥接客户端，工具实际在服务端执行。桥接调用与 HTTP `/mcp` 调用都会在服务端为本次执行关闭沙盒，无须额外设置环境变量。这个标记跟随调用的执行器与宿主回调，不改变同一服务中普通会话的默认沙盒模式，也不会复用另一模式下的 LSP、MCP 子连接或插件进程。
 
-关闭后，shell、PTY、文件工具和辅助子进程直接执行，不要求 MXC 后端、沙盒挂载或专用网络代理；命令保留宿主环境及调用方的显式环境设置。浏览器入口也不再因缺少 MXC 浏览器隔离而拒绝启动。工具入口、声明资源和 MCP 工具暴露仍按原授权检查；命令启动后按宿主用户权限访问文件和网络，实际 I/O 不再由 MXC 约束。
+关闭后，shell、PTY、文件工具和辅助子进程直接执行，不要求 MXC 后端或沙盒挂载；命令保留宿主环境及调用方的显式环境设置。浏览器入口也不再因缺少 MXC 浏览器隔离而拒绝启动。工具入口、声明资源和 MCP 工具暴露仍按原授权检查；命令启动后按宿主用户权限访问文件和网络，实际 I/O 不再由 MXC 约束。
 
 ## 启用沙盒时的执行流程
 
 1. 保存全局、项目或会话设置时，解析并校验规则。无法表示为受支持资源边界的路径、模式和条件返回具体错误，不写入配置。
 2. 工具参数和 hook 转换完成后，执行器按当前项目、会话和来源身份解析实际路径、网络目标以及工具权限。
-3. 工具和网络授权仍处理 `allow`、`deny`、`auto`、`ask`；路径资源权限已经是确定的三种模式。审批不会把路径的明确拒绝升级为允许。
+3. 工具审批处理 `allow`、`deny`、`auto`、`ask`；路径资源使用三种确定模式，网络资源只使用 `allow` / `deny`。审批不能扩大资源策略的允许范围。
 4. `SandboxPermissionSnapshot` 捕获当前 principal 的路径和网络策略、独立权限上限及当前调用可见的持久规则。
 5. 宿主将本次获准的资源声明转换成具体只读路径、读写路径、拒绝路径和网络策略。没有网络声明的调用采用离线策略。
 6. 统一 launcher 启动 MXC，再启动命令或工具 worker。实际后端和主机依赖无法落实策略时返回启动错误，不转成普通宿主进程。
@@ -58,9 +58,15 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
       }
     },
     "network": {
-      "internet": "deny",
-      "private": "deny",
-      "loopback": "deny"
+      "egress": {
+        "default": "deny",
+        "allow": [],
+        "deny": []
+      },
+      "ingress": {
+        "default": "deny",
+        "hostLoopback": "deny"
+      }
     },
     "tools": {
       "names": {
@@ -75,7 +81,7 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 
 将需要不同权限的数据放在并列的授权目录中。`readonly` 目录下面再设 `readwrite` 子目录，或 `readwrite` 目录下面再设 `readonly` 子目录，当前都会拒绝保存；不同后端的嵌套挂载和授权合并方式不能提供一致边界。允许在已授权根内设置后端支持的明确 `deny`。
 
-项目覆盖仍与全局设置合并，空 `rules` 不会清空已经继承的规则。保存时必须验证合并后的生效配置，不能用项目中的宽松项绕过独立的权限上限。
+路径的项目覆盖仍与全局设置合并，空的路径 `rules` 不会清空已经继承的路径规则。保存时必须验证合并后的生效配置，不能用项目中的宽松项绕过独立的权限上限。
 
 ### 默认值和路径别名
 
@@ -85,8 +91,7 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 | 工作区之外的业务路径 | `deny` |
 | `<state>` 的具体目录规则 | `readwrite` |
 | `<tmp>` 宿主临时目录根 | 无内置规则 |
-| Linux/macOS 的互联网、私有网络、回环网络授权 | `auto` |
-| Windows 的互联网、私有网络、回环网络授权 | `deny` |
+| 所有平台的出站、入站和宿主回环网络默认动作 | `deny` |
 
 MXC 和工具 worker 所需的任务私有临时目录由宿主通过受信任的 `private_paths` 提供。需要处理宿主临时文件时，显式授权自己的具体任务目录，例如 `"<tmp>/my-task": "readwrite"`。
 
@@ -103,7 +108,7 @@ MXC 和工具 worker 所需的任务私有临时目录由宿主通过受信任�
 - 旧正向路径规则对象只有在目录本身与同模式 `/**` 规则完整配对时，才会自动合并为一条递归目录规则。未配对的旧正向对象要求用户明确改成字符串，以确认新的路径范围；不根据扩展名猜测文件或目录。旧完整拒绝对象可以转成递归 `deny`，只会收紧访问。
 - 旧 `read: allow, write: ask` 不能自动变成 `readwrite`。先把写入审批迁移到合适的工具或任务审批，再明确选择资源权限。
 - TUI/Web 显示保存错误并保留可修正的编辑内容。校验失败不更新原有设置。
-- 校验当前宿主的已知后端能力。Windows 当前没有身份绑定的 HTTP 代理入口，联网许可不能保存；如果所选 Windows 后端不支持 `FileSystemDeny`，明确的路径 `deny` 规则也不能保存。默认 `workspace: "deny"`、`external: "deny"` 配合分离的只读/读写根仍可表达最小授权。
+- 校验当前宿主的已知后端能力。macOS 拒绝非空的细粒度出站规则，Linux 拒绝允许入站或宿主回环的设置。如果所选 Windows 后端不支持 `FileSystemDeny`，明确的路径 `deny` 规则不能保存。默认 `workspace: "deny"`、`external: "deny"` 配合分离的只读/读写根仍可表达最小授权。
 
 路径和主机状态可能在保存后改变；启动前仍需核对真实路径、符号链接、当前权限及后端能力。保存成功表示规则通过当前配置与已知能力校验，不代替在目标系统上启动沙盒。
 
@@ -152,46 +157,107 @@ launcher 另行加入程序和系统库所需的只读路径，以及任务私�
 
 持久规则按调用所属的 `global → workspace → session` 作用域解析，每个作用域与动作键采用最新且未撤销的记录。明确拒绝不能被记住的批准升级。资源批准之后，本次具体清单仍需通过 MXC 转换。
 
+持久 `NetworkAccess` 只接受 `allow`、`deny` 和数值 IP 目标，例如 `192.0.2.10:443`、`[2001:db8::10]:443`、`udp://192.0.2.10:53` 或 `icmp://192.0.2.10`。裸 IP 匹配该地址的全部协议/端口，允许决定仍受配置范围限制；CIDR 范围放在 `permission.network` 中设置。域名、`ask`/`auto`、含路径或凭据的 URL 无法保存。macOS 的后端不支持这种精确 IP 决定，保存时会明确报错。历史记录继续展示并可撤销或删除；编辑后保存同样执行新校验。
+
 快照按调用所属会话绑定工作区和来源身份。长期进程的权限在创建时固定；改变设置不会给已运行的进程追加挂载或网络权限。
 
 ## 网络设置与执行
 
-`permission.network.internet`、`private`、`loopback` 及 `rules` 继续决定目标授权。配置中的规则键只接受具体主机、IP、CIDR 和有效的可选端口，例如 `example.com:443`、`192.0.2.10:8443`、`10.0.0.0/8`。任意主机通配符、URL 路径条件和非法端口会在保存时返回错误。
+`permission.network` 直接采用 MXC 的网络模型。Agena 不再启动沙盒 HTTP 代理，不向任务注入代理地址或认证信息。配置只描述数值 IP/CIDR、协议与端口边界，进程通过原生 socket 联网。
 
-模型提供的 `network` 则声明本次调用需要哪些具体主机、IP 或 URL，不能设置策略开关。URL 声明只会转换为主机和端口权限，不能表达“仅允许访问某一个 HTTP 路径”。
+### 原生策略示例
 
-### 离线执行
+```json
+{
+  "permission": {
+    "network": {
+      "egress": {
+        "default": "deny",
+        "allow": [
+          {
+            "to": [
+              {
+                "cidr": "10.20.0.0/16",
+                "except": ["10.20.10.0/24"]
+              },
+              {
+                "cidr": "fd20:20::/48"
+              }
+            ],
+            "ports": [
+              { "protocol": "tcp", "port": 443 },
+              { "protocol": "tcp", "port": 8000, "endPort": 8099 }
+            ]
+          },
+          {
+            "to": [{ "cidr": "192.0.2.53/32" }],
+            "ports": [
+              { "protocol": "udp", "port": 53 },
+              { "protocol": "tcp", "port": 53 }
+            ]
+          }
+        ],
+        "deny": [
+          {
+            "to": [{ "cidr": "10.20.66.0/24" }]
+          },
+          {
+            "to": [{ "cidr": "10.20.0.0/16" }],
+            "ports": [{ "protocol": "tcp", "port": 8080, "endPort": 8089 }]
+          }
+        ]
+      },
+      "ingress": {
+        "default": "deny",
+        "hostLoopback": "deny"
+      }
+    }
+  }
+}
+```
 
-启用沙盒时，`network: []` 选择离线策略，拒绝进程的外部 IP 网络以及宿主回环访问。需要网络的命令必须声明实际目标，并先通过原网络审批。
+示例中的 IP 是规则示意，运行时换成实际业务目标与 DNS 服务器。单个 IPv4 地址使用 `/32`，IPv6 地址使用 `/128`。
 
-Linux 的私有网络命名空间仍可具有沙盒内部回环，这与访问宿主 `127.0.0.1` 是不同对象。不同后端对不可访问文件的表现也不同，例如可能得到权限错误、不可见路径或被遮蔽内容；不能依靠某一种错误文本判断隔离是否成功。
+- 拒绝规则优先于允许规则，与 JSON 或数组的先后顺序无关。本例允许 TCP 8000～8099，再拒绝 TCP 8080～8089。
+- 一条规则中的多个目标为“或”，多个协议/端口选择器也为“或”；目标与协议/端口两组条件之间为“且”。
+- `except` 只从当前目标选择器中减去子网；其他允许规则仍可能授予这个子网。需要始终禁止的目标应写入 `deny`。
+- 省略 `to` 表示所有目标，省略 `ports` 表示所有协议/端口；显式的 `to: []` 或 `ports: []` 无效。
+- 协议支持 `tcp`、`udp`、`icmp`、`any`，省略协议按 `any` 处理。端口范围包含两端；端口须为 1～65535，`endPort` 需要同时有 `port` 且不得更小，ICMP 不能指定端口。
+- 未提供的字段继承下层配置；明确的 `allow: []`、`deny: []` 替换并清空继承的同名列表。没有任何层设置的默认动作最终为 `deny`。
+- 旧的 `internet`、`private`、`loopback`、`rules` 字段、域名规则和网络 `ask` / `auto` 不再接受，不做会扩大权限的隐式迁移。保存时会给出字段级错误。
 
-### 带网络的工具调用
+### 工具网络资源声明
 
-启用沙盒时，工具层把网络声明编译为每次调用专用的认证 HTTP 代理策略：
+工具的 `network` 声明申请本次调用需要的网络范围，最终策略始终与当前设置及每一层独立权限上限取交集：
 
-| 声明 | 生效方式 |
+| 声明 | 本次申请的范围 |
 | --- | --- |
-| `example.com` | 允许审批后的 80、443 端口 |
-| `example.com:8443` | 只请求明确的 8443 端口 |
-| `https://example.com/resource` | 使用 URL 中确定的主机和端口；路径不变成任意网络开放权限 |
-| 空数组 | 离线，无内部 HTTP 出口 |
+| `[]` | 离线，拒绝外部 IP 网络与宿主回环访问 |
+| `["*"]` | 当前配置已经允许的完整原生网络范围；`*` 必须单独使用 |
+| `["192.0.2.10:443"]` | 目标 IP 的 TCP 443 |
+| `["api.example.com:8443"]` | 启动前解析出的目标 IP 的 TCP 8443 |
+| `["https://api.example.com/resource"]` | 目标 IP 的 TCP 443；URL 路径不构成网络隔离条件 |
+| `["udp://192.0.2.53:53"]` | 目标 IP 的 UDP 53 |
+| `["icmp://192.0.2.10"]` | 目标 IP 的 ICMP |
+| `["api.example.com"]` 或 `["192.0.2.10"]` | 该目标内当前策略已经允许的协议和端口，不隐含开放 80、443 |
 
-宿主先解析 DNS，按当前网络快照检查数值地址，再固定代理实际连接的 IP 集合。代理不会在连接时自行重新解析成另一个目的地址。
+主机名在父进程中解析并转换为具体 IP，再生成原生 MXC 规则。域名声明不提供 HTTP Host、TLS SNI 或 URL 级隔离；同一获准 IP 上的其他服务仍按协议和端口边界处理。
 
-已批准域名访问公网时，`internet: deny` 配合具体域名 `allow` 可以生效：解析后的公网 IP 继承该域名审批，同时仍受各层显式 IP、CIDR 规则约束。DNS 从互联网主机转向私有或回环地址，或者从私有网络转向回环时，目标 IP 必须获得最终明确 `allow`；域名审批不能代替另一网络类别的审批。
+父进程在解析域名前先检查 DNS 权限：当前发现的所有解析器都必须获准使用 UDP/TCP 53，并通过当前设置和全部权限上限检查，不能借域名声明自动开放 DNS。无法证明解析器已获准时，使用具体 IP 声明，或明确申请已经配置的完整范围。使用 `["*"]` 时同样需要在策略中允许实际解析器，或明确允许所需出站范围。Linux 的隔离网络可能使用 MXC 提供的解析器入口，最终地址在编译和启动阶段核对。
 
-代理支持 HTTP，以及目标一致的 TLS `CONNECT`。TLS ClientHello 的 SNI 必须与获准目标匹配，ECH 被拒绝。它不提供任意域名的原始 TCP 隧道；SSH、数据库私有协议及不经 HTTP 代理的网络程序不能因为声明了一个域名就任意直连。非标准服务端口需要显式声明。
+已保存的网络批准不能扩大静态策略，保存的拒绝必须落实为原生拒绝规则。无法转换为数值 IP/CIDR 的旧域名拒绝会在联网策略编译时返回错误，要求改为原生规则。
 
-底层 `agena-process::sandbox::SandboxNetwork::Direct` 提供数值 IP/CIDR、协议和端口策略接口，用于能够准确声明这类资源的受信任调用方。工具层的域名 HTTP 策略不会自动降级成开放网络。
+Linux 的私有网络命名空间可以保有沙盒内部回环；这与宿主机 `127.0.0.1` 是不同对象。
 
-### Web HTTP 请求与 DNS 地址校验
+### 宿主 HTTP 请求与 DNS 地址校验
 
-宿主 Web 插件的普通抓取、重定向、robots.txt 请求和 HTML 搜索沿用同一套网络权限。每个目标先完成域名授权，再将 DNS 返回的数值地址交给当前调用的宿主权限快照检查；IP、CIDR、网络类别限制以及会话和父级权限上限继续生效。只有最终明确允许的地址会进入实际 HTTP 客户端的固定解析表；没有获准地址时返回权限错误。
+宿主 Web 插件的普通抓取、重定向、robots.txt 请求和 HTML 搜索使用同一份调用网络权限。DNS 返回的数值地址必须通过当前原生配置、独立权限上限和持久拒绝检查；只有允许的地址进入 HTTP 客户端的固定解析表。没有获准地址时返回权限错误。
 
-这条校验通过宿主的 `check_resolved_network_permission` 接口执行，保留原调用的身份与权限上限，不从插件读取的配置重新拼装权限。接口覆盖原生插件回调、HTTP 和 stdio 回调；不支持这项校验的宿主明确拒绝请求。
+受控下载、provider HTTP/WebSocket 和 MCP 出站访问同样绑定实际连接地址。MCP 对每个 POST、GET、DELETE 请求及 OAuth 的每次跳转先检查原始 URL，再解析并逐个审核数值 IP，将获准地址固定到本次 HTTP 客户端；禁用其代理和自动跳转，避免把目的地址交给另一次 DNS 解析。原始 hostname 继续用于 HTTP Host 与 TLS 校验。
 
-Web 插件不会把本机已审核的域名交给外部代理重新解析。HTTP(S)、`socks4a`、`socks5h` 等由代理解析目标的路由当前返回明确错误，因为实际目的 IP 无法固定。可使用直连或本地 DNS 的 SOCKS 路由；在 `agena.web` 插件配置中把 `network.proxy` 设为 `""` 可明确选择直连，仍须经过完整网络授权。进程沙盒使用的每次调用专用 HTTP 代理则连接 Agena 已固定的 IP 集合。
+这条校验通过宿主的 `check_resolved_network_permission` 接口执行，保留原调用的身份与权限上限；原生、HTTP 和 stdio 插件回调使用相同接口。
+
+服务自身的 HTTP/SOCKS 路由配置与沙盒权限策略分开。Web 插件不会把已经审核的目标交给远端代理重新解析；无法固定实际目的 IP 的代理 DNS 路由会明确报错。移除的是每次沙盒调用创建的权限代理，服务与 provider 自己的网络配置仍按各自客户端处理。
 
 ### 浏览器渲染的当前状态
 
@@ -208,11 +274,15 @@ Web 插件不会把本机已审核的域名交给外部代理重新解析。HTTP
 
 页面必须执行 JavaScript 时，启用沙盒的调用会报告当前渲染隔离尚不支持该操作。支持隔离渲染仍需完成浏览器进程、文件资源、控制通道和实际网络连接的统一隔离；MCP 或显式关闭沙盒的调用使用宿主浏览器执行。
 
-### Windows 的当前网络边界
+### 各平台的原生网络能力
 
-Windows 原生进程后端支持离线隔离及其能力范围内的数值 IP/CIDR 策略。当前 Agena 的认证 HTTP 代理尚未提供与 AppContainer 身份绑定的 Windows 代理入口，所以 Windows 上的 `Proxy`/`HttpProxy` 模式会明确返回 `Unsupported`。
+| 平台 | 支持范围与保存校验 |
+| --- | --- |
+| Linux / Bubblewrap | 支持上述 CIDR、排除子网、协议与端口规则；`ingress.default` 和 `ingress.hostLoopback` 必须为 `deny` |
+| Windows / ProcessContainer | 使用原生数值 IP、协议和端口规则；运行时检查当前 Windows 版本与 ProcessContainer/PSEC 能力 |
+| macOS / Seatbelt | 支持出站默认动作；非空的 `egress.allow` / `egress.deny` 规则不能保存。允许出站默认动作时，可用 `network: ["*"]` 申请该原生范围；具体目标限制因需要细粒度规则而不能执行 |
 
-工具 `network` 声明当前统一使用上述 `HttpProxy` 编译路径；填写一个数值 IP 也不会自动切到低层 `Direct`。Windows 的出厂网络默认值为 `deny`，保存时会拒绝允许、询问或自动批准出口的生效网络策略，错误说明当前缺少 Windows 身份代理。完成代理接入后才能启用这类联网工具。
+Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒限制的进程。
 
 ## 已接入的工具和辅助进程
 
@@ -266,9 +336,9 @@ LSP 缓存键包含会话身份、服务器名称、实际根目录和完整 `Sa
 
 ### MCP stdio 服务
 
-MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<name>.process` 沿用 `command`、`args`、`env`、`cwd`，增加 `reads`、`writes`、`network` 资源声明。省略三组声明时，服务仅获得工作目录的读取权限，网络关闭。资源的允许、询问和拒绝继续由既有路径、网络、项目设置、全部 ceiling 以及当前持久规则决定。
+MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<name>.process` 沿用 `command`、`args`、`env`、`cwd`，增加 `reads`、`writes`、`network` 资源声明。省略三组声明时，服务仅获得工作目录的读取权限，网络关闭。资源范围由路径、原生网络、项目设置、全部 ceiling 和当前持久拒绝共同限制；需要确认的启动操作由工具审批处理。
 
-Linux/macOS 启用沙盒时，既有 MCP 连接可以这样声明输入、输出和准确网络目标；Windows 当前应使用 `"network": []`：
+Linux/Windows 在原生后端能力可用且设置允许目标 IP 时，可以这样声明输入、输出和网络目标；macOS 可选择离线或已获准的完整原生出站范围：
 
 ```json
 {
@@ -289,6 +359,8 @@ Linux/macOS 启用沙盒时，既有 MCP 连接可以这样声明输入、输出
 加载配置只登记 stdio 定义，管理列表以 `scoped` 表示需要执行作用域。实际使用时，宿主验证当前会话、调用或 operator 能力，完成资源审批并生成策略。实例按服务器、配置版本、宿主 scope、工作区、实际工作目录和完整策略隔离；不同会话或更窄策略不会借用已有宽权限进程。实例退出后，下一次合法调用会重新检查当前权限再连接；显式重连也走相同流程，后台不会脱离授权以旧策略创建进程。
 
 当所有资源已由现有策略明确允许时，同一会话可以复用相同策略实例；一次性批准的资源和 operator 调用绑定本次宿主调用的完成信号，调用结束即移除并关闭对应实例。`connections.test` 总是建立独立受限连接并关闭它。缺少可信调用 scope 或后端能力时直接返回错误。
+
+工具访问 HTTP MCP 时，每次宿主调用创建独立连接管理器，保留该服务器的认证存储、工具过滤、roots 和超时配置。连接、重连、OAuth discovery/registration/refresh 及 token exchange 都使用当前调用的授权上下文和逐请求固定地址。清理在建立连接前注册，调用成功、失败或取消后关闭该独立管理器；连接测试也在取消时回收。结束的 OAuth 授权作用域不能退回可信管理客户端。
 
 ### 外部 stdio 插件
 
@@ -311,8 +383,8 @@ Playwright Python/Node 辅助进程已有独立的私有 HOME、暂存区和受�
 | 平台 | 原生后端 | 部署要求与当前功能 |
 | --- | --- | --- |
 | Linux | Bubblewrap | 需要可用 `bwrap` 和允许创建所需 user/mount/network namespace 的系统策略；联网模式还需 `slirp4netns` 及后端要求的网络工具 |
-| macOS | Seatbelt | 使用 MXC 支持的 macOS 版本；MXC 1.1.0 的 macOS 基线为 macOS 15；离线和受限代理能力由本机后端检查 |
-| Windows | Process Container/AppContainer | 需要包含相应 Process Container 能力的 Windows 版本；路径拒绝依赖对应文件系统拒绝能力；离线与低层数值 IP 策略按后端能力检查，当前认证 HTTP 代理模式返回不支持 |
+| macOS | Seatbelt | 使用 MXC 支持的 macOS 版本；MXC 1.1.0 的 macOS 基线为 macOS 15；离线和出站默认动作由本机后端检查，不支持细粒度出站目标规则 |
+| Windows | Process Container/AppContainer | 需要包含相应 Process Container 能力的 Windows 版本；路径拒绝依赖对应文件系统拒绝能力；离线与原生数值 IP/协议/端口策略按本机后端能力检查 |
 
 部署版本、Windows 能力标志和各后端差异以 MXC 上游文档与本机探针结果为准：
 
@@ -333,7 +405,7 @@ bash ./scripts/agena/install.sh reinstall --source --host 0.0.0.0
 
 默认 `--setup-mode auto` 会先准备源码构建所需工具，再补齐原生沙盒运行依赖。Linux 会按最终安装路径生成专用 AppArmor userns profile、准备 `nf_conntrack` 和联网工具；系统步骤在需要时通过 `sudo` 请求密码。macOS 原生服务会在安装阶段通过稳定的 `Agena.app` 身份集中检查/申请辅助功能、屏幕录制，并打开完全磁盘访问设置。Windows 源码安装会准备相应工具链，并在需要时请求 UAC 授权。已有路径、网络和工具审批设置继续保留。
 
-准备阶段失败时旧服务保持运行；新程序复制到最终路径后必须通过 `--agena-sandbox-check`，否则回滚程序和原运行状态。Linux/macOS 要求离线隔离和认证 HTTP 代理自检都成功；Windows 必须通过离线隔离检查，并单独显示当前 MXC HTTP 代理模式不支持。成功报告保存在 `<install-dir>/sandbox-report.json`。
+准备阶段失败时旧服务保持运行；新程序复制到最终路径后必须通过 `--agena-sandbox-check`，否则回滚程序和原运行状态。各平台必须通过离线隔离检查；Linux/Windows 还必须通过原生网络自检。macOS 将细粒度原生网络检查标为非必需的 `unsupported`，同时保留可用的出站默认动作能力。成功报告保存在 `<install-dir>/sandbox-report.json`。
 
 Linux 安装器按 `/etc/os-release` 的发行版家族选择 `apt-get/apt`、`dnf/dnf5/yum`、`pacman`、`zypper` 或 `apk`，分别处理开发库、网络工具及 AppArmor 的包名。支持通过 `sudo`、`doas` 或交互式 `su` 完成系统步骤；systemd/OpenRC 的模块开机加载也分别处理。Alpine 使用 `--source` 构建原生 musl 版本，或通过 `--archive` 提供原生包；当前官方 Linux 发布包为 glibc。各包管理器分支的离线测试覆盖调用和配置行为，最终可用性由目标宿主的真实隔离探针决定。
 
@@ -395,7 +467,7 @@ profile 的目录和单文件加载方法见 [Ubuntu Server AppArmor 文档](htt
 agena --agena-sandbox-check
 ```
 
-该入口在加载配置、凭证和插件之前执行，输出单行 JSON。`schema_version` 为 `1`，`ok` 与退出码一致，`checks` 分别列出 `offline` 和 `http_proxy` 的 `required`、`status`、`detail`。检查使用私有临时目录和本地 HTTP 测试端点，完成后清理；不连接外部测试网站。AppArmor 按程序路径匹配，诊断时应直接使用最终安装路径的二进制。
+该入口在加载配置、凭证和插件之前执行，输出单行 JSON。`schema_version` 为 `1`，`ok` 与退出码一致，`checks` 分别列出 `offline` 和 `native_network` 的 `required`、`status`、`detail`。Linux/Windows 的原生网络检查使用本机非回环 IPv4 上的两个临时 TCP 端口：一个允许端口必须返回预期数据，另一个同时位于 allow 和 deny 的端口必须被拒绝，并检查任务没有代理环境变量。检查完成后清理私有临时目录和监听端点，不访问外部网站。AppArmor 按程序路径匹配，诊断时应直接使用最终安装路径的二进制。
 
 在仓库根目录运行诊断示例：
 
@@ -440,11 +512,11 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | --- | --- |
 | Linux 创建 user namespace 返回 `EPERM` | 检查 doctor 的实际 bwrap 路径、AppArmor 限制和发行版专用 profile；修复后重新运行 doctor |
 | 找不到 `slirp4netns` | 先安装当前发行版支持的联网依赖；离线策略与联网策略分开验证 |
-| Windows 提示 identity-bound AppContainer proxy 不可用 | 当前认证 HTTP 代理未接入该能力；保持离线或使用明确支持的受信任低层数值 IP 策略，不能改成无沙盒重试 |
+| 原生网络规则提示后端不支持 | macOS 只使用出站默认动作或离线；Windows 检查宿主 ProcessContainer/PSEC 能力；不能静默改用代理或无沙盒执行 |
 | `existing writable mount` | 声明现有输出目录，或先用 `fs.write` 创建准确文件；不自动扩大到父目录 |
 | 路径规则 `Unsupported` | 检查负向文件名通配、字面量目录与子树默认值、拒绝父目录中的子授权；使用可表达的明确目录边界 |
 | `ReadApprovalRequired` | 读写挂载会包含读取能力，需要补足该写入目标的读取授权 |
-| 域名没有可用的获准 IP | 检查显式 IP/CIDR 拒绝，以及 DNS 是否指向需要单独允许的私有/回环地址 |
+| 域名没有可用的获准 IP | 检查实际 DNS 结果是否命中原生允许规则，以及是否被配置或权限上限拒绝；主机名本身不授予访问权限 |
 | 补丁修订冲突 | 文件在暂存后被修改；重新读取最新版本并准备修改，不覆盖外部变更 |
 
 ## 源码入口
@@ -462,5 +534,4 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | `agena-plugin-host/src/transport/stdio/scoped.rs` | 外部 stdio 插件的 bootstrap 与作用域进程路由 |
 | `agena-runtime-tools/src/media_input.rs` | 媒体准备与私有 IPC 传输校验 |
 | `agena-process/src/sandbox.rs` | MXC launcher、环境、运行时目录、平台能力和进程生命周期 |
-| `agena-process/src/sandbox_proxy.rs` | 每次调用的认证网络代理 |
 | `agena-lsp/src/registry.rs` | 按完整权限策略区分语言服务实例 |

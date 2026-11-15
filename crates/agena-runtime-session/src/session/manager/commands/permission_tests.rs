@@ -38,7 +38,7 @@ async fn invalid_session_permission_does_not_change_saved_configuration_or_versi
         .metadata_version;
 
     let invalid_network: PermissionConfig = serde_json::from_value(serde_json::json!({
-        "network": { "rules": { "*.example.com": "allow" } }
+        "network": { "egress": { "allow": [{ "to": [{ "cidr": "*.example.com/32" }] }] } }
     }))
     .unwrap();
     let invalid_tool: PermissionConfig = serde_json::from_value(serde_json::json!({
@@ -471,10 +471,10 @@ async fn reordered_session_rules_are_persisted_and_advance_the_metadata_version(
             r#"{"tools":{"rules":{"agena.shell.exec":{"git push *":"deny","git *":"ask"}}}}"#,
             r#"{"tools":{"rules":{"agena.shell.exec":{"git *":"ask","git push *":"deny"}}}}"#,
         ),
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(target_os = "macos"))]
         (
-            r#"{"network":{"rules":{"8.8.8.8:443":"deny","8.0.0.0/8":"allow"}}}"#,
-            r#"{"network":{"rules":{"8.0.0.0/8":"allow","8.8.8.8:443":"deny"}}}"#,
+            r#"{"network":{"egress":{"default":"deny","allow":[{"to":[{"cidr":"192.0.2.0/24"}]},{"to":[{"cidr":"198.51.100.0/24"}]}]}}}"#,
+            r#"{"network":{"egress":{"default":"deny","allow":[{"to":[{"cidr":"198.51.100.0/24"}]},{"to":[{"cidr":"192.0.2.0/24"}]}]}}}"#,
         ),
     ];
     for (first, reordered) in cases {
@@ -613,7 +613,7 @@ async fn inherited_permission_ceiling_cannot_be_changed_by_reordering_rules() {
 async fn session_creation_rejects_invalid_effective_rules_before_inserting() {
     let config = RuntimeSessionManagerConfig {
         permission: serde_json::from_value(serde_json::json!({
-            "network": { "rules": { "https://example.com/private": "allow" } }
+            "network": { "egress": { "allow": [{ "to": [{ "cidr": "https://example.com/private" }] }] } }
         }))
         .unwrap(),
         ..Default::default()
@@ -683,7 +683,7 @@ async fn session_archive_rejects_invalid_network_rules_before_publication() {
             "Older archive".into(),
             SessionConfiguration {
                 permission: serde_json::from_value(serde_json::json!({
-                    "network": { "rules": { "*.example.com": "allow" } }
+                    "network": { "egress": { "allow": [{ "to": [{ "cidr": "*.example.com/32" }] }] } }
                 }))
                 .unwrap(),
                 ..Default::default()

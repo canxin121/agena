@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import http.server
+import ipaddress
 import json
 from pathlib import Path
 import queue
@@ -23,7 +24,7 @@ import http_experience as fixture
 
 
 class LocalServices:
-    def __init__(self) -> None:
+    def __init__(self, bind_host: str = '127.0.0.1') -> None:
         self.calls: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue()
         self.search_requests = 0
         self.page_requests = 0
@@ -103,10 +104,10 @@ class LocalServices:
                 except (BrokenPipeError, ConnectionResetError):
                     pass
 
-        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server = http.server.ThreadingHTTPServer((bind_host, 0), Handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
-        self.url = f'http://127.0.0.1:{self.server.server_port}'
+        self.url = f'http://{bind_host}:{self.server.server_port}'
 
     def close(self) -> None:
         self.server.shutdown()
@@ -118,6 +119,24 @@ def tool_parts(api: fixture.Api, sid: int) -> list[dict[str, Any]]:
     return [part for part in api.parts(sid) if part['kind'] == 'tool_call']
 
 
+def native_network(egress: str = 'deny') -> dict[str, Any]:
+    fixture.require(egress in ('allow', 'deny'), 'native network actions must be allow or deny')
+    return {'egress': {'default': egress, 'allow': [], 'deny': []},
+            'ingress': {'default': 'deny', 'hostLoopback': 'deny'}}
+
+
+def local_interface_ipv4() -> str:
+    # UDP connect selects an interface without sending a packet. Native Linux
+    # policy denies host loopback, so successful local searches use this address.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect(('192.0.2.1', 9))
+        address = sock.getsockname()[0]
+    parsed = ipaddress.ip_address(address)
+    fixture.require(not parsed.is_loopback and not parsed.is_unspecified,
+                    'this probe requires a local non-loopback IPv4 interface')
+    return address
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True, type=Path)
@@ -126,7 +145,7 @@ def main() -> None:
     binary = args.binary.resolve(strict=True)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    services = LocalServices()
+    services = LocalServices(local_interface_ipv4())
     secondary = LocalServices()
     trace = fixture.JsonLines(out / 'http.jsonl')
     process = None
@@ -136,7 +155,9 @@ def main() -> None:
         workspace = fixture.prepare_configuration(out, services.url + '/v1')
         config_path = workspace / '.agena/agena.json'
         config = json.loads(config_path.read_text())
-        config['plugins'] = {'list': {'agena.web': {'package': {'kind': 'static'}, 'settings': {'search': {'provider': 'searxng', 'endpoint': services.url + '/search', 'allow_private_endpoint': True}, 'browser': {'enabled': False}}}}}
+        config['permission'] = {'path': {'workspace': 'readwrite', 'external': 'deny'},
+                                'network': native_network(), 'tools': {'default': 'allow'}}
+        config['plugins'] = {'list': {'agena.web': {'package': {'kind': 'static'}, 'settings': {'search': {'provider': 'searxng', 'endpoint': services.url + '/search', 'allow_private_endpoint': True}, 'network': {'proxy': ''}, 'browser': {'enabled': False}}}}}
         fixture.write_json(config_path, config)
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
@@ -172,11 +193,12 @@ def main() -> None:
                 fixture.require(all(part.get('state') not in ('failed', 'error') for part in parts), f'{name}: unexpected tool failure: {parts}')
             result['cases'].append({'name': name, 'session_id': sid, 'passed': True})
 
-        # All filesystem targets get an exact rule, overriding the shipped tmp allowance.
+        # Approval belongs to the tool; native paths use readwrite/readonly/deny.
         for mode, decision in [('ask', 'allow_once'), ('ask', 'deny_once'), ('deny', None)]:
             name = f'write_{mode}_{decision or "policy"}'
             path = workspace / f'{name}/file.txt'
-            permission = {'path': {'rules': {str(path): {'read': 'allow', 'write': mode}}}}
+            permission = {'path': {'rules': {str(path.parent): 'readonly' if mode == 'deny' else 'readwrite'}},
+                          'tools': {'names': {'agena.fs.write': 'ask' if mode == 'ask' else 'allow'}}}
             sid = session(name, permission, 'fs.write', {'path': str(path), 'content': name, 'create_parents': True})
             if decision:
                 fixture.permission_wait(api, sid)
@@ -191,7 +213,7 @@ def main() -> None:
         discovery.mkdir()
         blocked = discovery / 'blocked.rs'
         blocked.write_text('fn secret_marker() {}\n')
-        child_permission = {'path': {'rules': {str(discovery): {'read': 'allow'}, str(blocked): {'read': 'deny'}}}}
+        child_permission = {'path': {'rules': {str(discovery): 'readonly', str(blocked): 'deny'}}}
         for tool, inputs in [('fs.glob', {'path': str(discovery), 'pattern': '**/*'}), ('fs.grep', {'path': str(discovery), 'pattern': 'secret_marker'}), ('code.search_ast', {'path': str(discovery), 'language': 'rust', 'pattern': 'fn $NAME() { $$$ }'})]:
             name = tool.replace('.', '_') + '_child_denied'
             sid = session(name, child_permission, tool, inputs)
@@ -201,7 +223,7 @@ def main() -> None:
         skill = workspace / '.agena/skills/permission-fixture/SKILL.md'
         skill.parent.mkdir(parents=True)
         skill.write_text('---\nname: permission-fixture\ndescription: controlled permission fixture\naliases: [permission-alias]\n---\nPrivate fixture instructions.\n')
-        sid = session('commands_child_denied', {'path': {'rules': {str(skill): {'read': 'deny'}}}}, 'commands.get', {'name': 'permission-alias'})
+        sid = session('commands_child_denied', {'path': {'rules': {str(skill): 'deny'}}}, 'commands.get', {'name': 'permission-alias'})
         complete(sid, 'commands_child_denied', 'denied')
 
         sid = session('memory_write_allowed', {}, 'memory.write', {'name': 'permission-record', 'content': 'controlled private memory'})
@@ -211,21 +233,23 @@ def main() -> None:
         record = records[0]
         for tool, inputs in [('memory.get', {'name': 'permission-record.md'}), ('memory.list', {}), ('memory.search', {'query': 'controlled'})]:
             name = tool.replace('.', '_') + '_child_denied'
-            sid = session(name, {'path': {'rules': {str(record): {'read': 'deny'}}}}, tool, inputs)
+            sid = session(name, {'path': {'rules': {str(record): 'deny'}}}, tool, inputs)
             complete(sid, name, 'denied')
-        sid = session('memory_index_write_denied', {'path': {'rules': {str(record.parent / 'MEMORY.md'): {'write': 'deny'}}}}, 'memory.write', {'name': 'blocked-record', 'content': 'must not be written'})
+        sid = session('memory_index_write_denied', {'path': {'rules': {str(record.parent / 'MEMORY.md'): 'readonly'}}}, 'memory.write', {'name': 'blocked-record', 'content': 'must not be written'})
         complete(sid, 'memory_index_write_denied', 'denied')
         fixture.require(not (record.parent / 'blocked-record.md').exists(), 'memory record was written before index permission')
 
-        # Ask must block outbound I/O; AllowOnce opens it; Deny and Auto rejection never send.
+        # Tool approval gates execution; native network rules remain allow/deny.
         for mode, decision in [('ask', 'allow_once'), ('ask', 'deny_once'), ('deny', None), ('auto', None)]:
-            name = f'search_{mode}_{decision or "policy"}'
+            name = f'search_tool_{mode}_{decision or "policy"}'
             before = services.search_requests
-            sid = session(name, {'network': {'loopback': mode}}, 'web.search', {'query': name})
+            permission = {'network': native_network('allow'),
+                          'tools': {'names': {'agena.web.search': mode}}}
+            sid = session(name, permission, 'web.search', {'query': name})
             if decision:
                 fixture.permission_wait(api, sid)
                 time.sleep(0.15)
-                fixture.require(services.search_requests == before, f'{name}: network request before approval')
+                fixture.require(services.search_requests == before, f'{name}: network request before tool approval')
                 reply(sid, decision)
             complete(sid, name, 'declined' if decision == 'deny_once' else 'denied' if mode == 'deny' else None)
             fixture.require(services.search_requests - before == int(decision == 'allow_once' or mode == 'auto'), f'{name}: wrong outbound effect')
@@ -233,50 +257,61 @@ def main() -> None:
                 approved_session = sid
 
         before = services.search_requests
-        services.calls.put(('web.search', {'query': 'new call needs a new grant'}))
+        services.calls.put(('web.search', {'query': 'new call needs a new tool grant'}))
         fixture.submit(api, approved_session, 'AllowOnce must not authorize a later tool call')
         reply(approved_session, 'deny_once')
         complete(approved_session, 'search_allow_once_does_not_leak', 'declined')
         fixture.require(services.search_requests == before, 'AllowOnce leaked to another call')
 
-        before_pages = services.page_requests + secondary.page_requests
-        urls = [services.url + '/page/a', secondary.url + '/page/b']
-        sid = session('fetch_many_serial_approvals', {'network': {'loopback': 'ask'}}, 'web.fetch_many', {'urls': urls, 'render_js': False})
-        pending = fixture.permission_wait(api, sid)
-        fixture.require(services.page_requests + secondary.page_requests == before_pages, 'batch sent requests before approval')
-        reply(sid, 'allow_once')
-        next_pending = fixture.permission_wait(api, sid)
-        fixture.require(next_pending['request_id'] != pending['request_id'], 'batch reused an unrelated endpoint grant')
-        reply(sid, 'allow_once')
-        complete(sid, 'fetch_many_serial_approvals', 'denied')
-        # Approval does not override the independent public-address boundary.
-        fixture.require(services.page_requests + secondary.page_requests == before_pages, 'batch bypassed the public-address guard')
+        before = services.search_requests
+        sid = session('search_native_egress_denied', {'network': native_network('deny')},
+                      'web.search', {'query': 'search_native_egress_denied'})
+        complete(sid, 'search_native_egress_denied', 'denied')
+        fixture.require(services.search_requests == before, 'native egress deny sent a request')
+        fixture.require(not fixture.pending_permissions(api.state(sid)), 'native network denial requested approval')
 
-        sid = session('fetch_many_denied', {'network': {'loopback': 'deny'}}, 'web.fetch_many', {'urls': urls, 'render_js': False})
-        complete(sid, 'fetch_many_denied', 'denied')
-        fixture.require(services.page_requests + secondary.page_requests == before_pages, 'denied batch sent a request')
+        before_pages = secondary.page_requests
+        urls = [secondary.url + '/page/a', secondary.url + '/page/b']
+        permission = {'network': native_network('allow'),
+                      'tools': {'names': {'agena.web.fetch_many': 'ask'}}}
+        sid = session('fetch_many_tool_approval_keeps_network_guard', permission,
+                      'web.fetch_many', {'urls': urls, 'render_js': False})
+        fixture.permission_wait(api, sid)
+        fixture.require(secondary.page_requests == before_pages, 'batch sent requests before tool approval')
+        reply(sid, 'allow_once')
+        complete(sid, 'fetch_many_tool_approval_keeps_network_guard', 'denied')
+        fixture.require(secondary.page_requests == before_pages, 'tool approval bypassed the loopback/private-address guard')
+
+        sid = session('fetch_many_native_denied', {'network': native_network('deny')},
+                      'web.fetch_many', {'urls': urls, 'render_js': False})
+        complete(sid, 'fetch_many_native_denied', 'denied')
+        fixture.require(secondary.page_requests == before_pages, 'denied batch sent a request')
 
         services.allow_auto = False
         before = services.search_requests
-        sid = session('search_auto_rejected', {'network': {'loopback': 'auto'}}, 'web.search', {'query': 'search_auto_rejected'})
-        complete(sid, 'search_auto_rejected', 'denied')
-        fixture.require(services.search_requests == before, 'Auto rejection sent a network request')
+        permission = {'network': native_network('allow'),
+                      'tools': {'names': {'agena.web.search': 'auto'}}}
+        sid = session('search_tool_auto_rejected', permission, 'web.search', {'query': 'search_tool_auto_rejected'})
+        complete(sid, 'search_tool_auto_rejected', 'denied')
+        fixture.require(services.search_requests == before, 'tool Auto rejection sent a network request')
 
         before = services.search_requests
-        sid = session('search_cancelled', {'network': {'loopback': 'ask'}}, 'web.search', {'query': 'search_cancelled'})
+        permission = {'network': native_network('allow'),
+                      'tools': {'names': {'agena.web.search': 'ask'}}}
+        sid = session('search_tool_cancelled', permission, 'web.search', {'query': 'search_tool_cancelled'})
         fixture.permission_wait(api, sid)
         api.call('POST', f'/api/v1/sessions/{sid}/cancel', {})
         fixture.wait_idle(api, sid)
-        fixture.require(services.search_requests == before, 'Cancelled approval sent a network request')
-        fixture.require(not fixture.pending_permissions(api.state(sid)), 'Cancelled interaction remains pending')
-        result['cases'].append({'name': 'search_cancelled', 'session_id': sid, 'passed': True})
-        fixture.require(services.reviews >= 2, 'Auto approval model was not called')
+        fixture.require(services.search_requests == before, 'cancelled tool approval sent a network request')
+        fixture.require(not fixture.pending_permissions(api.state(sid)), 'cancelled interaction remains pending')
+        result['cases'].append({'name': 'search_tool_cancelled', 'session_id': sid, 'passed': True})
+        fixture.require(services.reviews >= 2, 'tool Auto approval model was not called')
 
-        # A trusted HTTP proxy resolves this intentionally nonexistent public
-        # hostname. Authorization must still run against the original URL,
-        # before the proxy sees a single request.
+        # A remote-DNS proxy cannot pin authorized destination IPs. A numeric
+        # documentation address keeps preflight local; no connection may reach
+        # either the destination or the controlled proxy.
         proxy_settings = {'search': {'provider': 'searxng',
-                                    'endpoint': 'http://proxy-search.fixture.invalid/search'},
+                                    'endpoint': 'http://192.0.2.1/search'},
                           'network': {'proxy': services.url}, 'browser': {'enabled': False}}
         config['plugins']['list']['agena.web']['settings'] = proxy_settings
         fixture.write_json(config_path, config)
@@ -287,19 +322,12 @@ def main() -> None:
         effective = api.get('/api/v1/plugins/agena.web/settings')['effective']
         fixture.require(effective['search']['endpoint'] == proxy_settings['search']['endpoint'],
                         'workspace search settings did not reload')
-        for mode, decision in [('ask', 'allow_once'), ('ask', 'deny_once'), ('deny', None), ('auto', None)]:
-            name = f'proxy_search_{mode}_{decision or "policy"}'
+        for egress in ['allow', 'deny']:
+            name = f'remote_dns_proxy_denied_with_egress_{egress}'
             before = services.proxy_requests
-            services.allow_auto = False
-            sid = session(name, {'network': {'internet': mode}}, 'web.search', {'query': name})
-            if decision:
-                fixture.permission_wait(api, sid)
-                time.sleep(0.15)
-                fixture.require(services.proxy_requests == before, f'{name}: contacted proxy before approval')
-                reply(sid, decision)
-            complete(sid, name, None if decision == 'allow_once' else 'declined' if decision == 'deny_once' else 'denied')
-            fixture.require(services.proxy_requests - before == int(decision == 'allow_once'),
-                            f'{name}: wrong proxy effect')
+            sid = session(name, {'network': native_network(egress)}, 'web.search', {'query': name})
+            complete(sid, name, 'denied')
+            fixture.require(services.proxy_requests == before, f'{name}: contacted a remote-DNS proxy')
         result.update(status='passed', search_requests=services.search_requests, automatic_reviews=services.reviews)
     except BaseException:
         result['error'] = traceback.format_exc()

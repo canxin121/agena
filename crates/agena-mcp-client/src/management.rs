@@ -197,12 +197,71 @@ pub async fn test_connection(
     request_ms: u64,
     token_store_enabled: bool,
 ) -> McpTestResult {
+    test_connection_with_authority(
+        name,
+        spec,
+        workspace,
+        connect_ms,
+        request_ms,
+        token_store_enabled,
+        None,
+    )
+    .await
+}
+
+/// Probe under a live plugin call, with per-request numeric address checks.
+pub async fn test_connection_authorized(
+    name: &str,
+    spec: ServerSpec,
+    workspace: PathBuf,
+    connect_ms: u64,
+    request_ms: u64,
+    token_store_enabled: bool,
+    authorizer: Arc<dyn crate::McpHttpNetworkAuthorizer>,
+) -> McpTestResult {
+    test_connection_with_authority(
+        name,
+        spec,
+        workspace,
+        connect_ms,
+        request_ms,
+        token_store_enabled,
+        Some(authorizer),
+    )
+    .await
+}
+
+struct ProbeCleanup(Option<Arc<McpConnectionManager>>);
+
+impl Drop for ProbeCleanup {
+    fn drop(&mut self) {
+        if let Some(manager) = self.0.take() {
+            tokio::spawn(async move { manager.shutdown_all().await });
+        }
+    }
+}
+
+async fn test_connection_with_authority(
+    name: &str,
+    spec: ServerSpec,
+    workspace: PathBuf,
+    connect_ms: u64,
+    request_ms: u64,
+    token_store_enabled: bool,
+    authorizer: Option<Arc<dyn crate::McpHttpNetworkAuthorizer>>,
+) -> McpTestResult {
     let started = Instant::now();
     if matches!(&spec, ServerSpec::Stdio { sandbox: None, .. }) {
         return McpTestResult {
-            ok: false, elapsed_ms: 0, tool_count: 0, protocol_version: None,
-            server_info: None, capabilities: None,
-            error: Some("MCP stdio connection test requires a host-authorized sandbox scope.".into()),
+            ok: false,
+            elapsed_ms: 0,
+            tool_count: 0,
+            protocol_version: None,
+            server_info: None,
+            capabilities: None,
+            error: Some(
+                "MCP stdio connection test requires a host-authorized sandbox scope.".into(),
+            ),
         };
     }
     let mut probe = McpConnectionManager::new("agena-connection-test", env!("CARGO_PKG_VERSION"))
@@ -214,7 +273,11 @@ pub async fn test_connection(
     if token_store_enabled {
         probe.set_token_store(Arc::new(FileTokenStore::new()));
     }
+    if let Some(authorizer) = authorizer {
+        probe = probe.with_http_network_authorizer(authorizer);
+    }
     let probe = Arc::new(probe);
+    let mut cleanup = ProbeCleanup(Some(Arc::clone(&probe)));
     let result = probe.add_server(name, spec).await;
     let status = probe.statuses().await.into_iter().find(|s| s.name == name);
     let response = McpTestResult {
@@ -227,6 +290,7 @@ pub async fn test_connection(
         error: result.err().map(|e| e.user_message()),
     };
     probe.shutdown_all().await;
+    cleanup.0.take();
     response
 }
 

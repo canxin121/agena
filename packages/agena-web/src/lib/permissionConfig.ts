@@ -2,18 +2,23 @@ import type { JsonValue } from '@/types/json'
 
 export type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
 export type PathPermissionMode = 'readonly' | 'readwrite' | 'deny'
+export type NetworkAction = 'allow' | 'deny'
+export type NetworkProtocol = 'tcp' | 'udp' | 'icmp' | 'any'
+export type NetworkRule = {
+  to?: Array<{ cidr: string; except?: string[] }>
+  ports?: Array<{ protocol?: NetworkProtocol; port?: number; endPort?: number }>
+}
+export type NetworkPermissionConfig = {
+  egress?: { default?: NetworkAction; allow?: NetworkRule[]; deny?: NetworkRule[] }
+  ingress?: { default?: NetworkAction; hostLoopback?: NetworkAction }
+}
 export type PermissionConfig = {
   path?: {
     workspace?: PathPermissionMode
     external?: PathPermissionMode
     rules?: Record<string, PathPermissionMode>
   }
-  network?: {
-    internet?: PermissionMode
-    private?: PermissionMode
-    loopback?: PermissionMode
-    rules?: Record<string, PermissionMode>
-  }
+  network?: NetworkPermissionConfig
   tools?: {
     default?: PermissionMode
     names?: Record<string, PermissionMode>
@@ -23,7 +28,7 @@ export type PermissionConfig = {
 }
 
 export function renamePermissionRule<T>(rules: Record<string, T>, from: string, to: string): Record<string, T> {
-  // Entry order determines which overlapping command or network rule wins.
+  // Entry order determines which overlapping command rule wins.
   return Object.fromEntries(Object.entries(rules).map(([key, value]) => [key === from ? to : key, value]))
 }
 
@@ -164,6 +169,167 @@ function modeMap(value: unknown, field: string): Record<string, PermissionMode> 
   )
 }
 
+function networkAction(value: unknown, field: string): NetworkAction {
+  if (value === 'allow' || value === 'deny') return value
+  throw new PermissionConfigError('Invalid permission value at {field}: expected {expected}.', {
+    field,
+    expected: 'allow | deny',
+  })
+}
+
+function arrayAt(value: unknown, field: string, nonempty = false): unknown[] {
+  if (!Array.isArray(value)) throw new PermissionConfigError('Expected an array at {field}.', { field })
+  if (nonempty && value.length === 0)
+    throw new PermissionConfigError('Network selector at {field} must not be empty.', { field })
+  return value
+}
+
+function parseIp(value: string): { address: bigint; bits: number } | null {
+  const v4 = (input: string): number[] | null => {
+    const octets = input.split('.')
+    if (octets.length !== 4 || octets.some((part) => !/^(0|[1-9][0-9]{0,2})$/.test(part) || Number(part) > 255))
+      return null
+    return octets.map(Number)
+  }
+  if (!value.includes(':')) {
+    const octets = v4(value)
+    return octets ? { address: octets.reduce((result, part) => (result << 8n) | BigInt(part), 0n), bits: 32 } : null
+  }
+  let address = value
+  if (address.includes('.')) {
+    const boundary = address.lastIndexOf(':')
+    const octets = v4(address.slice(boundary + 1))
+    if (!octets) return null
+    address =
+      address.slice(0, boundary + 1) +
+      ((octets[0]! << 8) | octets[1]!).toString(16) +
+      ':' +
+      ((octets[2]! << 8) | octets[3]!).toString(16)
+  }
+  const compressed = address.split('::')
+  if (compressed.length > 2) return null
+  const left = compressed[0] ? compressed[0].split(':') : []
+  const right = compressed.length === 2 && compressed[1] ? compressed[1].split(':') : []
+  if ([...left, ...right].some((part) => !/^[0-9a-fA-F]{1,4}$/.test(part))) return null
+  const omitted = 8 - left.length - right.length
+  if (compressed.length === 1 ? left.length !== 8 : omitted < 1) return null
+  const parts = compressed.length === 1 ? left : [...left, ...Array<string>(omitted).fill('0'), ...right]
+  return { address: parts.reduce((result, part) => (result << 16n) | BigInt(parseInt(part, 16)), 0n), bits: 128 }
+}
+
+function networkCidr(value: unknown, field: string) {
+  if (typeof value !== 'string' || value.trim() !== value) {
+    throw new PermissionConfigError('Expected an IP CIDR at {field}; domains and URLs are not supported.', { field })
+  }
+  const parts = value.split('/')
+  const ip = parts.length === 2 ? parseIp(parts[0]!) : null
+  if (!ip || !/^(0|[1-9][0-9]*)$/.test(parts[1]!) || Number(parts[1]) > ip.bits) {
+    throw new PermissionConfigError('Expected an IP CIDR at {field}; domains and URLs are not supported.', { field })
+  }
+  const prefix = Number(parts[1])
+  return { value, ...ip, prefix, network: (ip.address >> BigInt(ip.bits - prefix)) << BigInt(ip.bits - prefix) }
+}
+
+function networkRules(value: unknown, field: string): NetworkRule[] {
+  return arrayAt(value, field).map((value, index) => {
+    const at = field + '[' + index + ']'
+    const rule = objectAt(value, at)
+    knownFields(rule, ['to', 'ports'], at)
+    const result: NetworkRule = {}
+    if (rule.to !== undefined) {
+      result.to = arrayAt(rule.to, at + '.to', true).map((value, peerIndex) => {
+        const peerAt = at + '.to[' + peerIndex + ']'
+        const peer = objectAt(value, peerAt)
+        knownFields(peer, ['cidr', 'except'], peerAt)
+        const cidr = networkCidr(peer.cidr, peerAt + '.cidr')
+        const result: NonNullable<NetworkRule['to']>[number] = { cidr: cidr.value }
+        if (peer.except !== undefined) {
+          result.except = arrayAt(peer.except, peerAt + '.except').map((value, exceptIndex) => {
+            const exceptAt = peerAt + '.except[' + exceptIndex + ']'
+            const excluded = networkCidr(value, exceptAt)
+            if (
+              excluded.bits !== cidr.bits ||
+              excluded.prefix < cidr.prefix ||
+              excluded.address >> BigInt(cidr.bits - cidr.prefix) !== cidr.address >> BigInt(cidr.bits - cidr.prefix)
+            ) {
+              throw new PermissionConfigError('Excluded CIDR at {field} must be contained in {cidr}.', {
+                field: exceptAt,
+                cidr: cidr.value,
+              })
+            }
+            return excluded.value
+          })
+        }
+        return result
+      })
+    }
+    if (rule.ports !== undefined) {
+      result.ports = arrayAt(rule.ports, at + '.ports', true).map((value, portIndex) => {
+        const portAt = at + '.ports[' + portIndex + ']'
+        const selector = objectAt(value, portAt)
+        knownFields(selector, ['protocol', 'port', 'endPort'], portAt)
+        const result: NonNullable<NetworkRule['ports']>[number] = {}
+        if (selector.protocol !== undefined) {
+          if (typeof selector.protocol !== 'string' || !['tcp', 'udp', 'icmp', 'any'].includes(selector.protocol)) {
+            throw new PermissionConfigError('Invalid permission value at {field}: expected {expected}.', {
+              field: portAt + '.protocol',
+              expected: 'tcp | udp | icmp | any',
+            })
+          }
+          result.protocol = selector.protocol as NetworkProtocol
+        }
+        for (const name of ['port', 'endPort'] as const) {
+          if (selector[name] !== undefined) {
+            const port = selector[name]
+            if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)
+              throw new PermissionConfigError('Port at {field} must be an integer from 1 to 65535.', {
+                field: portAt + '.' + name,
+              })
+            result[name] = port
+          }
+        }
+        if (result.endPort !== undefined && (result.port === undefined || result.endPort < result.port))
+          throw new PermissionConfigError(
+            'endPort at {field} requires port and must be greater than or equal to port.',
+            { field: portAt },
+          )
+        if (result.protocol === 'icmp' && (result.port !== undefined || result.endPort !== undefined))
+          throw new PermissionConfigError('ICMP rule at {field} must not specify ports.', { field: portAt })
+        return result
+      })
+    }
+    return result
+  })
+}
+
+/** Parse native MXC network policy. Backend availability is validated by the server. */
+export function parseNetworkPermissionConfig(value: unknown): NetworkPermissionConfig {
+  const field = 'permission.network'
+  const raw = objectAt(value, field)
+  knownFields(raw, ['egress', 'ingress'], field)
+  const result: NetworkPermissionConfig = {}
+  if (raw.egress !== undefined) {
+    const egress = objectAt(raw.egress, field + '.egress')
+    knownFields(egress, ['default', 'allow', 'deny'], field + '.egress')
+    result.egress = {}
+    if (egress.default !== undefined) result.egress.default = networkAction(egress.default, field + '.egress.default')
+    for (const action of ['allow', 'deny'] as const) {
+      if (egress[action] !== undefined)
+        result.egress[action] = networkRules(egress[action], field + '.egress.' + action)
+    }
+  }
+  if (raw.ingress !== undefined) {
+    const ingress = objectAt(raw.ingress, field + '.ingress')
+    knownFields(ingress, ['default', 'hostLoopback'], field + '.ingress')
+    result.ingress = {}
+    for (const action of ['default', 'hostLoopback'] as const) {
+      if (ingress[action] !== undefined)
+        result.ingress[action] = networkAction(ingress[action], field + '.ingress.' + action)
+    }
+  }
+  return result
+}
+
 /** Normalize deterministic legacy values, then validate before replacing a draft or submitting it. */
 export function parsePermissionConfig(value: unknown): PermissionConfig {
   const raw = objectAt(value, 'permission')
@@ -218,15 +384,7 @@ export function parsePermissionConfig(value: unknown): PermissionConfig {
       result.path.rules = Object.fromEntries(rules)
     }
   }
-  if (raw.network != null) {
-    const network = objectAt(raw.network, 'permission.network')
-    knownFields(network, ['internet', 'private', 'loopback', 'rules'], 'permission.network')
-    result.network = {}
-    for (const zone of ['internet', 'private', 'loopback'] as const) {
-      if (network[zone] != null) result.network[zone] = permissionMode(network[zone], `permission.network.${zone}`)
-    }
-    if (network.rules !== undefined) result.network.rules = modeMap(network.rules, 'permission.network.rules')
-  }
+  if (raw.network !== undefined) result.network = parseNetworkPermissionConfig(raw.network)
   if (raw.tools != null) {
     const tools = objectAt(raw.tools, 'permission.tools')
     knownFields(tools, ['default', 'names', 'rules'], 'permission.tools')

@@ -33,15 +33,34 @@ impl McpPlugin {
             .server_spec(server)
             .await
             .map_err(|error| PluginError::internal_error(&error))?;
+        if let ServerSpec::Http { url, .. } = &spec {
+            self.host
+                .get()
+                .ok_or_else(|| PluginError::internal("MCP permission host is not initialized"))?
+                .require_network_permission(network_permission_target(url.as_str())?)
+                .await?;
+            let completion =
+                agena_plugin_host::current_plugin_call_completion().ok_or_else(|| {
+                    PluginError::internal("MCP HTTP requires an active host call lifetime")
+                })?;
+            let authority = self.connection_network_authority()?;
+            let manager = self
+                .manager
+                .for_http_scope(server, authority.clone())
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?;
+            let cleanup = Arc::clone(&manager);
+            tokio::spawn(async move {
+                completion.wait().await;
+                cleanup.shutdown_all().await;
+            });
+            authority.finish(manager.reconnect(server).await)?;
+            return Ok(manager);
+        }
         let Some(prepared) = self.prepare_stdio_sandbox(&spec).await? else {
-            if let ServerSpec::Http { url, .. } = spec {
-                self.host
-                    .get()
-                    .ok_or_else(|| PluginError::internal("MCP permission host is not initialized"))?
-                    .require_network_permission(url.to_string())
-                    .await?;
-            }
-            return Ok(Arc::clone(&self.manager));
+            return Err(PluginError::internal(
+                "MCP server has no authorized transport",
+            ));
         };
         let completion = if prepared.call_bound {
             Some(
@@ -120,7 +139,9 @@ impl McpPlugin {
         Ok(tools)
     }
 
-    pub(super) async fn scoped_statuses(&self) -> SdkResult<Vec<agena_mcp_client::McpServerStatus>> {
+    pub(super) async fn scoped_statuses(
+        &self,
+    ) -> SdkResult<Vec<agena_mcp_client::McpServerStatus>> {
         let mut statuses = Vec::new();
         for name in self.manager.server_names().await {
             let manager = self.authorize_server(&name).await?;

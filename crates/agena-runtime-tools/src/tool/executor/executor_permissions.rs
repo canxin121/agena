@@ -474,41 +474,107 @@ mod sandbox_network_tests {
     use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
 
     #[test]
-    fn bare_hostname_approval_keeps_port_specific_ask() {
+    fn native_network_deny_is_checked_before_a_shell_launch() {
         let principal = ExecutionPrincipal::new(
-            PermissionPolicy::allow_all(), ToolPermissionPolicy::allow_all(),
-        ).try_apply_permission_config(&serde_json::from_value(serde_json::json!({
-            "network": { "internet": "deny", "rules": {
-                "example.test": "allow", "example.test:443": "ask"
-            }}
-        })).unwrap()).unwrap();
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "network": {"egress": {"default": "allow", "deny": [{
+                    "to": [{"cidr":"192.0.2.10/32"}],
+                    "ports": [{"protocol":"tcp","port":443}]
+                }]}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
         let executor = ToolExecutor::new(
-            std::env::temp_dir().join("agena-network-effect-test"), principal,
-            agena_plugin_host::PluginHost::new_empty(), None, None,
+            std::env::temp_dir().join("agena-network-effect-test"),
+            principal,
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
         );
         let mut checks = Vec::new();
-        executor.push_declared_network_checks(
-            &mut checks, "curl https://example.test", &["example.test".into()],
-        ).unwrap();
-        let https = checks.iter().find(|check| matches!(
-            &check.action, agena_domain::PermissionAction::NetworkAccess { host, port: Some(443), .. }
-                if host == "example.test"
-        )).expect("HTTPS port must have its own approval check");
-        assert!(matches!(https.decision, PermissionDecision::Ask { .. }));
-        assert!(checks.iter().any(|check| matches!(
-            &check.action, agena_domain::PermissionAction::NetworkAccess { port: Some(80), .. }
-        )));
+        executor
+            .push_declared_network_checks(
+                &mut checks,
+                "curl https://192.0.2.10",
+                &["192.0.2.10:443".into()],
+            )
+            .unwrap();
+        assert_eq!(checks.len(), 1);
+        assert!(matches!(
+            checks[0].decision,
+            PermissionDecision::Deny { .. }
+        ));
     }
 
     #[test]
-    fn explicit_network_port_does_not_request_other_ports() {
+    fn explicit_protocols_and_bare_hosts_do_not_add_http_ports() {
         let targets = crate::shell_sandbox::declared_network_targets(&[
-            "https://example.test:8443/data".into(), "[::1]:9000".into(),
-        ]).unwrap();
+            "udp://192.0.2.53:53".into(),
+            "192.0.2.10".into(),
+        ])
+        .unwrap();
         assert_eq!(targets.len(), 2);
-        let ports = targets.iter().map(|raw| raw.parse::<agena_domain::NetworkTarget>().unwrap().port())
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(ports, std::collections::BTreeSet::from([Some(8443), Some(9000)]));
+        assert!(targets.iter().any(|target| target == "192.0.2.10"));
+        assert!(
+            !targets
+                .iter()
+                .any(|target| target.ends_with(":80") || target.ends_with(":443"))
+        );
+    }
+
+    #[test]
+    fn wildcard_network_scope_must_be_explicit_and_exclusive() {
+        assert_eq!(
+            crate::shell_sandbox::declared_network_targets(&["*".into()]).unwrap(),
+            ["*"]
+        );
+        assert!(
+            crate::shell_sandbox::declared_network_targets(&["*".into(), "192.0.2.1".into()])
+                .is_err()
+        );
+        assert!(
+            crate::shell_sandbox::declared_network_targets(&["*.example.test".into()]).is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod native_offline_network_tests {
+    use super::*;
+    use crate::authorization::ExecutionPrincipal;
+    use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
+
+    #[test]
+    fn offline_network_rejection_happens_before_hostname_resolution() {
+        let principal = ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "network": {"egress": {"default":"deny"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let executor = ToolExecutor::new(
+            std::env::temp_dir().join("agena-offline-network-test"),
+            principal,
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        );
+        // A lookup would fail this nonexistent host with a resolver error;
+        // static denial must instead produce an ordinary denied permission check.
+        let check = executor
+            .network_permission_check("https://must-not-resolve.invalid/")
+            .unwrap();
+        assert!(matches!(check.decision, PermissionDecision::Deny { .. }));
     }
 }
 

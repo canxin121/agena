@@ -8,17 +8,20 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+use agena_domain::{
+    NetworkAction as ConfigNetworkAction, NetworkPermissionConfig,
+    NetworkProtocol as ConfigNetworkProtocol, NetworkRuleConfig,
+};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use mxc_sdk::v1::{
     ContainerRequest, FilesystemPolicy, NetworkAction, NetworkEgressPolicy, NetworkIngressPolicy,
-    NetworkPeerPolicy, NetworkPolicy, NetworkPortPolicy, NetworkRulePolicy, NetworkRuntimeConfig,
-    SpawnExtendedOptions, SpawnStdio, UiPolicy, WaitResult,
+    NetworkPeerPolicy, NetworkPolicy, NetworkPortPolicy, NetworkRulePolicy, SpawnExtendedOptions,
+    SpawnStdio, UiPolicy, WaitResult,
 };
 use serde::{Deserialize, Serialize};
 
@@ -99,41 +102,8 @@ pub struct SandboxPolicy {
 pub enum SandboxNetwork {
     #[default]
     Disabled,
-    /// An independently managed, trusted loopback transport endpoint. Usually
-    /// an HTTP proxy; trusted adapters can use the injected endpoint to reach
-    /// one already-owned local control socket instead.
-    Proxy { url: String },
-    /// Agena's per-invocation authenticated HTTP proxy. Addresses have already
-    /// passed both hostname and IP checks in every permission ceiling.
-    HttpProxy { targets: Vec<ProxyTarget> },
-    /// Explicit IP/CIDR permissions only; hostname policies use HttpProxy.
-    Direct { allow: Vec<NetworkEndpoint> },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProxyTarget {
-    pub host: String,
-    pub port: Option<u16>,
-    pub addresses: Vec<IpAddr>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct NetworkEndpoint {
-    pub cidr: String,
-    pub protocol: NetworkProtocol,
-    pub port: Option<u16>,
-    pub end_port: Option<u16>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NetworkProtocol {
-    Tcp,
-    Udp,
-    Icmp,
-    Any,
+    /// Native MXC IP, protocol and port policy. No userspace proxy is involved.
+    Native { policy: NetworkPermissionConfig },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,14 +124,6 @@ struct WorkloadPayload {
     argv: Vec<String>,
     cwd: PathBuf,
     environment: HashMap<String, String>,
-    proxy_credentials: Option<ProxyCredentials>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProxyCredentials {
-    username: String,
-    password: Option<String>,
 }
 
 /// Set a trusted launcher executable for embedders and integration-test helpers.
@@ -629,7 +591,7 @@ pub fn try_run_launcher() -> Option<i32> {
 }
 
 // This entry point runs inside MXC. Its file is created privately by the parent
-// launcher, so proxy credentials and trusted environment values never become
+// launcher, so trusted environment values never become
 // bwrap --setenv command-line arguments visible through /proc/*/cmdline.
 fn run_workload_payload(path: &Path) -> io::Result<i32> {
     use std::io::Read;
@@ -640,41 +602,11 @@ fn run_workload_payload(path: &Path) -> io::Result<i32> {
     if bytes.len() > 4 * 1024 * 1024 {
         return Err(invalid("sandbox workload payload is too large"));
     }
-    let mut payload: WorkloadPayload = serde_json::from_slice(&bytes).map_err(invalid)?;
+    let payload: WorkloadPayload = serde_json::from_slice(&bytes).map_err(invalid)?;
     let (program, args) = payload
         .argv
         .split_first()
         .ok_or_else(|| invalid("empty sandbox workload argv"))?;
-    if let Some(credentials) = payload.proxy_credentials {
-        // Bubblewrap rewrites a host-loopback proxy to its private namespace
-        // gateway. Preserve that endpoint and restore only the private auth.
-        let endpoint = std::env::var("HTTP_PROXY")
-            .or_else(|_| std::env::var("http_proxy"))
-            .map_err(|_| invalid("MXC did not provide its sandbox-visible proxy endpoint"))?;
-        let mut url = url::Url::parse(&endpoint).map_err(invalid)?;
-        url.set_username(&credentials.username)
-            .map_err(|_| invalid("invalid sandbox proxy username"))?;
-        url.set_password(credentials.password.as_deref())
-            .map_err(|_| invalid("invalid sandbox proxy password"))?;
-        for key in [
-            "HTTP_PROXY",
-            "HTTPS_PROXY",
-            "ALL_PROXY",
-            "FTP_PROXY",
-            "http_proxy",
-            "https_proxy",
-            "all_proxy",
-            "ftp_proxy",
-        ] {
-            payload.environment.insert(key.to_owned(), url.to_string());
-        }
-        payload
-            .environment
-            .insert("NO_PROXY".to_owned(), String::new());
-        payload
-            .environment
-            .insert("no_proxy".to_owned(), String::new());
-    }
     let mut command = std::process::Command::new(program);
     command
         .args(args)
@@ -707,27 +639,10 @@ fn run_launcher(mut payload: LauncherRequest) -> io::Result<i32> {
             Ok((name.clone(), value))
         })
         .collect::<io::Result<HashMap<_, _>>>()?;
-    #[cfg(windows)]
-    if matches!(
-        payload.policy.network,
-        SandboxNetwork::Proxy { .. } | SandboxNetwork::HttpProxy { .. }
-    ) {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows sandbox proxy requires an identity-bound AppContainer proxy; unrestricted host-loopback fallback is disabled",
-        ));
-    }
     let scratch = tempfile::Builder::new()
         .prefix("agena-sandbox-")
         .tempdir_in(&payload.temporary_root)?;
-    let broker = match &payload.policy.network {
-        SandboxNetwork::HttpProxy { targets } => {
-            Some(crate::sandbox_proxy::ProxyBroker::start(targets)?)
-        }
-        _ => None,
-    };
-    let proxy = broker.as_ref().map(|broker| broker.url());
-    let request = mxc_request(&payload, scratch.path(), proxy)?;
+    let request = mxc_request(&payload, scratch.path())?;
     let mut options = SpawnExtendedOptions::default();
     options.stdio = SpawnStdio::Inherit;
     install_termination_handlers()?;
@@ -766,13 +681,12 @@ fn run_launcher(mut payload: LauncherRequest) -> io::Result<i32> {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    // MXC's drop path tears down remaining descendants before the proxy and
-    // private filesystem disappear, including descendants retaining stdio.
+    // MXC tears down remaining descendants before private files disappear,
+    // including descendants retaining stdio.
     for warning in process.warnings() {
         eprintln!("Agena sandbox: {warning}");
     }
     drop(process);
-    drop(broker);
     drop(scratch);
     result
 }
@@ -785,11 +699,7 @@ fn wait_exit_code(outcome: WaitResult) -> i32 {
     }
 }
 
-fn mxc_request(
-    payload: &LauncherRequest,
-    scratch: &Path,
-    proxy: Option<&str>,
-) -> io::Result<ContainerRequest> {
+fn mxc_request(payload: &LauncherRequest, scratch: &Path) -> io::Result<ContainerRequest> {
     let mut readonly_paths = payload.policy.readonly_paths.clone();
     readonly_paths.extend(payload.policy.runtime_paths.iter().cloned());
     readonly_paths.extend(runtime_paths(
@@ -821,38 +731,10 @@ fn mxc_request(
     // The bootstrap restores those from a mode-0600 file after isolation.
     let mut bootstrap_environment = sanitize_environment(&environment);
     private_environment(&mut bootstrap_environment, scratch)?;
-    let proxy_url = proxy.or_else(|| match &payload.policy.network {
-        SandboxNetwork::Proxy { url } => Some(url.as_str()),
-        _ => None,
-    });
-    let proxy_credentials = proxy_url
-        .map(|value| {
-            let url = url::Url::parse(value).map_err(invalid)?;
-            Ok::<_, io::Error>(ProxyCredentials {
-                username: url.username().to_owned(),
-                password: url.password().map(str::to_owned),
-            })
-        })
-        .transpose()?;
-    for key in [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "FTP_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-        "ftp_proxy",
-        "NO_PROXY",
-        "no_proxy",
-    ] {
-        environment.remove(key);
-    }
     let workload = WorkloadPayload {
         argv: payload.argv.clone(),
         cwd: payload.cwd.clone(),
         environment,
-        proxy_credentials,
     };
     let payload_path = scratch.join("workload.json");
     let mut options = std::fs::OpenOptions::new();
@@ -877,7 +759,7 @@ fn mxc_request(
         denied_paths: path_strings(payload.policy.denied_paths.clone())?,
         clear_policy_on_exit: Some(true),
     });
-    request.network = Some(network_policy(&payload.policy.network, proxy)?);
+    request.network = Some(network_policy(&payload.policy.network)?);
     request.ui = Some(UiPolicy::default());
     request.working_directory =
         Some(utf8(payload.cwd.as_os_str(), "working directory")?.to_owned());
@@ -1055,34 +937,7 @@ fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io
             )));
         }
     }
-    match &policy.network {
-        SandboxNetwork::Direct { allow } => {
-            for endpoint in allow {
-                endpoint_rule(endpoint)?;
-            }
-        }
-        SandboxNetwork::Proxy { url } => {
-            validate_proxy_url(url)?;
-            let parsed = url::Url::parse(url).map_err(invalid)?;
-            if !parsed.username().is_empty() || parsed.password().is_some() {
-                return Err(invalid(
-                    "external proxy URLs must not include credentials; use Agena's authenticated HttpProxy broker",
-                ));
-            }
-        }
-        SandboxNetwork::HttpProxy { targets } => {
-            if targets.is_empty()
-                || targets.iter().any(|target| {
-                    target.host.is_empty() || target.addresses.is_empty() || target.port == Some(0)
-                })
-            {
-                return Err(invalid(
-                    "sandbox HTTP proxy requires nonempty hosts and approved fixed IP addresses",
-                ));
-            }
-        }
-        SandboxNetwork::Disabled => {}
-    }
+    network_policy(&policy.network)?;
     Ok(())
 }
 
@@ -1196,123 +1051,85 @@ fn path_strings(paths: Vec<PathBuf>) -> io::Result<Vec<String>> {
     Ok(paths)
 }
 
-fn network_policy(network: &SandboxNetwork, broker_url: Option<&str>) -> io::Result<NetworkPolicy> {
-    let mut policy = NetworkPolicy {
+/// Validate native network semantics before persistence or launch.
+///
+/// Host-specific Windows capabilities are checked by MXC when provisioning.
+pub fn validate_network_config_for_platform(
+    config: &NetworkPermissionConfig,
+    platform: &str,
+) -> io::Result<()> {
+    config.validate_for_platform(platform).map_err(invalid)
+}
+
+fn network_policy(network: &SandboxNetwork) -> io::Result<NetworkPolicy> {
+    let offline = NetworkPermissionConfig::offline();
+    let config = match network {
+        SandboxNetwork::Disabled => &offline,
+        SandboxNetwork::Native { policy } => policy,
+    };
+    validate_network_config_for_platform(config, std::env::consts::OS)?;
+    let egress = config.egress.as_ref();
+    let ingress = config.ingress.as_ref();
+    Ok(NetworkPolicy {
         egress: Some(NetworkEgressPolicy {
-            default: Some(NetworkAction::Deny),
-            ..Default::default()
+            default: Some(network_action(egress.and_then(|egress| egress.default))),
+            allow: egress.and_then(|egress| {
+                egress
+                    .allow
+                    .as_ref()
+                    .map(|rules| rules.iter().map(network_rule).collect())
+            }),
+            deny: egress.and_then(|egress| {
+                egress
+                    .deny
+                    .as_ref()
+                    .map(|rules| rules.iter().map(network_rule).collect())
+            }),
         }),
         ingress: Some(NetworkIngressPolicy {
-            default: Some(NetworkAction::Deny),
-            host_loopback: Some(NetworkAction::Deny),
+            default: Some(network_action(ingress.and_then(|ingress| ingress.default))),
+            host_loopback: Some(network_action(
+                ingress.and_then(|ingress| ingress.host_loopback),
+            )),
         }),
         runtime_config: None,
-    };
-    match network {
-        SandboxNetwork::Disabled => {}
-        SandboxNetwork::Proxy { url } => {
-            validate_proxy_url(url)?;
-            policy.runtime_config = Some(NetworkRuntimeConfig {
-                network_proxy: Some(proxy_endpoint(url)?),
-            });
-        }
-        SandboxNetwork::HttpProxy { .. } => {
-            let url = broker_url.ok_or_else(|| invalid("sandbox proxy was not started"))?;
-            validate_proxy_url(url)?;
-            policy.runtime_config = Some(NetworkRuntimeConfig {
-                network_proxy: Some(proxy_endpoint(url)?),
-            });
-        }
-        SandboxNetwork::Direct { allow } => {
-            let rules = allow
-                .iter()
-                .map(endpoint_rule)
-                .collect::<io::Result<Vec<_>>>()?;
-            policy.egress.as_mut().expect("egress was set").allow = Some(rules);
-            if allow.iter().any(|endpoint| {
-                parse_cidr(&endpoint.cidr).is_ok_and(|cidr| {
-                    cidr.contains(&IpAddr::from([127, 0, 0, 1]))
-                        || cidr.contains(&IpAddr::V6(std::net::Ipv6Addr::LOCALHOST))
-                })
-            }) {
-                policy
-                    .ingress
-                    .as_mut()
-                    .expect("ingress was set")
-                    .host_loopback = Some(NetworkAction::Allow);
-            }
-        }
-    }
-    Ok(policy)
-}
-
-fn proxy_endpoint(value: &str) -> io::Result<String> {
-    let mut url = url::Url::parse(value).map_err(invalid)?;
-    url.set_username("")
-        .map_err(|_| invalid("invalid proxy URL"))?;
-    url.set_password(None)
-        .map_err(|_| invalid("invalid proxy URL"))?;
-    Ok(url.to_string())
-}
-
-fn validate_proxy_url(value: &str) -> io::Result<()> {
-    let url = url::Url::parse(value).map_err(invalid)?;
-    let local = match url.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    };
-    if !local
-        || !matches!(url.scheme(), "http" | "https")
-        || url.port_or_known_default().is_none_or(|port| port == 0)
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid("sandbox proxy must be an HTTP/S loopback origin"));
-    }
-    Ok(())
-}
-
-fn parse_cidr(value: &str) -> io::Result<ipnet::IpNet> {
-    if let Ok(ip) = value.parse::<IpAddr>() {
-        Ok(ipnet::IpNet::from(ip))
-    } else {
-        value.parse::<ipnet::IpNet>().map_err(|_| invalid("direct sandbox networking requires a literal IP or CIDR; use the HTTP proxy for hostnames"))
-    }
-}
-
-fn endpoint_rule(endpoint: &NetworkEndpoint) -> io::Result<NetworkRulePolicy> {
-    let cidr = parse_cidr(&endpoint.cidr)?;
-    if endpoint.port == Some(0)
-        || endpoint
-            .end_port
-            .is_some_and(|end| endpoint.port.is_none_or(|start| end < start))
-        || (matches!(
-            endpoint.protocol,
-            NetworkProtocol::Any | NetworkProtocol::Icmp
-        ) && endpoint.port.is_some())
-    {
-        return Err(invalid("invalid sandbox protocol/port range"));
-    }
-    let protocol = match endpoint.protocol {
-        NetworkProtocol::Tcp => mxc_sdk::v1::NetworkProtocol::Tcp,
-        NetworkProtocol::Udp => mxc_sdk::v1::NetworkProtocol::Udp,
-        NetworkProtocol::Icmp => mxc_sdk::v1::NetworkProtocol::Icmp,
-        NetworkProtocol::Any => mxc_sdk::v1::NetworkProtocol::Any,
-    };
-    Ok(NetworkRulePolicy {
-        to: Some(vec![NetworkPeerPolicy {
-            cidr: cidr.to_string(),
-            except: None,
-        }]),
-        ports: Some(vec![NetworkPortPolicy {
-            protocol: Some(protocol),
-            port: endpoint.port,
-            end_port: endpoint.end_port,
-        }]),
     })
+}
+
+fn network_action(action: Option<ConfigNetworkAction>) -> NetworkAction {
+    match action.unwrap_or(ConfigNetworkAction::Deny) {
+        ConfigNetworkAction::Allow => NetworkAction::Allow,
+        ConfigNetworkAction::Deny => NetworkAction::Deny,
+    }
+}
+
+fn network_rule(rule: &NetworkRuleConfig) -> NetworkRulePolicy {
+    NetworkRulePolicy {
+        to: rule.to.as_ref().map(|peers| {
+            peers
+                .iter()
+                .map(|peer| NetworkPeerPolicy {
+                    cidr: peer.cidr.clone(),
+                    except: (!peer.except.is_empty()).then(|| peer.except.clone()),
+                })
+                .collect()
+        }),
+        ports: rule.ports.as_ref().map(|ports| {
+            ports
+                .iter()
+                .map(|port| NetworkPortPolicy {
+                    protocol: port.protocol.map(|protocol| match protocol {
+                        ConfigNetworkProtocol::Tcp => mxc_sdk::v1::NetworkProtocol::Tcp,
+                        ConfigNetworkProtocol::Udp => mxc_sdk::v1::NetworkProtocol::Udp,
+                        ConfigNetworkProtocol::Icmp => mxc_sdk::v1::NetworkProtocol::Icmp,
+                        ConfigNetworkProtocol::Any => mxc_sdk::v1::NetworkProtocol::Any,
+                    }),
+                    port: port.port,
+                    end_port: port.end_port,
+                })
+                .collect()
+        }),
+    }
 }
 
 fn private_environment(
@@ -1962,18 +1779,102 @@ mod tests {
     }
 
     #[test]
-    fn direct_network_rejects_domains_and_invalid_port_ranges() {
-        let mut endpoint = NetworkEndpoint {
-            cidr: "example.com".into(),
-            protocol: NetworkProtocol::Tcp,
-            port: Some(443),
-            end_port: None,
-        };
-        assert!(endpoint_rule(&endpoint).is_err());
-        endpoint.cidr = "192.0.2.1".into();
-        assert!(endpoint_rule(&endpoint).is_ok());
-        endpoint.end_port = Some(80);
-        assert!(endpoint_rule(&endpoint).is_err());
+    fn native_network_rejects_domains_and_invalid_port_ranges() {
+        for value in [
+            serde_json::json!({"egress":{"allow":[{"to":[{"cidr":"example.com"}]}]}}),
+            serde_json::json!({"egress":{"allow":[{"to":[{"cidr":"192.0.2.1/32"}],"ports":[{"protocol":"tcp","port":443,"endPort":80}]}]}}),
+            serde_json::json!({"egress":{"allow":[{"to":[{"cidr":"192.0.2.0/24","except":["198.51.100.0/24"]}]}]}}),
+        ] {
+            let config = serde_json::from_value(value).unwrap();
+            assert!(validate_network_config_for_platform(&config, "linux").is_err());
+        }
+    }
+
+    #[test]
+    fn native_network_enforces_backend_capabilities_before_launch() {
+        let selective = serde_json::from_value(serde_json::json!({
+            "egress": {"default": "deny", "allow": [{"to": [{"cidr": "192.0.2.1/32"}]}]}
+        }))
+        .unwrap();
+        assert!(validate_network_config_for_platform(&selective, "linux").is_ok());
+        assert!(validate_network_config_for_platform(&selective, "windows").is_ok());
+        assert!(validate_network_config_for_platform(&selective, "macos").is_err());
+        let loopback = serde_json::from_value(serde_json::json!({
+            "ingress": {"default": "deny", "hostLoopback": "allow"}
+        }))
+        .unwrap();
+        assert!(validate_network_config_for_platform(&loopback, "linux").is_err());
+        assert!(validate_network_config_for_platform(&loopback, "macos").is_err());
+        assert!(validate_network_config_for_platform(&loopback, "windows").is_ok());
+        assert!(
+            validate_network_config_for_platform(&NetworkPermissionConfig::offline(), "macos")
+                .is_ok()
+        );
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
+    #[test]
+    fn native_network_preserves_cidr_exceptions_protocols_ranges_and_denies() {
+        let config = serde_json::from_value(serde_json::json!({
+            "egress": {
+                "default": "allow",
+                "allow": [{
+                    "to": [
+                        {"cidr": "10.20.0.0/16", "except": ["10.20.10.0/24"]},
+                        {"cidr": "fd20:20::/48", "except": ["fd20:20:0:10::/64"]}
+                    ],
+                    "ports": [
+                        {"protocol": "tcp", "port": 8000, "endPort": 8099},
+                        {"protocol": "udp", "port": 53},
+                        {"protocol": "icmp"}
+                    ]
+                }],
+                "deny": [{"to": [{"cidr": "10.20.66.0/24"}]}]
+            },
+            "ingress": {"default": "deny", "hostLoopback": "deny"}
+        }))
+        .unwrap();
+        let policy = network_policy(&SandboxNetwork::Native { policy: config }).unwrap();
+        assert!(policy.runtime_config.is_none());
+        let egress = policy.egress.unwrap();
+        assert!(matches!(egress.default, Some(NetworkAction::Allow)));
+        let allow = egress.allow.unwrap();
+        let peers = allow[0].to.as_ref().unwrap();
+        assert_eq!(peers[0].except.as_ref().unwrap(), &["10.20.10.0/24"]);
+        assert_eq!(peers[1].cidr, "fd20:20::/48");
+        let ports = allow[0].ports.as_ref().unwrap();
+        assert_eq!(ports[0].end_port, Some(8099));
+        assert!(matches!(
+            ports[1].protocol,
+            Some(mxc_sdk::v1::NetworkProtocol::Udp)
+        ));
+        assert!(matches!(
+            ports[2].protocol,
+            Some(mxc_sdk::v1::NetworkProtocol::Icmp)
+        ));
+        let deny = egress.deny.unwrap();
+        assert!(deny[0].ports.is_none());
+        assert_eq!(deny[0].to.as_ref().unwrap()[0].cidr, "10.20.66.0/24");
+        assert!(matches!(
+            policy.ingress.unwrap().host_loopback,
+            Some(NetworkAction::Deny)
+        ));
+    }
+
+    #[test]
+    fn native_network_defaults_to_deny_without_runtime_transport() {
+        let policy = network_policy(&SandboxNetwork::Native {
+            policy: NetworkPermissionConfig::default(),
+        })
+        .unwrap();
+        assert!(matches!(
+            policy.egress.unwrap().default,
+            Some(NetworkAction::Deny)
+        ));
+        let ingress = policy.ingress.unwrap();
+        assert!(matches!(ingress.default, Some(NetworkAction::Deny)));
+        assert!(matches!(ingress.host_loopback, Some(NetworkAction::Deny)));
+        assert!(policy.runtime_config.is_none());
     }
 
     #[test]
@@ -2086,14 +1987,6 @@ mod tests {
     }
 
     #[test]
-    fn proxy_url_must_be_a_loopback_origin() {
-        assert!(validate_proxy_url("http://user:token@127.0.0.1:1234").is_ok());
-        assert!(validate_proxy_url("http://example.com:1234").is_err());
-        assert!(validate_proxy_url("http://127.0.0.1:0").is_err());
-        assert!(validate_proxy_url("http://127.0.0.1:1234/path").is_err());
-    }
-
-    #[test]
     fn credentials_cross_the_mxc_boundary_only_in_a_private_payload_file() {
         let directory = tempfile::tempdir().unwrap();
         let environment = HashMap::from([
@@ -2111,38 +2004,17 @@ mod tests {
             environment,
             policy: SandboxPolicy {
                 private_build_cache: true,
-                network: SandboxNetwork::HttpProxy {
-                    targets: vec![ProxyTarget {
-                        host: "example.com".into(),
-                        port: Some(443),
-                        addresses: vec![IpAddr::from([192, 0, 2, 1])],
-                    }],
-                },
                 ..Default::default()
             },
         };
         let transported = serde_json::to_string(&payload).unwrap();
         assert!(!transported.contains("trusted-override-secret"));
-        let request = mxc_request(
-            &payload,
-            directory.path(),
-            Some("http://agena:broker-secret@127.0.0.1:1234"),
-        )
-        .unwrap();
-        assert!(!request.command.contains("broker-secret"));
+        let request = mxc_request(&payload, directory.path()).unwrap();
         assert!(!request.command.contains("trusted-override-secret"));
         for (_, value) in request.environment.unwrap() {
-            assert!(!value.contains("broker-secret"));
             assert!(!value.contains("trusted-override-secret"));
         }
-        let endpoint = request
-            .network
-            .unwrap()
-            .runtime_config
-            .unwrap()
-            .network_proxy
-            .unwrap();
-        assert_eq!(endpoint, "http://127.0.0.1:1234/");
+        assert!(request.network.unwrap().runtime_config.is_none());
         let file = directory.path().join("workload.json");
         let workload: WorkloadPayload =
             serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -2153,10 +2025,6 @@ mod tests {
         assert_eq!(
             Path::new(&workload.environment["CARGO_TARGET_DIR"]),
             directory.path().join("cache/cargo-target")
-        );
-        assert_eq!(
-            workload.proxy_credentials.unwrap().password.as_deref(),
-            Some("broker-secret")
         );
         #[cfg(unix)]
         {

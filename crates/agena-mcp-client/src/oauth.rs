@@ -15,7 +15,7 @@ use url::Url;
 
 use crate::oauth_http::{AuthorizedOAuthHttpClient, OAuthAuthorizationSlot};
 use crate::{
-    FileOAuthCredentialStore, McpError, McpOAuthNetworkAuthorizer, McpResult, credential_store_name,
+    FileOAuthCredentialStore, McpError, McpHttpNetworkAuthorizer, McpResult, credential_store_name,
 };
 
 const FLOW_LIFETIME: Duration = Duration::from_secs(600);
@@ -220,7 +220,7 @@ impl McpOAuthSessionManager {
         redirect_uri: &str,
         binding_revision: String,
         registration: McpOAuthRegistration,
-        authorizer: Arc<dyn McpOAuthNetworkAuthorizer>,
+        authorizer: Arc<dyn McpHttpNetworkAuthorizer>,
     ) -> McpResult<McpOAuthStart> {
         self.begin_internal(
             server,
@@ -242,7 +242,7 @@ impl McpOAuthSessionManager {
         redirect_uri: &str,
         binding_revision: String,
         registration: McpOAuthRegistration,
-        authorizer: Option<Arc<dyn McpOAuthNetworkAuthorizer>>,
+        authorizer: Option<Arc<dyn McpHttpNetworkAuthorizer>>,
     ) -> McpResult<McpOAuthStart> {
         if self.shutdown.is_cancelled() {
             return Err(McpError::Shutdown);
@@ -364,7 +364,7 @@ impl McpOAuthSessionManager {
         flow_id: &str,
         callback_url: &str,
         expected_binding_revision: &str,
-        authorizer: Arc<dyn McpOAuthNetworkAuthorizer>,
+        authorizer: Arc<dyn McpHttpNetworkAuthorizer>,
     ) -> McpResult<()> {
         self.complete_internal(
             flow_id,
@@ -380,7 +380,7 @@ impl McpOAuthSessionManager {
         flow_id: &str,
         callback_url: &str,
         expected_binding_revision: &str,
-        authorizer: Option<Arc<dyn McpOAuthNetworkAuthorizer>>,
+        authorizer: Option<Arc<dyn McpHttpNetworkAuthorizer>>,
     ) -> McpResult<()> {
         self.expire().await;
         let server = self

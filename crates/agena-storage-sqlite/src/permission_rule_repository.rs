@@ -124,6 +124,7 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         rule_id: i64,
         rule: &PersistedPermissionRule,
     ) -> Result<Option<PermissionRuleRecord>, PermissionRuleRepositoryError> {
+        validate_network_rule(&rule.action_key, rule.mode)?;
         let _permit = crate::acquire_write_permit(&self.db)
             .await
             .map_err(map_error)?;
@@ -205,29 +206,45 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         if rule_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let _permit = crate::acquire_write_permit(&self.db)
+        let (txn, _permit) = crate::transaction::begin_with_write_lock(&self.db)
             .await
             .map_err(map_error)?;
-        let placeholders = vec!["?"; rule_ids.len()].join(", ");
-        let (scope_clause, scope_values) = batch_scope_predicate(scope);
-        let mut values = vec![
-            mode_to_string(mode).into(),
-            Utc::now().timestamp_millis().into(),
-        ];
-        values.extend(rule_ids.iter().copied().map(Value::from));
-        values.extend(scope_values);
-        self.db
-            .query_all(statement(
-                format!(
-                    "UPDATE {TABLE} SET mode = ?, updated_at_ms = ? WHERE id IN ({placeholders}) AND {scope_clause} RETURNING {COLUMNS}"
-                ),
+        let result: Result<Vec<PermissionRuleRecord>, PermissionRuleRepositoryError> = async {
+            let placeholders = vec!["?"; rule_ids.len()].join(", ");
+            let (scope_clause, scope_values) = batch_scope_predicate(scope);
+            let mut selected_values = rule_ids.iter().copied().map(Value::from).collect::<Vec<_>>();
+            selected_values.extend(scope_values.iter().cloned());
+            let selected = txn.query_all(statement(
+                format!("SELECT action_key FROM {TABLE} WHERE id IN ({placeholders}) AND {scope_clause}"),
+                selected_values,
+            )).await.map_err(map_error)?;
+            for row in selected {
+                let action_key: String = row.try_get("", "action_key").map_err(map_error)?;
+                validate_network_rule(&action_key, mode)?;
+            }
+            let mut values = vec![
+                mode_to_string(mode).into(),
+                Utc::now().timestamp_millis().into(),
+            ];
+            values.extend(rule_ids.iter().copied().map(Value::from));
+            values.extend(scope_values);
+            txn.query_all(statement(
+                format!("UPDATE {TABLE} SET mode = ?, updated_at_ms = ? WHERE id IN ({placeholders}) AND {scope_clause} RETURNING {COLUMNS}"),
                 values,
-            ))
-            .await
-            .map_err(map_error)?
-            .into_iter()
-            .map(record_from_row)
-            .collect()
+            )).await.map_err(map_error)?.into_iter().map(record_from_row).collect()
+        }.await;
+        match result {
+            Ok(rows) => {
+                txn.commit().await.map_err(map_error)?;
+                Ok(rows)
+            }
+            Err(error) => {
+                if let Err(rollback_error) = txn.rollback().await {
+                    tracing::error!(%rollback_error, "permission rule batch rollback failed");
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn resolve(
@@ -319,6 +336,7 @@ async fn upsert_rule<C: ConnectionTrait>(
     db: &C,
     rule: &PersistedPermissionRule,
 ) -> Result<(PermissionRuleRecord, bool), PermissionRuleRepositoryError> {
+    validate_network_rule(&rule.action_key, rule.mode)?;
     let scope = scope_to_string(rule.scope);
     let now = Utc::now().timestamp_millis();
     let (insert_sql, update_sql, values) = match (rule.session_id, rule.workspace_id) {
@@ -569,6 +587,14 @@ fn scope_from_string(value: &str) -> Option<PermissionScope> {
         _ => None,
     }
 }
+fn validate_network_rule(
+    action_key: &str,
+    mode: PermissionMode,
+) -> Result<(), PermissionRuleRepositoryError> {
+    agena_domain::validate_persisted_network_rule_key(action_key, mode, std::env::consts::OS)
+        .map_err(PermissionRuleRepositoryError::InvalidInput)
+}
+
 fn map_error(error: impl std::error::Error + 'static) -> PermissionRuleRepositoryError {
     PermissionRuleRepositoryError::Backend(agena_failure::diagnostic::format_error_chain(&error))
 }

@@ -17,7 +17,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use super::{API_KEY, Vendor, allow_permissions, fixture};
+use super::{API_KEY, Vendor, allow_permissions, fixture, native_fixture_address};
 
 const MAX_EXCHANGES: usize = 128;
 
@@ -251,7 +251,8 @@ pub(super) fn scripted_routes(peer: &Peer, routes: Router) -> TestAgenaBuilder {
                 .trim_end_matches("/v1")
                 .to_owned();
             let server = case
-                .serve_http(
+                .serve_http_on(
+                    native_fixture_address()?,
                     Router::new()
                         .fallback(serve)
                         .with_state(Gateway {

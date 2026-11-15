@@ -6,12 +6,22 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn typed_permission_projection_preserves_wire_values_and_canonicalizes_aliases() {
+    fn typed_permission_projection_preserves_native_wire_values() {
         let wire = json!({
-            "path": {"workspace":{"read":"allow","write":"ask"},"rules":{"/tmp/**":{"write":"deny"}}},
-            "network":{"internet":"auto","private":"deny","loopback":"allow","rules":{"example.com":"ask"}},
-            "tools":{"default":"ask","names":{"shell.exec":"allow","agena.shell.exec":"deny"},
-                "rules":{"shell.exec":{"routine":"allow","dangerous":"deny"},"fixture.tool":"auto"}},
+            "path": {"workspace":"readonly","rules":{"/tmp":"deny"}},
+            "network":{
+                "egress":{
+                    "default":"deny",
+                    "allow":[{
+                        "to":[{"cidr":"192.0.2.0/24","except":["192.0.2.128/25"]}],
+                        "ports":[{"protocol":"tcp","port":8000,"endPort":8099}]
+                    }],
+                    "deny":[{"to":[{"cidr":"192.0.2.64/26"}]}]
+                },
+                "ingress":{"default":"deny","hostLoopback":"deny"}
+            },
+            "tools":{"default":"ask","names":{"agena.shell.exec":"deny"},
+                "rules":{"agena.shell.exec":{"routine":"allow","dangerous":"deny"},"fixture.tool":"auto"}},
             "approval_model":{"provider":"fixture","adapter":"adapter","model":"model","thinking_mode":"high","speed_mode":"fast","verbosity":"low"}
         });
         let resource: PermissionConfigResource = serde_json::from_value(wire.clone()).unwrap();
@@ -34,8 +44,8 @@ mod tests {
         let mut domain: agena_domain::PermissionConfig = serde_json::from_value(json!({
             "tools": {"default": "ask", "names": {"fixture.tool": "deny"},
                 "rules": {"fixture.tool": {"routine": "ask"}}},
-            "path": {"workspace": {"read": "allow"}},
-            "network": {"internet": "deny"},
+            "path": {"workspace": "readonly"},
+            "network": {"egress": {"default": "deny", "allow": [], "deny": []}},
             "approval_model": {"provider": "fixture", "model": "approval"}
         }))
         .unwrap();

@@ -15,9 +15,10 @@ from pathlib import Path
 import socket
 import subprocess
 import traceback
+from urllib.parse import urlsplit
 
 import http_experience as fixture
-from plugin_permissions import LocalServices, tool_parts
+from plugin_permissions import LocalServices, native_network, tool_parts
 
 
 DEFAULT_FAKE_IP_RANGES = ['198.18.0.0/15', 'fc00::/18', 'fdfe:dcba:9876::/64']
@@ -28,14 +29,17 @@ def main() -> None:
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--fake-ip-range', action='append', help='optional custom TUN pool; defaults to common IPv4/IPv6 pools')
-    parser.add_argument('--browser', action='store_true', help='also verify rendering with installed Chrome/Chromium')
-    parser.add_argument('--proxy', help='also verify real search/fetch with explicit and environment proxy settings')
+    parser.add_argument('--browser', action='store_true', help='also verify that unsupported MXC browser rendering is blocked')
+    parser.add_argument('--proxy', help='also verify explicit/environment proxy routes; remote-DNS routes must be denied')
     args = parser.parse_args()
     binary = args.binary.resolve(strict=True)
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
     fake_ip_ranges = args.fake_ip_range or DEFAULT_FAKE_IP_RANGES
     networks = [ipaddress.ip_network(value) for value in fake_ip_ranges]
+    proxy_scheme = urlsplit(args.proxy if args.proxy and '://' in args.proxy else
+                            f'http://{args.proxy}').scheme if args.proxy else None
+    remote_dns_proxy = proxy_scheme in ('http', 'https', 'socks4a', 'socks5h')
     dns = sorted({item[4][0] for item in socket.getaddrinfo('www.bing.com', 443, type=socket.SOCK_STREAM)})
     fixture.require(any(any(ipaddress.ip_address(value) in net for net in networks) for value in dns),
                     f'the current DNS does not use the supplied synthetic ranges: {dns}')
@@ -66,7 +70,8 @@ def main() -> None:
                 env = fixture.clean_environment(phase)
                 env['AGENA_DISABLE_PUBLIC_MODEL_CATALOG_SOURCES'] = '1'
                 if label == 'environment_proxy':
-                    env.update({'HTTP_PROXY': args.proxy, 'HTTPS_PROXY': args.proxy, 'ALL_PROXY': args.proxy})
+                    env.update({'HTTP_PROXY': args.proxy, 'HTTPS_PROXY': args.proxy, 'ALL_PROXY': args.proxy,
+                                'NO_PROXY': '127.0.0.1,localhost,::1'})
                 process = subprocess.Popen(
                     [str(binary), '--data-dir', str(phase / 'data'), 'server', '--host', '127.0.0.1',
                      '--port', str(port), '--workspace', str(workspace)],
@@ -77,11 +82,12 @@ def main() -> None:
                                {'path': str(workspace), 'create_if_missing': True})[0]['id']
 
                 def run(name: str, tool: str, inputs: dict, *, denied: bool = False,
-                        internet: str = 'allow', needs_results: bool = False) -> None:
+                        egress: str = 'allow', needs_results: bool = False,
+                        failure_text: str | None = None) -> None:
                     sid = fixture.create_session(api, wid, name)
                     api.call('PUT', f'/api/v1/sessions/{sid}/permission', {'permission': {
                         'tools': {'default': 'allow'},
-                        'network': {'internet': internet, 'private': 'allow', 'loopback': 'allow'},
+                        'network': native_network(egress),
                     }})
                     services.calls.put((tool, inputs))
                     fixture.submit(api, sid, name)
@@ -90,7 +96,11 @@ def main() -> None:
                     fixture.write_json(phase / f'{name}.json', {'state': api.state(sid), 'parts': parts})
                     fixture.require(len(parts) == 1, f'{name}: expected one tool call')
                     part = parts[0]
-                    if denied:
+                    if failure_text:
+                        fixture.require(part['state'] == 'failed' and
+                                        failure_text in json.dumps(part['content'].get('error', {})),
+                                        f'{name}: expected unsupported capability: {part}')
+                    elif denied:
                         failure = part['content'].get('error', {}).get('failure', {})
                         fixture.require(part['state'] == 'failed' and failure.get('category') == 'permission_denied',
                                         f'{name}: expected typed policy denial: {part}')
@@ -106,13 +116,21 @@ def main() -> None:
                     result['cases'].append({'phase': label, 'name': name, 'passed': True, 'summary': part.get('summary', ''),
                                             'presentation': part.get('presentation')})
 
-                run('real_multi_engine_search', 'web.search',
-                    {'query': '英雄联盟 赛事 赛程 2026 LPL LCK 世界赛', 'max_results': 15}, needs_results=True)
-                run('real_public_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': False})
-                if args.browser and label == 'default':
-                    run('real_browser_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': True})
-                run('internet_deny_preserved', 'web.search', {'query': 'must be denied', 'engine': 'bing'},
-                    denied=True, internet='deny')
+                if remote_dns_proxy and label in ('proxy', 'environment_proxy'):
+                    run('remote_dns_proxy_search_denied', 'web.search',
+                        {'query': 'must reject unpinned proxy DNS', 'engine': 'bing'}, denied=True)
+                    run('remote_dns_proxy_fetch_denied', 'web.fetch',
+                        {'url': 'https://example.com/', 'render_js': False}, denied=True)
+                else:
+                    run('real_multi_engine_search', 'web.search',
+                        {'query': '英雄联盟 赛事 赛程 2026 LPL LCK 世界赛', 'max_results': 15}, needs_results=True)
+                    run('real_public_fetch', 'web.fetch', {'url': 'https://example.com/', 'render_js': False})
+                    if args.browser and label == 'default':
+                        run('native_browser_rendering_unavailable', 'web.fetch',
+                            {'url': 'https://example.com/', 'render_js': True},
+                            failure_text='rendered browser isolation is not supported')
+                run('native_egress_deny_preserved', 'web.search', {'query': 'must be denied', 'engine': 'bing'},
+                    denied=True, egress='deny')
                 for name, url in [('literal_fake_v4_denied', 'http://198.18.0.52/'),
                                   ('literal_fake_v6_denied', 'http://[fdfe:dcba:9876::59]/'),
                                   ('real_loopback_denied', services.url + '/page/private')]:

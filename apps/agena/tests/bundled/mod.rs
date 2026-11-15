@@ -30,6 +30,36 @@ fn fixture() -> TestAgenaBuilder {
         })
 }
 
+fn native_fixture_address() -> anyhow::Result<std::net::IpAddr> {
+    // Selecting a UDP route does not send a packet. Fixtures only bind and
+    // connect to the resulting local interface, never to this documentation IP.
+    let route = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))?;
+    route.connect((std::net::Ipv4Addr::new(192, 0, 2, 1), 9))?;
+    let address = route.local_addr()?.ip();
+    ensure!(
+        !address.is_loopback() && !address.is_unspecified(),
+        "native network fixtures require a local non-loopback interface"
+    );
+    Ok(address)
+}
+
+fn native_fixture_network() -> anyhow::Result<Value> {
+    let egress = if cfg!(target_os = "macos") {
+        json!({"default":"allow","allow":[],"deny":[]})
+    } else {
+        let address = native_fixture_address()?;
+        json!({
+            "default":"deny",
+            "allow":[{"to":[{"cidr":format!("{address}/32")}]}],
+            "deny":[]
+        })
+    };
+    Ok(json!({
+        "egress":egress,
+        "ingress":{"default":"deny","hostLoopback":"deny"}
+    }))
+}
+
 /// Explicit policy for these local, case-owned behavioral fixtures. It is not
 /// hidden inside call_tool: permission-specific tests select their own policy.
 async fn allow_permissions(user: &UserSession) -> TestResult {
@@ -47,10 +77,10 @@ async fn allow_permissions(user: &UserSession) -> TestResult {
             user.id(),
             serde_json::from_value(json!({
                 "path": {
-                    "workspace": {"read": "allow", "write": "allow"},
-                    "external": {"read": "allow", "write": "allow"}
+                    "workspace": "readwrite",
+                    "external": "readwrite"
                 },
-                "network": {"loopback": "allow", "private": "deny", "internet": "deny"},
+                "network": native_fixture_network()?,
                 "tools": {"default": "allow", "names": Value::Object(names)}
             }))?,
         )

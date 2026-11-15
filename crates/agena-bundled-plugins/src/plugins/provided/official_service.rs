@@ -5,7 +5,10 @@
 //! retain continuation state, and persist binary-redacted response receipts.
 
 pub(crate) mod hosted;
+mod network;
 mod outcome;
+
+pub(crate) use network::{authorized_provider_addresses, authorized_provider_http_client};
 
 use std::{
     collections::{BTreeMap, HashSet},
@@ -128,6 +131,11 @@ pub(crate) async fn validate_provider_endpoint(
     host: &Arc<dyn HostClient>,
     url: &str,
 ) -> SdkResult<()> {
+    host.require_network_permission(provider_permission_url(url)?.to_string())
+        .await
+}
+
+fn provider_permission_url(url: &str) -> SdkResult<url::Url> {
     let mut parsed = url::Url::parse(url)
         .map_err(|error| PluginError::invalid_params(format!("invalid provider URL: {error}")))?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -142,7 +150,7 @@ pub(crate) async fn validate_provider_endpoint(
     }
     parsed.set_query(None);
     parsed.set_fragment(None);
-    host.require_network_permission(parsed.to_string()).await
+    Ok(parsed)
 }
 
 /// Read one provider image without allowing a request containing several
@@ -596,12 +604,18 @@ pub(crate) fn provider_headers(
 pub(crate) fn provider_http_client(
     connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
 ) -> SdkResult<reqwest::Client> {
+    provider_http_builder(connection)
+        .build()
+        .map_err(|error| PluginError::internal_error(&error))
+}
+
+fn provider_http_builder(
+    connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
+) -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(connection.timeout_secs.max(1)))
         .connect_timeout(Duration::from_secs(connection.connect_timeout_secs.max(1)))
-        .build()
-        .map_err(|error| PluginError::internal_error(&error))
 }
 
 pub(crate) async fn post_json(
@@ -613,7 +627,7 @@ pub(crate) async fn post_json(
     provider: &str,
     operation: &str,
 ) -> SdkResult<ProviderHttpResponse> {
-    validate_provider_endpoint(host, url).await?;
+    let client = authorized_provider_http_client(host, url, connection).await?;
     let bytes = JSON_WORKERS
         .run(move || serde_json::to_vec(&body))
         .await
@@ -623,7 +637,7 @@ pub(crate) async fn post_json(
         .map_err(|error| {
             PluginError::internal(format!("cannot serialize provider request: {error}"))
         })?;
-    let mut request = provider_http_client(connection)?
+    let mut request = client
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
         .body(bytes);

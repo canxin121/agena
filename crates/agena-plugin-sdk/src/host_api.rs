@@ -45,6 +45,13 @@ pub struct HostProcessResources {
     pub cwd: Option<String>,
     pub reads: Vec<String>,
     pub writes: Vec<String>,
+    /// Native MXC network scope: [] is offline; ["*"] alone requests the full
+    /// configured scope. host:port/tcp://host:port selects TCP, udp://host:port
+    /// selects UDP, and icmp://host selects ICMP. Bare host/IP keeps that target's
+    /// configured protocol/port subset. HTTP(S) URLs select TCP host/port.
+    /// Hostnames are resolved before startup; permissions constrain IPs rather
+    /// than domains. All targets and DNS dependencies remain subject to policy
+    /// and every permission ceiling.
     pub network: Vec<String>,
 }
 

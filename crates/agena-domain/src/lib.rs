@@ -53,6 +53,7 @@ mod model_metadata;
 mod model_request_override;
 mod model_selection;
 mod model_values;
+mod network_decision;
 mod network_permission;
 mod network_target;
 mod operation_error;
@@ -172,7 +173,13 @@ pub use model_metadata::{
 pub use model_request_override::ModelSpeedModeRequestOverride;
 pub use model_selection::{ApprovalModelSelection, ModelSelectionConfig};
 pub use model_values::{CapabilitySupport, ModelInputModality, ModelLifecycle};
-pub use network_permission::NetworkPermissionConfig;
+pub use network_decision::{
+    validate_persisted_network_decision, validate_persisted_network_rule_key,
+};
+pub use network_permission::{
+    NetworkAction, NetworkEgressConfig, NetworkIngressConfig, NetworkPeerConfig,
+    NetworkPermissionConfig, NetworkPortConfig, NetworkProtocol, NetworkRuleConfig,
+};
 pub use network_target::{NetworkTarget, NetworkTargetParseError};
 pub use operation_error::OperationError;
 pub use part_kind::PartKind;

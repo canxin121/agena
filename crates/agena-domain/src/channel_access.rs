@@ -138,7 +138,7 @@ pub struct ChannelGrant {
     pub private_memory: bool,
     pub source_workspace: bool,
     /// No network by default, including loopback/private targets. Explicit
-    /// destination rules still intersect the source session's permission cap.
+    /// Literal IP or IP:port grants intersect the source session's permission cap.
     pub network_hosts: BTreeSet<String>,
 }
 impl ChannelGrant {
@@ -224,9 +224,7 @@ impl ChannelGrant {
             }
         }
         for host in &self.network_hosts {
-            if !valid_channel_id(host) || host.contains(['*', '/', '@', '?', '#']) {
-                return Err("network grants require exact host or host:port identities".into());
-            }
+            network_grant_rule(host)?;
         }
         Ok(())
     }
@@ -593,6 +591,14 @@ fn permission_fence(
         rules.insert(path.clone(), modes.clone());
         rules.insert(format!("{path}/**"), modes);
     }
+    let mut network = NetworkPermissionConfig::offline();
+    // Invalid grants cannot broaden access even if a caller skipped validate().
+    network.egress.as_mut().expect("offline egress").allow = Some(
+        network_hosts
+            .iter()
+            .filter_map(|host| network_grant_rule(host).ok())
+            .collect(),
+    );
     crate::PermissionConfig {
         path: Some(PathPermissionConfig {
             workspace: Some(PathAccessModes {
@@ -605,17 +611,43 @@ fn permission_fence(
             }),
             rules,
         }),
-        network: Some(NetworkPermissionConfig {
-            internet: Some(deny),
-            private: Some(deny),
-            loopback: Some(deny),
-            rules: network_hosts
-                .iter()
-                .map(|host| (host.clone(), allow))
-                .collect(),
-        }),
+        network: Some(network),
         ..Default::default()
     }
+}
+
+fn network_grant_rule(value: &str) -> Result<crate::NetworkRuleConfig, String> {
+    use std::net::{IpAddr, SocketAddr};
+
+    let (address, port) = if let Ok(address) = value.parse::<IpAddr>() {
+        (address, None)
+    } else if let Ok(socket) = value.parse::<SocketAddr>() {
+        if socket.port() == 0 {
+            return Err("network grants require a port between 1 and 65535".into());
+        }
+        (socket.ip(), Some(socket.port()))
+    } else {
+        return Err("network grants require a literal IP or IP:port; native MXC cannot enforce hostname grants".into());
+    };
+    let address = match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address => address,
+    };
+    Ok(crate::NetworkRuleConfig {
+        to: Some(vec![crate::NetworkPeerConfig {
+            cidr: format!("{address}/{}", if address.is_ipv4() { 32 } else { 128 }),
+            except: Vec::new(),
+        }]),
+        ports: port.map(|port| {
+            vec![crate::NetworkPortConfig {
+                protocol: Some(crate::NetworkProtocol::Tcp),
+                port: Some(port),
+                end_port: None,
+            }]
+        }),
+    })
 }
 
 #[allow(dead_code)]
@@ -630,6 +662,47 @@ impl From<&ChannelAuthority> for SessionChannelScope {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_network_grants_are_literal_native_destinations() {
+        let grant = ChannelGrant {
+            network_hosts: BTreeSet::from(["192.0.2.7".to_owned(), "[2001:db8::7]:443".to_owned()]),
+            ..Default::default()
+        };
+        grant.validate().unwrap();
+        let fence = permission_fence(&BTreeSet::new(), &BTreeSet::new(), &grant.network_hosts);
+        let network = fence.network.unwrap();
+        network.validate().unwrap();
+        let rules = network.egress.unwrap().allow.unwrap();
+        assert_eq!(rules[0].to.as_ref().unwrap()[0].cidr, "192.0.2.7/32");
+        assert!(rules[0].ports.is_none());
+        assert_eq!(rules[1].to.as_ref().unwrap()[0].cidr, "2001:db8::7/128");
+        let port = &rules[1].ports.as_ref().unwrap()[0];
+        assert_eq!(port.protocol, Some(crate::NetworkProtocol::Tcp));
+        assert_eq!(port.port, Some(443));
+    }
+
+    #[test]
+    fn unsupported_channel_network_grants_are_rejected_and_never_authorize() {
+        for value in [
+            "example.com",
+            "example.com:443",
+            "https://192.0.2.7",
+            "192.0.2.7:0",
+        ] {
+            let grant = ChannelGrant {
+                network_hosts: BTreeSet::from([value.to_owned()]),
+                ..Default::default()
+            };
+            assert!(grant.validate().is_err(), "{value}");
+            let fence = permission_fence(&BTreeSet::new(), &BTreeSet::new(), &grant.network_hosts);
+            assert_eq!(
+                fence.network,
+                Some(crate::NetworkPermissionConfig::offline())
+            );
+        }
+    }
+
     fn policy() -> ChannelAccessPolicy {
         ChannelAccessPolicy {
             administrator_actors: Default::default(),

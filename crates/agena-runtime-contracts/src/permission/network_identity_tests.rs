@@ -1,13 +1,17 @@
 use super::*;
+use serde_json::json;
 
 fn denied(decision: PermissionDecision) -> bool {
     matches!(decision, PermissionDecision::Deny { .. })
 }
 
+fn native_policy(value: serde_json::Value) -> NetworkPermissionPolicy {
+    NetworkPermissionPolicy::from_config(&serde_json::from_value(value).unwrap()).unwrap()
+}
+
 #[test]
-fn ipv6_urls_and_mapped_loopback_targets_cannot_skip_the_loopback_default() {
-    let mut policy = NetworkPermissionPolicy::allow_all();
-    policy.loopback_default = PermissionMode::Deny;
+fn ipv6_urls_and_mapped_loopback_targets_cannot_skip_native_host_loopback_denial() {
+    let policy = NetworkPermissionPolicy::allow_all();
     for target in [
         "http://[::1]/",
         "[::1]:80",
@@ -23,54 +27,63 @@ fn ipv6_urls_and_mapped_loopback_targets_cannot_skip_the_loopback_default() {
 }
 
 #[test]
-fn exact_and_cidr_mapped_rules_match_the_same_ipv4_destinations() {
-    for rule in ["127.0.0.1:443", "[::ffff:127.0.0.1]:443"] {
-        let mut policy = NetworkPermissionPolicy::allow_all();
-        policy.add_rule(rule, PermissionMode::Deny).unwrap();
-        for target in [
-            "127.0.0.1:443",
-            "[::ffff:7f00:1]:443",
-            "https://[::ffff:127.0.0.1]/",
-        ] {
-            assert!(
-                denied(policy.check_connect(&target.parse().unwrap())),
-                "{rule} / {target}"
-            );
+fn ipv4_cidr_denials_cover_mapped_ipv6_target_spellings() {
+    let policy = native_policy(json!({
+        "egress": {
+            "default":"allow",
+            "deny":[{
+                "to":[{"cidr":"192.0.2.0/24"}],
+                "ports":[{"protocol":"tcp","port":443}]
+            }]
         }
-    }
-    let mut policy = NetworkPermissionPolicy::allow_all();
-    policy
-        .add_rule("[::ffff:127.0.0.0/104]:443", PermissionMode::Deny)
-        .unwrap();
-    for target in ["127.32.1.9:443", "[::ffff:127.32.1.9]:443"] {
+    }));
+    for target in [
+        "192.0.2.7:443",
+        "[::ffff:192.0.2.7]:443",
+        "https://[::ffff:c000:207]/",
+    ] {
         assert!(
             denied(policy.check_connect(&target.parse().unwrap())),
             "{target}"
         );
     }
-    for target in ["128.32.1.9:443", "127.32.1.9:80"] {
+    for target in ["192.0.3.7:443", "192.0.2.7:80"] {
         assert!(matches!(
             policy.check_connect(&target.parse().unwrap()),
             PermissionDecision::Allow
         ));
     }
-    for rule in ["::ffff:127.0.0.1/95", "[::ffff:127.0.0.0/64]:443"] {
+}
+
+#[test]
+fn mapped_ipv6_cidr_denials_have_the_same_ipv4_native_meaning() {
+    let policy = native_policy(json!({
+        "egress":{"default":"allow","deny":[{
+            "to":[{"cidr":"::ffff:192.0.2.0/120","except":["::ffff:192.0.2.128/121"]}]
+        }]}
+    }));
+    for target in ["192.0.2.7:443", "[::ffff:192.0.2.7]:443"] {
         assert!(
-            policy.add_rule(rule, PermissionMode::Allow).is_err(),
-            "{rule}"
+            denied(policy.check_connect(&target.parse().unwrap())),
+            "{target}"
         );
     }
+    assert!(matches!(
+        policy.check_connect(&"192.0.2.200:443".parse().unwrap()),
+        PermissionDecision::Allow
+    ));
 }
 
 #[test]
 fn ordinary_ipv6_cidrs_keep_their_native_address_family() {
-    let mut policy = NetworkPermissionPolicy::new(PermissionMode::Deny);
-    policy.add_rule("::/0", PermissionMode::Allow).unwrap();
+    let policy = native_policy(json!({
+        "egress":{"default":"deny","allow":[{"to":[{"cidr":"2001:db8::/32"}]}]}
+    }));
     assert!(matches!(
         policy.check_connect(&"[2001:db8::1]:443".parse().unwrap()),
         PermissionDecision::Allow
     ));
-    for target in ["8.8.8.8:443", "[::ffff:8.8.8.8]:443"] {
+    for target in ["192.0.2.7:443", "[::ffff:192.0.2.7]:443"] {
         assert!(
             denied(policy.check_connect(&target.parse().unwrap())),
             "{target}"
@@ -79,21 +92,20 @@ fn ordinary_ipv6_cidrs_keep_their_native_address_family() {
 }
 
 #[test]
-fn resolved_dns_address_checks_keep_mapped_ip_fences() {
-    let mut network = NetworkPermissionPolicy::allow_all();
-    network
-        .add_rule("[::ffff:127.0.0.0/104]:443", PermissionMode::Deny)
-        .unwrap();
-    network
-        .add_rule("example.com:443", PermissionMode::Allow)
-        .unwrap();
+fn hostnames_require_resolution_and_resolved_addresses_keep_native_denials() {
+    let network = native_policy(json!({
+        "egress":{"default":"allow","deny":[{"to":[{"cidr":"192.0.2.0/24"}]}]}
+    }));
+    assert!(denied(
+        network.check_connect(&"example.com:443".parse().unwrap())
+    ));
     let snapshot = SandboxPermissionSnapshot::from_policies(
         false,
         Path::new(""),
         std::iter::empty(),
         std::iter::once(&network),
     );
-    for resolved in ["127.0.0.1:443", "[::ffff:127.0.0.1]:443"] {
+    for resolved in ["192.0.2.7:443", "[::ffff:192.0.2.7]:443"] {
         assert!(
             denied(snapshot.authorize_resolved_network_address(
                 &"example.com:443".parse().unwrap(),
@@ -102,4 +114,11 @@ fn resolved_dns_address_checks_keep_mapped_ip_fences() {
             "{resolved}"
         );
     }
+    assert!(matches!(
+        snapshot.authorize_resolved_network_address(
+            &"example.com:443".parse().unwrap(),
+            &"198.51.100.7:443".parse().unwrap(),
+        ),
+        PermissionDecision::Allow
+    ));
 }

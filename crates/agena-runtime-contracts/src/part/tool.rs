@@ -65,9 +65,13 @@ pub struct ShellCommandInput {
     #[serde(default)]
     #[schemars(example = example_writes())]
     pub writes: Vec<String>,
-    /// Outbound network targets the command may connect to: host names,
-    /// `host:port`, or URLs. Pass an empty array `[]` when the command has no
-    /// network effect.
+    /// Requested network scope, intersected with the configured native MXC policy.
+    /// `[]` starts offline. `["*"]`, used alone, requests the full configured scope.
+    /// `host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;
+    /// `icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.
+    /// A bare host/IP requests only that target's configured protocols and ports.
+    /// Hosts resolve to IPs before startup; this does not isolate domains or URL
+    /// paths. DNS dependencies must also be allowed by the configured policy.
     #[serde(default)]
     #[schemars(example = example_network())]
     pub network: Vec<String>,
@@ -294,7 +298,13 @@ pub struct ShellWriteInput {
     /// Paths the entered operation may modify, relative to the Agena workspace.
     #[serde(default)]
     pub writes: Vec<String>,
-    /// Outbound targets the entered operation may contact.
+    /// Network effects of the entered operation, bounded by the process's existing
+    /// sandbox and current policy. `[]` declares no network use; `["*"]`, alone,
+    /// requests the configured scope. `host:port`/`tcp://host:port` means TCP,
+    /// `udp://host:port` means UDP, and `icmp://host` means ICMP. Bare host/IP means
+    /// that target's configured protocols and ports; HTTP(S) URLs mean TCP.
+    /// Hostnames resolve to IPs; they do not provide domain isolation. This field
+    /// cannot expand or replace the sandbox established when the process started.
     #[serde(default)]
     pub network: Vec<String>,
 }
@@ -329,7 +339,7 @@ fn example_writes() -> Vec<String> {
 }
 
 fn example_network() -> Vec<String> {
-    vec!["<target>".to_string()]
+    vec!["192.0.2.10:443".to_string()]
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]

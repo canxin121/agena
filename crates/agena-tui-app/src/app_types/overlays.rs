@@ -68,6 +68,7 @@ pub(crate) struct PermissionStudioItem {
 pub(crate) enum PermissionStudioAction {
     CreateRule,
     EditMode(PermissionStudioModeTarget),
+    EditNetworkPolicy,
     AddToolCommandPattern { tool_name: String },
 }
 
@@ -89,7 +90,7 @@ pub(crate) type PermissionStudioEditor = EditorDialogState<PermissionStudioEdito
 pub(crate) enum PermissionStudioEditorAction {
     Text(PermissionStudioTextTarget),
     AddPathRule,
-    AddNetworkRule,
+    EditNetworkPolicy,
     AddToolName,
     AddToolRule,
     AddToolCommandPattern { tool_name: String },
@@ -100,7 +101,6 @@ pub(crate) use agena_tui_permission_studio::PermissionStudioModeTarget;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PermissionStudioTextTarget {
     PathRulePattern { pattern: String },
-    NetworkRuleTarget { target: String },
     ToolNameKey { key: String },
     ToolRuleName { tool_name: String },
 }
@@ -449,9 +449,7 @@ pub(crate) enum ConfirmAction {
     PermissionStudioDeletePathRule {
         pattern: String,
     },
-    PermissionStudioDeleteNetworkRule {
-        target: String,
-    },
+    PermissionStudioDeleteNetworkPolicy,
     PermissionStudioDeleteToolName {
         key: String,
     },

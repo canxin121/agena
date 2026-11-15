@@ -274,3 +274,150 @@ async fn revocation_between_context_validation_and_callback_admission_fails_clos
     assert_eq!(result.unwrap_err().kind, PluginErrorKind::Cancelled);
     assert!(starts.try_recv().is_err());
 }
+
+struct CompletionProbe {
+    started: mpsc::UnboundedSender<(PluginCallCompletion, HostCallbackContext)>,
+    cleaned: mpsc::UnboundedSender<i64>,
+}
+
+#[async_trait::async_trait]
+impl crate::sdk::Plugin for CompletionProbe {
+    fn manifest(&self) -> PluginManifest {
+        PluginManifest::new("test", "cancellation", "1.0.0")
+    }
+
+    async fn tool_invoke(&self, input: ToolInvokeInput) -> crate::sdk::Result<ToolInvokeOutput> {
+        let completion = current_plugin_call_completion()
+            .ok_or_else(|| PluginError::internal("origin completion was lost"))?;
+        let context = host_api::current_host_callback_context().unwrap();
+        self.started.send((completion.clone(), context)).unwrap();
+        let cleaned = self.cleaned.clone();
+        let call_id = input.call_id;
+        tokio::spawn(async move {
+            completion.wait().await;
+            let _ = cleaned.send(call_id);
+        });
+        match input.tool_name.as_str() {
+            "success" => Ok(ToolInvokeOutput::from_parts(
+                "done",
+                "done",
+                "done",
+                None,
+                BTreeMap::new(),
+                vec![],
+            )),
+            "failure" => Err(PluginError::internal("fixture failure")),
+            "wait" => std::future::pending().await,
+            _ => unreachable!(),
+        }
+    }
+}
+
+async fn assert_inproc_origin_completion(streaming: bool, outcome: &'static str) {
+    let (probe, _, _) = probe();
+    let (handle, plugin) = handle(probe);
+    let (started, mut starts) = mpsc::unbounded_channel();
+    let (cleaned, mut cleanups) = mpsc::unbounded_channel();
+    let transport = InProcessTransport::new(CompletionProbe { started, cleaned });
+    let (origin_tx, origin_rx) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        handle
+            .run_in_authorized_callback_context(
+                &plugin,
+                HostCallbackContext {
+                    session_id: Some(17),
+                    call_id: Some(71),
+                    workspace_root: Some("/workspace".into()),
+                    tool_name: Some(outcome.into()),
+                    ..Default::default()
+                },
+                async {
+                    let completion = current_plugin_call_completion().unwrap();
+                    origin_tx.send(completion.clone()).unwrap();
+                    let input = ToolInvokeInput {
+                        tool_name: outcome.into(),
+                        session_id: 17,
+                        call_id: 71,
+                        workspace_root: "/workspace".into(),
+                        input: json!({}),
+                    };
+                    let succeeded = if streaming {
+                        let stream = transport.invoke_stream(input).await.unwrap().unwrap();
+                        stream.end.await.unwrap().is_ok()
+                    } else {
+                        transport
+                            .dispatch(
+                                method::HOOK_TOOL_INVOKE,
+                                serde_json::to_value(input).unwrap(),
+                            )
+                            .await
+                            .is_ok()
+                    };
+                    // Returning from the plugin must not close the originating
+                    // host scope while that host scope is still executing.
+                    assert!(
+                        tokio::time::timeout(Duration::from_millis(5), completion.wait())
+                            .await
+                            .is_err()
+                    );
+                    succeeded
+                },
+            )
+            .await
+    });
+    let original = origin_rx.await.unwrap();
+    let (observed, context) = tokio::time::timeout(Duration::from_secs(5), starts.recv())
+        .await
+        .unwrap()
+        .expect("the plugin entered its completion scope");
+    assert_eq!(
+        observed.id(),
+        original.id(),
+        "the transport must inherit the original completion"
+    );
+    assert_eq!(context.session_id, Some(17));
+    assert_eq!(context.call_id, Some(71));
+    assert!(context.authority_token.is_some());
+    if outcome == "wait" {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), original.wait())
+                .await
+                .is_err()
+        );
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    } else {
+        assert_eq!(task.await.unwrap(), outcome == "success");
+    }
+    tokio::time::timeout(Duration::from_secs(5), original.wait())
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), cleanups.recv())
+            .await
+            .unwrap(),
+        Some(71),
+        "call-owned resources are cleaned after return, failure, or cancellation"
+    );
+}
+
+#[tokio::test]
+async fn inproc_completion_survives_dispatch_success_and_failure() {
+    for outcome in ["success", "failure"] {
+        assert_inproc_origin_completion(false, outcome).await;
+    }
+}
+
+#[tokio::test]
+async fn inproc_completion_survives_stream_success_and_failure() {
+    for outcome in ["success", "failure"] {
+        assert_inproc_origin_completion(true, outcome).await;
+    }
+}
+
+#[tokio::test]
+async fn inproc_completion_cancellation_cleans_dispatch_and_stream() {
+    for streaming in [false, true] {
+        assert_inproc_origin_completion(streaming, "wait").await;
+    }
+}

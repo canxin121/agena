@@ -18,7 +18,8 @@ impl SessionManager {
                 .map_err(tool_error)?;
             let checks = authority
                 .executor
-                .process_sandbox_permission_checks(&resources)
+                .process_sandbox_permission_checks_async(&resources)
+                .await
                 .map_err(tool_error)?;
             self.authorize_operator_checks(&authority, checks)
                 .await
@@ -78,7 +79,8 @@ impl SessionManager {
             .resolve_process_sandbox_resources(resources)
             .map_err(tool_error)?;
         let checks = executor
-            .process_sandbox_permission_checks(&resources)
+            .process_sandbox_permission_checks_async(&resources)
+            .await
             .map_err(tool_error)?;
         if let Some((tool, control)) = live.as_ref() {
             self.authorize_checks(tool, checks, &executor, control, &state)

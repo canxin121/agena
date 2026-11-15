@@ -1078,6 +1078,8 @@ async fn remember_rule(
     action: &str,
     remember: &RememberPermission,
 ) -> Result<()> {
+    agena_domain::validate_persisted_network_rule_key(action, remember.mode, std::env::consts::OS)
+        .map_err(invalid)?;
     let (session, workspace) = match remember.scope {
         PermissionScope::Session => (Some(metadata.id.get()), None),
         PermissionScope::Workspace => (

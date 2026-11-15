@@ -94,11 +94,11 @@ const cards = computed(() => {
       id: 'network',
       title: st('Network access'),
       icon: RiGlobalLine,
-      count: Object.keys(policy.network?.rules || {}).length,
+      count: (policy.network?.egress?.allow?.length || 0) + (policy.network?.egress?.deny?.length || 0),
       rows: [
-        { label: st('Internet'), mode: policy.network?.internet },
-        { label: st('Private network'), mode: policy.network?.private },
-        { label: st('This device'), mode: policy.network?.loopback },
+        { label: st('Outbound default'), mode: policy.network?.egress?.default ?? ('deny' as const) },
+        { label: st('Inbound default'), mode: policy.network?.ingress?.default ?? ('deny' as const) },
+        { label: st('Host loopback'), mode: policy.network?.ingress?.hostLoopback ?? ('deny' as const) },
       ],
     },
     {

@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 
 use crate::error::TransportError;
+use crate::host::current_plugin_call_completion;
 use crate::sdk::drivers::dispatch::PluginDispatcher;
 use crate::sdk::host_api::{current_host_callback_context, run_in_host_callback_context};
 use crate::sdk::{HostClient, InitOutcome, Plugin, PluginManifest, ToolInvokeInput};
@@ -86,6 +87,7 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         let method_name = method.to_string();
         let method = method_name.clone();
         let context = current_host_callback_context();
+        let completion = current_plugin_call_completion();
         let request = dispatcher
             .begin_request(crate::sdk::rpc::RequestId::Num(
                 self.next_id.fetch_add(1, Ordering::Relaxed),
@@ -93,15 +95,22 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
             .map_err(TransportError::from)?;
         // A Tool API call may arrive through several nested async layers.
         // Dispatch it on a fresh worker stack while preserving the callback
-        // context and aborting the task if the caller cancels. This also keeps
-        // a large plugin callback from overflowing the initiating worker.
+        // context and its original completion, aborting the task if the caller
+        // cancels. This also keeps a large plugin callback from overflowing the
+        // initiating worker.
         let task = tokio::spawn(async move {
             AssertUnwindSafe(async move {
                 let fut = Box::pin(request.run(dispatcher.dispatch(&method, params)));
-                if let Some(context) = context {
-                    run_in_host_callback_context(context, fut).await
-                } else {
-                    fut.await
+                let invoke = async move {
+                    if let Some(context) = context {
+                        run_in_host_callback_context(context, fut).await
+                    } else {
+                        fut.await
+                    }
+                };
+                match completion {
+                    Some(completion) => completion.scope(invoke).await,
+                    None => invoke.await,
                 }
             })
             .catch_unwind()
@@ -134,9 +143,18 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
             ))
             .map_err(TransportError::from)?;
         let request = Arc::new(request);
-        let handle = self
-            .dispatcher
-            .dispatch_stream_request(input, &request, request.clone());
+        let completion = current_plugin_call_completion();
+        let handle = self.dispatcher.dispatch_stream_request_with_scope(
+            input,
+            &request,
+            request.clone(),
+            move |task| async move {
+                match completion {
+                    Some(completion) => completion.scope(task).await,
+                    None => task.await,
+                }
+            },
+        );
         Ok(Some(ToolStreamHandle {
             stream_id: handle.stream_id,
             chunks: handle.chunks,

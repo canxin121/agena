@@ -1,4 +1,36 @@
+static PERMISSION_CHECK_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
+
 impl ToolExecutor {
+    /// Host resolution and filesystem inspection must not block an async
+    /// runtime thread. A running OS resolver retains its bounded worker slot
+    /// after cancellation until the syscall returns.
+    pub(super) async fn run_permission_preflight<T, F>(&self, operation: F) -> Result<T, ToolError>
+    where
+        T: Send + 'static,
+        F: FnOnce(ToolExecutor) -> Result<T, ToolError> + Send + 'static,
+    {
+        self.ensure_not_cancelled()?;
+        let cancel = self.cancellation_token().cloned();
+        let executor = self.clone();
+        let work = PERMISSION_CHECK_WORKERS.run(move || {
+            executor.ensure_not_cancelled()?;
+            operation(executor)
+        });
+        tokio::select! {
+            biased;
+            _ = async {
+                match cancel {
+                    Some(token) => token.cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => Err(ToolError::Cancelled),
+            result = tokio::time::timeout(std::time::Duration::from_secs(30), work) => {
+                result.map_err(|_| ToolError::invalid_input("permission preflight or DNS lookup timed out"))?
+                    .map_err(|error| ToolError::plugin(format!("permission preflight worker failed: {error}")))?
+            }
+        }
+    }
+
     pub(crate) fn read_path_filter(&self) -> agena_tool::path_filter::PathFilter<ToolError> {
         let executor = self.clone();
         agena_tool::path_filter::PathFilter::new(move |path| {
@@ -35,7 +67,11 @@ impl ToolExecutor {
     }
     /// Called only on blocking workers; callbacks may await the host's
     /// existing approval pipeline. Repeated approved effects reuse its cache.
-    pub(crate) fn authorize_sandbox_paths(&self, reads: &[PathBuf], writes: &[PathBuf]) -> Result<(), ToolError> {
+    pub(crate) fn authorize_sandbox_paths(
+        &self,
+        reads: &[PathBuf],
+        writes: &[PathBuf],
+    ) -> Result<(), ToolError> {
         let mut all_reads = reads.iter().chain(writes).collect::<Vec<_>>();
         all_reads.sort();
         all_reads.dedup();
@@ -80,6 +116,15 @@ impl ToolExecutor {
         let mut checks = Vec::with_capacity(1);
         self.push_network_check(&mut checks, target)?;
         Ok(checks.remove(0))
+    }
+
+    pub async fn network_permission_check_async(
+        &self,
+        target: &str,
+    ) -> Result<ToolPermissionCheck, ToolError> {
+        let target = target.to_owned();
+        self.run_permission_preflight(move |executor| executor.network_permission_check(&target))
+            .await
     }
 
     pub fn resolve_target_path(&self, raw_path: &str) -> PathBuf {
@@ -272,13 +317,40 @@ impl ToolExecutor {
                 "invalid network permission target `{target}`: {err}"
             ))
         })?;
+        let snapshot = self.sandbox_permission_snapshot();
+        let requires_dns =
+            target.host() != "*" && target.host().parse::<std::net::IpAddr>().is_err();
+        let mut decision = if requires_dns {
+            crate::shell_sandbox::hostname_resolution_permission(&snapshot)
+        } else {
+            agena_domain::PermissionDecision::Allow
+        };
+        if matches!(decision, agena_domain::PermissionDecision::Allow) {
+            decision = agena_domain::PermissionDecision::Deny {
+                reason: "native network policy denies all resolved destinations".into(),
+            };
+            for resolved in
+                crate::shell_sandbox::resolved_network_targets(target.original(), &snapshot)?
+            {
+                let candidate = if target.host() == "*" {
+                    snapshot.authorize_network_connect(&resolved)
+                } else {
+                    snapshot.authorize_resolved_network_address(&target, &resolved)
+                };
+                if matches!(candidate, agena_domain::PermissionDecision::Allow) {
+                    decision = candidate;
+                    break;
+                }
+                decision = candidate;
+            }
+        }
         checks.push(ToolPermissionCheck {
             action: PermissionAction::NetworkAccess {
                 target: target.original().to_string(),
                 host: target.host().to_string(),
                 port: target.port(),
             },
-            decision: self.principal.authorize_network_connect(&target),
+            decision,
         });
         Ok(())
     }
@@ -309,3 +381,64 @@ use super::{
     resolve_managed_project_path_alias, shell,
 };
 use agena_domain::PermissionAction;
+
+#[cfg(test)]
+mod permission_worker_tests {
+    use super::*;
+
+    fn executor() -> ToolExecutor {
+        ToolExecutor::new(
+            std::env::temp_dir(),
+            crate::authorization::ExecutionPrincipal::new(
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocking_permission_work_leaves_the_async_runtime_responsive() {
+        let executor = executor();
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, waiting) = std::sync::mpsc::channel();
+        let worker = executor.run_permission_preflight(move |_| {
+            started.send(()).unwrap();
+            waiting
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            Ok(42)
+        });
+        let caller = async {
+            ready.await.unwrap();
+            tokio::task::yield_now().await;
+            release.send(()).unwrap();
+        };
+        let (result, ()) = tokio::join!(worker, caller);
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_permission_preflight_returns_while_an_os_lookup_is_running() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let executor = executor().with_cancellation_token(Some(cancel.clone()));
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let (release, waiting) = std::sync::mpsc::channel();
+        let worker = executor.run_permission_preflight(move |_| {
+            started.send(()).unwrap();
+            waiting
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            Ok(())
+        });
+        let canceller = async {
+            ready.await.unwrap();
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::join!(worker, canceller);
+        assert!(matches!(result, Err(ToolError::Cancelled)));
+        release.send(()).unwrap();
+    }
+}

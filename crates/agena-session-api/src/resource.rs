@@ -726,30 +726,8 @@ pub struct ApprovalModelSelectionResource {
     pub verbosity: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-/// Network permission configuration of a session.
-pub struct NetworkPermissionConfigResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub internet: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub private: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub loopback: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub rules: IndexMap<String, PermissionMode>,
-}
-
-impl PartialEq for NetworkPermissionConfigResource {
-    fn eq(&self, other: &Self) -> bool {
-        self.internet == other.internet
-            && self.private == other.private
-            && self.loopback == other.loopback
-            && self.rules.iter().eq(other.rules.iter())
-    }
-}
-
-impl Eq for NetworkPermissionConfigResource {}
+/// Native MXC network permission configuration of a session.
+pub type NetworkPermissionConfigResource = agena_domain::NetworkPermissionConfig;
 
 /// Path permission configuration of a session.
 ///
@@ -977,15 +955,6 @@ impl PathPermissionConfigResource {
     }
 }
 
-impl NetworkPermissionConfigResource {
-    pub fn is_empty(&self) -> bool {
-        self.internet.is_none()
-            && self.private.is_none()
-            && self.loopback.is_none()
-            && self.rules.is_empty()
-    }
-}
-
 impl ToolPermissionConfigResource {
     pub fn is_empty(&self) -> bool {
         self.default.is_none() && self.names.is_empty() && self.rules.is_empty()
@@ -1079,21 +1048,7 @@ impl From<&agena_domain::PermissionConfig> for PermissionConfigResource {
                         })
                         .collect(),
                 }),
-            network: value
-                .network
-                .as_ref()
-                .map(|network| NetworkPermissionConfigResource {
-                    internet: network.internet.map(permission_mode_resource_from_domain),
-                    private: network.private.map(permission_mode_resource_from_domain),
-                    loopback: network.loopback.map(permission_mode_resource_from_domain),
-                    rules: network
-                        .rules
-                        .iter()
-                        .map(|(pattern, mode)| {
-                            (pattern.clone(), permission_mode_resource_from_domain(*mode))
-                        })
-                        .collect(),
-                }),
+            network: value.network.clone(),
             tools: value
                 .tools
                 .as_ref()
@@ -1161,18 +1116,7 @@ impl From<PermissionConfigResource> for agena_domain::PermissionConfig {
                     .map(|(pattern, modes)| (pattern, path_access_modes_to_domain(modes)))
                     .collect(),
             }),
-            network: value
-                .network
-                .map(|network| agena_domain::NetworkPermissionConfig {
-                    internet: network.internet.map(permission_mode_to_domain),
-                    private: network.private.map(permission_mode_to_domain),
-                    loopback: network.loopback.map(permission_mode_to_domain),
-                    rules: network
-                        .rules
-                        .into_iter()
-                        .map(|(pattern, mode)| (pattern, permission_mode_to_domain(mode)))
-                        .collect(),
-                }),
+            network: value.network,
             tools: value.tools.map(|tools| agena_domain::ToolPermissionConfig {
                 default: tools.default.map(permission_mode_to_domain),
                 names: tools
@@ -1508,43 +1452,36 @@ mod permission_path_wire_tests {
     use serde_json::json;
 
     #[test]
-    fn session_api_equality_detects_reordered_permission_rules() {
-        for (left, right) in [
-            (
-                r#"{"network":{"rules":{"8.8.8.8:443":"deny","8.0.0.0/8":"allow"}}}"#,
-                r#"{"network":{"rules":{"8.0.0.0/8":"allow","8.8.8.8:443":"deny"}}}"#,
-            ),
-            (
-                r#"{"tools":{"rules":{"agena.shell.exec":{"git push *":"deny","git *":"ask"}}}}"#,
-                r#"{"tools":{"rules":{"agena.shell.exec":{"git *":"ask","git push *":"deny"}}}}"#,
-            ),
-        ] {
-            let left: PermissionConfigResource = serde_json::from_str(left).unwrap();
-            let right: PermissionConfigResource = serde_json::from_str(right).unwrap();
-            assert_eq!(left, left.clone());
-            assert_ne!(left, right);
-        }
+    fn session_api_equality_detects_reordered_command_rules() {
+        let left: PermissionConfigResource = serde_json::from_str(
+            r#"{"tools":{"rules":{"agena.shell.exec":{"git push *":"deny","git *":"ask"}}}}"#,
+        )
+        .unwrap();
+        let right: PermissionConfigResource = serde_json::from_str(
+            r#"{"tools":{"rules":{"agena.shell.exec":{"git *":"ask","git push *":"deny"}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(left, left.clone());
+        assert_ne!(left, right);
     }
 
     #[test]
-    fn session_api_preserves_ordered_network_and_command_rule_precedence() {
+    fn session_api_preserves_native_network_and_ordered_command_rules() {
         let input = r#"{
-            "network": {"rules": {"8.8.8.8:443": "deny", "8.0.0.0/8": "allow"}},
+            "network": {
+                "egress": {
+                    "default": "deny",
+                    "allow": [{"to":[{"cidr":"192.0.2.0/24","except":["192.0.2.128/25"]}],"ports":[{"protocol":"tcp","port":443,"endPort":444}]}],
+                    "deny": []
+                },
+                "ingress": {"default":"deny","hostLoopback":"deny"}
+            },
             "tools": {"rules": {
                 "agena.shell.exec": {"git push *": "deny", "git *": "ask"}
             }}
         }"#;
         let resource: PermissionConfigResource = serde_json::from_str(input).unwrap();
-        let network_keys = |value: &PermissionConfigResource| {
-            value
-                .network
-                .as_ref()
-                .unwrap()
-                .rules
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
+        let network = resource.network.clone();
         let command_keys = |value: &PermissionConfigResource| {
             let ToolPermissionRulesResource::Ordered(rules) =
                 &value.tools.as_ref().unwrap().rules["agena.shell.exec"]
@@ -1553,26 +1490,28 @@ mod permission_path_wire_tests {
             };
             rules.keys().cloned().collect::<Vec<_>>()
         };
-        assert_eq!(network_keys(&resource), ["8.8.8.8:443", "8.0.0.0/8"]);
         assert_eq!(command_keys(&resource), ["git push *", "git *"]);
         let domain: agena_domain::PermissionConfig = resource.into();
-        assert_eq!(
-            domain
-                .network
-                .as_ref()
-                .unwrap()
-                .rules
-                .keys()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["8.8.8.8:443", "8.0.0.0/8"],
-        );
+        assert_eq!(domain.network, network);
         let round_trip = PermissionConfigResource::from(&domain);
-        assert_eq!(network_keys(&round_trip), ["8.8.8.8:443", "8.0.0.0/8"]);
+        assert_eq!(round_trip.network, network);
         assert_eq!(command_keys(&round_trip), ["git push *", "git *"]);
         let encoded = serde_json::to_string(&round_trip).unwrap();
-        assert!(encoded.find("8.8.8.8:443").unwrap() < encoded.find("8.0.0.0/8").unwrap());
         assert!(encoded.find("git push *").unwrap() < encoded.find("git *").unwrap());
+    }
+
+    #[test]
+    fn session_api_rejects_obsolete_network_fields() {
+        for network in [
+            json!({"internet":"allow"}),
+            json!({"rules":{"example.com":"allow"}}),
+            json!({"egress":{"default":"ask"}}),
+        ] {
+            assert!(
+                serde_json::from_value::<PermissionConfigResource>(json!({"network":network}))
+                    .is_err()
+            );
+        }
     }
 
     #[test]

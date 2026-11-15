@@ -309,3 +309,331 @@ async fn session_scoped_delegation_honours_a_workspace_rule() {
     );
     fixture.shutdown().await;
 }
+
+fn callback_network_permission(
+    network: agena_domain::NetworkPermissionConfig,
+) -> agena_domain::PermissionConfig {
+    agena_domain::PermissionConfig {
+        network: Some(network),
+        ..Default::default()
+    }
+}
+
+fn enable_callback_network(manager: &SessionManager) {
+    let state = manager.state.load_full();
+    let permission =
+        callback_network_permission(agena_domain::NetworkPermissionConfig::allow_all());
+    let executor = state.executor.clone().with_permission_config(&permission);
+    let mut config = state.config.clone();
+    config.permission = permission;
+    manager.reconfigure(
+        state.providers.clone(),
+        state.governor.clone(),
+        state.processor.clone(),
+        executor.clone(),
+        config.clone(),
+    );
+    manager.reconfigure_global(
+        state.providers.clone(),
+        state.processor.clone(),
+        executor,
+        config,
+    );
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn save_callback_network_rule(
+    manager: &SessionManager,
+    scope: agena_domain::PermissionScope,
+    owner: Option<i64>,
+    address: &str,
+    mode: agena_domain::PermissionMode,
+    port: Option<u16>,
+) {
+    use agena_domain::{PermissionAction, PermissionScope};
+    manager
+        .kernel_runtime
+        .permissions
+        .upsert(&agena_storage::PersistedPermissionRule {
+            id: None,
+            created_at_ms: None,
+            updated_at_ms: None,
+            action_key: serde_json::to_string(&PermissionAction::NetworkAccess {
+                target: port.map_or_else(
+                    || format!("tcp://{address}"),
+                    |port| format!("{address}:{port}"),
+                ),
+                host: address.into(),
+                port,
+            })
+            .unwrap(),
+            mode,
+            scope,
+            session_id: (scope == PermissionScope::Session)
+                .then_some(owner)
+                .flatten(),
+            workspace_id: (scope == PermissionScope::Workspace)
+                .then_some(owner)
+                .flatten(),
+            source: "callback-network-test".into(),
+            reason: None,
+            operator: None,
+            revoked_at_ms: None,
+            revoked_reason: None,
+            revoked_by: None,
+        })
+        .await
+        .unwrap();
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn callback_network_snapshot_reloads_numeric_denies_in_the_owning_scopes() {
+    use agena_domain::{PermissionDecision, PermissionMode, PermissionScope};
+
+    let fixture = Fixture::new("allow").await;
+    enable_callback_network(&fixture.manager);
+    let workspace = fixture.manager.current_workspace_id().await.unwrap();
+    let other_workspace = fixture
+        .manager
+        .kernel_runtime
+        .workspaces
+        .ensure_id(&fixture.root.join("other-workspace").to_string_lossy())
+        .await
+        .unwrap();
+    let other_session = fixture
+        .manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Other callback scope".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id
+        .get();
+    let global_session = fixture
+        .manager
+        .kernel()
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Global callback scope".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id
+        .get();
+    for (scope, owner, address) in [
+        (PermissionScope::Global, None, "192.0.2.10"),
+        (PermissionScope::Workspace, Some(workspace), "192.0.2.11"),
+        (
+            PermissionScope::Session,
+            Some(fixture.session),
+            "192.0.2.12",
+        ),
+        (
+            PermissionScope::Workspace,
+            Some(other_workspace),
+            "192.0.2.13",
+        ),
+        (PermissionScope::Session, Some(other_session), "192.0.2.14"),
+    ] {
+        save_callback_network_rule(
+            &fixture.manager,
+            scope,
+            owner,
+            address,
+            PermissionMode::Deny,
+            Some(443),
+        )
+        .await;
+    }
+
+    let original = "example.test:443".parse().unwrap();
+    for (session, denied) in [
+        (Some(fixture.session), vec![10, 11, 12]),
+        (Some(global_session), vec![10]),
+        (None, vec![10, 11]),
+    ] {
+        let (executor, context) = fixture
+            .manager
+            .host_callback_executor(session, None)
+            .await
+            .unwrap();
+        assert_eq!(context.and_then(|value| value.scope_session_id), session);
+        let snapshot = executor.sandbox_permission_snapshot();
+        for octet in 10..=15 {
+            let resolved = format!("192.0.2.{octet}:443").parse().unwrap();
+            let decision = snapshot.authorize_resolved_network_address(&original, &resolved);
+            assert_eq!(
+                matches!(decision, PermissionDecision::Deny { .. }),
+                denied.contains(&octet),
+                "session {session:?}, {resolved:?}: {decision:?}"
+            );
+        }
+    }
+
+    // A subsequent DNS callback must see a decision added after the earlier
+    // callback, even though its hostname action key is entirely different.
+    save_callback_network_rule(
+        &fixture.manager,
+        PermissionScope::Session,
+        Some(fixture.session),
+        "192.0.2.15",
+        PermissionMode::Deny,
+        Some(443),
+    )
+    .await;
+    let (executor, _) = fixture
+        .manager
+        .host_callback_executor(Some(fixture.session), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        executor
+            .sandbox_permission_snapshot()
+            .authorize_resolved_network_address(&original, &"192.0.2.15:443".parse().unwrap()),
+        PermissionDecision::Deny { .. }
+    ));
+    assert!(
+        fixture
+            .manager
+            .host_callback_executor(Some(fixture.session), Some(999_999))
+            .await
+            .is_err()
+    );
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn callback_network_snapshot_retains_session_policy_and_permission_ceiling() {
+    use agena_domain::{NetworkPermissionConfig, PermissionDecision};
+
+    let fixture = Fixture::new("allow").await;
+    enable_callback_network(&fixture.manager);
+    let workspace = fixture.manager.current_workspace_id().await.unwrap();
+    let allowed = callback_network_permission(NetworkPermissionConfig::allow_all());
+    let denied = callback_network_permission(NetworkPermissionConfig::offline());
+    for (permission, permission_ceiling) in
+        [(denied.clone(), Default::default()), (allowed, denied)]
+    {
+        let session = fixture
+            .manager
+            .kernel()
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                workspace,
+                "Restricted callback scope".into(),
+                SessionConfiguration {
+                    permission,
+                    permission_ceiling,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id
+            .get();
+        #[cfg(not(target_os = "macos"))]
+        save_callback_network_rule(
+            &fixture.manager,
+            agena_domain::PermissionScope::Session,
+            Some(session),
+            "192.0.2.20",
+            agena_domain::PermissionMode::Allow,
+            Some(443),
+        )
+        .await;
+        let (executor, _) = fixture
+            .manager
+            .host_callback_executor(Some(session), None)
+            .await
+            .unwrap();
+        assert!(matches!(
+            executor
+                .sandbox_permission_snapshot()
+                .authorize_resolved_network_address(
+                    &"example.test:443".parse().unwrap(),
+                    &"192.0.2.20:443".parse().unwrap()
+                ),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(
+            fixture
+                .manager
+                .require_host_network_permission(
+                    session,
+                    host_api::SESSION_SCOPED_CALL_ID,
+                    "192.0.2.20:443".into(),
+                )
+                .await
+                .is_err()
+        );
+    }
+    fixture.shutdown().await;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tokio::test]
+async fn callback_network_snapshot_enforces_portless_tcp_denies_before_io() {
+    use agena_domain::{PermissionMode, PermissionScope};
+
+    let fixture = Fixture::new("allow").await;
+    enable_callback_network(&fixture.manager);
+    let workspace = fixture.manager.current_workspace_id().await.unwrap();
+    for (scope, owner, address) in [
+        (PermissionScope::Global, None, "192.0.2.21"),
+        (PermissionScope::Workspace, Some(workspace), "192.0.2.22"),
+        (
+            PermissionScope::Session,
+            Some(fixture.session),
+            "192.0.2.23",
+        ),
+    ] {
+        save_callback_network_rule(
+            &fixture.manager,
+            scope,
+            owner,
+            address,
+            PermissionMode::Deny,
+            None,
+        )
+        .await;
+        for target in [
+            format!("{address}:80"),
+            format!("https://[::ffff:{address}]/"),
+        ] {
+            assert!(
+                fixture
+                    .manager
+                    .require_host_network_permission(
+                        fixture.session,
+                        host_api::SESSION_SCOPED_CALL_ID,
+                        target.clone(),
+                    )
+                    .await
+                    .is_err(),
+                "persisted unqualified TCP deny must block {target}"
+            );
+        }
+        fixture
+            .manager
+            .require_host_network_permission(
+                fixture.session,
+                host_api::SESSION_SCOPED_CALL_ID,
+                format!("udp://{address}:443"),
+            )
+            .await
+            .unwrap();
+    }
+    fixture.shutdown().await;
+}

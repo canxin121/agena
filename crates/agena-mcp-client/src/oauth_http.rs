@@ -3,24 +3,17 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use rmcp::transport::auth::{
     OAuthHttpClient, OAuthHttpClientError, OAuthHttpClientFuture, OAuthHttpRedirectPolicy,
     OAuthHttpRequest,
 };
 
-use crate::{McpError, McpResult};
-
-/// The active host callback authorizes the real destination before OAuth
-/// discovery, registration, code exchange, or refresh performs any network I/O.
-#[async_trait]
-pub trait McpOAuthNetworkAuthorizer: Send + Sync {
-    async fn authorize(&self, target: &str) -> McpResult<()>;
-}
+use crate::{McpError, McpHttpNetworkAuthorizer, McpResult};
 
 #[derive(Default)]
 struct AuthorizationState {
-    authorizer: Option<Arc<dyn McpOAuthNetworkAuthorizer>>,
+    active: bool,
+    authorizer: Option<Arc<dyn McpHttpNetworkAuthorizer>>,
     failure: Option<McpError>,
 }
 
@@ -30,9 +23,10 @@ pub(crate) struct OAuthAuthorizationSlot(Mutex<AuthorizationState>);
 impl OAuthAuthorizationSlot {
     pub(crate) fn install(
         self: &Arc<Self>,
-        authorizer: Option<Arc<dyn McpOAuthNetworkAuthorizer>>,
+        authorizer: Option<Arc<dyn McpHttpNetworkAuthorizer>>,
     ) -> OAuthAuthorizationScope {
         *self.0.lock().unwrap_or_else(|error| error.into_inner()) = AuthorizationState {
+            active: true,
             authorizer,
             failure: None,
         };
@@ -47,24 +41,30 @@ impl OAuthAuthorizationSlot {
             .take()
     }
 
-    async fn require(&self, target: &str) -> Result<(), OAuthHttpClientError> {
+    async fn client(&self, target: &str) -> Result<reqwest::Client, OAuthHttpClientError> {
         let authorizer = {
             let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-            if state.failure.is_some() {
+            if !state.active || state.failure.is_some() {
                 return Err(Box::new(McpError::PermissionDenied));
             }
             state.authorizer.clone()
         };
-        if let Some(authorizer) = authorizer
-            && let Err(error) = authorizer.authorize(target).await
-        {
-            self.0
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .failure = Some(error);
-            return Err(Box::new(McpError::PermissionDenied));
+        let result = match authorizer {
+            Some(authorizer) => {
+                crate::http_transport::authorized_client(target, authorizer.as_ref()).await
+            }
+            None => crate::http_transport::trusted_client(),
+        };
+        match result {
+            Ok(client) => Ok(client),
+            Err(error) => {
+                self.0
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .failure = Some(error);
+                Err(Box::new(McpError::PermissionDenied))
+            }
         }
-        Ok(())
     }
 }
 
@@ -78,22 +78,24 @@ impl Drop for OAuthAuthorizationScope {
 }
 
 pub(crate) struct AuthorizedOAuthHttpClient {
-    client: reqwest::Client,
     authorization: Arc<OAuthAuthorizationSlot>,
 }
 
 impl AuthorizedOAuthHttpClient {
     pub(crate) fn new(authorization: Arc<OAuthAuthorizationSlot>) -> McpResult<Self> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(20))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|_| McpError::Auth("Could not create the OAuth HTTP client.".into()))?;
-        Ok(Self {
-            client,
-            authorization,
-        })
+        Ok(Self { authorization })
+    }
+
+    /// A transport owns this callback only for its isolated call lifetime.
+    /// Its host authorizer rechecks the captured authority on every request.
+    pub(crate) fn for_transport(authorizer: Option<Arc<dyn McpHttpNetworkAuthorizer>>) -> Self {
+        Self {
+            authorization: Arc::new(OAuthAuthorizationSlot(Mutex::new(AuthorizationState {
+                active: true,
+                authorizer,
+                failure: None,
+            }))),
+        }
     }
 }
 
@@ -115,12 +117,11 @@ impl OAuthHttpClient for AuthorizedOAuthHttpClient {
                     .min(Duration::from_secs(30)),
             );
             for redirects in 0..=10 {
-                self.authorization.require(request.url().as_str()).await?;
+                let client = self.authorization.client(request.url().as_str()).await?;
                 let outgoing = request
                     .try_clone()
                     .ok_or_else(|| http_error("Could not replay the OAuth HTTP request."))?;
-                let mut response = self
-                    .client
+                let mut response = client
                     .execute(outgoing)
                     .await
                     .map_err(|_| http_error("The OAuth HTTP request failed."))?;
@@ -200,5 +201,20 @@ impl OAuthHttpClient for AuthorizedOAuthHttpClient {
             }
             Err(http_error("The OAuth server returned too many redirects."))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn completed_oauth_scope_cannot_fall_back_to_trusted_http() {
+        let slot = Arc::new(OAuthAuthorizationSlot::default());
+        assert!(slot.client("http://127.0.0.1:39123").await.is_err());
+        let scope = slot.install(None);
+        assert!(slot.client("http://127.0.0.1:39123").await.is_ok());
+        drop(scope);
+        assert!(slot.client("http://127.0.0.1:39123").await.is_err());
     }
 }

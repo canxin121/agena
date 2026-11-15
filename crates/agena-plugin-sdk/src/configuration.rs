@@ -91,6 +91,11 @@ pub enum PluginPackage {
         reads: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         writes: Vec<String>,
+        /// [] requests offline execution; ["*"] alone requests the configured
+        /// native network scope. host:port/tcp://host:port selects TCP,
+        /// udp://host:port selects UDP, and icmp://host selects ICMP. Bare host/IP
+        /// requests its configured protocol/port subset. Hostnames resolve to IPs
+        /// before startup; target and DNS access remain bounded by host policy.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         network: Vec<String>,
         #[serde(default)]

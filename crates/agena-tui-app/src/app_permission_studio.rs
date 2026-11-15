@@ -35,12 +35,15 @@ impl App {
             // than a named collection: there is nothing to add. Every key
             // already exists - an entry with no stored value is showing its
             // built-in default.
-            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => {
+            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkDefaults => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
                 return;
             }
             PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
-            PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule,
+            PermissionStudioPage::NetworkRules => {
+                self.open_permission_studio_network_editor(dialog);
+                return;
+            }
             PermissionStudioPage::ToolNames => {
                 self.open_permission_studio_catalog_selector(
                     dialog,
@@ -139,7 +142,7 @@ impl App {
             // Class-default entries are cleared by emptying their mode in the
             // editor (which restores the built-in default), not by deleting the
             // entry, so the delete action does not apply here either.
-            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => {
+            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkDefaults => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
                 return;
             }
@@ -168,31 +171,17 @@ impl App {
                     ConfirmAction::PermissionStudioDeletePathRule { pattern },
                 )
             }
-            PermissionStudioPage::NetworkRules => {
-                let Some(target) = selected_action.and_then(|action| match action {
-                    PermissionStudioAction::EditMode(PermissionStudioModeTarget::NetworkRule {
-                        target,
-                    }) => Some(target),
-                    _ => None,
-                }) else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
-                    return;
-                };
-                (
-                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
-                    vec![self.i18n.text_args(
-                        "overlay-permission-studio-delete-body",
-                        &agena_tui::fl_args!(
-                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-network-rules"),
-                            "value" => target.clone(),
-                        ),
-                    )],
-                    ConfirmAction::PermissionStudioDeleteNetworkRule { target },
-                )
-            }
+            PermissionStudioPage::NetworkRules => (
+                ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
+                vec![self.i18n.text_args(
+                    "overlay-permission-studio-delete-body",
+                    &agena_tui::fl_args!(
+                        "kind" => self.i18n.text("permission-studio-network-json"),
+                        "value" => "permission.network".to_string(),
+                    ),
+                )],
+                ConfirmAction::PermissionStudioDeleteNetworkPolicy,
+            ),
             PermissionStudioPage::ToolNames => {
                 let Some(key) = selected_action.and_then(|action| match action {
                     PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName {
@@ -291,13 +280,8 @@ impl App {
         });
     }
 
-    pub(crate) fn delete_permission_studio_network_rule(&mut self, target: &str) {
-        let target = target.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(network) = permission.network.as_mut() {
-                network.rules.shift_remove(target.as_str());
-            }
-        });
+    pub(crate) fn delete_permission_studio_network_policy(&mut self) {
+        self.delete_permission_studio_config(|permission| permission.network = None);
     }
 
     pub(crate) fn delete_permission_studio_tool_name(&mut self, key: &str) {

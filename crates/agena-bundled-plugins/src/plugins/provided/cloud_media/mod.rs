@@ -143,9 +143,14 @@ impl<'a> Service<'a> {
         let request = request
             .build()
             .map_err(|error| PluginError::internal_error(&error))?;
-        official_service::validate_provider_endpoint(self.host, request.url().as_str()).await?;
+        let client = official_service::authorized_provider_http_client(
+            self.host,
+            request.url().as_str(),
+            &self.connection,
+        )
+        .await?;
         let may_have_effects = request.method() != reqwest::Method::GET;
-        let response = self.client.execute(request).await.map_err(|error| {
+        let response = client.execute(request).await.map_err(|error| {
             let error = official_service::provider_transport_error(
                 self.provider,
                 operation,

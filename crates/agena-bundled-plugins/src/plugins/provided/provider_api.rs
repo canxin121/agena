@@ -547,8 +547,13 @@ async fn request(
                 .or_insert(json!(4096));
         }
     }
-    let mut req = service
-        .client
+    let client = official_service::authorized_provider_http_client(
+        service.host,
+        url.as_str(),
+        &service.connection,
+    )
+    .await?;
+    let mut req = client
         .request(route.method.clone(), url)
         .headers(official_service::provider_headers(&service.connection)?)
         .header("x-agena-provider-api", service.provider);

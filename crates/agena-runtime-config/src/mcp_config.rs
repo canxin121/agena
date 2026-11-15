@@ -166,9 +166,17 @@ impl McpServerConfig {
                 if process.reads.len() + process.writes.len() > 512 || process.network.len() > 128 {
                     return Err("MCP process has too many resource declarations.".into());
                 }
-                if process.reads.iter().chain(&process.writes).chain(&process.network)
-                    .any(|value| value.trim().is_empty() || value.contains('\0')) {
-                    return Err("MCP process resource declarations must be nonempty and contain no NUL.".into());
+                if process
+                    .reads
+                    .iter()
+                    .chain(&process.writes)
+                    .chain(&process.network)
+                    .any(|value| value.trim().is_empty() || value.contains('\0'))
+                {
+                    return Err(
+                        "MCP process resource declarations must be nonempty and contain no NUL."
+                            .into(),
+                    );
                 }
                 tools
             }
@@ -348,6 +356,11 @@ pub struct McpStdioProcessConfig {
     pub reads: Vec<String>,
     #[serde(default)]
     pub writes: Vec<String>,
+    /// [] requests offline execution; ["*"] alone requests the configured native
+    /// network scope. host:port/tcp://host:port selects TCP, udp://host:port selects
+    /// UDP, and icmp://host selects ICMP. Bare host/IP requests its configured
+    /// protocol/port subset; HTTP(S) URLs select TCP host/port. Hostnames resolve
+    /// to IPs before startup, and DNS dependencies also require policy approval.
     #[serde(default)]
     pub network: Vec<String>,
 }
@@ -421,8 +434,11 @@ mod tests {
         let mut injected = value;
         injected["process"]["sandbox"] = json!({"readwrite_paths":["/"]});
         assert!(serde_json::from_value::<McpServerConfig>(injected).is_err());
-        let default: McpStdioProcessConfig = serde_json::from_value(json!({"command":"node"})).unwrap();
-        assert!(default.reads.is_empty() && default.writes.is_empty() && default.network.is_empty());
+        let default: McpStdioProcessConfig =
+            serde_json::from_value(json!({"command":"node"})).unwrap();
+        assert!(
+            default.reads.is_empty() && default.writes.is_empty() && default.network.is_empty()
+        );
     }
 
     #[test]

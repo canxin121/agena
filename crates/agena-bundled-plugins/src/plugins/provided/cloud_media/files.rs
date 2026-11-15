@@ -499,10 +499,15 @@ impl Service<'_> {
         let original = start.path().trim_end_matches('/');
         let (prefix, version) = original.rsplit_once('/').unwrap_or(("", "v1beta"));
         start.set_path(&format!("{prefix}/upload/{version}/files"));
-        official_service::validate_provider_endpoint(self.host, start.as_str()).await?;
+        let client = official_service::authorized_provider_http_client(
+            self.host,
+            start.as_str(),
+            &self.connection,
+        )
+        .await?;
         let begin = self
             .authenticated(
-                self.client
+                client
                     .post(start)
                     .header("X-Goog-Upload-Protocol", "resumable")
                     .header("X-Goog-Upload-Command", "start")
@@ -582,11 +587,13 @@ impl Service<'_> {
             return record.output(None);
         }
         let url = self.remote_endpoint(&record.remote_id)?;
-        official_service::validate_provider_endpoint(self.host, &url).await?;
+        let client =
+            official_service::authorized_provider_http_client(self.host, &url, &self.connection)
+                .await?;
         let request = if delete {
-            self.client.delete(url)
+            client.delete(url)
         } else {
-            self.client.get(url)
+            client.get(url)
         };
         if delete {
             record.state = "deletion_unconfirmed".into();

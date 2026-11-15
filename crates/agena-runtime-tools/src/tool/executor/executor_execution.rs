@@ -169,7 +169,19 @@ impl ToolExecutor {
         let mut checks = vec![ToolPermissionCheck { action, decision }];
 
         if let Some(resolution) = self.invocation_definition(invocation) {
-            self.collect_builtin_effect_checks(&mut checks, &resolution, invocation)?;
+            let invocation = invocation.clone();
+            let effects = self
+                .run_permission_preflight(move |executor| {
+                    let mut effects = Vec::new();
+                    executor.collect_builtin_effect_checks(
+                        &mut effects,
+                        &resolution,
+                        &invocation,
+                    )?;
+                    Ok(effects)
+                })
+                .await?;
+            checks.extend(effects);
         }
 
         if let Some(inspector) = self.permission_inspector.as_ref() {

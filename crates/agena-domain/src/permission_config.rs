@@ -108,12 +108,6 @@ impl PermissionConfig {
     /// what makes them editable and restorable (a user writes the same key, or
     /// deletes it) without the schema growing a parallel set of keys.
     pub fn global_default() -> Self {
-        let auto = PermissionMode::Auto;
-        let network_default = if cfg!(target_os = "windows") {
-            PermissionMode::Deny
-        } else {
-            auto
-        };
         let allow = PermissionMode::Allow;
         let deny = PermissionMode::Deny;
         Self {
@@ -126,12 +120,7 @@ impl PermissionConfig {
                 // sandbox. Each worker receives its own private temporary area.
                 rules: IndexMap::from([(RUNTIME_STATE_PATH.to_string(), allow_rw())]),
             }),
-            network: Some(NetworkPermissionConfig {
-                internet: Some(network_default),
-                private: Some(network_default),
-                loopback: Some(network_default),
-                ..Default::default()
-            }),
+            network: Some(NetworkPermissionConfig::offline()),
             tools: Some(ToolPermissionConfig {
                 // Ordinary execution tools default to Allow: their effects are
                 // already constrained by the path, network, and shell-command

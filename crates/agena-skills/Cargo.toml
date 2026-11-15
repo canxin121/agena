@@ -20,7 +20,7 @@ sha2.workspace = true
 tar.workspace = true
 tempfile.workspace = true
 reqwest = { workspace = true, features = ["rustls", "stream"] }
-tokio = { workspace = true, features = ["rt", "sync", "macros"] }
+tokio = { workspace = true, features = ["rt", "sync", "macros", "net", "time"] }
 url.workspace = true
 urlencoding.workspace = true
 zip.workspace = true

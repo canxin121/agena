@@ -3,13 +3,12 @@
 //! The installed executable is its own probe and launcher, so the check exercises
 //! the same AppArmor attachment and runtime path as the service that will run.
 
-use crate::sandbox::{ProxyTarget, SandboxNetwork, SandboxPolicy};
-use base64::{Engine, engine::general_purpose::STANDARD};
+use crate::sandbox::{SandboxNetwork, SandboxPolicy};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -22,7 +21,7 @@ use std::time::{Duration, Instant};
 const CHECK_ARGUMENT: &str = "--agena-sandbox-check";
 const PROBE_ARGUMENT: &str = "--agena-sandbox-check-probe";
 const ENV_SENTINEL: &str = "AGENA_SANDBOX_CHECK_HOST_SECRET";
-const FIXTURE_HOST: &str = "agena-sandbox-check.invalid";
+const FIXTURE_REQUEST: &[u8] = b"agena-native-network-check\n";
 const OUTPUT_LIMIT: usize = 16 * 1024;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 const PARENT_TIMEOUT: Duration = Duration::from_secs(25);
@@ -111,21 +110,21 @@ pub fn try_run_cli() -> Option<i32> {
 pub fn run() -> CheckReport {
     let started = Instant::now();
     let mut checks = vec![result("offline", offline_check())];
-    if cfg!(windows) {
+    if cfg!(any(target_os = "linux", windows)) {
+        checks.push(result("native_network", native_network_check()));
+    } else if cfg!(target_os = "macos") {
         checks.push(CheckResult {
-            name: "http_proxy",
+            name: "native_network",
             required: false,
             status: CheckStatus::Unsupported,
-            detail: "Windows identity-bound AppContainer HTTP proxy support is not implemented; offline isolation remains required".into(),
+            detail: "macOS MXC Seatbelt supports egress defaults, but not IP/protocol/port allow and deny rules".into(),
         });
-    } else if cfg!(any(target_os = "linux", target_os = "macos")) {
-        checks.push(result("http_proxy", proxy_check()));
     } else {
         checks.push(CheckResult {
-            name: "http_proxy",
+            name: "native_network",
             required: true,
             status: CheckStatus::Unsupported,
-            detail: "HTTP proxy isolation has no supported backend on this platform".into(),
+            detail: "native MXC networking has no supported backend on this platform".into(),
         });
     }
     CheckReport::finish(started, checks)
@@ -242,24 +241,22 @@ fn invoke(arguments: &[String], cwd: &Path, policy: &SandboxPolicy) -> io::Resul
 }
 
 fn probe(arguments: Vec<OsString>) -> io::Result<()> {
-    let [mode, first, second] = arguments.as_slice() else {
-        return Err(io::Error::other("invalid private sandbox check arguments"));
-    };
-    match mode.to_str() {
-        Some("offline") => {
-            let port = parse_port(second)?;
-            offline_probe(Path::new(first), port)
-        }
-        Some("http_proxy") => {
-            let port = parse_port(first)?;
-            let expected = second
+    let (mode, arguments) = arguments
+        .split_first()
+        .ok_or_else(|| io::Error::other("missing private sandbox check mode"))?;
+    match (mode.to_str(), arguments) {
+        (Some("offline"), [root, port]) => offline_probe(Path::new(root), parse_port(port)?),
+        (Some("native_network"), [address, denied_port, expected]) => {
+            let address = address
+                .to_str()
+                .and_then(|value| value.parse::<SocketAddr>().ok())
+                .ok_or_else(|| io::Error::other("invalid local fixture address"))?;
+            let expected = expected
                 .to_str()
                 .ok_or_else(|| io::Error::other("invalid fixture response"))?;
-            let proxy = std::env::var("HTTP_PROXY")
-                .map_err(|_| io::Error::other("MXC did not provide an HTTP proxy endpoint"))?;
-            verify_proxy(&proxy, port, expected)
+            verify_native_network(address, parse_port(denied_port)?, expected)
         }
-        _ => Err(io::Error::other("unknown private sandbox check")),
+        _ => Err(io::Error::other("invalid private sandbox check arguments")),
     }
 }
 
@@ -310,87 +307,104 @@ fn offline_probe(root: &Path, port: u16) -> io::Result<()> {
     Ok(())
 }
 
-fn proxy_check() -> io::Result<&'static str> {
+fn native_network_check() -> io::Result<&'static str> {
     let root = fixture()?;
-    let endpoint = LocalEndpoint::start()?;
+    let address = local_fixture_address()?;
+    let allowed = LocalEndpoint::start(address)?;
+    let denied = LocalEndpoint::start(address)?;
     let policy = SandboxPolicy {
         readonly_paths: vec![root.path().to_path_buf()],
         private_paths: vec![root.path().to_path_buf()],
-        network: SandboxNetwork::HttpProxy {
-            targets: vec![endpoint.target()],
+        network: SandboxNetwork::Native {
+            policy: serde_json::from_value(serde_json::json!({
+                "egress": {
+                    "default": "deny",
+                    "allow": [{
+                        "to": [{"cidr": format!("{address}/32")}],
+                        "ports": [
+                            {"protocol": "tcp", "port": allowed.port},
+                            {"protocol": "tcp", "port": denied.port}
+                        ]
+                    }],
+                    "deny": [{
+                        "to": [{"cidr": format!("{address}/32")}],
+                        "ports": [{"protocol": "tcp", "port": denied.port}]
+                    }]
+                },
+                "ingress": {"default": "deny", "hostLoopback": "deny"}
+            }))
+            .map_err(io::Error::other)?,
         },
         timeout_ms: Some(PROBE_TIMEOUT.as_millis() as u64),
         ..Default::default()
     };
     invoke(
         &[
-            "http_proxy".into(),
-            endpoint.port.to_string(),
-            endpoint.response.clone(),
+            "native_network".into(),
+            SocketAddr::new(IpAddr::V4(address), allowed.port).to_string(),
+            denied.port.to_string(),
+            allowed.response.clone(),
         ],
         root.path(),
         &policy,
     )?;
     Ok(
-        "authenticated MXC HTTP proxy reached the pinned local fixture; unapproved destination denied; no external network used",
+        "native MXC TCP allow reached a local interface fixture; explicit deny overrode allow; no proxy or external network used",
     )
 }
 
-fn verify_proxy(proxy: &str, port: u16, expected: &str) -> io::Result<()> {
-    let response = proxy_request(proxy, FIXTURE_HOST, port)?;
+fn local_fixture_address() -> io::Result<Ipv4Addr> {
+    // UDP connect only selects a route and local interface; no packet is sent.
+    // The fixture then binds and connects exclusively to that local interface.
+    let route = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
+    route.connect((Ipv4Addr::new(192, 0, 2, 1), 9))?;
+    match route.local_addr()?.ip() {
+        IpAddr::V4(address) if !address.is_loopback() && !address.is_unspecified() => Ok(address),
+        _ => Err(io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            "native network self-check requires a local non-loopback IPv4 interface",
+        )),
+    }
+}
+
+fn verify_native_network(allowed: SocketAddr, denied_port: u16, expected: &str) -> io::Result<()> {
     require(
-        response.starts_with("HTTP/1.1 200 ")
-            && response
-                .split_once("\r\n\r\n")
-                .is_some_and(|(_, body)| body == expected),
-        "approved local HTTP fixture was not reached through the MXC proxy",
+        fixture_request(allowed)? == expected,
+        "native MXC allow rule did not reach the local fixture",
     )?;
-    let denied = proxy_request(proxy, "unapproved-sandbox-check.invalid", port)?;
     require(
-        denied.starts_with("HTTP/1.1 403 "),
-        "HTTP proxy did not reject an unapproved destination",
+        TcpStream::connect_timeout(
+            &SocketAddr::new(allowed.ip(), denied_port),
+            Duration::from_millis(700),
+        )
+        .is_err(),
+        "native MXC deny rule did not block a destination also covered by allow",
+    )?;
+    require(
+        !std::env::vars_os().any(|(name, _)| {
+            matches!(
+                name.to_string_lossy().to_ascii_uppercase().as_str(),
+                "HTTP_PROXY" | "HTTPS_PROXY" | "ALL_PROXY" | "FTP_PROXY"
+            )
+        }),
+        "native sandbox unexpectedly inherited proxy configuration",
     )
 }
 
-fn proxy_request(proxy: &str, host: &str, port: u16) -> io::Result<String> {
-    let proxy =
-        url::Url::parse(proxy).map_err(|_| io::Error::other("invalid MXC proxy endpoint"))?;
-    let address = match proxy.host() {
-        Some(url::Host::Ipv4(address)) => IpAddr::V4(address),
-        Some(url::Host::Ipv6(address)) => IpAddr::V6(address),
-        _ => {
-            return Err(io::Error::other(
-                "MXC proxy endpoint must have a numeric address",
-            ));
-        }
-    };
-    let proxy_port = proxy
-        .port_or_known_default()
-        .ok_or_else(|| io::Error::other("MXC proxy endpoint has no port"))?;
-    let mut stream = TcpStream::connect_timeout(
-        &SocketAddr::new(address, proxy_port),
-        Duration::from_secs(3),
-    )?;
+fn fixture_request(address: SocketAddr) -> io::Result<String> {
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3))?;
     stream.set_read_timeout(Some(Duration::from_secs(4)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    let authorization = STANDARD.encode(format!(
-        "{}:{}",
-        proxy.username(),
-        proxy.password().unwrap_or_default()
-    ));
-    write!(
-        stream,
-        "GET http://{host}:{port}/probe HTTP/1.1\r\nHost: {host}:{port}\r\nProxy-Authorization: Basic {authorization}\r\nConnection: close\r\n\r\n"
-    )?;
+    stream.write_all(FIXTURE_REQUEST)?;
     let mut response = Vec::new();
     stream
         .take((OUTPUT_LIMIT + 1) as u64)
         .read_to_end(&mut response)?;
     require(
         response.len() <= OUTPUT_LIMIT,
-        "HTTP fixture response exceeded its limit",
+        "native network fixture response exceeded its limit",
     )?;
-    String::from_utf8(response).map_err(|_| io::Error::other("invalid HTTP fixture response"))
+    String::from_utf8(response).map_err(|_| io::Error::other("invalid fixture response"))
 }
 
 struct LocalEndpoint {
@@ -401,8 +415,8 @@ struct LocalEndpoint {
 }
 
 impl LocalEndpoint {
-    fn start() -> io::Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    fn start(address: Ipv4Addr) -> io::Result<Self> {
+        let listener = TcpListener::bind((address, 0))?;
         listener.set_nonblocking(true)?;
         let port = listener.local_addr()?.port();
         let response = uuid::Uuid::new_v4().simple().to_string();
@@ -410,7 +424,7 @@ impl LocalEndpoint {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = stop.clone();
         let worker = thread::Builder::new()
-            .name("agena-sandbox-check-http".into())
+            .name("agena-sandbox-check-native-network".into())
             .spawn(move || {
                 while !worker_stop.load(Ordering::Acquire) {
                     match listener.accept() {
@@ -431,14 +445,6 @@ impl LocalEndpoint {
             worker: Some(worker),
         })
     }
-
-    fn target(&self) -> ProxyTarget {
-        ProxyTarget {
-            host: FIXTURE_HOST.into(),
-            port: Some(self.port),
-            addresses: vec![IpAddr::V4(Ipv4Addr::LOCALHOST)],
-        }
-    }
 }
 
 impl Drop for LocalEndpoint {
@@ -454,27 +460,15 @@ fn serve_fixture(stream: &mut TcpStream, body: &str, stop: &AtomicBool) -> io::R
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
     stream.set_write_timeout(Some(Duration::from_millis(200)))?;
     let deadline = Instant::now() + Duration::from_secs(3);
-    let mut header = Vec::new();
-    while header.len() < 4096 && Instant::now() < deadline && !stop.load(Ordering::Acquire) {
-        let mut buffer = [0; 512];
+    let mut request = Vec::new();
+    while request.len() < FIXTURE_REQUEST.len()
+        && Instant::now() < deadline
+        && !stop.load(Ordering::Acquire)
+    {
+        let mut buffer = [0; 64];
         match stream.read(&mut buffer) {
             Ok(0) => break,
-            Ok(count) => {
-                header.extend_from_slice(&buffer[..count]);
-                if header.windows(4).any(|part| part == b"\r\n\r\n") {
-                    let header = String::from_utf8_lossy(&header);
-                    require(
-                        header.starts_with("GET /probe HTTP/1.1\r\n")
-                            && !header.to_ascii_lowercase().contains("proxy-authorization:"),
-                        "proxy fixture received an invalid request or leaked authorization",
-                    )?;
-                    return write!(
-                        stream,
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                }
-            }
+            Ok(count) => request.extend_from_slice(&buffer[..count]),
             Err(error)
                 if matches!(
                     error.kind(),
@@ -483,10 +477,11 @@ fn serve_fixture(stream: &mut TcpStream, body: &str, stop: &AtomicBool) -> io::R
             Err(error) => return Err(error),
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::TimedOut,
-        "HTTP fixture request did not complete",
-    ))
+    require(
+        request == FIXTURE_REQUEST,
+        "native network fixture received an invalid request",
+    )?;
+    stream.write_all(body.as_bytes())
 }
 
 fn path_argument(path: &Path) -> io::Result<String> {
@@ -512,7 +507,7 @@ mod tests {
         let mut checks = vec![
             result("offline", Ok("fixture passed")),
             CheckResult {
-                name: "http_proxy",
+                name: "native_network",
                 required: false,
                 status: CheckStatus::Unsupported,
                 detail: "platform limitation".into(),
@@ -527,7 +522,7 @@ mod tests {
         assert_eq!(json["checks"][1]["required"], false);
         assert!(!CheckReport::finish(Instant::now(), vec![failed("offline", "blocked")]).ok);
         let unsupported = CheckResult {
-            name: "http_proxy",
+            name: "native_network",
             required: true,
             status: CheckStatus::Unsupported,
             detail: "required backend missing".into(),
@@ -536,15 +531,13 @@ mod tests {
     }
 
     #[test]
-    fn local_http_fixture_checks_authentication_pinning_and_denied_destinations() {
-        let endpoint = LocalEndpoint::start().unwrap();
-        let proxy = crate::sandbox_proxy::ProxyBroker::start(&[endpoint.target()]).unwrap();
-        verify_proxy(proxy.url(), endpoint.port, &endpoint.response).unwrap();
-        let mut bad = url::Url::parse(proxy.url()).unwrap();
-        bad.set_password(Some("incorrect-fixture-password"))
-            .unwrap();
-        let response = proxy_request(bad.as_str(), FIXTURE_HOST, endpoint.port).unwrap();
-        assert!(response.starts_with("HTTP/1.1 407 "));
+    fn native_network_fixture_detects_an_unrestricted_process() {
+        let allowed = LocalEndpoint::start(Ipv4Addr::LOCALHOST).unwrap();
+        let denied = LocalEndpoint::start(Ipv4Addr::LOCALHOST).unwrap();
+        let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), allowed.port);
+        assert_eq!(fixture_request(address).unwrap(), allowed.response);
+        let error = verify_native_network(address, denied.port, &allowed.response).unwrap_err();
+        assert!(error.to_string().contains("deny rule did not block"));
     }
 
     #[test]
@@ -561,10 +554,10 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_http_fixture_clients_do_not_delay_cleanup() {
-        let endpoint = LocalEndpoint::start().unwrap();
+    fn incomplete_native_fixture_clients_do_not_delay_cleanup() {
+        let endpoint = LocalEndpoint::start(Ipv4Addr::LOCALHOST).unwrap();
         let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, endpoint.port)).unwrap();
-        client.write_all(b"GET /probe").unwrap();
+        client.write_all(b"agena-native").unwrap();
         thread::sleep(Duration::from_millis(20));
         let started = Instant::now();
         drop(endpoint);

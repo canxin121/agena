@@ -44,10 +44,13 @@ async fn path_rules(user: &UserSession, rules: &[(PathBuf, &str, &str)]) -> Resu
     let mut policy = serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
     let mut paths = serde_json::Map::new();
     for (path, read, write) in rules {
-        paths.insert(
-            path.to_string_lossy().into_owned(),
-            json!({"read":read,"write":write}),
-        );
+        let mode = match (*read, *write) {
+            ("allow", "allow") => "readwrite",
+            ("allow", "deny") => "readonly",
+            ("deny", "deny") => "deny",
+            _ => anyhow::bail!("invalid concrete path permission fixture"),
+        };
+        paths.insert(path.to_string_lossy().into_owned(), json!(mode));
     }
     policy["path"]["rules"] = Value::Object(paths);
     user.client()
@@ -329,46 +332,78 @@ async fn skill_install_preview_is_read_only_and_denied_install_preserves_source(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn skill_downloads_wait_for_permission_and_preserve_user_declines() -> TestResult {
+async fn skill_downloads_obey_static_network_denials_and_tool_approval() -> TestResult {
     fixture()
         .expect_plugin("agena.skills")
         .run(|case| async move {
             let requests = Arc::new(AtomicUsize::new(0));
             let seen = requests.clone();
-            let service = case.serve_http(Router::new().route(
-                "/skills.zip",
-                get(move || {
-                    seen.fetch_add(1, Ordering::SeqCst);
-                    async { "permission must be resolved before this handler" }
-                }),
-            )).await?;
+            let service = case
+                .serve_http_on(
+                    super::super::native_fixture_address()?,
+                    Router::new().route(
+                        "/skills.zip",
+                        get(move || {
+                            seen.fetch_add(1, Ordering::SeqCst);
+                            async { "permission must be resolved before this handler" }
+                        }),
+                    ),
+                )
+                .await?;
             let archive_url = service.url("/skills.zip");
             let user = user(&case).await?;
-            let mut policy = serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
-            policy["network"] = json!({"loopback":"ask","internet":"ask","private":"deny"});
-            user.client()
-                .set_session_permission(user.id(), serde_json::from_value(policy)?)
-                .await?;
-
-            for tool in ["skills.preview_install", "skills.install"] {
-                for (source, target) in [
-                    (json!({"kind":"archive","url":archive_url}), archive_url.clone()),
-                    (
-                        json!({"kind":"github","url":"https://github.com/agena-fixtures/skills","reference":"main"}),
-                        "https://codeload.github.com/agena-fixtures/skills/tar.gz/main".to_owned(),
-                    ),
+            let mut policy =
+                serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
+            for tool_approval in [false, true] {
+                policy["network"] = if tool_approval {
+                    super::super::native_fixture_network()?
+                } else {
+                    serde_json::to_value(agena_domain::NetworkPermissionConfig::offline())?
+                };
+                // Keep the fixture's exposed and registry names consistent;
+                // the exposed name is checked first for these invocations.
+                for name in [
+                    "skills.preview_install", "agena.skills.preview_install",
+                    "skills.install", "agena.skills.install",
                 ] {
-                    let run = user.start_tool(tool, json!({"scope":"workspace","source":source})).await?;
-                    let permission = run.wait_permission().await?;
-                    let request = serde_json::to_value(&permission.request.request)?;
-                    assert_eq!(request.pointer("/action/target"), Some(&json!(target)));
-                    assert_eq!(requests.load(Ordering::SeqCst), 0);
-                    ensure!(!case.workspace().join(".agena/skills").exists());
-                    permission.mark_presented().await?;
-                    permission.deny_once().await?;
-                    failure(&run.wait_settled().await?, ModelFeedbackKind::UserDeclined)?;
-                    assert_eq!(requests.load(Ordering::SeqCst), 0);
-                    ensure!(!case.workspace().join(".agena/skills").exists());
+                    policy["tools"]["names"][name] =
+                        json!(if tool_approval { "ask" } else { "allow" });
+                }
+                user.client()
+                    .set_session_permission(user.id(), serde_json::from_value(policy.clone())?)
+                    .await?;
+
+                for tool in ["skills.preview_install", "skills.install"] {
+                    for source in [
+                        json!({"kind":"archive","url":archive_url}),
+                        json!({"kind":"github","url":"https://github.com/agena-fixtures/skills","reference":"main"}),
+                    ] {
+                        let input = json!({"scope":"workspace","source":source});
+                        if tool_approval {
+                            let run = user.start_tool(tool, input).await?;
+                            let permission = run.wait_permission().await?;
+                            let request = serde_json::to_value(&permission.request.request)?;
+                            assert_eq!(request.pointer("/action/kind"), Some(&json!("tool")));
+                            assert_eq!(
+                                request.pointer("/action/tool_name"),
+                                Some(&json!(tool))
+                            );
+                            assert_eq!(requests.load(Ordering::SeqCst), 0);
+                            ensure!(!case.workspace().join(".agena/skills").exists());
+                            permission.mark_presented().await?;
+                            permission.deny_once().await?;
+                            failure(&run.wait_settled().await?, ModelFeedbackKind::UserDeclined)?;
+                        } else {
+                            let result = user.call_tool(tool, input).await?;
+                            failure(&result, ModelFeedbackKind::PermissionDenied)?;
+                        }
+                        ensure!(
+                            user.snapshot().await?.session.state.pending_interactive_requests().is_empty(),
+                            "a concrete network denial must not wait for approval"
+                        );
+                        assert_eq!(requests.load(Ordering::SeqCst), 0);
+                        ensure!(!case.workspace().join(".agena/skills").exists());
+                    }
                 }
             }
             Ok(())

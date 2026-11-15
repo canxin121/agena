@@ -25,11 +25,46 @@ cdylib ABI 版本为 2，`cancel(request_id)` 独立于 dispatch 队列。原生
 ## 查询与授权的区别
 
 - `check_path_permission`、`check_network_permission` 只读查询当前会话策略和已保存规则，不调用审批模型、不创建交互，也不构成一次授权。
-- `require_path_permission`、`require_network_permission` 在访问资源前执行统一授权：Allow 放行，Deny 返回策略拒绝，Auto 调用审批模型，无法确定时转 Ask，Ask 等待用户明确回复。
+- `require_path_permission`、`require_network_permission` 在访问资源前执行统一授权。路径与原生网络设置提供确定的资源边界；网络只接受 Allow / Deny，实际 IP、协议、端口必须在设置和所有权限上限允许的范围内。工具层的 Auto 调用审批模型，Ask 等待用户回复，批准不会扩大资源范围。
 - 默认 SDK host 没有审批实现时，Ask 返回 HostUnavailable。不会把 Ask 伪装成 Deny，也不会默许执行。
 - 运行时审批要求真实活动中的工具调用及其宿主签发的临时凭证。插件不能通过自行填写 session_id、call_id 或 workspace_root 获得其他会话权限。凭证与插件、调用、工作区和插件代次绑定，调用完成后失效。
-- 同一工具调用并发提出的审批串行处理，避免争抢工具的交互槽。已批准的相同访问可在本次调用内复用；网络按主机与端口复用。每次仍先读取当前规则，明确 Deny 优先。AllowOnce 不跨工具调用复用。
+- 同一工具调用并发提出的审批串行处理，避免争抢工具的交互槽。已批准的相同访问可在本次调用内复用；每次仍先读取当前规则，明确 Deny 优先；网络批准不能越过原生 IP、协议、端口策略。AllowOnce 不跨工具调用复用。
 - 审批等待暂停执行预算，不暂停取消信号。审批结束后继续计算实际工作耗时；并发等待只计一次。SDK、宿主工具调用、HTTP 传输、抓取和搜索协调器共享这一约定。
+
+### 原生 MXC 网络策略
+
+网络配置使用 `permission.network.egress` 和 `permission.network.ingress`。出站包含 `default`、`allow`、`deny`；规则使用数值 `cidr`、可选 `except`、`protocol`、`port` 与 `endPort`。动作只有 `allow` / `deny`，拒绝优先。旧的公网/私网/回环分类字段、域名规则与网络审批模式不再接受。
+
+```json
+{
+  "permission": {
+    "network": {
+      "egress": {
+        "default": "deny",
+        "allow": [
+          {
+            "to": [{ "cidr": "192.0.2.10/32" }],
+            "ports": [{ "protocol": "tcp", "port": 443 }]
+          }
+        ],
+        "deny": []
+      },
+      "ingress": {
+        "default": "deny",
+        "hostLoopback": "deny"
+      }
+    }
+  }
+}
+```
+
+示例 IP 应换成实际目的地址。未提供字段继承，显式空数组覆盖并清空继承列表。非法字段、空目标选择器、错误 CIDR/排除子网、端口范围和当前平台不支持的配置都会在保存前报错。
+
+子进程工具的 `network: []` 选择离线，单独的 `network: ["*"]` 申请设置允许的完整原生范围；具体目标声明先解析为 IP，再与配置和全部权限上限取交集。`host:port` 使用 TCP，`udp://host:port` 使用 UDP，`icmp://host` 使用 ICMP；裸主机申请该目标内设置已允许的协议和端口。主机名声明不提供域名级隔离，DNS 依赖同样必须获准。
+
+Linux 支持细粒度出站规则，但拒绝允许入站和宿主回环的设置；macOS 不支持细粒度出站规则，出站默认允许时可以申请 `["*"]`；Windows 按本机原生后端能力执行。沙盒权限代理已经移除。服务/provider 自己使用的 HTTP/SOCKS 路由配置仍由各自客户端管理。
+
+完整规则和平台示例见 [工具沙盒文档](sandbox.md#网络设置与执行)。
 
 ### 通用会话接口（`HostClient::session_op`）
 
@@ -64,7 +99,7 @@ stdio 与 HTTP 回调都通过 `host/session.op` 转发，请求体使用 `{"req
 | `agena.settings` | 读取全局/工作区配置、合并验证、修改文件及请求重载 | 文件读取检查对应路径；合并验证检查两层 Read；实际编辑检查选中层 Write。dry_run 不申请不发生的写入。读取已加载的 effective 配置属于宿主配置能力。 |
 | `agena.commands` | 发现技能/命令、读取资源、安装和移除工作区技能 | 请求时扫描授权现有配置根；资源单独授权具体路径。批准后使用同一个解析出的包，避免再次解析换成别的文件。移除先将别名解析成真实包名，再批准真实目标。安装/移除在创建目录前批准。热重载时获取当前代次的 host。请求按当前调用的工作区扫描；遍历的目录和实际读取的命令文档逐项授权，不使用初始化数据目录替代请求工作区。 |
 | `agena.memory` | 工作区记忆文件与内部检索索引 | 显式读写按目录/记录路径申请权限；写入/删除同时授权实际连带修改的 MEMORY.md。目录检索在读每条记录前检查子路径，授权和实际访问均绑定当前调用的工作区。自动召回只查询已有权限，需要审批时跳过，避免后台 hook 发起交互。默认 `<state>` 规则允许当前实例的工作区记忆；用户限制该路径时仍生效。索引由宿主私有存储能力维护。 |
-| `agena.web` | 搜索、HTTP 抓取、重定向、robots、缓存读取、浏览器操作、截图与下载 | 所有网络 require 接入统一审批；每个 HTTP 重定向和浏览器 HTTP 请求重新授权。交互浏览器补齐子资源拦截并绕过 service worker/缓存。截图指定用户路径时要求 Write。下载保留调用上下文。拒绝不再被聚合成空搜索或“0 个可读页面”。浏览器旧调用的延迟拒绝不影响新调用。公共地址限制返回明确的策略拒绝，网络批准不会越过这个独立限制。默认兼容常见 TUN 代理的 IPv4/IPv6 Fake-IP DNS，服务端也可声明额外网段，见下文。 |
+| `agena.web` | 搜索、HTTP 抓取、重定向、robots、缓存读取、浏览器操作、截图与下载 | 所有网络 require 接入统一原生资源权限校验；每个 HTTP 重定向和浏览器 HTTP 请求重新授权。交互浏览器补齐子资源拦截并绕过 service worker/缓存。截图指定用户路径时要求 Write。下载保留调用上下文。拒绝不再被聚合成空搜索或“0 个可读页面”。浏览器旧调用的延迟拒绝不影响新调用。公共地址限制返回明确的策略拒绝，网络批准不会越过这个独立限制。默认兼容常见 TUN 代理的 IPv4/IPv6 Fake-IP DNS，服务端也可声明额外网段，见下文。 |
 | `agena.chatgpt` | OpenAI 请求、图片输入、云端媒体及远程文件 | 请求发送前检查实际 provider endpoint；本地图片与媒体先 Read。禁止自动重定向。审批目标移除 query/fragment，避免暴露签名或 API key。 |
 | `agena.claude` | Anthropic 请求、云端媒体与文件管理 | 复用相同 endpoint 和本地输入授权；远程文件句柄继续绑定工作区、会话和 provider 连接。 |
 | `agena.gemini` | Gemini 请求、图片/媒体、可恢复上传及文件管理 | 相同网络和文件检查；上传初始化、服务端给出的上传地址、查询/删除文件均检查实际请求地址。保留上传地址同源验证。 |
@@ -94,7 +129,7 @@ stdio 和 HTTP 使用独立的 `host/permission.require_path`、`host/permission
 
 会话错误边界保留策略拒绝、用户拒绝及执行器已验证的插件 Failure 分类。策略拒绝不会被标成可重试的内部故障；用户明确拒绝也不会变成一条自动重试指令。爬取和浏览器适配器保留拒绝类型与原始 Failure 标识。
 
-## HTTP / SOCKS 代理
+## 服务 HTTP / SOCKS 路由
 
 网页搜索、普通 HTTP 抓取、robots、重定向预检和搜索 API 默认读取
 `HTTP_PROXY`/`http_proxy`、`HTTPS_PROXY`/`https_proxy`、`ALL_PROXY`/`all_proxy`、
@@ -184,10 +219,12 @@ python3 scripts/probes/web_fake_ip.py \
   --output target/web-validation/fake-ip-new-run
 ```
 
-验证默认配置与已有显式网段配置下的多引擎真实结果、网页抓取、Internet Deny，以及 IP 字面量和回环地址
-在网络审批允许时仍被公共地址策略拒绝。单个搜索引擎的验证码、限流或网络失败可以保留为部分结果诊断。
-机器已安装 Chrome/Chromium 时，可追加 `--browser` 验证真实浏览器渲染路径。
-追加 `--proxy http://127.0.0.1:7890` 会追加显式代理和环境变量代理两个阶段，验证真实搜索、抓取和拒绝行为。
+验证默认配置与已有显式网段配置下的多引擎真实结果、网页抓取、原生出站拒绝，以及 IP 字面量和回环地址
+仍被公共地址策略拒绝。资源设置使用原生 `egress` / `ingress`；审批由工具规则控制。
+单个搜索引擎的验证码、限流或网络失败可以保留为部分结果诊断。
+追加 `--browser` 验证启用沙盒时浏览器渲染入口按当前能力返回拒绝。
+追加 `--proxy http://127.0.0.1:7890` 会检查显式代理和环境变量代理两个阶段：
+需要代理重新解析目标、无法固定获准 IP 的路由必须在实际请求前拒绝。
 
 ## 本次验证记录（2026-10-25）
 
@@ -210,4 +247,4 @@ python3 scripts/probes/web_fake_ip.py \
 
 ## 权限边界
 
-这是 Agena 的协作式权限协议，不是所有插件包的操作系统沙箱。安装的原生、cdylib、stdio、HTTP 插件及 MCP/LSP 进程仍是可信代码；恶意程序自行调用系统接口不能靠 Rust trait 阻止。WASM 没有预打开宿主目录或授予网络。浏览器拦截覆盖 CDP Fetch 支持的 HTTP 请求，不能当成 Chromium 的完整网络沙箱或 DNS 连接绑定。配置的 provider、插件传输、MCP/LSP 启动与技能发现属于已安装运行时能力；会话中由工具选择的资源访问则执行上面的权限流程。
+宿主回调提供协作式权限协议；模型触发的本地子进程和工具 worker 另通过 MXC 执行原生文件及网络隔离。原生/cdylib 插件与宿主同进程运行，必须作为可信代码安装；HTTP 插件的远端执行边界由远端服务负责。stdio 插件、MCP/LSP 子进程的具体沙盒作用域见工具沙盒文档。WASM 没有预打开宿主目录或授予网络。浏览器拦截覆盖 CDP Fetch 支持的 HTTP 请求，不能当成 Chromium 的完整网络沙箱或 DNS 连接绑定。配置的 provider、插件传输、MCP/LSP 启动与技能发现属于已安装运行时能力；会话中由工具选择的资源访问则执行上面的权限流程。

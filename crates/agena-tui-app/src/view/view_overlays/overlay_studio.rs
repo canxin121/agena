@@ -204,10 +204,10 @@ impl App {
         match section_id {
             PermissionStudioSectionId::PathDefaults => ("Setting".to_string(), "Value".to_string()),
             PermissionStudioSectionId::PathRules => ("Path".to_string(), "Access".to_string()),
-            PermissionStudioSectionId::NetworkZones => ("Zone".to_string(), "Connect".to_string()),
-            PermissionStudioSectionId::NetworkRules => {
-                ("Domain".to_string(), "Connect".to_string())
+            PermissionStudioSectionId::NetworkDefaults => {
+                ("Direction".to_string(), "Action".to_string())
             }
+            PermissionStudioSectionId::NetworkRules => ("Policy".to_string(), "JSON".to_string()),
             PermissionStudioSectionId::ToolDefaults | PermissionStudioSectionId::ToolNames => {
                 ("Name".to_string(), "Access".to_string())
             }

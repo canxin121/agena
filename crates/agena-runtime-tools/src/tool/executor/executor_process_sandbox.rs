@@ -3,8 +3,6 @@ use agena_domain::{AccessKind, NetworkTarget, PermissionDecision};
 use agena_plugin_host::sdk::host_api::HostProcessResources;
 use std::path::{Path, PathBuf};
 
-static PROCESS_POLICY_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(4);
-
 impl ToolExecutor {
     /// Resolve declarations before approval. The resulting absolute paths are
     /// retained for compilation; relative resource paths use the child's cwd.
@@ -113,62 +111,68 @@ impl ToolExecutor {
         Ok(checks)
     }
 
+    pub async fn process_sandbox_permission_checks_async(
+        &self,
+        resources: &HostProcessResources,
+    ) -> Result<Vec<agena_tool::ToolPermissionCheck>, ToolError> {
+        let resources = resources.clone();
+        self.run_permission_preflight(move |executor| {
+            executor.process_sandbox_permission_checks(&resources)
+        })
+        .await
+    }
+
     /// Compile only after the host authorized `resources` and loaded current
     /// persisted decisions. The boolean marks approvals limited to this call.
     pub async fn prepare_process_sandbox_policy(
         &self,
         resources: HostProcessResources,
     ) -> Result<(serde_json::Value, bool), ToolError> {
-        let executor = self.clone();
-        PROCESS_POLICY_WORKERS
-            .run(move || {
-                let snapshot = executor.sandbox_permission_snapshot();
-                let reads = resources
-                    .reads
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<_>>();
-                let writes = resources
-                    .writes
-                    .iter()
-                    .map(PathBuf::from)
-                    .collect::<Vec<_>>();
-                let mut call_bound = reads.iter().any(|path| {
-                    !matches!(
-                        snapshot.authorize_path_access(AccessKind::Read, path),
-                        PermissionDecision::Allow
-                    )
-                }) || writes.iter().any(|path| {
-                    !matches!(
-                        snapshot.authorize_path_access(AccessKind::Write, path),
-                        PermissionDecision::Allow
-                    )
-                });
-                for target in &resources.network {
-                    let target: NetworkTarget = target.parse().map_err(|error| {
-                        ToolError::invalid_input(format!("invalid process network target: {error}"))
-                    })?;
-                    call_bound |= !matches!(
-                        snapshot.authorize_network_connect(&target),
-                        PermissionDecision::Allow
-                    );
-                }
-                let policy = crate::shell_sandbox::policy_for_paths(
-                    &executor,
-                    &reads,
-                    &writes,
-                    &resources.network,
-                )?;
-                Ok((
-                    serde_json::to_value(policy)
-                        .map_err(|error| ToolError::invalid_input_error(&error))?,
-                    call_bound,
-                ))
-            })
-            .await
-            .map_err(|error| {
-                ToolError::invalid_input(format!("process sandbox policy worker failed: {error}"))
-            })?
+        self.run_permission_preflight(move |executor| {
+            let snapshot = executor.sandbox_permission_snapshot();
+            let reads = resources
+                .reads
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            let writes = resources
+                .writes
+                .iter()
+                .map(PathBuf::from)
+                .collect::<Vec<_>>();
+            let mut call_bound = reads.iter().any(|path| {
+                !matches!(
+                    snapshot.authorize_path_access(AccessKind::Read, path),
+                    PermissionDecision::Allow
+                )
+            }) || writes.iter().any(|path| {
+                !matches!(
+                    snapshot.authorize_path_access(AccessKind::Write, path),
+                    PermissionDecision::Allow
+                )
+            });
+            for target in &resources.network {
+                let target: NetworkTarget = target.parse().map_err(|error| {
+                    ToolError::invalid_input(format!("invalid process network target: {error}"))
+                })?;
+                call_bound |= !matches!(
+                    snapshot.authorize_network_connect(&target),
+                    PermissionDecision::Allow
+                );
+            }
+            let policy = crate::shell_sandbox::policy_for_paths(
+                &executor,
+                &reads,
+                &writes,
+                &resources.network,
+            )?;
+            Ok((
+                serde_json::to_value(policy)
+                    .map_err(|error| ToolError::invalid_input_error(&error))?,
+                call_bound,
+            ))
+        })
+        .await
     }
 }
 

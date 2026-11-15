@@ -1636,10 +1636,15 @@ try:
     by_name = {item.get("name"): item for item in checks}
     if len(by_name) != len(checks) or report.get("platform") not in ("linux", "macos"):
         raise ValueError("sandbox report has invalid platform or duplicate checks")
-    for name in ("offline", "http_proxy"):
+    required_names = ("offline", "native_network") if report["platform"] == "linux" else ("offline",)
+    for name in required_names:
         check = by_name.get(name, {})
         if check.get("required") is not True or check.get("status") != "passed":
             raise ValueError("required sandbox check did not pass: " + name)
+    if report["platform"] == "macos":
+        native = by_name.get("native_network", {})
+        if native.get("required") is not False or native.get("status") != "unsupported":
+            raise ValueError("macOS must report unsupported native IP/protocol/port rules")
     for check in checks:
         if type(check.get("required")) is not bool or check.get("status") not in ("passed", "failed", "unsupported"):
             raise ValueError("invalid sandbox check result")

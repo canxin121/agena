@@ -45,7 +45,6 @@ const technicalTemplateLiterals = new Set([
   'Top K',
   'Top P',
   'agena:tools',
-  'api.example.com:443 · 10.0.0.0/8',
   'git push *',
   'npm version or semver',
   'openai',

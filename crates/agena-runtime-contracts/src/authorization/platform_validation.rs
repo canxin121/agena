@@ -3,30 +3,17 @@
 use super::{PermissionConfig, PermissionConfigError};
 
 pub(super) fn validate(config: &PermissionConfig) -> Result<(), PermissionConfigError> {
+    if let Some(network) = &config.network {
+        network
+            .validate_for_platform(std::env::consts::OS)
+            .map_err(|reason| PermissionConfigError::UnsupportedSandbox {
+                field: "permission.network".into(),
+                reason,
+            })?;
+    }
     #[cfg(target_os = "windows")]
     {
-        use agena_domain::{PathPermissionMode, PermissionMode};
-
-        // Agena has not yet implemented an identity-bound proxy for PSEC.
-        // Accepting these decisions would persist policies every launch rejects.
-        if let Some(network) = &config.network {
-            for (field, mode) in [
-                ("permission.network.internet", network.internet),
-                ("permission.network.private", network.private),
-                ("permission.network.loopback", network.loopback),
-            ] {
-                if mode.is_some_and(|mode| mode != PermissionMode::Deny) {
-                    return Err(unsupported_network(field));
-                }
-            }
-            for (pattern, mode) in &network.rules {
-                if *mode != PermissionMode::Deny {
-                    return Err(unsupported_network(&format!(
-                        "permission.network.rules[{pattern:?}]"
-                    )));
-                }
-            }
-        }
+        use agena_domain::PathPermissionMode;
 
         if let Some(paths) = &config.path {
             let has_explicit_deny = paths
@@ -46,12 +33,4 @@ pub(super) fn validate(config: &PermissionConfig) -> Result<(), PermissionConfig
     #[cfg(not(target_os = "windows"))]
     let _ = config;
     Ok(())
-}
-
-#[cfg(target_os = "windows")]
-fn unsupported_network(field: &str) -> PermissionConfigError {
-    PermissionConfigError::UnsupportedSandbox {
-        field: field.into(),
-        reason: "Agena's Windows MXC adapter currently supports offline execution only; set internet, private, loopback and network rules to deny".into(),
-    }
 }

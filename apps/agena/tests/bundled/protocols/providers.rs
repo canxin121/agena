@@ -16,7 +16,7 @@ use axum::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::super::{allow_permissions, fixture};
+use super::super::{allow_permissions, fixture, native_fixture_address, native_fixture_network};
 
 mod boundaries;
 mod catalog;
@@ -251,7 +251,8 @@ async fn provider_case(vendor: Vendor) -> TestResult {
                 .context("the local Responses endpoint must end in /v1")?
                 .to_owned();
             let server = case
-                .serve_http(
+                .serve_http_on(
+                    native_fixture_address()?,
                     Router::new().fallback(gateway).with_state(Gateway {
                         vendor,
                         upstream,

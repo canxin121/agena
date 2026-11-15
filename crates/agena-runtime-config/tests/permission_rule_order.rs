@@ -8,9 +8,12 @@ use agena_runtime_config::{
     ConfigSettingsEditOptions, ConfigSettingsLayer, ConfigSettingsSetInput,
     set_layered_file_setting, set_runtime_file_setting,
 };
+#[cfg(not(target_os = "macos"))]
 use agena_runtime_contracts::{
-    authorization::{apply_to_network_permission_policy, apply_to_tool_permission_policy},
-    permission::{NetworkPermissionPolicy, ToolPermissionPolicy},
+    authorization::apply_to_network_permission_policy, permission::NetworkPermissionPolicy,
+};
+use agena_runtime_contracts::{
+    authorization::apply_to_tool_permission_policy, permission::ToolPermissionPolicy,
 };
 
 fn input(raw: &str) -> ConfigSettingsSetInput {
@@ -69,35 +72,35 @@ fn both_save_services_preserve_command_order_and_persist_order_only_updates() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(target_os = "macos"))]
 #[test]
-fn saved_network_rules_keep_order_including_order_only_updates() {
-    let deny_last = r#"{"network":{"rules":{"8.8.8.8:443":"allow","8.0.0.0/8":"deny"}}}"#;
-    let allow_last = r#"{"network":{"rules":{"8.0.0.0/8":"deny","8.8.8.8:443":"allow"}}}"#;
+fn saved_native_network_denies_override_allows_regardless_of_json_key_order() {
+    let deny_last = r#"{"network":{"egress":{"default":"deny","allow":[{"to":[{"cidr":"192.0.2.0/24"}],"ports":[{"protocol":"tcp","port":443}]}],"deny":[{"to":[{"cidr":"192.0.2.42/32"}]}]}}}"#;
+    let allow_last = r#"{"network":{"egress":{"default":"deny","deny":[{"to":[{"cidr":"192.0.2.42/32"}]}],"allow":[{"to":[{"cidr":"192.0.2.0/24"}],"ports":[{"protocol":"tcp","port":443}]}]}}}"#;
     for layered in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("global.json");
         let workspace = root.path().join("project/.agena/agena.json");
-        for (raw, expect_allowed) in [(deny_last, false), (allow_last, true)] {
-            let response = if layered {
+        for raw in [deny_last, allow_last] {
+            if layered {
                 set_layered_file_setting(&file, &workspace, ConfigSettingsLayer::Global, input(raw))
                     .unwrap()
             } else {
                 set_runtime_file_setting(&file, input(raw), None).unwrap()
             };
-            assert!(response.changed);
             let policy = apply_to_network_permission_policy(
                 &persisted_permission(&file),
                 NetworkPermissionPolicy::allow_all(),
             )
             .unwrap();
-            assert_eq!(
-                matches!(
-                    policy.check_connect(&"8.8.8.8:443".parse().unwrap()),
-                    PermissionDecision::Allow
-                ),
-                expect_allowed
-            );
+            assert!(matches!(
+                policy.check_connect(&"192.0.2.41:443".parse().unwrap()),
+                PermissionDecision::Allow
+            ));
+            assert!(matches!(
+                policy.check_connect(&"192.0.2.42:443".parse().unwrap()),
+                PermissionDecision::Deny { .. }
+            ));
         }
     }
 }

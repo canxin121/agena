@@ -34,7 +34,7 @@ pub enum McpError {
     #[error("request timed out: {0}")]
     Timeout(String),
 
-    #[error("permission for an MCP authentication endpoint was not granted")]
+    #[error("permission for an MCP network endpoint was not granted")]
     PermissionDenied,
 
     #[error("client shutting down")]
@@ -59,7 +59,7 @@ impl McpError {
     pub fn user_message(&self) -> String {
         match self {
             Self::PermissionDenied => {
-                "Permission for an MCP authentication endpoint was not granted.".into()
+                "Permission for an MCP network endpoint was not granted.".into()
             }
             Self::Auth(_) => {
                 "The MCP connection requires valid credentials or OAuth sign-in.".into()

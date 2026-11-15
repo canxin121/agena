@@ -3,8 +3,8 @@ use super::{
     parse_permission_studio_optional_mode_input, parse_permission_studio_optional_path_mode_input,
     path_access_modes_summary, path_permission_mode_token, permission_mode_input_text,
     permission_mode_label, permission_mode_token_text, permission_studio_mode_target_value,
-    permission_studio_path_target_value, rename_network_rule, rename_path_rule, rename_tool_name,
-    rename_tool_rule, set_path_default_mode,
+    permission_studio_path_target_value, rename_path_rule, rename_tool_name, rename_tool_rule,
+    set_path_default_mode,
 };
 
 pub(crate) fn permission_studio_sections(
@@ -78,86 +78,98 @@ pub(crate) fn permission_studio_sections(
                 items: rule_items,
             }]
         }
-        PermissionStudioPage::NetworkZones => vec![PermissionStudioSection {
-            id: PermissionStudioSectionId::NetworkZones,
-            label: ui_text::t(i18n, "permission-studio-page-network-zones"),
+        PermissionStudioPage::NetworkDefaults => vec![PermissionStudioSection {
+            id: PermissionStudioSectionId::NetworkDefaults,
+            label: ui_text::t(i18n, "permission-studio-page-network-defaults"),
             items: vec![
                 PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-network-internet"),
+                    label: ui_text::t(i18n, "permission-studio-network-egress-default"),
                     value: permission_mode_input_text(
                         dialog
                             .permission
                             .network
                             .as_ref()
-                            .and_then(|network| network.internet),
+                            .and_then(|network| network.egress.as_ref())
+                            .and_then(|egress| egress.default)
+                            .map(|action| match action {
+                                agena_domain::NetworkAction::Allow => {
+                                    agena_domain::PermissionMode::Allow
+                                }
+                                agena_domain::NetworkAction::Deny => {
+                                    agena_domain::PermissionMode::Deny
+                                }
+                            }),
                         i18n,
                     ),
                     action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkInternet,
+                        PermissionStudioModeTarget::NetworkEgressDefault,
                     ),
                 },
                 PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-network-private"),
+                    label: ui_text::t(i18n, "permission-studio-network-ingress-default"),
                     value: permission_mode_input_text(
                         dialog
                             .permission
                             .network
                             .as_ref()
-                            .and_then(|network| network.private),
+                            .and_then(|network| network.ingress.as_ref())
+                            .and_then(|ingress| ingress.default)
+                            .map(|action| match action {
+                                agena_domain::NetworkAction::Allow => {
+                                    agena_domain::PermissionMode::Allow
+                                }
+                                agena_domain::NetworkAction::Deny => {
+                                    agena_domain::PermissionMode::Deny
+                                }
+                            }),
                         i18n,
                     ),
                     action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkPrivate,
+                        PermissionStudioModeTarget::NetworkIngressDefault,
                     ),
                 },
                 PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-network-loopback"),
+                    label: ui_text::t(i18n, "permission-studio-network-host-loopback"),
                     value: permission_mode_input_text(
                         dialog
                             .permission
                             .network
                             .as_ref()
-                            .and_then(|network| network.loopback),
+                            .and_then(|network| network.ingress.as_ref())
+                            .and_then(|ingress| ingress.host_loopback)
+                            .map(|action| match action {
+                                agena_domain::NetworkAction::Allow => {
+                                    agena_domain::PermissionMode::Allow
+                                }
+                                agena_domain::NetworkAction::Deny => {
+                                    agena_domain::PermissionMode::Deny
+                                }
+                            }),
                         i18n,
                     ),
                     action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkLoopback,
+                        PermissionStudioModeTarget::NetworkHostLoopback,
                     ),
                 },
             ],
         }],
-        PermissionStudioPage::NetworkRules => {
-            let mut rules = dialog
-                .permission
-                .network
-                .as_ref()
-                .map(|network| network.rules.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            rules.sort();
-            let mut rule_items = rules
-                .into_iter()
-                .map(|target| PermissionStudioItem {
-                    label: target.clone(),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .network
-                            .as_ref()
-                            .and_then(|network| network.rules.get(target.as_str()).copied()),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkRule { target },
-                    ),
-                })
-                .collect::<Vec<_>>();
-            rule_items.insert(0, permission_studio_new_rule_item(i18n));
-            vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::NetworkRules,
-                label: ui_text::t(i18n, "permission-studio-page-network-rules"),
-                items: rule_items,
-            }]
-        }
+        PermissionStudioPage::NetworkRules => vec![PermissionStudioSection {
+            id: PermissionStudioSectionId::NetworkRules,
+            label: i18n.text("permission-studio-page-network-rules"),
+            items: vec![PermissionStudioItem {
+                label: i18n.text("permission-studio-network-json"),
+                value: serde_json::to_string(
+                    &dialog
+                        .permission
+                        .network
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+                .unwrap_or_default(),
+                action: PermissionStudioAction::EditNetworkPolicy,
+            }],
+        }],
         PermissionStudioPage::ToolNames => {
             let mut keys = dialog
                 .permission
@@ -337,12 +349,17 @@ pub(crate) fn permission_studio_mode_target_label(
         match target {
             PermissionStudioModeTarget::PathWorkspace => "permission-studio-path-workspace",
             PermissionStudioModeTarget::PathExternal => "permission-studio-path-external",
-            PermissionStudioModeTarget::NetworkInternet => "permission-studio-network-internet",
-            PermissionStudioModeTarget::NetworkPrivate => "permission-studio-network-private",
-            PermissionStudioModeTarget::NetworkLoopback => "permission-studio-network-loopback",
+            PermissionStudioModeTarget::NetworkEgressDefault => {
+                "permission-studio-network-egress-default"
+            }
+            PermissionStudioModeTarget::NetworkIngressDefault => {
+                "permission-studio-network-ingress-default"
+            }
+            PermissionStudioModeTarget::NetworkHostLoopback => {
+                "permission-studio-network-host-loopback"
+            }
             PermissionStudioModeTarget::ToolDefault => "permission-studio-tool-default",
             PermissionStudioModeTarget::PathRule { .. } => "permission-studio-rule-path",
-            PermissionStudioModeTarget::NetworkRule { .. } => "permission-studio-rule-target",
             PermissionStudioModeTarget::ToolName { .. }
             | PermissionStudioModeTarget::ToolRule { .. }
             | PermissionStudioModeTarget::ToolCommandPattern { .. } => "permission-studio-rule-key",
@@ -374,7 +391,6 @@ pub(crate) fn permission_studio_text_target_label(
         i18n,
         match target {
             PermissionStudioTextTarget::PathRulePattern { .. } => "permission-studio-rule-path",
-            PermissionStudioTextTarget::NetworkRuleTarget { .. } => "permission-studio-rule-target",
             PermissionStudioTextTarget::ToolNameKey { .. }
             | PermissionStudioTextTarget::ToolRuleName { .. } => "permission-studio-rule-key",
         },
@@ -386,7 +402,6 @@ pub(crate) fn permission_studio_text_target_input_text(
 ) -> String {
     match target {
         PermissionStudioTextTarget::PathRulePattern { pattern }
-        | PermissionStudioTextTarget::NetworkRuleTarget { target: pattern }
         | PermissionStudioTextTarget::ToolNameKey { key: pattern }
         | PermissionStudioTextTarget::ToolRuleName { tool_name: pattern } => pattern.clone(),
     }
@@ -403,13 +418,6 @@ pub(crate) fn permission_studio_creator_spec(
                 ui_text::t(i18n, "permission-studio-add-path-rule").as_str(),
             ),
             i18n.text("permission-studio-path-help"),
-        ),
-        PermissionStudioEditorAction::AddNetworkRule => (
-            settings_edit_title(
-                i18n,
-                ui_text::t(i18n, "permission-studio-add-network-rule").as_str(),
-            ),
-            String::new(),
         ),
         PermissionStudioEditorAction::AddToolName => (
             settings_edit_title(
@@ -478,44 +486,50 @@ pub(crate) fn apply_permission_studio_mode_input(
     }
     let mode = parse_permission_studio_optional_mode_input(i18n, input)
         .map_err(crate::UiFailure::message)?;
+    if target.is_network() {
+        let action = match mode {
+            None => None,
+            Some(agena_domain::PermissionMode::Allow) => Some(agena_domain::NetworkAction::Allow),
+            Some(agena_domain::PermissionMode::Deny) => Some(agena_domain::NetworkAction::Deny),
+            _ => {
+                return Err(crate::UiFailure::message(
+                    i18n.text("permission-studio-network-invalid-action"),
+                ));
+            }
+        };
+        let network = permission.network.get_or_insert_with(Default::default);
+        match target {
+            PermissionStudioModeTarget::NetworkEgressDefault => {
+                network.egress.get_or_insert_with(Default::default).default = action
+            }
+            PermissionStudioModeTarget::NetworkIngressDefault => {
+                network.ingress.get_or_insert_with(Default::default).default = action
+            }
+            PermissionStudioModeTarget::NetworkHostLoopback => {
+                network
+                    .ingress
+                    .get_or_insert_with(Default::default)
+                    .host_loopback = action
+            }
+            _ => unreachable!("network target was checked"),
+        }
+        normalize_permission_config(permission);
+        return Ok(());
+    }
     match target {
         PermissionStudioModeTarget::PathWorkspace
         | PermissionStudioModeTarget::PathExternal
         | PermissionStudioModeTarget::PathRule { .. } => unreachable!("path modes handled above"),
-        PermissionStudioModeTarget::NetworkInternet => {
-            permission
-                .network
-                .get_or_insert_with(Default::default)
-                .internet = mode;
-        }
-        PermissionStudioModeTarget::NetworkPrivate => {
-            permission
-                .network
-                .get_or_insert_with(Default::default)
-                .private = mode;
-        }
-        PermissionStudioModeTarget::NetworkLoopback => {
-            permission
-                .network
-                .get_or_insert_with(Default::default)
-                .loopback = mode;
+        PermissionStudioModeTarget::NetworkEgressDefault
+        | PermissionStudioModeTarget::NetworkIngressDefault
+        | PermissionStudioModeTarget::NetworkHostLoopback => {
+            unreachable!("network modes handled above")
         }
         PermissionStudioModeTarget::ToolDefault => {
             permission
                 .tools
                 .get_or_insert_with(Default::default)
                 .default = mode;
-        }
-        PermissionStudioModeTarget::NetworkRule { target } => {
-            if let Some(mode) = mode {
-                permission
-                    .network
-                    .get_or_insert_with(Default::default)
-                    .rules
-                    .insert(target.clone(), mode);
-            } else if let Some(network) = permission.network.as_mut() {
-                network.rules.shift_remove(target.as_str());
-            }
         }
         PermissionStudioModeTarget::ToolName { key } => {
             if let Some(mode) = mode {
@@ -572,6 +586,19 @@ pub(crate) fn apply_permission_studio_mode_input(
     Ok(())
 }
 
+pub(crate) fn apply_permission_studio_network_input(
+    permission: &mut PermissionConfig,
+    input: &str,
+) -> UiResult<()> {
+    let network: agena_domain::NetworkPermissionConfig = serde_json::from_str(input)
+        .map_err(|error| crate::UiFailure::message(error.to_string()))?;
+    network
+        .validate_for_platform(std::env::consts::OS)
+        .map_err(crate::UiFailure::message)?;
+    permission.network = (!network.is_empty()).then_some(network);
+    Ok(())
+}
+
 pub(crate) fn apply_permission_studio_text_input(
     i18n: &I18n,
     permission: &mut PermissionConfig,
@@ -600,20 +627,6 @@ pub(crate) fn apply_permission_studio_text_input(
             }
             rename_path_rule(permission, pattern.as_str(), value.as_str());
             PermissionStudioPage::PathRules
-        }
-        PermissionStudioTextTarget::NetworkRuleTarget { target } => {
-            if target != &value
-                && permission
-                    .network
-                    .as_ref()
-                    .is_some_and(|network| network.rules.contains_key(&value))
-            {
-                return Err(crate::UiFailure::message(
-                    i18n.text("permission-studio-rule-duplicate"),
-                ));
-            }
-            rename_network_rule(permission, target.as_str(), value.as_str());
-            PermissionStudioPage::NetworkRules
         }
         PermissionStudioTextTarget::ToolNameKey { key } => {
             if key != &value
@@ -663,13 +676,6 @@ mod tests {
     fn duplicate_rule_rename_keeps_permission_draft() {
         let i18n = I18n::english();
         let mut permission = PermissionConfig::default();
-        let network = permission.network.get_or_insert_with(Default::default);
-        network
-            .rules
-            .insert("example.com".to_string(), PermissionMode::Allow);
-        network
-            .rules
-            .insert("private.example.com".to_string(), PermissionMode::Deny);
         let tools = permission.tools.get_or_insert_with(Default::default);
         for (name, mode) in [
             ("agena.shell.exec", PermissionMode::Allow),
@@ -683,12 +689,6 @@ mod tests {
         let original = permission.clone();
 
         for (target, input) in [
-            (
-                PermissionStudioTextTarget::NetworkRuleTarget {
-                    target: "example.com".to_string(),
-                },
-                "private.example.com",
-            ),
             (
                 PermissionStudioTextTarget::ToolNameKey {
                     key: "agena.shell.exec".to_string(),
@@ -707,5 +707,28 @@ mod tests {
             assert!(error.to_string().contains("Rule already exists"));
             assert_eq!(permission, original);
         }
+    }
+    #[test]
+    fn invalid_native_network_json_keeps_existing_permission() {
+        let mut permission = PermissionConfig::default();
+        permission.network = Some(agena_domain::NetworkPermissionConfig::offline());
+        let original = permission.clone();
+        for input in [
+            r#"{"rules":{"example.com":"allow"}}"#,
+            r#"{"egress":{"allow":[{"to":[]}]}}"#,
+            r#"{"egress":{"allow":[{"ports":[{"protocol":"icmp","port":443}]}]}}"#,
+        ] {
+            assert!(apply_permission_studio_network_input(&mut permission, input).is_err());
+            assert_eq!(permission, original);
+        }
+        apply_permission_studio_network_input(
+            &mut permission,
+            r#"{"egress":{"default":"deny","allow":[],"deny":[]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            permission.network.unwrap().egress.unwrap().allow,
+            Some(vec![])
+        );
     }
 }

@@ -8,6 +8,7 @@
 
 pub mod credentials;
 pub mod error;
+mod http_transport;
 pub mod management;
 pub mod manager;
 pub mod oauth;
@@ -17,15 +18,15 @@ pub mod token_store;
 
 pub use credentials::credential_store_name;
 pub use error::{McpError, McpResult};
+pub use http_transport::McpHttpNetworkAuthorizer;
 pub use manager::{
     ConnectedServer, HttpAuth, McpConnectionManager, McpCredentialConflict, McpCredentialState,
-    McpServerAuthMode, McpServerStatus, McpToolPolicy, McpToolRisk, ReconnectPolicy, ServerSpec,
-    TokenStore, McpSandboxContext, StdioResourceDeclarations,
+    McpSandboxContext, McpServerAuthMode, McpServerStatus, McpToolPolicy, McpToolRisk,
+    ReconnectPolicy, ServerSpec, StdioResourceDeclarations, TokenStore,
 };
 pub use oauth::{
     McpOAuthRegistration, McpOAuthSessionManager, McpOAuthStart, oauth_credential_binding,
 };
-pub use oauth_http::McpOAuthNetworkAuthorizer;
 pub use protocol::{
     CallToolParams, CallToolResult, ContentBlock, GetPromptParams, GetPromptResult,
     ListPromptsResult, ListResourcesResult, ListToolsResult, PromptArgument, PromptDescriptor,

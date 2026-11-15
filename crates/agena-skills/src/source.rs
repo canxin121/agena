@@ -3,6 +3,7 @@
 
 use std::{
     future::Future,
+    net::SocketAddr,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -122,6 +123,12 @@ pub struct SkillDeleteResult {
 pub enum SkillSourceAccess {
     Read(PathBuf),
     Network(String),
+    /// A numeric destination selected for this exact URL. Only addresses
+    /// approved here are installed in the HTTP client's pinned resolver.
+    ResolvedNetwork {
+        original: String,
+        address: SocketAddr,
+    },
 }
 
 pub struct LoadedSkillImport {
@@ -692,16 +699,64 @@ where
     Fut: Future<Output = Result<(), E>>,
     M: Fn(SkillError) -> E,
 {
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(120))
-        .connect_timeout(Duration::from_secs(20))
-        .user_agent("Agena-Skills/0.1")
-        .build()
-        .map_err(|error| map_error(SkillError::new(SkillErrorKind::Io, error.to_string())))?;
     let mut url = http_url(initial).map_err(map_error)?;
     for hop in 0..=5 {
         authorize(SkillSourceAccess::Network(url.to_string())).await?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| map_error(SkillError::invalid("The archive URL has no host.")))?;
+        let port = url
+            .port_or_known_default()
+            .ok_or_else(|| map_error(SkillError::invalid("The archive URL has no port.")))?;
+        let addresses = tokio::time::timeout(
+            Duration::from_secs(20),
+            tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
+        )
+        .await
+        .map_err(|_| {
+            map_error(SkillError::new(
+                SkillErrorKind::Io,
+                "The archive DNS lookup timed out.",
+            ))
+        })?
+        .map_err(|error| {
+            map_error(SkillError::new(
+                SkillErrorKind::Io,
+                format!("Could not resolve the archive host: {error}"),
+            ))
+        })?
+        .collect::<std::collections::BTreeSet<_>>();
+        let mut permitted = Vec::new();
+        let mut denial = None;
+        for address in addresses {
+            match authorize(SkillSourceAccess::ResolvedNetwork {
+                original: url.to_string(),
+                address,
+            })
+            .await
+            {
+                Ok(()) => permitted.push(address),
+                Err(error) => denial = Some(error),
+            }
+        }
+        if permitted.is_empty() {
+            return Err(denial.unwrap_or_else(|| {
+                map_error(SkillError::invalid(
+                    "The archive host has no permitted IP address.",
+                ))
+            }));
+        }
+        // Every redirect gets a new client bound to that hop's approved IPs.
+        // Proxies can resolve the hostname independently and defeat this pin.
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .resolve_to_addrs(host, &permitted)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(120))
+            .connect_timeout(Duration::from_secs(20))
+            .user_agent("Agena-Skills/0.1")
+            .build()
+            .map_err(|error| map_error(SkillError::new(SkillErrorKind::Io, error.to_string())))?;
         let response = client.get(url.clone()).send().await.map_err(|error| {
             map_error(SkillError::new(
                 SkillErrorKind::Io,
@@ -766,6 +821,128 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn respond_once(
+        listener: tokio::net::TcpListener,
+        response: String,
+    ) -> tokio::task::JoinHandle<String> {
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+                assert!(request.len() < 16_384);
+            }
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        })
+    }
+
+    #[tokio::test]
+    async fn download_pins_only_authorized_addresses_and_preserves_the_url_host() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = listener.local_addr().unwrap();
+        let url = format!("http://localhost:{}/archive", endpoint.port());
+        let server = respond_once(
+            listener,
+            "HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\narchive".into(),
+        );
+        let mut seen = Vec::new();
+        let mut authorize = |access| {
+            let result = match access {
+                SkillSourceAccess::Network(original) => {
+                    assert_eq!(original, url);
+                    Ok(())
+                }
+                SkillSourceAccess::ResolvedNetwork { original, address } => {
+                    assert_eq!(original, url);
+                    seen.push(address);
+                    if address == endpoint {
+                        Ok(())
+                    } else {
+                        Err("other IP denied".to_owned())
+                    }
+                }
+                SkillSourceAccess::Read(_) => panic!("download cannot read a source path"),
+            };
+            std::future::ready(result)
+        };
+        let bytes = download(&url, &mut authorize, &|error| error.to_string())
+            .await
+            .unwrap();
+        assert_eq!(bytes, b"archive");
+        assert!(seen.contains(&endpoint));
+        let request = server.await.unwrap().to_ascii_lowercase();
+        assert!(request.contains(&format!("host: localhost:{}\r\n", endpoint.port())));
+    }
+
+    #[tokio::test]
+    async fn denied_numeric_download_address_is_never_contacted() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/archive", listener.local_addr().unwrap());
+        let mut authorize = |access| {
+            std::future::ready(match access {
+                SkillSourceAccess::Network(_) => Ok(()),
+                SkillSourceAccess::ResolvedNetwork { .. } => Err("IP ceiling denied".to_owned()),
+                SkillSourceAccess::Read(_) => panic!("download cannot read a source path"),
+            })
+        };
+        assert_eq!(
+            download(&url, &mut authorize, &|error| error.to_string())
+                .await
+                .unwrap_err(),
+            "IP ceiling denied"
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[tokio::test]
+    async fn download_redirect_rechecks_numeric_authority_before_the_next_connection() {
+        let origin = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin_address = origin.local_addr().unwrap();
+        let denied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        denied.set_nonblocking(true).unwrap();
+        let denied_url = format!("http://{}/secret", denied.local_addr().unwrap());
+        let server = respond_once(
+            origin,
+            format!(
+                "HTTP/1.1 302 Found\r\nLocation: {denied_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        let mut seen = Vec::new();
+        let mut authorize = |access| {
+            let result = match access {
+                SkillSourceAccess::Network(original) => {
+                    seen.push(original);
+                    Ok(())
+                }
+                SkillSourceAccess::ResolvedNetwork { address, .. } if address == origin_address => {
+                    Ok(())
+                }
+                SkillSourceAccess::ResolvedNetwork { .. } => Err("redirect IP denied".to_owned()),
+                SkillSourceAccess::Read(_) => panic!("download cannot read a source path"),
+            };
+            std::future::ready(result)
+        };
+        let url = format!("http://{origin_address}/archive");
+        assert_eq!(
+            download(&url, &mut authorize, &|error| error.to_string())
+                .await
+                .unwrap_err(),
+            "redirect IP denied"
+        );
+        assert_eq!(seen, vec![url, denied_url]);
+        server.await.unwrap();
+        assert_eq!(
+            denied.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
 
     #[test]
     fn github_repository_tree_and_blob_sources_preserve_selection() {

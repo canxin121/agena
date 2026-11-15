@@ -455,6 +455,8 @@ pub struct PermissionRuleBatchScope {
 #[derive(Debug, thiserror::Error)]
 /// Backend error from the permission rule repository.
 pub enum PermissionRuleRepositoryError {
+    #[error("invalid permission rule: {0}")]
+    InvalidInput(String),
     #[error("permission rule repository backend error: {0}")]
     Backend(String),
 }

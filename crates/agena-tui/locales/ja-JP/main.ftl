@@ -812,9 +812,7 @@ permission-studio-field-path-external = パス 外部デフォルト
 
 permission-studio-field-path-rules = パスルール
 
-permission-studio-field-network-defaults = ネットワークデフォルト
 
-permission-studio-field-network-rules = ネットワークルール
 
 permission-studio-field-tool-names = ツール名
 
@@ -874,7 +872,6 @@ permission-studio-mode-read = 読みます {$value}
 
 permission-studio-mode-write = {$value} を書く
 
-permission-studio-network-default = {$label} {$value}
 
 permission-studio-page-overview = プロフィール
 
@@ -884,11 +881,10 @@ permission-studio-page-path-defaults = ファイルシステム / デフォル�
 
 permission-studio-page-path-rules = ファイルシステム / パスルール
 
-permission-studio-page-network = ネットワーク
 
-permission-studio-page-network-zones = ネットワーク / ネットワーク領域
+permission-studio-page-network-defaults = ネットワーク / ネイティブ既定値
 
-permission-studio-page-network-rules = ネットワーク / ドメインルール
+permission-studio-page-network-rules = ネットワーク / ネイティブルール
 
 permission-studio-page-tools = ツール
 
@@ -912,9 +908,9 @@ permission-studio-nav-path-rules = パスルール
 
 permission-studio-nav-network = ネットワーク
 
-permission-studio-nav-network-zones = ネットワーク領域
+permission-studio-nav-network-defaults = ネイティブ既定値
 
-permission-studio-nav-domain-rules = ドメインルール
+permission-studio-nav-network-rules = ネイティブルール
 
 permission-studio-nav-tool-access = ツールアクセス
 
@@ -934,11 +930,11 @@ permission-studio-path-rule-read = モードを読む
 
 permission-studio-path-rule-write = モードを書く
 
-permission-studio-network-internet = インターネット
+permission-studio-network-egress-default = 送信の既定動作
 
-permission-studio-network-private = プライベート
+permission-studio-network-ingress-default = 受信の既定動作
 
-permission-studio-network-loopback = ループバック
+permission-studio-network-host-loopback = ホストのループバック
 
 permission-studio-tool-default = ツールのデフォルト
 
@@ -946,7 +942,6 @@ permission-studio-tool-default-summary = デフォルト {$value}
 
 permission-studio-add-path-rule = パスルールを追加
 
-permission-studio-add-network-rule = ネットワークターゲットの追加
 
 permission-studio-add-name = 名前を追加
 
@@ -956,7 +951,6 @@ permission-studio-rule-key = キーキー
 
 permission-studio-rule-pattern = パターン
 
-permission-studio-rule-target = ターゲット
 
 permission-studio-rule-mode = モード
 
@@ -1308,6 +1302,7 @@ overlay-permission-rule-choice-scope-session-detail = このセッションの�
 overlay-permission-rule-choice-scope-workspace-detail = このワークスペース内のすべてのセッション
 overlay-permission-rule-choice-scope-global-detail = すべてのワークスペース
 overlay-permission-rule-choice-mode-title = ルールモードの選択
+overlay-permission-rule-network-mode-detail = ネットワーク判断には allow または deny を指定します。allow はネイティブ設定の範囲に従い、deny はその範囲を狭めます。
 overlay-permission-rule-choice-mode-prompt = 許可、質問、または拒否を選択します。
 overlay-permission-rule-choice-mode-allow-detail = 一致するアクションを常に許可する
 overlay-permission-rule-choice-mode-auto-detail = 構成された承認モデルに決定させます。利用できない場合はプロンプトに戻る
@@ -1323,7 +1318,7 @@ overlay-permission-rule-editor-workspace-root-prompt = オプションの worksp
 overlay-permission-rule-editor-target-path-title = ターゲットパスの編集
 overlay-permission-rule-editor-target-path-prompt = ターゲットのパスまたはパターンを入力します。
 overlay-permission-rule-editor-network-target-title = ネットワークターゲットの編集
-overlay-permission-rule-editor-network-target-prompt = ホスト、ホスト:ポート、または URL を入力します。
+overlay-permission-rule-editor-network-target-prompt = 192.0.2.10:443 や [2001:db8::10]:443 のように IP または IP:ポートを入力してください。tcp://、udp://、icmp:// でプロトコルを指定します。
 overlay-permission-rule-editor-session-id-title = セッションIDの編集
 overlay-permission-rule-editor-session-id-prompt = ターゲットのセッション ID を入力します。
 overlay-permission-rule-browser-workspace-root-title = ワークスペースルートの選択
@@ -1351,14 +1346,14 @@ overlay-permission-rule-item-target-path-detail = 保護するパス パター�
 overlay-permission-rule-item-workspace-root = ワークスペースルート
 overlay-permission-rule-item-workspace-root-detail = 相対ターゲット パスを解釈するために使用されるオプションのベース ディレクトリ。
 overlay-permission-rule-item-network-target = ネットワークターゲット
-overlay-permission-rule-item-network-target-detail = 一致するホスト、ホスト:ポート、または URL ターゲット。
+overlay-permission-rule-item-network-target-detail = 192.0.2.10:443 や [2001:db8::10]:443 のように IP または IP:ポートを入力してください。tcp://、udp://、icmp:// でプロトコルを指定します。
 overlay-permission-rule-detail-subject-kind = ツール ルールは、ツール名とオプションの修飾子によって一致します。パスルールはファイルシステムアクセスと一致します。ネットワーク ルールはホストまたは URL アクセスと一致します。
 overlay-permission-rule-detail-tool-name = ツール ルールには、`shell`、`read`、`web_search` などの正確なツール名が必要です。
 overlay-permission-rule-detail-qualifier = 修飾子はオプションです。ツールまたはアクションでより狭い範囲の一致が必要な場合を除き、空のままにしておきます。
 overlay-permission-rule-detail-path-access-kind = 照合するファイル システム アクセスに応じて、`read`、`write`、または `read_write` を使用します。
 overlay-permission-rule-detail-workspace-root = ランタイム ワークスペース ルートを継承するには、workspace_root を空のままにしておきます。保護されたパスが別の場所にある場合は、明示的に設定します。
 overlay-permission-rule-detail-target-path = パスまたはパターンを入力します。相対パスは、設定時に workspace_root に対して解釈されます。
-overlay-permission-rule-detail-network-target = ルールの具体性の程度に応じて、ホスト、`host:port`、または完全な URL を入力します。
+overlay-permission-rule-detail-network-target = 数値 IP を使用します。IP のみの場合は全プロトコルと全ポートが対象です。tcp:// と udp:// はポートを指定でき、icmp:// はポートなしです。CIDR は permission.network で設定します。macOS は特定 IP の判断を拒否します。既存の記録は確認、取り消し、削除ができます。
 overlay-permission-rule-detail-scope = セッション スコープは一時的なオーバーライドに最適です。ワークスペースとグローバル スコープはより長く存続します。
 overlay-permission-rule-detail-session-id = セッションスコープのルールには具体的なセッション ID が必要です。
 overlay-permission-rule-detail-mode = 「許可」はアクションを許可し、承認を求めるプロンプトを表示し、「拒否」はアクションをブロックします。
@@ -3295,3 +3290,9 @@ permission-studio-path-help = 具体的なファイルまたはディレクト�
 permission-studio-rule-path = パス
 permission-studio-path-duplicate = このパスのルールは既に存在します。
 permission-studio-rule-duplicate = このルールは既に存在します。
+
+permission-studio-network-json = ネイティブネットワークポリシー JSON
+
+permission-studio-network-json-help = MXC の egress と ingress に CIDR、except、プロトコル、ポート範囲を設定できます。拒否ルールが優先されます。省略したフィールドは継承され、[] は継承リストを空にします。
+
+permission-studio-network-invalid-action = ネットワーク動作は allow、deny、または未設定にしてください。

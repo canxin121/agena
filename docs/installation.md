@@ -170,16 +170,24 @@ After copying the candidate binary into its final installation path, the
 installer runs `agena --agena-sandbox-check`. It actually launches restricted
 processes and checks allowed input reads, denied input writes, output writes,
 secret/outside path denial, environment isolation, and blocked direct network
-access. Linux and macOS also verify the authenticated HTTP broker against a
-local fixture, including rejection of an unapproved destination. Windows
-reports the current MXC HTTP proxy mode as unsupported while requiring the
-offline isolation checks to pass.
+access. Linux and Windows also require the `native_network` check: one local
+TCP destination is allowed, while another is explicitly denied even though
+it appears in the allow list. Both connections use MXC's native filtering;
+the check creates no HTTP proxy and contacts no external server. macOS reports
+fine-grained native network rules as unsupported and requires the offline
+isolation checks to pass.
 
 A required check failure restores the previous program, installer state, and
 running state. A successful installation saves `sandbox-report.json` under
 the installation directory. Existing project paths, network rules, approval
 rules, configuration, and data are preserved. System preparation does not
 change tool approval settings to allow everything.
+
+Network settings now use `permission.network.egress` and `ingress`. Replace
+the former `internet`, `private`, `loopback`, and `rules` fields before starting
+the updated service; unsupported legacy settings return a configuration error.
+See [native network configuration](sandbox.md#网络设置与执行) for examples and
+platform capabilities.
 
 To repair the dependencies/host permissions and rerun the installed binary's
 checks without replacing it or restarting the service:

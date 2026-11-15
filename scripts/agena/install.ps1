@@ -707,14 +707,15 @@ function Test-InstalledSandbox {
       throw "Sandbox verification returned malformed or duplicate checks."
     }
   }
-  if (-not $names.Contains("http_proxy")) { throw "Sandbox verification is missing the http_proxy capability report." }
+  if (-not $names.Contains("native_network")) { throw "Sandbox verification is missing the native_network capability report." }
   $offline = @($checks | Where-Object { $_.name -eq "offline" -and $_.required -eq $true })
+  $nativeNetwork = @($checks | Where-Object { $_.name -eq "native_network" -and $_.required -eq $true -and $_.status -eq "passed" })
   foreach ($check in $checks) {
     if ($check.status -eq "passed") { Write-Host "Sandbox $($check.name): passed" }
     else { Write-Warning "Sandbox $($check.name): $($check.status). $($check.detail)" }
   }
   $failed = @($checks | Where-Object { $_.required -eq $true -and $_.status -ne "passed" })
-  if ($result.ExitCode -ne 0 -or -not $report.ok -or $offline.Count -ne 1 -or $failed.Count -ne 0) {
+  if ($result.ExitCode -ne 0 -or -not $report.ok -or $offline.Count -ne 1 -or $nativeNetwork.Count -ne 1 -or $failed.Count -ne 0) {
     $details = ($checks | Where-Object { $_.status -ne "passed" } | ForEach-Object { "$($_.name): $($_.detail)" }) -join "; "
     throw "Required sandbox verification failed (exit $($result.ExitCode)). $details"
   }

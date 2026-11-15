@@ -727,9 +727,7 @@ permission-studio-field-path-external = Path 외부 기본값
 
 permission-studio-field-path-rules = 경로 규칙
 
-permission-studio-field-network-defaults = 네트워크 기본값
 
-permission-studio-field-network-rules = 네트워크 규칙
 
 permission-studio-field-tool-names = 도구 이름
 
@@ -789,7 +787,6 @@ permission-studio-mode-read = 읽기 {$value}
 
 permission-studio-mode-write = 쓰기 {$value}
 
-permission-studio-network-default = {$label} {$value}
 
 permission-studio-page-overview = 제품정보
 
@@ -799,11 +796,10 @@ permission-studio-page-path-defaults = 파일 시스템 / 기본 영역
 
 permission-studio-page-path-rules = 파일 시스템 / 경로 규칙
 
-permission-studio-page-network = 회사연혁
 
-permission-studio-page-network-zones = 네트워크 / 네트워크 영역
+permission-studio-page-network-defaults = 네트워크 / 네이티브 기본값
 
-permission-studio-page-network-rules = 네트워크 / 도메인 규칙
+permission-studio-page-network-rules = 네트워크 / 네이티브 규칙
 
 permission-studio-page-tools = 회사 소개
 
@@ -827,9 +823,9 @@ permission-studio-nav-path-rules = 경로 규칙
 
 permission-studio-nav-network = 네트워크
 
-permission-studio-nav-network-zones = 네트워크 영역
+permission-studio-nav-network-defaults = 네이티브 기본값
 
-permission-studio-nav-domain-rules = 도메인 규칙
+permission-studio-nav-network-rules = 네이티브 규칙
 
 permission-studio-nav-tool-access = 도구 접근
 
@@ -849,11 +845,11 @@ permission-studio-path-rule-read = 읽기 모드
 
 permission-studio-path-rule-write = 쓰기 모드
 
-permission-studio-network-internet = 인터넷 연결
+permission-studio-network-egress-default = 아웃바운드 기본 동작
 
-permission-studio-network-private = 한국어
+permission-studio-network-ingress-default = 인바운드 기본 동작
 
-permission-studio-network-loopback = 루프백
+permission-studio-network-host-loopback = 호스트 루프백
 
 permission-studio-tool-default = 도구 기본값
 
@@ -861,7 +857,6 @@ permission-studio-tool-default-summary = 기본 {$value}
 
 permission-studio-add-path-rule = 경로 규칙 추가
 
-permission-studio-add-network-rule = Network Target 추가
 
 permission-studio-add-name = 이름 *
 
@@ -871,7 +866,6 @@ permission-studio-rule-key = 이름 *
 
 permission-studio-rule-pattern = 제품 정보
 
-permission-studio-rule-target = 제품정보
 
 permission-studio-rule-mode = 주요 특징
 
@@ -1177,6 +1171,7 @@ overlay-permission-rule-choice-scope-session-detail = 이번 세션만
 overlay-permission-rule-choice-scope-workspace-detail = 이 작업공간의 모든 세션
 overlay-permission-rule-choice-scope-global-detail = 모든 작업공간
 overlay-permission-rule-choice-mode-title = 규칙 모드 선택
+overlay-permission-rule-network-mode-detail = 네트워크 결정은 allow 또는 deny만 허용합니다. Allow는 네이티브 설정 범위 안에서 적용되고 deny는 범위를 더 좁힙니다.
 overlay-permission-rule-choice-mode-prompt = 허용, 요청 또는 거부를 선택하세요.
 overlay-permission-rule-choice-mode-allow-detail = 항상 일치하는 작업 허용
 overlay-permission-rule-choice-mode-auto-detail = 구성된 승인 모델이 결정하도록 합니다. 사용할 수 없을 때 프롬프트로 돌아갑니다.
@@ -1192,7 +1187,7 @@ overlay-permission-rule-editor-workspace-root-prompt = 선택적 작업공간_�
 overlay-permission-rule-editor-target-path-title = 대상 경로 편집
 overlay-permission-rule-editor-target-path-prompt = 대상 경로나 패턴을 입력하세요.
 overlay-permission-rule-editor-network-target-title = 네트워크 대상 편집
-overlay-permission-rule-editor-network-target-prompt = 호스트, 호스트:포트 또는 URL을 입력하세요.
+overlay-permission-rule-editor-network-target-prompt = 192.0.2.10:443 또는 [2001:db8::10]:443처럼 숫자 IP나 IP:포트를 입력하세요. tcp://, udp://, icmp://로 프로토콜을 지정합니다.
 overlay-permission-rule-editor-session-id-title = 세션 ID 편집
 overlay-permission-rule-editor-session-id-prompt = 대상 세션 ID를 입력하세요.
 overlay-permission-rule-browser-workspace-root-title = 작업공간 루트 선택
@@ -1220,14 +1215,14 @@ overlay-permission-rule-item-target-path-detail = 보호할 경로 패턴 또는
 overlay-permission-rule-item-workspace-root = 작업공간 루트
 overlay-permission-rule-item-workspace-root-detail = 상대 대상 경로를 해석하는 데 사용되는 선택적 기본 디렉터리입니다.
 overlay-permission-rule-item-network-target = 네트워크 대상
-overlay-permission-rule-item-network-target-detail = 일치시킬 호스트, 호스트:포트 또는 URL 대상입니다.
+overlay-permission-rule-item-network-target-detail = 192.0.2.10:443 또는 [2001:db8::10]:443처럼 숫자 IP나 IP:포트를 입력하세요. tcp://, udp://, icmp://로 프로토콜을 지정합니다.
 overlay-permission-rule-detail-subject-kind = 도구 규칙은 도구 이름 및 선택적 한정자와 일치합니다. 경로 규칙은 파일 시스템 액세스와 일치합니다. 네트워크 규칙은 호스트 또는 URL 액세스와 일치합니다.
 overlay-permission-rule-detail-tool-name = 공구 규칙에는 정확한 공구 이름이 필요합니다(예: `shell`, `read` 또는 `web_search`).
 overlay-permission-rule-detail-qualifier = 한정자는 선택 사항입니다. 도구나 작업에 더 좁은 범위의 일치가 필요한 경우가 아니면 비워 두세요.
 overlay-permission-rule-detail-path-access-kind = 일치시키려는 파일 시스템 액세스에 따라 `read`, `write` 또는 `read_write`을 사용하십시오.
 overlay-permission-rule-detail-workspace-root = 런타임 작업공간 루트를 상속하려면 작업공간_루트를 비워 두세요. 보호된 경로가 다른 곳에 있는 경우 이를 명시적으로 설정하십시오.
 overlay-permission-rule-detail-target-path = 경로나 패턴을 입력하세요. 상대 경로는 설정 시 작업 공간 루트에 대해 해석됩니다.
-overlay-permission-rule-detail-network-target = 규칙의 구체적인 정도에 따라 호스트, `host:port` 또는 전체 URL을 입력하세요.
+overlay-permission-rule-detail-network-target = 숫자 IP 주소를 사용하세요. IP만 지정하면 모든 프로토콜과 포트가 대상입니다. tcp://와 udp://는 포트를 지정할 수 있고 icmp://는 포트가 없습니다. CIDR는 permission.network에서 설정하세요. macOS에서는 특정 IP 결정을 거부합니다. 기존 기록은 조회, 취소, 삭제할 수 있습니다.
 overlay-permission-rule-detail-scope = 세션 범위는 임시 재정의에 가장 적합합니다. 작업공간 및 전역 범위는 더 오래 지속됩니다.
 overlay-permission-rule-detail-session-id = 세션 범위 규칙에는 구체적인 세션 ID가 필요합니다.
 overlay-permission-rule-detail-mode = 허용은 작업을 허용하고, 승인을 요청하고, 거부하면 차단합니다.
@@ -3291,3 +3286,9 @@ permission-studio-path-help = 구체적인 파일 또는 디렉터리를 입력�
 permission-studio-rule-path = 경로
 permission-studio-path-duplicate = 이 경로의 규칙이 이미 있습니다.
 permission-studio-rule-duplicate = 이 규칙이 이미 있습니다.
+
+permission-studio-network-json = 네이티브 네트워크 정책 JSON
+
+permission-studio-network-json-help = MXC의 egress 및 ingress 객체에서 CIDR, except, 프로토콜, 포트 범위를 설정합니다. 거부 규칙이 우선합니다. 생략한 필드는 상속되며 []는 상속 목록을 비웁니다.
+
+permission-studio-network-invalid-action = 네트워크 동작은 allow, deny 또는 미설정이어야 합니다.

@@ -77,7 +77,7 @@ impl ApplicationService {
                 .permission_rule_repository
                 .set_mode_many(&request.rule_ids, permission_mode_to_domain(mode), scope)
                 .await
-                .map_err(|error| ApplicationError::internal_error(&error))?,
+                .map_err(permission_rule_write_error)?,
         };
         let affected = affected_rows
             .iter()
@@ -164,7 +164,7 @@ impl ApplicationService {
             .permission_rule_repository
             .upsert(&rule)
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?;
+            .map_err(permission_rule_write_error)?;
         permission_rule_record_resource(&created)
     }
 
@@ -195,7 +195,7 @@ impl ApplicationService {
             .permission_rule_repository
             .replace(rule_id, &rule)
             .await
-            .map_err(|error| ApplicationError::internal_error(&error))?
+            .map_err(permission_rule_write_error)?
         else {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The permission rule was not found.",
@@ -238,6 +238,12 @@ impl ApplicationService {
         &self,
         command: PermissionRuleWriteCommand,
     ) -> ApplicationResult<PersistedPermissionRule> {
+        agena_domain::validate_persisted_network_decision(
+            &command.action,
+            command.mode,
+            std::env::consts::OS,
+        )
+        .map_err(network_permission_input_error)?;
         if command.scope == PermissionScope::Session && command.session_id.is_none() {
             return Err(ApplicationError::bad_request(
                 "session scope requires a session_id",
@@ -290,6 +296,24 @@ impl ApplicationService {
         };
 
         permission_rule_record_resource(&existing)
+    }
+}
+
+fn network_permission_input_error(message: String) -> ApplicationError {
+    ApplicationError::bad_request_error(&std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        message,
+    ))
+}
+
+fn permission_rule_write_error(
+    error: agena_storage::PermissionRuleRepositoryError,
+) -> ApplicationError {
+    match error {
+        agena_storage::PermissionRuleRepositoryError::InvalidInput(message) => {
+            network_permission_input_error(message)
+        }
+        error => ApplicationError::internal_error(&error),
     }
 }
 
@@ -402,6 +426,12 @@ fn permission_action_from_write_request(
     if let Some(action_key) = request.action_key.as_deref()
         && !action_key.trim().is_empty()
     {
+        agena_domain::validate_persisted_network_rule_key(
+            action_key,
+            permission_mode_to_domain(request.mode),
+            std::env::consts::OS,
+        )
+        .map_err(network_permission_input_error)?;
         return serde_json::from_str(action_key).map_err(api_error_from_app);
     }
 
@@ -461,7 +491,7 @@ fn permission_action_from_write_request(
             })
         }
         Some("network_access") => {
-            let target = request
+            let mut target = request
                 .network_target
                 .as_deref()
                 .or(request.network_host.as_deref())
@@ -473,17 +503,65 @@ fn permission_action_from_write_request(
                     )
                 })?
                 .to_string();
-            let parsed: agena_domain::NetworkTarget = request
-                .network_port
-                .map(|port| format!("{target}:{port}"))
-                .unwrap_or_else(|| target.clone())
-                .parse()
-                .map_err(|err| {
+            if target.contains('*') {
+                return Err(ApplicationError::bad_request(
+                    "network_target must be a literal IP endpoint without wildcards",
+                ));
+            }
+            let mut parsed: agena_domain::NetworkTarget = target.parse().map_err(|err| {
+                ApplicationError::bad_request_with_diagnostic("The network target is invalid.", err)
+            })?;
+            if let Some(port) = request.network_port {
+                if target.contains("://") {
+                    let mut url = url::Url::parse(&target).map_err(|error| {
+                        ApplicationError::bad_request_with_diagnostic(
+                            "The network target is invalid.",
+                            error,
+                        )
+                    })?;
+                    if url.port().is_some_and(|actual| actual != port) {
+                        return Err(ApplicationError::bad_request(
+                            "network_target and network_port specify different ports",
+                        ));
+                    }
+                    url.set_port(Some(port)).map_err(|_| {
+                        ApplicationError::bad_request("network_target does not accept a port")
+                    })?;
+                    target = url.to_string();
+                } else {
+                    if parsed.port().is_some_and(|actual| actual != port) {
+                        return Err(ApplicationError::bad_request(
+                            "network_target and network_port specify different ports",
+                        ));
+                    }
+                    target = if parsed.host().contains(':') {
+                        format!("[{}]:{port}", parsed.host())
+                    } else {
+                        format!("{}:{port}", parsed.host())
+                    };
+                }
+                parsed = target.parse().map_err(|error| {
                     ApplicationError::bad_request_with_diagnostic(
                         "The network target is invalid.",
-                        err,
+                        error,
                     )
                 })?;
+            }
+            if let Some(host) = request.network_host.as_deref()
+                && request.network_target.is_some()
+            {
+                let host: agena_domain::NetworkTarget = host.parse().map_err(|error| {
+                    ApplicationError::bad_request_with_diagnostic(
+                        "The network host is invalid.",
+                        error,
+                    )
+                })?;
+                if host.host() != parsed.host() {
+                    return Err(ApplicationError::bad_request(
+                        "network_target and network_host specify different addresses",
+                    ));
+                }
+            }
             Ok(PermissionAction::NetworkAccess {
                 target,
                 host: parsed.host().to_string(),
@@ -508,9 +586,12 @@ fn permission_rule_write_command_from_request(
 ) -> ApplicationResult<PermissionRuleWriteCommand> {
     let scope = permission_scope_from_request(request.scope.as_deref())?;
     let action = permission_action_from_write_request(&request, workspace_root)?;
+    let mode = permission_mode_to_domain(request.mode);
+    agena_domain::validate_persisted_network_decision(&action, mode, std::env::consts::OS)
+        .map_err(network_permission_input_error)?;
     Ok(PermissionRuleWriteCommand {
         action,
-        mode: permission_mode_to_domain(request.mode),
+        mode,
         scope,
         session_id: request.session_id,
         source: source.to_owned(),
@@ -549,5 +630,57 @@ const fn permission_mode_to_resource(
         agena_domain::PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
         agena_domain::PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
         agena_domain::PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
+    }
+}
+
+#[cfg(test)]
+mod network_write_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn structured_ip_and_port_fields_form_one_unambiguous_endpoint() {
+        for (target, expected) in [
+            ("192.0.2.7", "192.0.2.7:443"),
+            ("2001:db8::7", "[2001:db8::7]:443"),
+            ("[2001:db8::7]:443", "[2001:db8::7]:443"),
+        ] {
+            let request: UpsertPermissionRuleParams = serde_json::from_value(json!({
+                "subject_kind":"network_access", "network_target":target,
+                "network_port":443, "mode":"deny"
+            }))
+            .unwrap();
+            let action = permission_action_from_write_request(&request, "/").unwrap();
+            let PermissionAction::NetworkAccess { target, host, port } = action else {
+                panic!("expected a network action");
+            };
+            assert_eq!(target, expected);
+            assert!(host.parse::<std::net::IpAddr>().is_ok());
+            assert_eq!(port, Some(443));
+        }
+    }
+
+    #[test]
+    fn unsupported_network_writes_fail_before_command_persistence() {
+        for fields in [
+            json!({"network_target":"example.com:443"}),
+            json!({"network_target":"192.0.2.7:443","mode":"auto"}),
+            json!({"network_target":"192.0.2.7:443","mode":"ask"}),
+            json!({"network_target":"192.0.2.7:443","network_port":80}),
+            json!({"network_target":"192.0.2.7:443","network_host":"192.0.2.8"}),
+            json!({"network_target":"192.0.2.7:*","network_port":443}),
+            json!({"network_target":"https://192.0.2.7/private","network_port":8443}),
+        ] {
+            let mut value = json!({"subject_kind":"network_access","mode":"deny"});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(fields.as_object().unwrap().clone());
+            let request: UpsertPermissionRuleParams = serde_json::from_value(value).unwrap();
+            assert!(
+                permission_rule_write_command_from_request(request, "test", None, "/").is_err(),
+                "{fields}"
+            );
+        }
     }
 }

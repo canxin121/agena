@@ -16,8 +16,8 @@ pub use permission_helpers::{
     parse_permission_studio_optional_mode_input, parse_permission_studio_optional_path_mode_input,
     path_access_modes_summary, path_permission_mode_label, path_permission_mode_token,
     path_rule_summary, permission_mode_label, permission_mode_token,
-    permission_studio_mode_target_value, permission_studio_path_target_value, rename_network_rule,
-    rename_path_rule, rename_tool_name, rename_tool_rule, set_path_default_mode,
+    permission_studio_mode_target_value, permission_studio_path_target_value, rename_path_rule,
+    rename_tool_name, rename_tool_rule, set_path_default_mode,
 };
 pub use permission_rule_studio::{
     PermissionRuleStudioEffect, PermissionRuleStudioItem, PermissionRuleStudioPresentation,
@@ -34,18 +34,24 @@ pub use permission_studio::{
 pub enum PermissionStudioModeTarget {
     PathWorkspace,
     PathExternal,
-    NetworkInternet,
-    NetworkPrivate,
-    NetworkLoopback,
+    NetworkEgressDefault,
+    NetworkIngressDefault,
+    NetworkHostLoopback,
     ToolDefault,
     PathRule { pattern: String },
-    NetworkRule { target: String },
     ToolName { key: String },
     ToolRule { tool_name: String },
     ToolCommandPattern { tool_name: String, pattern: String },
 }
 
 impl PermissionStudioModeTarget {
+    pub fn is_network(&self) -> bool {
+        matches!(
+            self,
+            Self::NetworkEgressDefault | Self::NetworkIngressDefault | Self::NetworkHostLoopback
+        )
+    }
+
     pub fn is_path(&self) -> bool {
         matches!(
             self,

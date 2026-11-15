@@ -808,8 +808,7 @@ impl SessionManager {
             state.providers.clone(),
         ));
         let executor = executor.with_path_effect_authorizer(Arc::new(move |access, path| {
-            let check = authorizer
-                .path_permission_check(access, &path.to_string_lossy());
+            let check = authorizer.path_permission_check(access, &path.to_string_lossy());
             runtime.block_on(agena_async::permission_wait::scope(
                 Some(key),
                 agena_async::permission_wait::waiting(manager.authorize_checks(
@@ -866,11 +865,11 @@ impl SessionManager {
                 Ok((value, blobs)) => (ToolPhase::Succeeded, value, blobs),
                 Err(error) => {
                     let failure = error.failure();
-                    (
-                        ToolPhase::Failed,
-                        json!({"error":agena_failure::UserProblem::from(&failure),"failure":failure,"invocation":applied_invocation,"metadata":{},"capture_error":"the external effect completed, but its result could not be prepared"}),
-                        Vec::new(),
-                    )
+                    let mut value = failure_result_value(&failure, &applied_invocation);
+                    value["capture_error"] = json!(
+                        "the external effect completed, but its result could not be prepared"
+                    );
+                    (ToolPhase::Failed, value, Vec::new())
                 }
             },
             Err(error) => {
@@ -882,7 +881,7 @@ impl SessionManager {
                     } else {
                         ToolPhase::Failed
                     },
-                    json!({"error":agena_failure::UserProblem::from(&failure),"failure":failure,"invocation":applied_invocation,"metadata":{}}),
+                    failure_result_value(&failure, &applied_invocation),
                     Vec::new(),
                 )
             }
@@ -915,11 +914,20 @@ impl SessionManager {
         executor: &ToolExecutor,
         session: i64,
     ) -> Result<ToolExecutor, ToolError> {
-        let session_key = session_id(session)
-            .map_err(|error| ToolError::invalid_input(error.to_string()))?;
-        let workspace = self.kernel().reader.metadata(session_key).await
-            .map_err(|error| ToolError::invalid_input(error.to_string()))?.workspace_id;
-        let rules = self.kernel_runtime.permissions.resolve_snapshot(Some(session), workspace).await
+        let session_key =
+            session_id(session).map_err(|error| ToolError::invalid_input(error.to_string()))?;
+        let workspace = self
+            .kernel()
+            .reader
+            .metadata(session_key)
+            .await
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?
+            .workspace_id;
+        let rules = self
+            .kernel_runtime
+            .permissions
+            .resolve_snapshot(Some(session), workspace)
+            .await
             .map_err(|error| ToolError::invalid_input(error.to_string()))?;
         executor.clone().with_sandbox_persisted_rules(rules)
     }
@@ -2175,6 +2183,30 @@ fn native_portable_summary(
     Ok((!text.trim().is_empty()).then_some(text))
 }
 
+fn failure_result_value(failure: &agena_failure::Failure, invocation: &ToolInvocation) -> Value {
+    let mut public_invocation = invocation.clone();
+    let provider_tool = agena_tool::provider_tools::cloud_tool(&invocation.name).is_some()
+        || invocation.plugin_name.as_ref().is_some_and(|plugin| {
+            agena_tool::provider_tools::cloud_tool(&format!("{plugin}.{}", invocation.name))
+                .is_some()
+        });
+    if provider_tool {
+        // Provider query maps can contain opaque pagination data or credentials
+        // rejected by input validation. Keep them out of the public failure
+        // envelope; the actual invocation and its wire input stay unchanged.
+        public_invocation
+            .input
+            .fields
+            .retain(|field| field.name != "query");
+    }
+    json!({
+        "error": agena_failure::UserProblem::from(failure),
+        "failure": failure,
+        "invocation": public_invocation,
+        "metadata": {},
+    })
+}
+
 fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &str) -> bool {
     recent
         .iter()
@@ -2185,5 +2217,7 @@ fn tool_call_repeats(recent: &std::collections::VecDeque<String>, signature: &st
 
 #[cfg(test)]
 mod compaction_tests;
+#[cfg(test)]
+mod failure_result_tests;
 #[cfg(test)]
 mod stop_hook_tests;

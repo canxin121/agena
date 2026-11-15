@@ -23,9 +23,8 @@ use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
 pub use crate::permission::{
-    SandboxFilesystemRestrictions, SandboxNetworkPolicy, SandboxNetworkRule, SandboxPathAccess,
-    SandboxPathPattern, SandboxPathPolicy, SandboxPathRule, SandboxPermissionSnapshot,
-    SandboxPersistedRule, SandboxPolicyError,
+    SandboxFilesystemRestrictions, SandboxPathAccess, SandboxPathPattern, SandboxPathPolicy,
+    SandboxPathRule, SandboxPermissionSnapshot, SandboxPersistedRule, SandboxPolicyError,
 };
 
 pub fn apply_to_permission_policy(
@@ -78,28 +77,9 @@ fn apply_path_permission_config(
 
 fn apply_network_permission_config(
     value: &NetworkPermissionConfig,
-    mut base: NetworkPermissionPolicy,
+    _base: NetworkPermissionPolicy,
 ) -> Result<NetworkPermissionPolicy, PermissionConfigError> {
-    if let Some(mode) = value.internet {
-        base.internet_default = mode;
-    }
-    if let Some(mode) = value.private {
-        base.private_default = mode;
-    }
-    if let Some(mode) = value.loopback {
-        base.loopback_default = mode;
-    }
-    for (pattern, mode) in &value.rules {
-        let trimmed = pattern.trim();
-        if trimmed.is_empty() || trimmed != pattern {
-            return Err(PermissionConfigError::InvalidNetworkRule {
-                pattern: pattern.clone(),
-                reason: "network rules must name a non-empty host, IP or CIDR without surrounding whitespace".into(),
-            });
-        }
-        base.add_rule(trimmed, *mode)?;
-    }
-    Ok(base)
+    NetworkPermissionPolicy::from_config(value)
 }
 
 pub fn apply_tool_permission_config(

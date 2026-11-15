@@ -3,36 +3,11 @@ import asyncio
 import json
 import os
 import sys
-from urllib.parse import urlsplit, urlunsplit
-
-
-def sandbox_cdp_endpoint(endpoint):
-    # MXC rewrites a host loopback peer to its private-network gateway on
-    # Linux. The CDP service is the sole allowed socket, not an HTTP proxy.
-    mapped = os.environ.get("HTTP_PROXY") or os.environ.get("http_proxy")
+async def act(request):
+    endpoint = request["endpoint"]
     for name in list(os.environ):
         if name.lower() in {"http_proxy", "https_proxy", "all_proxy", "ftp_proxy", "no_proxy"}:
             del os.environ[name]
-    if not mapped:
-        raise ValueError("sandbox CDP transport is missing")
-    peer = urlsplit(mapped)
-    target = urlsplit(endpoint)
-    target_port = target.port or (443 if target.scheme in {"wss", "https"} else 80)
-    peer_port = peer.port if peer.port is not None else (443 if peer.scheme == "https" else 80)
-    if (peer.scheme not in {"http", "https"}
-            or peer.hostname not in {"127.0.0.1", "::1", "localhost", "10.0.2.2"}
-            or peer.username is not None or peer.password is not None
-            or peer_port != target_port
-            or peer.path not in {"", "/"} or peer.query or peer.fragment
-            or target.scheme not in {"ws", "wss", "http", "https"}
-            or target.hostname != "127.0.0.1"
-            or target.username is not None or target.password is not None):
-        raise ValueError("sandbox CDP transport does not match the owned endpoint")
-    return urlunsplit((target.scheme, peer.netloc, target.path, target.query, ""))
-
-
-async def act(request):
-    endpoint = sandbox_cdp_endpoint(request["endpoint"])
     try:
         from playwright.async_api import async_playwright, Error, TimeoutError, expect
     except ImportError:

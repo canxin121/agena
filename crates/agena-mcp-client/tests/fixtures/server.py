@@ -3,9 +3,9 @@ import argparse
 import base64
 import hashlib
 import json
-import os
 import sys
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -22,6 +22,8 @@ parser.add_argument('--registration', choices=['dcr', 'preregistered', 'metadata
 parser.add_argument('--issuer-base')
 parser.add_argument('--authorization-url')
 args = parser.parse_args()
+# PID namespaces can assign PID 2 to every restarted fixture.
+instance_id = uuid.uuid4().hex
 changed = False
 challenge = None
 base = None
@@ -78,7 +80,7 @@ def rpc(request, headers=None):
             sys.exit(0)
         if params['name'] == 'slow':
             time.sleep(0.3)
-        return result(request, {'content': [{'type': 'text', 'text': str(os.getpid())}]})
+        return result(request, {'content': [{'type': 'text', 'text': instance_id}]})
     if method == 'resources/list' and 'resources' in capabilities():
         return result(request, {'resources': [{'uri': 'fixture://notes', 'name': 'Notes'}]})
     if method == 'resources/templates/list' and 'resources' in capabilities():

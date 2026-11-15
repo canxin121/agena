@@ -5,13 +5,17 @@ use axum::http::Method;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-use super::{API_KEY, Vendor, peer::*};
+use super::{API_KEY, Vendor, native_fixture_address, native_fixture_network, peer::*};
 
 async fn permissions(user: &agena_testkit::UserSession, rules: Value, network: &str) -> TestResult {
+    let network = match network {
+        "allow" => native_fixture_network()?,
+        "deny" => serde_json::to_value(agena_domain::NetworkPermissionConfig::offline())?,
+        _ => anyhow::bail!("network permission fixtures accept only allow or deny"),
+    };
     user.client().set_session_permission(user.id(), serde_json::from_value(json!({
-        "path": {"workspace":{"read":"allow","write":"allow"},
-            "external":{"read":"allow","write":"allow"}, "rules":rules},
-        "network":{"loopback":network,"private":"deny","internet":"deny"},
+        "path": {"workspace":"readwrite", "external":"readwrite", "rules":rules},
+        "network":network,
         "tools":{"default":"allow","names":{"chatgpt.files":"allow","agena.chatgpt.files":"allow"}}
     }))?).await?;
     Ok(())
@@ -207,7 +211,7 @@ async fn refused_vendor_connection_does_not_leak_query_or_credentials() -> TestR
     let peer = Peer::default();
     scripted(&peer).run(move |case| async move {
         let user = session(&case).await?;
-        let reserved = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let reserved = std::net::TcpListener::bind((native_fixture_address()?, 0))?;
         let address = reserved.local_addr()?;
         drop(reserved);
         case.settings().set(SettingsLayer::Global, "providers.testkit.adapters.anthropic",
@@ -237,7 +241,7 @@ async fn upload_and_network_denials_stop_before_io_and_hide_query_secrets() -> T
             tokio::fs::write(&input, b"must-never-leave-workspace").await?;
             permissions(
                 &user,
-                json!({(input.to_string_lossy().to_string()):{"read":"deny","write":"deny"}}),
+                json!({(input.to_string_lossy().to_string()):"deny"}),
                 "allow",
             )
             .await?;
@@ -260,9 +264,7 @@ async fn upload_and_network_denials_stop_before_io_and_hide_query_secrets() -> T
             ensure!(denied.failure()?.category == FailureCategory::PermissionDenied);
             ensure!(peer.requests().is_empty());
 
-            permissions(&user, json!({}), "ask").await?;
-            // Credentials are supplied by the selected provider, so a query
-            // key override is rejected before the network permission stage.
+            // Invalid credentials are rejected before the native network check.
             let invalid = user
                 .call_tool(
                     "chatgpt.files",
@@ -272,24 +274,51 @@ async fn upload_and_network_denials_stop_before_io_and_hide_query_secrets() -> T
             invalid.assert_failure_kind(ModelFeedbackKind::InvalidInput)?;
             ensure!(peer.requests().is_empty());
 
-            // An otherwise valid opaque pagination value may also be sensitive.
-            // It reaches the real network ask, but must not enter its target.
+            // A static network refusal settles without approval and never exposes
+            // opaque pagination data in its public failure.
+            let denied = user
+                .call_tool(
+                    "chatgpt.files",
+                    json!({"action":"list","query":{"after":"query-secret-canary"}}),
+                )
+                .await?;
+            denied.assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
+            ensure!(!denied.output.to_string().contains("query-secret-canary"));
+            ensure!(
+                user.snapshot()
+                    .await?
+                    .session
+                    .state
+                    .pending_interactive_requests()
+                    .is_empty()
+            );
+            ensure!(peer.requests().is_empty());
+
+            // Approval belongs to the tool; granting network access does not
+            // start the operation until the tool decision is resolved.
+            permissions(&user, json!({}), "allow").await?;
+            let mut policy =
+                serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
+            for name in ["chatgpt.files", "agena.chatgpt.files"] {
+                policy["tools"]["names"][name] = json!("ask");
+            }
+            user.client()
+                .set_session_permission(user.id(), serde_json::from_value(policy)?)
+                .await?;
             let pending = user
                 .start_tool(
                     "chatgpt.files",
                     json!({"action":"list","query":{"after":"query-secret-canary"}}),
                 )
                 .await?;
-            let permission = pending.run().wait_permission().await?;
+            let permission = pending.wait_permission().await?;
             ensure!(peer.requests().is_empty(), "vendor I/O preceded approval");
-            let request = serde_json::to_string(&permission.request)?;
+            let request = serde_json::to_value(&permission.request.request)?;
+            ensure!(request.pointer("/action/kind") == Some(&json!("tool")));
+            ensure!(request.pointer("/action/tool_name") == Some(&json!("chatgpt.files")));
             ensure!(
-                request.contains("/v1/files"),
-                "approval omitted vendor target: {request}"
-            );
-            ensure!(
-                !request.contains("query-secret-canary"),
-                "approval leaked query secret"
+                !serde_json::to_string(&request)?.contains("query-secret-canary"),
+                "tool approval leaked query secret"
             );
             permission.mark_presented().await?;
             permission.deny_once().await?;

@@ -27,6 +27,10 @@ impl App {
                     false
                 }
             }
+            PermissionStudioAction::EditNetworkPolicy => {
+                self.open_permission_studio_network_editor(dialog);
+                false
+            }
             PermissionStudioAction::AddToolCommandPattern { tool_name } => {
                 if !dialog.editable {
                     self.flash_warning(permission_studio_read_only_message(
@@ -79,12 +83,47 @@ impl App {
             current_value,
             if target.is_path() {
                 path_permission_mode_choice_items(&self.i18n)
+            } else if target.is_network() {
+                permission_mode_choice_items(&self.i18n)
+                    .into_iter()
+                    .filter(|item| matches!(item.value.as_str(), "allow" | "deny"))
+                    .collect()
             } else {
                 permission_mode_choice_items(&self.i18n)
             },
             ChoiceOverlayAction::PermissionStudioMode(target),
             true,
             agena_tui::choice::ChoicePresentationStyle::SelectOnly,
+        ));
+    }
+
+    pub(crate) fn open_permission_studio_network_editor(
+        &mut self,
+        dialog: &mut PermissionStudioOverlay,
+    ) {
+        if !dialog.editable {
+            self.flash_warning(permission_studio_read_only_message(
+                &self.i18n,
+                &dialog.source,
+            ));
+            return;
+        }
+        let input = serde_json::to_string_pretty(
+            &dialog
+                .permission
+                .network
+                .as_ref()
+                .cloned()
+                .unwrap_or_default(),
+        )
+        .unwrap_or_default();
+        dialog.editor = Some(PermissionStudioEditor::new(
+            self.i18n.text("permission-studio-network-json"),
+            self.i18n.text("permission-studio-network-json-help"),
+            editor_save_footer(&self.i18n, true),
+            true,
+            Editor::from_text(input),
+            PermissionStudioEditorAction::EditNetworkPolicy,
         ));
     }
 
@@ -128,9 +167,6 @@ impl App {
             PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule { pattern }) => {
                 PermissionStudioTextTarget::PathRulePattern { pattern }
             }
-            PermissionStudioAction::EditMode(PermissionStudioModeTarget::NetworkRule {
-                target,
-            }) => PermissionStudioTextTarget::NetworkRuleTarget { target },
             PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName { key }) => {
                 PermissionStudioTextTarget::ToolNameKey { key }
             }
@@ -190,7 +226,9 @@ impl App {
                     // The class-default pages have no free-text field: every
                     // entry is a mode chosen from the value list, so no section
                     // follows.
-                    PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => None,
+                    PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkDefaults => {
+                        None
+                    }
                 };
                 self.set_permission_studio_page_with_section(
                     dialog,
@@ -232,23 +270,10 @@ impl App {
                     PermissionStudioModeTarget::PathRule { pattern },
                 );
             }
-            PermissionStudioEditorAction::AddNetworkRule => {
-                let target = parse_permission_studio_key_input(
-                    &self.i18n,
-                    ui_text::t(&self.i18n, "permission-studio-field-network-rules").as_str(),
-                    input.as_str(),
-                )
-                .map_err(crate::UiFailure::message)?;
-                self.set_permission_studio_page_with_section(
-                    dialog,
-                    PermissionStudioPage::NetworkRules,
-                    Some(PermissionStudioSectionId::NetworkRules),
-                    PermissionStudioFocus::Items,
-                );
-                self.open_permission_studio_mode_overlay(
-                    dialog,
-                    PermissionStudioModeTarget::NetworkRule { target },
-                );
+            PermissionStudioEditorAction::EditNetworkPolicy => {
+                let mut permission = dialog.permission.clone();
+                apply_permission_studio_network_input(&mut permission, &input)?;
+                self.persist_permission_studio(dialog, permission)?;
             }
             PermissionStudioEditorAction::AddToolName => {
                 let key = parse_permission_studio_key_input(
@@ -345,8 +370,9 @@ use crate::{
     PermissionStudioCatalogKind, PermissionStudioEditor, PermissionStudioEditorAction,
     PermissionStudioFocus, PermissionStudioModeTarget, PermissionStudioOverlay,
     PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
-    PermissionStudioTextTarget, ToolPermissionRules, UiResult, apply_permission_studio_text_input,
-    editor_save_footer, parse_permission_studio_key_input, path_permission_mode_choice_items,
+    PermissionStudioTextTarget, ToolPermissionRules, UiResult,
+    apply_permission_studio_network_input, apply_permission_studio_text_input, editor_save_footer,
+    parse_permission_studio_key_input, path_permission_mode_choice_items,
     permission_mode_choice_items, permission_studio_creator_input_text,
     permission_studio_creator_spec, permission_studio_mode_target_input_text,
     permission_studio_mode_target_label, permission_studio_read_only_message,

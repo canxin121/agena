@@ -18,7 +18,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use super::super::{allow_permissions, fixture};
+use super::super::{allow_permissions, fixture, native_fixture_address};
 
 #[derive(Default)]
 struct SearchPeer {
@@ -89,7 +89,8 @@ fn configured_fixture(setup_peer: Arc<SearchPeer>) -> TestAgenaBuilder {
         .before_start(move |case| async move {
             let private_peer = setup_peer.clone();
             let server = case
-                .serve_http(
+                .serve_http_on(
+                    native_fixture_address()?,
                     Router::new()
                         .route("/search", get(search))
                         .route(
@@ -226,7 +227,7 @@ pub(super) async fn configured_search_uses_real_http() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn configured_search_permission_decline_precedes_http() -> TestResult {
+async fn configured_search_denial_and_tool_approval_precede_http() -> TestResult {
     let peer = Arc::new(SearchPeer::default());
     configured_fixture(peer.clone())
         .run(move |case| async move {
@@ -234,9 +235,38 @@ async fn configured_search_permission_decline_precedes_http() -> TestResult {
             allow_permissions(&user).await?;
             let mut policy =
                 serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
-            policy["network"] = json!({
-                "loopback":"ask", "private":"deny", "internet":"deny"
-            });
+            policy["network"] =
+                serde_json::to_value(agena_domain::NetworkPermissionConfig::offline())?;
+            user.client()
+                .set_session_permission(user.id(), serde_json::from_value(policy)?)
+                .await?;
+
+            let denied = user
+                .call_tool(
+                    "web.search",
+                    json!({"query":"denied-search-must-not-reach-service"}),
+                )
+                .await?;
+            denied.assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
+            ensure!(
+                user.snapshot()
+                    .await?
+                    .session
+                    .state
+                    .pending_interactive_requests()
+                    .is_empty()
+            );
+            ensure!(peer.requests.lock().unwrap().is_empty());
+            assert_eq!(peer.private_fetches.load(Ordering::SeqCst), 0);
+
+            allow_permissions(&user).await?;
+            let mut policy =
+                serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
+            // The fixture fills both spellings; the invoked name is matched
+            // first, so both entries must require the same approval.
+            for name in ["web.search", "agena.web.search"] {
+                policy["tools"]["names"][name] = json!("ask");
+            }
             user.client()
                 .set_session_permission(user.id(), serde_json::from_value(policy)?)
                 .await?;
@@ -247,10 +277,13 @@ async fn configured_search_permission_decline_precedes_http() -> TestResult {
                     json!({"query":"declined-search-must-not-reach-service"}),
                 )
                 .await?;
-            let permission = run.run().wait_permission().await?;
+            let permission = run.wait_permission().await?;
             let presented = serde_json::to_value(&permission.request.request)?;
-            let target = format!("{}/search", peer.endpoint.get().context("search endpoint")?);
-            assert_eq!(presented.pointer("/action/target"), Some(&json!(target)));
+            assert_eq!(presented.pointer("/action/kind"), Some(&json!("tool")));
+            assert_eq!(
+                presented.pointer("/action/tool_name"),
+                Some(&json!("web.search"))
+            );
             ensure!(
                 peer.requests.lock().unwrap().is_empty(),
                 "search ran before user approval"

@@ -252,9 +252,33 @@ cdylib 插件与 Agena 宿主在同一进程中运行，必须作为受信任代
 - [Windows 文件系统策略](https://github.com/microsoft/mxc/blob/main/docs/backends/process-container/filesystem.md)
 - [Windows 网络策略](https://github.com/microsoft/mxc/blob/main/docs/backends/process-container/networking.md)
 
-本次接入主机为 Ubuntu 24.04.3 LTS。真实 MXC 探针和独立的最小 `bwrap --unshare-user --unshare-net` 探针均在启动负载前失败，错误为 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`。主机启用了 `kernel.apparmor_restrict_unprivileged_userns=1`，当前启动路径没有专用 userns profile；联网依赖 `slirp4netns` 也未安装。需要先完成下面的管理员配置，再以真实进程探针确认隔离可用。
+### 通过安装器自动准备
 
-### Ubuntu 24.04 的管理员配置
+通常直接运行安装命令即可补齐依赖、配置系统权限并验证真实沙盒：
+
+```bash
+bash ./scripts/agena/install.sh reinstall --source --host 0.0.0.0
+```
+
+默认 `--setup-mode auto` 会先准备源码构建所需工具，再补齐原生沙盒运行依赖。Linux 会按最终安装路径生成专用 AppArmor userns profile、准备 `nf_conntrack` 和联网工具；系统步骤在需要时通过 `sudo` 请求密码。macOS 原生服务会在安装阶段通过稳定的 `Agena.app` 身份集中检查/申请辅助功能、屏幕录制，并打开完全磁盘访问设置。Windows 源码安装会准备相应工具链，并在需要时请求 UAC 授权。已有路径、网络和工具审批设置继续保留。
+
+准备阶段失败时旧服务保持运行；新程序复制到最终路径后必须通过 `--agena-sandbox-check`，否则回滚程序和原运行状态。Linux/macOS 要求离线隔离和认证 HTTP 代理自检都成功；Windows 必须通过离线隔离检查，并单独显示当前 MXC HTTP 代理模式不支持。成功报告保存在 `<install-dir>/sandbox-report.json`。
+
+Linux 安装器按 `/etc/os-release` 的发行版家族选择 `apt-get/apt`、`dnf/dnf5/yum`、`pacman`、`zypper` 或 `apk`，分别处理开发库、网络工具及 AppArmor 的包名。支持通过 `sudo`、`doas` 或交互式 `su` 完成系统步骤；systemd/OpenRC 的模块开机加载也分别处理。Alpine 使用 `--source` 构建原生 musl 版本，或通过 `--archive` 提供原生包；当前官方 Linux 发布包为 glibc。各包管理器分支的离线测试覆盖调用和配置行为，最终可用性由目标宿主的真实隔离探针决定。
+
+只修复系统准备并重新检查已安装程序，不重装或重启服务：
+
+```bash
+bash ./scripts/agena/install.sh permissions
+# 仅检查，不安装依赖或修改系统配置：
+bash ./scripts/agena/install.sh permissions --setup-mode check
+```
+
+Windows 对应 `install.ps1 -Action Permissions`；只检查时增加 `-SetupMode check`。完整选项、各平台权限流程见 [安装文档](installation.md#automatic-setup-and-sandbox-verification)。
+
+开发机上的真实检测也用于确认失败是否能被准确报告：Ubuntu 24.04.3 的现有安装在尚未执行系统准备时，离线检查返回 `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`，联网检查返回 `unshare` 写入 `uid_map` 被拒绝；该机启用了 AppArmor userns 限制且缺少 `slirp4netns`。这些失败会使安装自检返回非零退出码，待安装器完成权限准备后重新确认。
+
+### Ubuntu 24.04 的手动管理员配置
 
 Ubuntu 24.04 对无专用 AppArmor profile 的非特权程序限制 user namespace 内的 capabilities；发行版说明推荐给具体应用添加含 `userns,` 的 profile。[Ubuntu 24.04 发布说明](https://discourse.ubuntu.com/t/ubuntu-24-04-lts-noble-numbat-release-notes/39890) 给出了 `flags=(unconfined)` 应用 profile 的模板。
 
@@ -262,7 +286,7 @@ Ubuntu 24.04 对无专用 AppArmor profile 的非特权程序限制 user namespa
 
 ```bash
 sudo apt update
-sudo apt install bubblewrap slirp4netns iproute2 iptables util-linux apparmor-profiles apparmor-utils
+sudo apt install bubblewrap slirp4netns iproute2 iptables util-linux kmod apparmor-profiles apparmor-utils
 ```
 
 Agena 可执行文件、MXC 后端工具及宿主 PATH 中的程序目录必须安装在任务可写目录之外；启动前会拒绝覆盖这些受信任路径的读写授权，包括符号链接别名。
@@ -293,6 +317,14 @@ profile 的目录和单文件加载方法见 [Ubuntu Server AppArmor 文档](htt
 随后分别验证离线沙盒和带获准网络目标的实际工具调用。若仍返回 `EPERM`，管理员可结合 `sudo journalctl -k` 中的 AppArmor 拒绝记录核对命中的 profile、可执行文件路径和具体操作。这些步骤保留系统级 user namespace 限制，通过应用专用规则提供所需能力。
 
 ## 诊断和验证
+
+使用已安装的主程序运行与安装器相同的真实自检：
+
+```bash
+agena --agena-sandbox-check
+```
+
+该入口在加载配置、凭证和插件之前执行，输出单行 JSON。`schema_version` 为 `1`，`ok` 与退出码一致，`checks` 分别列出 `offline` 和 `http_proxy` 的 `required`、`status`、`detail`。检查使用私有临时目录和本地 HTTP 测试端点，完成后清理；不连接外部测试网站。AppArmor 按程序路径匹配，诊断时应直接使用最终安装路径的二进制。
 
 在仓库根目录运行诊断示例：
 

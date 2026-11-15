@@ -9,11 +9,15 @@ on:
       - ".github/workflows/agena-release.yml"
       - "apps/agena/src/server/lifecycle.rs"
       - "apps/agena/src/server/user_service.rs"
+      - "apps/agena/src/main.rs"
+      - "apps/agena/src/server/macos_privacy_probe.rs"
       - "apps/agena/src/server/macos_permissions*"
       - "apps/agena/src/server/macos_permissions/**"
       - "apps/agena/src/server/macos_permission_host.c"
       - "apps/agena/build.rs"
       - "apps/agena/Cargo.toml"
+      - "crates/agena-process/**"
+      - "scripts/ci/setup-windows-toolchain.ps1"
       - "scripts/agena/install.sh"
       - "scripts/agena/install.ps1"
       - "scripts/agena/tests/**"
@@ -29,11 +33,15 @@ on:
       - ".github/workflows/agena-release.yml"
       - "apps/agena/src/server/lifecycle.rs"
       - "apps/agena/src/server/user_service.rs"
+      - "apps/agena/src/main.rs"
+      - "apps/agena/src/server/macos_privacy_probe.rs"
       - "apps/agena/src/server/macos_permissions*"
       - "apps/agena/src/server/macos_permissions/**"
       - "apps/agena/src/server/macos_permission_host.c"
       - "apps/agena/build.rs"
       - "apps/agena/Cargo.toml"
+      - "crates/agena-process/**"
+      - "scripts/ci/setup-windows-toolchain.ps1"
       - "scripts/agena/**"
       - "Cargo.toml"
       - "Cargo.lock"
@@ -102,7 +110,7 @@ jobs:
             }
           }
 
-      - name: Verify PowerShell installer state and parameter contracts
+      - name: Verify PowerShell setup, sandbox and rollback contracts
         shell: pwsh
         run: python scripts/agena/tests/test_installer_powershell.py
 
@@ -113,14 +121,42 @@ jobs:
           AGENA_DATA_DIR: ${{ runner.temp }}\agena-remote-data
           WORKSPACE_DIR: ${{ runner.temp }}\agena-remote-workspace
           TEST_PORT: "43211"
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Join-Path $PWD 'scripts\agena\install.ps1'
+          $installer = Join-Path $env:RUNNER_TEMP 'agena-published-install.ps1'
+          $download = "$installer.download"
+          $checksumPath = "$installer.sha256"
+          Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+          $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN" }
+          $releases = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases?per_page=100"
+          $release = $releases | Where-Object { -not $_.draft -and $_.tag_name -match '^agena-v\d+\.\d+\.\d+-beta\.[1-9]\d*$' } | Select-Object -First 1
+          if (-not $release) { throw 'no published beta release was found' }
+          $releaseVersion = $release.tag_name -replace '^agena-v', ''
+          $assetNames = @($release.assets | ForEach-Object { $_.name })
+          foreach ($name in @('install.ps1', 'install.ps1.sha256')) {
+            if ($assetNames -notcontains $name) { throw "release $($release.tag_name) is missing $name" }
+          }
+          function Get-PublishedInstallerAsset([string]$Name, [string]$Destination) {
+            $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$($release.tag_name)/$Name"
+            & curl.exe --fail --location --silent --show-error --retry 5 --retry-delay 2 --connect-timeout 15 --max-time 180 --output $Destination $url
+            if ($LASTEXITCODE -ne 0) { throw "failed to download $Name from release $($release.tag_name)" }
+          }
+          Get-PublishedInstallerAsset 'install.ps1' $download
+          Get-PublishedInstallerAsset 'install.ps1.sha256' $checksumPath
+          $checksumText = (Get-Content -LiteralPath $checksumPath -Raw).Trim()
+          if ($checksumText -notmatch '^([0-9a-fA-F]{64})\s+\*?install\.ps1$') { throw 'invalid published installer checksum' }
+          $expectedHash = $Matches[1]
+          $actualHash = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw 'published installer SHA256 mismatch' }
+          # Cleanup also uses this path, so expose it only after verification.
+          Move-Item -LiteralPath $download -Destination $installer
           New-Item -ItemType Directory -Force -Path $env:WORKSPACE_DIR | Out-Null
 
-          Write-Host '[remote-release] install latest beta from GitHub release URLs'
+          Write-Host "[remote-release] install matching installer and binary from $($release.tag_name)"
           & $installer -Action Install `
             -Repo $env:GITHUB_REPOSITORY `
+            -Version $releaseVersion `
             -InstallDir $env:INSTALL_DIR `
             -DataDir $env:AGENA_DATA_DIR `
             -Workspace $env:WORKSPACE_DIR `
@@ -156,7 +192,7 @@ jobs:
           INSTALL_DIR: ${{ runner.temp }}\agena-remote-install
           AGENA_DATA_DIR: ${{ runner.temp }}\agena-remote-data
         run: |
-          $installer = Join-Path $PWD 'scripts\agena\install.ps1'
+          $installer = Join-Path $env:RUNNER_TEMP 'agena-published-install.ps1'
           if ((Test-Path -LiteralPath $installer) -and (Test-Path -LiteralPath $env:INSTALL_DIR)) {
             try { & $installer -Action Uninstall -InstallDir $env:INSTALL_DIR -NoPathUpdate *> $null } catch {}
           }
@@ -282,6 +318,9 @@ jobs:
             --port "$TEST_PORT" \
             --service-mode "$SERVICE_MODE"
           "$INSTALL_DIR/bin/agena" --version
+          test -s "$INSTALL_DIR/sandbox-report.json"
+          python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["schema_version"] == 1 and r["ok"] is True; c={x["name"]:x for x in r["checks"]}; assert all(c[n]["required"] is True and c[n]["status"] == "passed" for n in ("offline","http_proxy"))' "$INSTALL_DIR/sandbox-report.json"
+          "${install[@]}" permissions --install-dir "$INSTALL_DIR" --setup-mode check
           if [[ "$(uname -s)" == "Darwin" ]]; then
             permission_host="$AGENA_DATA_DIR/macos/Agena.app"
             codesign --verify --strict "$permission_host"
@@ -345,6 +384,7 @@ jobs:
           # rollback, not merely checksum/download failure.
           version="$($INSTALL_DIR/bin/agena --version | awk '{print $NF}')"
           old_hash="$(shasum -a 256 "$INSTALL_DIR/bin/agena" | awk '{print $1}')"
+          old_report_hash="$(shasum -a 256 "$INSTALL_DIR/sandbox-report.json" | awk '{print $1}')"
           bad="$RUNNER_TEMP/agena-bad-upgrade"
           rm -rf "$bad"
           mkdir -p "$bad/bin" "$bad/web-dist"
@@ -375,6 +415,7 @@ jobs:
           fi
           new_hash="$(shasum -a 256 "$INSTALL_DIR/bin/agena" | awk '{print $1}')"
           test "$old_hash" = "$new_hash"
+          test "$old_report_hash" = "$(shasum -a 256 "$INSTALL_DIR/sandbox-report.json" | awk '{print $1}')"
           if [[ "$(uname -s)" == "Darwin" ]]; then
             codesign --verify --strict "$permission_host"
             test "$permission_hash" = "$(shasum -a 256 "$permission_host/Contents/MacOS/Agena" "$permission_host/Contents/Info.plist" "$permission_host/Contents/_CodeSignature/CodeResources")"
@@ -433,6 +474,17 @@ jobs:
             -ServiceMode native `
             -NoPathUpdate
           & (Join-Path $env:INSTALL_DIR 'bin\agena.exe') --version
+          $reportPath = Join-Path $env:INSTALL_DIR 'sandbox-report.json'
+          $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+          if ($report.schema_version -ne 1 -or $report.ok -ne $true -or $report.platform -cne 'windows') {
+            throw 'current Windows artifact did not save a successful sandbox report'
+          }
+          $offline = @($report.checks | Where-Object { $_.name -eq 'offline' -and $_.required -eq $true -and $_.status -eq 'passed' })
+          $proxy = @($report.checks | Where-Object { $_.name -eq 'http_proxy' })
+          if ($offline.Count -ne 1 -or $proxy.Count -ne 1 -or $proxy[0].status -notin @('passed', 'unsupported')) {
+            throw 'Windows sandbox report is missing required isolation or network capability results'
+          }
+          & $installer -Action Permissions -InstallDir $env:INSTALL_DIR -SetupMode check
           & $installer -Action Status -InstallDir $env:INSTALL_DIR
           $selectedDataDir = $env:AGENA_DATA_DIR
           try {
@@ -496,6 +548,7 @@ jobs:
           $versionText = (& $installedBinary --version | Out-String).Trim()
           $version = ($versionText -split '\s+')[-1]
           $oldHash = (Get-FileHash -LiteralPath $installedBinary -Algorithm SHA256).Hash
+          $oldReportHash = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash
           $badRoot = Join-Path $env:RUNNER_TEMP 'agena-bad-upgrade'
           Remove-Item -LiteralPath $badRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path (Join-Path $badRoot 'bin') | Out-Null
@@ -534,6 +587,9 @@ jobs:
           if (-not $failedAsExpected) { throw 'intentionally broken upgrade unexpectedly succeeded' }
           $newHash = (Get-FileHash -LiteralPath $installedBinary -Algorithm SHA256).Hash
           if ($oldHash -ne $newHash) { throw 'rollback did not restore the previous Windows binary' }
+          if ((Get-FileHash -LiteralPath $reportPath -Algorithm SHA256).Hash -ne $oldReportHash) {
+            throw 'rollback did not preserve the previous successful sandbox report'
+          }
           & $installer -Action Status -InstallDir $env:INSTALL_DIR
           Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$env:TEST_PORT/api/v1/health" | Out-Null
 

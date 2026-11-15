@@ -1,6 +1,6 @@
 [CmdletBinding()]
 Param(
-  [ValidateSet("Install", "Reinstall", "Upgrade", "Uninstall", "Start", "Stop", "Restart", "Status")]
+  [ValidateSet("Install", "Reinstall", "Upgrade", "Uninstall", "Start", "Stop", "Restart", "Status", "Permissions")]
   [string]$Action = "Install",
   [string]$Repo = "canxin121/agena",
   [string]$Version = "",
@@ -17,6 +17,8 @@ Param(
   [string]$ServerPassword = $env:AGENA_SERVER_PASSWORD,
   [ValidateSet("auto", "native", "detached")]
   [string]$ServiceMode = "auto",
+  [ValidateSet("auto", "check")]
+  [string]$SetupMode = "auto",
   [switch]$NoPathUpdate,
   [switch]$PurgeData
 )
@@ -34,6 +36,7 @@ $ServerPasswordSpecified = $PSBoundParameters.ContainsKey("ServerPassword")
 $ServiceModeSpecified = $PSBoundParameters.ContainsKey("ServiceMode")
 
 $ReleaseVersion = ""
+$script:SandboxReport = $null
 
 if (-not $InstallDir) {
   $InstallDir = Join-Path $env:LOCALAPPDATA "Agena"
@@ -62,6 +65,9 @@ if (-not $replacementAction -and $candidateParameters) {
 }
 if (-not $replacementAction -and $runtimeParameters) {
   throw "$(($runtimeParameters | ForEach-Object { "-$_" }) -join ', ') only applies to Install, Reinstall, and Upgrade"
+}
+if ($PSBoundParameters.ContainsKey("SetupMode") -and -not $replacementAction -and $Action -ne "Permissions") {
+  throw "-SetupMode only applies to Install, Reinstall, Upgrade, and Permissions"
 }
 if ($PurgeData -and $Action -ne "Uninstall") {
   throw "-PurgeData only applies to Uninstall"
@@ -141,6 +147,214 @@ function Get-TargetTriple {
   }
 }
 
+function Invoke-InstallerExecutable([string]$Executable, [string[]]$Arguments) {
+  # Capture native failures explicitly, including in Windows PowerShell 5.1.
+  $previousErrorAction = $ErrorActionPreference
+  try {
+    $ErrorActionPreference = "Continue"
+    $PSNativeCommandUseErrorActionPreference = $false
+    $global:LASTEXITCODE = $null
+    $output = (& $Executable @Arguments 2>&1 | Out-String).Trim()
+    $code = if ($null -eq $LASTEXITCODE) { 1 } else { $LASTEXITCODE }
+  }
+  finally { $ErrorActionPreference = $previousErrorAction }
+  return [pscustomobject]@{ ExitCode = $code; Output = $output }
+}
+
+function Get-DependencyCommand([string]$Name) {
+  $commands = @(Get-Command $Name -CommandType Application -All -ErrorAction SilentlyContinue)
+  # App Installer's Python alias opens the Store instead of running Python.
+  if ($Name -eq "python") {
+    $commands = @($commands | Where-Object { $_.Source -notmatch '[\\/]Microsoft[\\/]WindowsApps[\\/]python(?:3)?\.exe$' })
+  }
+  return $commands | Select-Object -First 1
+}
+
+function Invoke-DependencyCommand([string]$Name, [string[]]$Arguments) {
+  $command = Get-DependencyCommand $Name
+  if (-not $command) { throw "$Name is required to build Agena from source" }
+  return Invoke-InstallerExecutable $command.Source $Arguments
+}
+
+function Refresh-DependencyPath {
+  $cargoRoot = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $HOME ".cargo" }
+  $bunRoot = if ($env:BUN_INSTALL) { $env:BUN_INSTALL } else { Join-Path $HOME ".bun" }
+  $parts = @(
+    $env:PATH,
+    [Environment]::GetEnvironmentVariable("Path", "User"),
+    [Environment]::GetEnvironmentVariable("Path", "Machine"),
+    (Join-Path $cargoRoot "bin"),
+    (Join-Path $bunRoot "bin")
+  )
+  $env:PATH = (($parts | Where-Object { $_ }) -join ";")
+}
+
+function Install-WindowsDependency([string]$Package, [string]$PackageVersion = "", [string]$InstallerOptions = "") {
+  if ($SetupMode -eq "check") {
+    throw "Missing build dependency $Package; -SetupMode check never installs dependencies. Rerun with -SetupMode auto."
+  }
+  if (-not (Get-DependencyCommand "winget")) {
+    throw "winget is required to prepare $Package. Install Microsoft's App Installer (https://aka.ms/getwinget), then rerun this command."
+  }
+  Write-Host "Preparing missing build dependency $Package. Windows may request UAC approval for its installer; Agena remains a user service."
+  $arguments = @("install", "--exact", "--id", $Package, "--source", "winget", "--accept-source-agreements", "--accept-package-agreements", "--disable-interactivity")
+  if ($PackageVersion) { $arguments += @("--version", $PackageVersion) }
+  if ($InstallerOptions) { $arguments += @("--override", $InstallerOptions) }
+  $result = Invoke-DependencyCommand "winget" $arguments
+  if ($result.ExitCode -notin @(0, 3010)) {
+    throw "winget could not prepare $Package (exit $($result.ExitCode)). Approve its installer if Windows requests it, then retry. $($result.Output)"
+  }
+  if ($result.ExitCode -eq 3010) { Write-Warning "$Package requests a Windows restart before it can be used." }
+  Refresh-DependencyPath
+}
+
+function Test-WindowsCommand([string]$Name, [string]$MinimumVersion = "") {
+  if (-not (Get-DependencyCommand $Name)) { return $false }
+  if (-not $MinimumVersion) { return $true }
+  $result = Invoke-DependencyCommand $Name @("--version")
+  if ($result.ExitCode -ne 0 -or $result.Output -notmatch '(\d+\.\d+(?:\.\d+)?)') { return $false }
+  return ([version]$Matches[1] -ge [version]$MinimumVersion)
+}
+
+function Ensure-WindowsCommand([string]$Name, [string]$Package, [string]$MinimumVersion = "", [string]$PackageVersion = "") {
+  if (-not (Test-WindowsCommand $Name $MinimumVersion)) {
+    Install-WindowsDependency $Package $PackageVersion
+    if (-not (Test-WindowsCommand $Name $MinimumVersion)) {
+      throw "$Name is still unavailable or too old after installing $Package. Open a new PowerShell window and rerun the installer."
+    }
+  }
+  # Use the validated executable for nested builds as well, especially when
+  # WindowsApps' Python Store alias appears earlier in the caller's PATH.
+  $selected = Get-DependencyCommand $Name
+  $directory = Split-Path -Parent $selected.Source
+  if ($directory) { $env:PATH = $directory + ";" + $env:PATH }
+}
+
+function Get-SourceToolVersions([string]$Root) {
+  $rustFile = Join-Path $Root "rust-toolchain.toml"
+  $bunFile = Join-Path $Root ".bun-version"
+  if (-not (Test-Path -LiteralPath $rustFile) -or -not (Test-Path -LiteralPath $bunFile)) {
+    throw "Source checkout is missing rust-toolchain.toml or .bun-version"
+  }
+  $rustConfig = Get-Content -LiteralPath $rustFile -Raw
+  if ($rustConfig -notmatch '(?m)^\s*channel\s*=\s*"(\d+\.\d+\.\d+)"\s*$') {
+    throw "rust-toolchain.toml must select a pinned Rust release"
+  }
+  $rustVersion = $Matches[1]
+  $bunVersion = (Get-Content -LiteralPath $bunFile -Raw).Trim()
+  if ($bunVersion -notmatch '^\d+\.\d+\.\d+$') { throw ".bun-version must select a pinned Bun release" }
+  return [pscustomobject]@{ Rust = $rustVersion; Bun = $bunVersion }
+}
+
+function Get-WindowsBuildToolsState([string]$Target) {
+  $programFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+  $missing = [pscustomobject]@{ Ready = $false; InstallPath = "" }
+  if (-not $programFilesX86) { return $missing }
+  $vswhere = Join-Path $programFilesX86 "Microsoft Visual Studio/Installer/vswhere.exe"
+  if (-not (Test-Path -LiteralPath $vswhere)) { return $missing }
+  $query = @("-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath")
+  $result = Invoke-InstallerExecutable $vswhere $query
+  $installation = $result.Output.Trim()
+  if ($result.ExitCode -ne 0 -or -not $installation) {
+    $result = Invoke-InstallerExecutable $vswhere @("-latest", "-products", "*", "-property", "installationPath")
+    if ($result.ExitCode -ne 0) { return $missing }
+    return [pscustomobject]@{ Ready = $false; InstallPath = $result.Output.Trim() }
+  }
+  $missing.InstallPath = $installation
+  if (-not (Test-Path -LiteralPath (Join-Path $installation "Common7/Tools/VsDevCmd.bat"))) { return $missing }
+  $toolsets = Join-Path $installation "VC/Tools/MSVC"
+  $defaultTools = Join-Path $installation "VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt"
+  $toolset = $null
+  if (Test-Path -LiteralPath $defaultTools) {
+    $defaultVersion = (Get-Content -LiteralPath $defaultTools -Raw).Trim()
+    if ($defaultVersion -match '^\d+\.\d+\.\d+$') {
+      $toolset = Get-Item -LiteralPath (Join-Path $toolsets $defaultVersion) -ErrorAction SilentlyContinue
+    }
+  }
+  if (-not $toolset) {
+    $toolset = Get-ChildItem -LiteralPath $toolsets -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+  }
+  if (-not $toolset) { return $missing }
+  $arch = if ($Target.StartsWith("aarch64-")) { "arm64" } else { "x64" }
+  $hostArch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "HostARM64" } else { "HostX64" }
+  foreach ($file in @("bin/$hostArch/$arch/cl.exe", "include/vcruntime.h", "lib/$arch/vcruntime.lib")) {
+    if (-not (Test-Path -LiteralPath (Join-Path $toolset.FullName $file))) { return $missing }
+  }
+  $sdk = Join-Path $programFilesX86 "Windows Kits/10"
+  $sdkVersions = Get-ChildItem -LiteralPath (Join-Path $sdk "Include") -Directory -ErrorAction SilentlyContinue
+  foreach ($sdkVersion in $sdkVersions) {
+    $version = $sdkVersion.Name
+    $paths = @("Include/$version/ucrt/stddef.h", "Include/$version/um/Windows.h", "Lib/$version/um/$arch/kernel32.lib", "Lib/$version/ucrt/$arch/ucrt.lib")
+    $absent = @($paths | Where-Object { -not (Test-Path -LiteralPath (Join-Path $sdk $_)) })
+    if ($absent.Count -eq 0) { return [pscustomobject]@{ Ready = $true; InstallPath = $installation } }
+  }
+  return $missing
+}
+
+function Ensure-WindowsBuildTools([string]$Target) {
+  $state = Get-WindowsBuildToolsState $Target
+  if ($state.Ready) { return }
+  if ($SetupMode -eq "check") {
+    throw "MSVC C++ tools or Windows SDK headers/libraries are missing for $Target; -SetupMode check never changes Visual Studio. Rerun with -SetupMode auto."
+  }
+  $components = @("Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "Microsoft.VisualStudio.Component.Windows11SDK.26100")
+  if ($Target.StartsWith("aarch64-")) { $components += "Microsoft.VisualStudio.Component.VC.Tools.ARM64" }
+  if ($state.InstallPath) {
+    $installer = Join-Path ([Environment]::GetEnvironmentVariable("ProgramFiles(x86)")) "Microsoft Visual Studio/Installer/setup.exe"
+    if (-not (Test-Path -LiteralPath $installer)) { throw "Visual Studio Installer is missing; repair Visual Studio Build Tools and rerun." }
+    # Only this dependency installer is elevated. Quotes preserve spaces when
+    # Start-Process converts its argument list to the native Windows command line.
+    $installPath = $state.InstallPath.TrimEnd('\')
+    if ($installPath -match '["\r\n]') { throw "Visual Studio returned an invalid installation path" }
+    $arguments = @("modify", "--installPath", ('"' + $installPath + '"'), "--passive", "--norestart", "--includeRecommended")
+    foreach ($component in $components) { $arguments += @("--add", $component) }
+    Write-Host "Preparing missing Microsoft C++/SDK components. Approve the Visual Studio Installer UAC prompt."
+    $process = Start-Process -FilePath $installer -ArgumentList $arguments -Verb RunAs -Wait -PassThru
+    if ($process.ExitCode -notin @(0, 3010)) { throw "Visual Studio component installation failed (exit $($process.ExitCode))" }
+  } else {
+    $options = "--wait --passive --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+    foreach ($component in $components) { $options += " --add $component" }
+    Install-WindowsDependency "Microsoft.VisualStudio.2022.BuildTools" "" $options
+  }
+  if (-not (Get-WindowsBuildToolsState $Target).Ready) {
+    throw "MSVC/Windows SDK is still incomplete for $Target. Finish the Visual Studio Installer and any requested Windows restart, then rerun."
+  }
+}
+
+function Ensure-WindowsSourceDependencies([string]$Root, [string]$Target) {
+  $versions = Get-SourceToolVersions $Root
+  Write-Host "Checking source build dependencies (setup mode: $SetupMode)"
+  Refresh-DependencyPath
+  Ensure-WindowsBuildTools $Target
+  Ensure-WindowsCommand "rustup" "Rustlang.Rustup"
+  $installed = Invoke-DependencyCommand "rustup" @("toolchain", "list", "--quiet")
+  if ($installed.ExitCode -ne 0) { throw "Unable to inspect installed Rust toolchains: $($installed.Output)" }
+  if ($installed.Output -notmatch ("(?m)^" + [regex]::Escape($versions.Rust) + "(?:-|\s|$)")) {
+    if ($SetupMode -eq "check") { throw "Rust $($versions.Rust) is missing; -SetupMode check never installs toolchains." }
+    $result = Invoke-DependencyCommand "rustup" @("toolchain", "install", $versions.Rust, "--profile", "minimal", "--component", "rustfmt", "--component", "clippy")
+    if ($result.ExitCode -ne 0) { throw "Rust toolchain installation failed: $($result.Output)" }
+  }
+  $components = Invoke-DependencyCommand "rustup" @("component", "list", "--installed", "--toolchain", $versions.Rust)
+  if ($components.ExitCode -ne 0) { throw "Unable to inspect Rust components: $($components.Output)" }
+  foreach ($component in @("rustfmt", "clippy")) {
+    if ($components.Output -match ("(?m)^" + $component + "(?:-|\s|$)")) { continue }
+    if ($SetupMode -eq "check") { throw "Rust component $component is missing; -SetupMode check never installs components." }
+    $result = Invoke-DependencyCommand "rustup" @("component", "add", $component, "--toolchain", $versions.Rust)
+    if ($result.ExitCode -ne 0) { throw "Rust component installation failed: $($result.Output)" }
+  }
+  $targets = Invoke-DependencyCommand "rustup" @("target", "list", "--installed", "--toolchain", $versions.Rust)
+  if ($targets.ExitCode -ne 0) { throw "Unable to inspect Rust targets: $($targets.Output)" }
+  if (@($targets.Output -split '\r?\n') -notcontains $Target) {
+    if ($SetupMode -eq "check") { throw "Rust target $Target is missing; -SetupMode check never installs targets." }
+    $result = Invoke-DependencyCommand "rustup" @("target", "add", $Target, "--toolchain", $versions.Rust)
+    if ($result.ExitCode -ne 0) { throw "Rust target installation failed: $($result.Output)" }
+  }
+  if ($env:AGENA_WEB_DIST_PREBUILT -ne "1") { Ensure-WindowsCommand "bun" "Oven-sh.Bun" $versions.Bun $versions.Bun }
+  # Match the repository's Python CI line when Python 3 is not already available.
+  Ensure-WindowsCommand "python" "Python.Python.3.13" "3.0"
+  Write-Host "Source build dependencies are ready"
+}
+
 function Test-SourceRoot([string]$Path) {
   return ((Test-Path -LiteralPath (Join-Path $Path "Cargo.toml") -PathType Leaf) -and
     (Test-Path -LiteralPath (Join-Path $Path "packages/agena-web/package.json") -PathType Leaf) -and
@@ -171,6 +385,7 @@ function Test-GitSource([string]$Value) {
 }
 
 function Invoke-SourceClone([string]$Repository, [string]$Temp) {
+  Ensure-WindowsCommand "git" "Git.Git"
   $git = Get-Command git -ErrorAction SilentlyContinue
   if (-not $git) { throw "git is required to install from a remote source repository" }
   $destination = Join-Path $Temp "source"
@@ -214,18 +429,48 @@ function Resolve-SourceRoot([string]$Temp) {
   return $root
 }
 
+function Invoke-SourcePackage([string]$Root, [string]$Target) {
+  $packageScript = Join-Path $Root "scripts/agena/package-backend.ps1"
+  if (-not (Test-Path -LiteralPath $packageScript -PathType Leaf)) {
+    throw "Agena source build script is missing: $packageScript"
+  }
+  if ($SetupMode -eq "check") {
+    $setupScript = Join-Path $Root "scripts/ci/setup-windows-toolchain.ps1"
+    if (-not (Test-Path -LiteralPath $setupScript) -or
+        (Get-Content -LiteralPath $setupScript -Raw) -notmatch 'AGENA_INSTALLER_SETUP_MODE') {
+      throw "This source checkout does not support dependency check mode. Update it before using -Source -SetupMode check."
+    }
+  }
+  $versions = Get-SourceToolVersions $Root
+  $cargo = Invoke-DependencyCommand "rustup" @("which", "--toolchain", $versions.Rust, "cargo")
+  if ($cargo.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $cargo.Output -PathType Leaf)) {
+    throw "The requested Rust $($versions.Rust) Cargo executable is unavailable: $($cargo.Output)"
+  }
+  $previousMode = $env:AGENA_INSTALLER_SETUP_MODE
+  $previousToolchain = $env:RUSTUP_TOOLCHAIN
+  $previousPath = $env:PATH
+  try {
+    $env:AGENA_INSTALLER_SETUP_MODE = $SetupMode
+    $env:RUSTUP_TOOLCHAIN = $versions.Rust
+    $env:PATH = (Split-Path -Parent $cargo.Output) + ";" + $env:PATH
+    & $packageScript -TargetTriple $Target
+    if ($LASTEXITCODE -ne 0) { throw "Agena source build failed with exit code $LASTEXITCODE" }
+  }
+  finally {
+    $env:AGENA_INSTALLER_SETUP_MODE = $previousMode
+    $env:RUSTUP_TOOLCHAIN = $previousToolchain
+    $env:PATH = $previousPath
+  }
+}
+
 function New-SourceArchive([string]$Temp, [string]$Target) {
   $root = Resolve-SourceRoot $Temp
   if ($SourceRef -and $root -ne (Resolve-Directory (Join-Path $Temp "source"))) {
     Write-Warning "-SourceRef only applies when cloning; using the existing checkout as-is"
   }
+  Ensure-WindowsSourceDependencies $root $Target
   Write-Host "Building Agena from source at $root"
-  $packageScript = Join-Path $root "scripts/agena/package-backend.ps1"
-  if (-not (Test-Path -LiteralPath $packageScript -PathType Leaf)) {
-    throw "Agena source build script is missing: $packageScript"
-  }
-  & $packageScript -TargetTriple $Target
-  if ($LASTEXITCODE -ne 0) { throw "Agena source build failed with exit code $LASTEXITCODE" }
+  Invoke-SourcePackage $root $Target
 
   $artifactDir = Join-Path $root "artifacts/agena"
   $archive = Get-ChildItem -LiteralPath $artifactDir -File -Filter "agena-backend-$Target-v*.zip" |
@@ -422,14 +667,93 @@ function Get-ServerArgs {
   return $serverArgs
 }
 
+function Invoke-AgenaLifecycleAt([string]$DataRoot, [string[]]$Arguments, [switch]$Capture) {
+  $previousDataDir = $env:AGENA_DATA_DIR
+  try {
+    $env:AGENA_DATA_DIR = $DataRoot
+    $result = Invoke-InstallerExecutable $AgenaBin $Arguments
+    if ($Capture) { return $result }
+    if ($result.Output) { Write-Host $result.Output }
+    return $result.ExitCode
+  }
+  finally { $env:AGENA_DATA_DIR = $previousDataDir }
+}
+
 function Invoke-AgenaLifecycle([string[]]$Arguments, [switch]$Capture) {
   return Invoke-AgenaLifecycleAt $DataDir $Arguments -Capture:$Capture
+}
+
+function Test-InstalledSandbox {
+  $script:SandboxReport = $null
+  Write-Host "Verifying Agena sandbox at its final installed path: $AgenaBin"
+  $result = Invoke-AgenaLifecycle @("--agena-sandbox-check") -Capture
+  try { $report = $result.Output | ConvertFrom-Json }
+  catch { throw "Sandbox verification did not return a valid JSON report. $($result.Output)" }
+  if ($report -isnot [System.Management.Automation.PSCustomObject] -or
+      ($report.schema_version -isnot [int] -and $report.schema_version -isnot [long]) -or
+      $report.schema_version -ne 1 -or $report.platform -isnot [string] -or $report.platform -cne "windows" -or
+      $report.ok -isnot [bool] -or $report.checks -isnot [array] -or
+      ($report.duration_ms -isnot [int] -and $report.duration_ms -isnot [long]) -or $report.duration_ms -lt 0) {
+    throw "Sandbox verification returned an incompatible report. Install an Agena build that supports --agena-sandbox-check."
+  }
+  $checks = @($report.checks)
+  $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+  foreach ($check in $checks) {
+    if ($check -isnot [System.Management.Automation.PSCustomObject] -or
+        $check.name -isnot [string] -or $check.name -cnotmatch '^[a-z][a-z0-9_]*$' -or
+        $check.required -isnot [bool] -or $check.status -isnot [string] -or
+        @("passed", "failed", "unsupported") -cnotcontains $check.status -or $check.detail -isnot [string] -or
+        -not $names.Add($check.name)) {
+      throw "Sandbox verification returned malformed or duplicate checks."
+    }
+  }
+  if (-not $names.Contains("http_proxy")) { throw "Sandbox verification is missing the http_proxy capability report." }
+  $offline = @($checks | Where-Object { $_.name -eq "offline" -and $_.required -eq $true })
+  foreach ($check in $checks) {
+    if ($check.status -eq "passed") { Write-Host "Sandbox $($check.name): passed" }
+    else { Write-Warning "Sandbox $($check.name): $($check.status). $($check.detail)" }
+  }
+  $failed = @($checks | Where-Object { $_.required -eq $true -and $_.status -ne "passed" })
+  if ($result.ExitCode -ne 0 -or -not $report.ok -or $offline.Count -ne 1 -or $failed.Count -ne 0) {
+    $details = ($checks | Where-Object { $_.status -ne "passed" } | ForEach-Object { "$($_.name): $($_.detail)" }) -join "; "
+    throw "Required sandbox verification failed (exit $($result.ExitCode)). $details"
+  }
+  $script:SandboxReport = $report
+}
+
+function Save-SandboxReport {
+  if (-not $script:SandboxReport) { throw "A successful sandbox verification report is required before saving." }
+  $path = Join-Path $InstallDir "sandbox-report.json"
+  $temporary = Join-Path $InstallDir (".sandbox-report-" + [Guid]::NewGuid().ToString("N") + ".tmp")
+  try {
+    $json = ($script:SandboxReport | ConvertTo-Json -Depth 8 -Compress) + [Environment]::NewLine
+    [IO.File]::WriteAllText($temporary, $json, (New-Object Text.UTF8Encoding $false))
+    if (Test-Path -LiteralPath $path) { [IO.File]::Replace($temporary, $path, $null) }
+    else { Move-Item -LiteralPath $temporary -Destination $path }
+  }
+  finally {
+    if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+  }
+}
+
+function Repair-Permissions {
+  Load-State
+  # Windows AppContainer is built in. No global policy or elevated Agena
+  # process is needed; this also reports optional network capabilities.
+  Test-InstalledSandbox
+  Save-SandboxReport
+  Write-Host "Agena sandbox permissions verified at $InstallDir"
 }
 
 function Test-ServerRunningAt([string]$DataRoot) {
   if (-not (Test-Path -LiteralPath $AgenaBin)) { return $false }
   $result = Invoke-AgenaLifecycleAt $DataRoot @("server", "status") -Capture
-  return $result.Output.Contains(" is running at ")
+  if ($result.ExitCode -ne 0) {
+    throw "Unable to inspect the installed Agena server (exit $($result.ExitCode)); installation was not changed. $($result.Output)"
+  }
+  if ($result.Output -match '(?m)^Agena server is running at ') { return $true }
+  if ($result.Output -match '(?m)^Agena server (?:is not running|user service is installed but not running) \(') { return $false }
+  throw "Agena server status returned an unrecognized response; installation was not changed. $($result.Output)"
 }
 
 function Test-ServerRunning {
@@ -463,7 +787,7 @@ function Start-Installed {
 #   Resolve-Replacement    read saved state, overlay explicit options
 #   New-Candidate          download or build, verify, unpack, probe version
 #   Install-Candidate      stop the current instance, swap program files
-#   Complete-Replacement   start, restore prior run state, save state
+#   Complete-Replacement   verify sandbox, start, restore prior run state, save state
 #
 # Failures during activation restore the previous program files, state,
 # settings, and running state.
@@ -587,8 +911,9 @@ function New-Candidate([string]$Temp) {
     throw "Package archive is missing bin/agena.exe or web-dist/index.html"
   }
   Write-Host "Validating Agena binary"
-  $binaryVersionText = (& $stageBin --version | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0 -or $binaryVersionText -notmatch '(\S+)$') {
+  $versionResult = Invoke-InstallerExecutable $stageBin @("--version")
+  $binaryVersionText = $versionResult.Output
+  if ($versionResult.ExitCode -ne 0 -or $binaryVersionText -notmatch '(\S+)$') {
     throw "Installed Agena binary did not report a version"
   }
   $binaryVersion = $Matches[1]
@@ -609,6 +934,10 @@ function Install-Candidate([string]$Temp) {
     $script:HadState = $true
     Copy-Item -LiteralPath $StateFile -Destination (Join-Path $backup "install-state.json") -Force
   }
+  $previousReport = Join-Path $InstallDir "sandbox-report.json"
+  if (Test-Path -LiteralPath $previousReport) {
+    Copy-Item -LiteralPath $previousReport -Destination (Join-Path $backup "sandbox-report.json") -Force
+  }
 
   Write-Host "Stopping the installed Agena instance if needed"
   Stop-Installation $script:OldDataDir $script:OldServiceMode
@@ -626,6 +955,7 @@ function Install-Candidate([string]$Temp) {
 }
 
 function Complete-Replacement {
+  Test-InstalledSandbox
   Write-Host "Starting Agena server using $ServiceMode mode"
   Start-Installed
   if ($script:ReplacementAction -ne "Install" -and -not $script:OldWasRunning) {
@@ -635,6 +965,7 @@ function Complete-Replacement {
     }
   }
   Save-State
+  Save-SandboxReport
   try { Update-UserPath } catch { Write-Warning "Agena installed, but PATH update failed: $_" }
 }
 
@@ -643,8 +974,12 @@ function Undo-Replacement {
   if (Test-Path -LiteralPath $AgenaBin) {
     if ($ServiceMode -eq "native") {
       try { [void](Invoke-AgenaLifecycle @("server", "uninstall")) } catch {}
-    } elseif (Test-ServerRunning) {
-      try { [void](Invoke-AgenaLifecycle @("server", "stop")) } catch {}
+    } else {
+      # A rejected candidate can also fail its status command. Cleanup must
+      # remain best effort so the previous files and saved state are restored.
+      try {
+        if (Test-ServerRunning) { [void](Invoke-AgenaLifecycle @("server", "stop")) }
+      } catch {}
     }
   }
 
@@ -654,6 +989,13 @@ function Undo-Replacement {
     $current = Join-Path $InstallDir $name
     if (Test-Path -LiteralPath $current) { Remove-Item -LiteralPath $current -Recurse -Force }
     Move-Item -LiteralPath $saved -Destination $current
+  }
+  $savedReport = Join-Path $BackupDir "sandbox-report.json"
+  $currentReport = Join-Path $InstallDir "sandbox-report.json"
+  if (Test-Path -LiteralPath $savedReport) {
+    Copy-Item -LiteralPath $savedReport -Destination $currentReport -Force
+  } else {
+    Remove-Item -LiteralPath $currentReport -Force -ErrorAction SilentlyContinue
   }
 
   if ($HadState) {
@@ -766,4 +1108,5 @@ switch ($Action) {
   "Stop" { Stop-Agena }
   "Restart" { try { Stop-Agena } catch {}; Start-Agena }
   "Status" { Show-Status }
+  "Permissions" { Repair-Permissions }
 }

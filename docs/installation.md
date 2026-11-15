@@ -28,16 +28,22 @@ accepts x64 and ARM64.
 
 ## Release install prerequisites
 
-The macOS/Linux release path needs Bash, `curl` or `wget`, `tar`, and either
-`sha256sum` or `shasum`. The one-line command below uses `curl` to download
-the installer itself.
+Start the Unix installer with Bash. Its default `--setup-mode auto` prepares
+missing download/archive tools, Python 3, certificate bundles, and the native
+sandbox runtime dependencies. The one-line download command itself needs
+`curl`; running the script from an existing checkout can prepare missing
+`curl` or `wget` first.
 
 The Windows installer needs PowerShell. It prefers `curl.exe` and `tar.exe`
 when present and falls back to `Invoke-WebRequest` and `Expand-Archive`.
 No Rust, Bun, Git, or source checkout is required for a release install.
 
-Both paths use the current user's profile and do not require administrator or
-root privileges for the default directories and user service.
+Run the installer as the normal account that will own the Agena user service.
+System preparation requests `sudo`/`doas`/`su` authentication or Windows UAC
+when needed;
+program files, builds, configuration, and the service remain owned by that
+account. Passwords are entered into the operating system's terminal prompt or
+authorization dialog.
 
 ## Quick install
 
@@ -102,14 +108,111 @@ The installation root contains program files. The data root contains the
 instance's database, configuration, secrets, workspace data, logs, and client
 state. They must be different directories, and neither may contain the other.
 
+## Automatic setup and sandbox verification
+
+The usual source reinstall command also prepares the host:
+
+```bash
+bash ./scripts/agena/install.sh reinstall --source --host 0.0.0.0
+```
+
+`auto` is the default setup mode. Existing tools and configuration are reused;
+only missing requirements are installed or repaired. Source preparation runs
+before compilation. Runtime preparation finishes before the previous service
+is stopped, so a package installation or privilege failure leaves it running.
+
+| Platform | Automatic preparation |
+| --- | --- |
+| Linux | Missing compiler/C++/OpenSSL development tools for source builds; pinned Rust and Bun; Bubblewrap, slirp4netns, iproute2, iptables, util-linux, and kmod for sandbox execution; an application-specific AppArmor user namespace profile where required; `nf_conntrack` availability and persistence |
+| macOS | Command Line Tools and missing source build tools, pinned Rust and Bun; built-in Seatbelt verification; native-service privacy setup through the stable `Agena.app` identity |
+| Windows | Missing source build tools through winget/Visual Studio setup, Rust components and target, Bun, and Python; built-in AppContainer verification |
+
+Linux dependency selection reads `/etc/os-release` (`ID` and `ID_LIKE`)
+before selecting a package manager. This prevents an unrelated package-manager
+binary on `PATH` from selecting the wrong package names.
+
+| Distribution family | Package managers |
+| --- | --- |
+| Debian, Ubuntu, Linux Mint and derivatives | `apt-get`, then `apt` |
+| Fedora, RHEL, CentOS Stream, Rocky Linux, AlmaLinux, Oracle Linux, Amazon Linux | `dnf`, `dnf5`, then `yum` |
+| Arch Linux and Manjaro | `pacman` |
+| openSUSE Leap/Tumbleweed and SUSE Linux Enterprise | `zypper` |
+| Alpine Linux | `apk` |
+
+Development-library and networking package names are selected for each family,
+including OpenSSL headers, the nft variant of iptables, AppArmor's parser and
+policy includes, and the full util-linux namespace tools. System preparation
+uses `sudo`, `doas`, or interactive `su` as available. Passwords are read by
+those programs. On OpenRC hosts it also ensures the module-loading service is
+enabled at boot; systemd hosts use `modules-load.d` directly.
+
+Alpine/musl source installs select native musl Rust/Bun artifacts and build
+against the system OpenSSL shared libraries. Published Linux releases currently
+use glibc; on a musl host use `--source` or provide a native archive with
+`--archive`. The script needs Bash to start, including on minimal Alpine
+images. NixOS and immutable/transactional systems are identified explicitly
+and direct missing system dependencies to their native system configuration
+mechanism. Existing prepared hosts can still use `--setup-mode check`.
+
+On Linux the generated AppArmor profile matches the final Agena executable
+path. The installer preserves the system's global user namespace restrictions.
+The networking backend requires nft-backed iptables; a legacy installation
+produces an actionable error instead of changing the host firewall backend.
+Package managers are used only when a required command or development library
+is missing. An unavailable kernel facility or unsupported OS is reported by
+the native checks.
+
+After copying the candidate binary into its final installation path, the
+installer runs `agena --agena-sandbox-check`. It actually launches restricted
+processes and checks allowed input reads, denied input writes, output writes,
+secret/outside path denial, environment isolation, and blocked direct network
+access. Linux and macOS also verify the authenticated HTTP broker against a
+local fixture, including rejection of an unapproved destination. Windows
+reports the current MXC HTTP proxy mode as unsupported while requiring the
+offline isolation checks to pass.
+
+A required check failure restores the previous program, installer state, and
+running state. A successful installation saves `sandbox-report.json` under
+the installation directory. Existing project paths, network rules, approval
+rules, configuration, and data are preserved. System preparation does not
+change tool approval settings to allow everything.
+
+To repair the dependencies/host permissions and rerun the installed binary's
+checks without replacing it or restarting the service:
+
+```bash
+bash ./scripts/agena/install.sh permissions
+```
+
+To verify an already prepared host without installing system packages,
+changing host configuration, or opening macOS permission prompts:
+
+```bash
+bash ./scripts/agena/install.sh permissions --setup-mode check
+# The same mode can be used while installing a replacement:
+bash ./scripts/agena/install.sh reinstall --source --setup-mode check
+```
+
+The corresponding Windows commands are:
+
+```powershell
+.\scripts\agena\install.ps1 -Action Permissions
+.\scripts\agena\install.ps1 -Action Reinstall -Source -SetupMode check
+```
+
+A headless Unix process can use cached `sudo` authorization. If authorization
+is unavailable, setup prints the command that needs it and asks you to rerun
+from an interactive terminal. Keep the installer itself running as your normal
+account; its elevated commands perform the necessary system work.
+
 ## Unix installer options
 
 ```text
 install.sh [install|reinstall|upgrade|uninstall|start|stop|restart|status|permissions] [options]
 ```
 
-The `permissions` action is macOS-specific; other Unix hosts report that it is
-only needed on macOS.
+The `permissions` action repairs/checks native sandbox requirements on Unix
+and also opens the privacy setup for the native macOS service.
 
 | Option | Meaning |
 | --- | --- |
@@ -126,13 +229,15 @@ only needed on macOS.
 | `--workspace PATH` | Default workspace root for the server |
 | `--password PASSWORD` | Server password shared by Web/TUI login and MCP OAuth |
 | `--service-mode MODE` | `auto`, `native`, or `detached` |
+| `--setup-mode auto\|check` | Prepare missing dependencies and host permissions, or only verify them; applies to replacement and `permissions` actions |
 | `--no-path-update` | Do not update shell startup files or `AGENA_DATA_DIR` |
 | `--purge-data` | With `uninstall`, also remove the saved data root |
 
 The matching environment variables are `AGENA_INSTALL_REPO`,
 `AGENA_INSTALL_VERSION`, `AGENA_INSTALL_DIR`, `AGENA_DATA_DIR`,
 `AGENA_SERVER_HOST`, `AGENA_SERVER_PORT`, `AGENA_SERVER_PASSWORD`,
-`AGENA_WORKSPACE_ROOT`, and `AGENA_INSTALL_SERVICE_MODE`. Command-line options
+`AGENA_WORKSPACE_ROOT`, `AGENA_INSTALL_SERVICE_MODE`, and
+`AGENA_INSTALL_SETUP_MODE`. Command-line options
 take precedence over the environment.
 
 ## Windows installer options
@@ -142,8 +247,8 @@ take precedence over the environment.
 ```
 
 The supported actions are `Install`, `Reinstall`, `Upgrade`, `Uninstall`,
-`Start`, `Stop`, `Restart`, and `Status`. There is no `Permissions` action on
-Windows.
+`Start`, `Stop`, `Restart`, `Status`, and `Permissions`. The `Permissions`
+action verifies the installed sandbox without restarting the service.
 
 | Parameter | Meaning |
 | --- | --- |
@@ -161,6 +266,7 @@ Windows.
 | `-Workspace PATH` | Default workspace root for the server |
 | `-ServerPassword PASSWORD` | Server password shared by Web/TUI login and MCP OAuth |
 | `-ServiceMode MODE` | `auto`, `native`, or `detached` |
+| `-SetupMode auto\|check` | Install missing source requirements or verify the existing setup; always verify the native sandbox |
 | `-NoPathUpdate` | Do not update the user `Path` or `AGENA_DATA_DIR` |
 | `-PurgeData` | With `Uninstall`, also remove the saved data root |
 
@@ -208,10 +314,11 @@ A Unix installation root contains:
   web-dist/
   install-state.env
   client-env.sh
+  sandbox-report.json
 ```
 
-A Windows installation root contains `bin\agena.exe`, `web-dist\`, and
-`install-state.json`. The state file records the selected install and data
+A Windows installation root contains `bin\agena.exe`, `web-dist\`,
+`install-state.json`, and `sandbox-report.json`. The state file records the selected install and data
 roots, the installed version, the release tag when the package came from a
 release, host, port, workspace, service mode, and operator password when one
 was supplied. Treat it as private.
@@ -232,7 +339,8 @@ The data root uses one storage policy for the server and its local clients:
 | `plugin-data/` | Plugin-owned data |
 | `clients/<client-key>/` | Local client state |
 | `terminal-ui.json` | TUI presentation state |
-| `macos/Agena.app` | macOS permission host, when installed |
+| `macos/Agena.app` | Stable macOS permission host, when installed |
+| `macos/permissions.json` | Last macOS Accessibility/Screen Recording check and Full Disk Access setup status |
 
 Program files, Web assets, and client environment files belong to the
 installation root. Sessions, configuration, credentials, workspace content,
@@ -411,7 +519,9 @@ A temporary remote clone is removed after installation.
 
 ### Source build requirements
 
-Source installs require:
+In `auto` mode the installer prepares missing source requirements before the
+build. `check` mode reports anything missing without installing it. The
+requirements are:
 
 - Rust 1.97.0 through `rustup`, or a compatible override through
   `AGENA_STABLE_TOOLCHAIN`.
@@ -420,8 +530,8 @@ Source installs require:
 - Git when cloning a remote repository.
 - `tar` and `sha256sum` or `shasum` on macOS/Linux.
 - PowerShell archive creation on Windows.
-- The platform C/C++ build tools required by Rust dependencies. Windows
-  packaging runs `scripts/ci/setup-windows-toolchain.ps1` for Windows targets.
+- The platform C/C++ build tools required by Rust dependencies, plus OpenSSL
+  development libraries on Linux. Windows packaging runs `scripts/ci/setup-windows-toolchain.ps1` for Windows targets.
 
 If the Web frontend is already built at
 `packages/agena-web/dist/index.html`, set `AGENA_WEB_DIST_PREBUILT=1` to skip
@@ -482,7 +592,8 @@ agena server permissions
 ```
 
 `agena server install` and `agena server uninstall` manage the native per-user
-service. `agena server permissions` opens the macOS Full Disk Access setup.
+service. `agena server permissions` checks and requests the macOS privacy
+permissions used by the installed native service.
 
 When a user service is installed, `agena server start` starts that service using
 its saved configuration, or reports that it is already running. Launch options
@@ -551,39 +662,65 @@ authorize again; restarting with the same password preserves them.
 With `--no-path-update`, the installer does not modify startup files. Set
 `AGENA_DATA_DIR` yourself or pass `--data-dir` explicitly.
 
-## macOS file access
+## macOS privacy permissions
 
-Workspaces that span protected folders, other applications' data, external
-disks, or network volumes need a one-time **Full Disk Access** grant:
+Native-service installs perform privacy setup before starting the new server.
+Run the installer in a terminal on the Mac desktop, complete the operating
+system prompts, and press Enter when setup asks to recheck. Missing permissions
+are listed at the end and recorded under `<data-dir>/macos/permissions.json`.
 
-1. Install with the native user service.
-2. Run `agena server permissions` (or the installer action `permissions`).
-3. In **System Settings → Privacy & Security → Full Disk Access**, choose
-   **+**, press **Cmd+Shift+G**, and select the displayed app. The normal path
-   is `~/agena/macos/Agena.app`.
-4. Enable the app, then run `agena server stop` and `agena server start`.
+| Permission | Installation behavior |
+| --- | --- |
+| Accessibility | Query the public macOS API and request authorization when missing |
+| Screen Recording | Query the public macOS API and request authorization when missing |
+| Full Disk Access | Reveal the stable Agena app and open the corresponding System Settings pane; enable it using the **+** button |
 
-macOS makes the final access decision. Agena cannot grant the permission to
-itself, and a future system reset or manual replacement can require the grant
-again. The native service runs through a small signed supervisor inside
-`Agena.app`; its identity is preserved across normal upgrades and reinstalls
-that keep runtime data. The installer reports a damaged existing app instead
-of silently replacing or re-signing it and losing the remembered identity.
+For Full Disk Access, choose **System Settings → Privacy & Security → Full
+Disk Access → +**, press **Cmd+Shift+G**, and select the displayed app. The
+normal path is `~/agena/macos/Agena.app`. This grant supports workspaces in
+protected folders, other applications' data, external disks, and network
+volumes. macOS does not provide a public Full Disk Access status API, so the
+report directs you to confirm its switch in System Settings.
 
-Interactive first installs open the permission setup once. Set
-`AGENA_MACOS_OPEN_PERMISSIONS=0` for headless installers. Upgrades and restarts
-do not reopen settings or probe private data to guess authorization state.
+The native service and permission checks both run as children of the same
+small signed supervisor. Its original executable and signature remain intact
+across upgrades, reinstalls, and rollbacks that preserve runtime data. A
+damaged existing app produces an error instead of replacing its identity.
+
+Ordinary service restarts do not request permissions. Automatic reinstalls
+recheck Accessibility and Screen Recording and reopen setup if either is
+pending or no prior setup report exists. `--setup-mode check` suppresses all
+privacy prompts; `AGENA_MACOS_OPEN_PERMISSIONS=0` also suppresses them. The
+checks launch the stable app through LaunchServices so Terminal's permissions
+are not mistaken for Agena's permissions. SSH/headless installations record
+both desktop grants as `null` with `inspection: unavailable_no_local_desktop`
+and print the command to finish setup in a Mac desktop terminal:
+
+```bash
+agena server permissions
+# After changing grants on an already running installation:
+agena server stop
+agena server start
+```
+
+The system's authorization dialogs still require the Mac user to approve.
+Administrator authentication does not replace these consent steps. Automation
+consent belongs to each target application; a later action against a new
+application can need its own prompt. Microphone and camera access are not
+requested by this setup because these are not requirements of the current
+sandbox and desktop preparation.
 
 Recursive Web searches and workspace indexing skip macOS privacy domains when
 the search root is broad, including `~/Library`, standard protected user
-folders, and unselected mounted disks. Direct listing remains available. File
-access does not grant Accessibility, Screen Recording, microphone, camera, or
-Automation permissions. A foreground `agena server` or detached development
-run remains under the launching terminal's privacy identity; use the native
-service for the persistent Agena app identity.
+folders, and unselected mounted disks. Direct listing remains available.
+A foreground `agena server` or detached development run uses the launching
+terminal's privacy identity; use the native service for the persistent Agena
+app identity.
 
-Apple documents the code identity constraint in
-[TN3127: Inside Code Signing: Requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+Apple references:
+[Accessibility authorization](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions),
+[screen capture authorization](https://developer.apple.com/documentation/coregraphics/cgrequestscreencaptureaccess()),
+and [code identity requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
 
 ## Custom archives and checksums
 
@@ -643,8 +780,14 @@ The repository verifies installers in three layers:
    installer contracts with temporary homes, local archives, and a stub
    executable. It covers saved-root precedence, paths with spaces, action
    preconditions, option validation, reinstall and upgrade rollback, stopped
-   instances, purge boundaries, and source-checkout selection without
-   installing a system service.
+   instances, purge boundaries, source-checkout selection, sandbox reports,
+   and the macOS authorization-before-start order without installing a system
+   service. `test_installer_setup.py` covers distribution/package mapping,
+   privilege-command quoting, verified downloads, check mode, AppArmor,
+   systemd/OpenRC configuration, and native musl source preparation using
+   temporary system paths. `test_installer_powershell.py` executes the Windows
+   dependency and rollback contracts through PowerShell with simulated system
+   operations and real subprocess argument/exit-code checks.
 2. `.github/workflows/installer-ci.yml` builds real backend archives and runs
    install, status and health check, stop, start, restart, reinstall, upgrade,
    and uninstall on Linux x86_64 (detached service), macOS arm64 (native
@@ -668,5 +811,7 @@ For local changes, the minimum installer checks are:
 ```sh
 bash -n scripts/agena/install.sh
 python3 scripts/agena/tests/test_installer_storage.py
+python3 scripts/agena/tests/test_installer_setup.py
+python3 scripts/agena/tests/test_installer_powershell.py  # requires pwsh or powershell
 python3 scripts/agena/verify-target-coverage.py
 ```

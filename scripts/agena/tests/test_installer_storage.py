@@ -1,6 +1,7 @@
 """Offline installer storage contracts. All binaries and homes are temporary stubs."""
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import shlex
@@ -13,6 +14,41 @@ import unittest
 SCRIPTS = Path(__file__).resolve().parents[1]
 STUB = r'''#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == "--agena-sandbox-check" ]]; then
+  [[ "$0" == "$TEST_SANDBOX_ROOT/"* ]] || exit 91
+  printf '%s\t%s\n' "$0" "${TEST_PROBE_BEHAVIOR:-passed}" >> "$TEST_PROBE_AUDIT_PATH"
+  printf 'probe\t%s\n' "$0" >> "$TEST_ORDER_AUDIT_PATH"
+  python3 - "${TEST_PROBE_BEHAVIOR:-passed}" "${TEST_PROBE_DETAIL:-stub-ok}" <<'PY'
+import json, os, sys
+behavior, detail = sys.argv[1:]
+if behavior == "malformed":
+    print("{not a JSON report")
+    sys.exit(0)
+checks = [
+    {"name": "offline", "required": True, "status": "passed", "detail": detail},
+    {"name": "http_proxy", "required": True, "status": "passed", "detail": detail},
+]
+report = {"schema_version": 1, "ok": True, "platform": os.environ.get("TEST_PROBE_PLATFORM", "macos" if sys.platform == "darwin" else "linux"), "duration_ms": 1, "checks": checks}
+if behavior == "missing_network":
+    checks.pop()
+elif behavior == "network_failed":
+    checks[1]["status"] = "failed"
+elif behavior == "optional_network":
+    checks[1]["required"] = False
+elif behavior == "duplicate":
+    checks.append(checks[0].copy())
+elif behavior == "wrong_platform":
+    report["platform"] = "windows"
+elif behavior == "schema_bool":
+    report["schema_version"] = True
+elif behavior == "nonzero":
+    report["ok"] = False
+    checks[0]["status"] = "failed"
+print(json.dumps(report))
+sys.exit(42 if behavior == "nonzero" else 0)
+PY
+  exit $?
+fi
 if [[ "${1:-}" == "--version" ]]; then
   echo 'agena 0.1.0'
   exit 0
@@ -33,6 +69,8 @@ fi
 [[ "${1:-}" == "server" ]] || exit 92
 action="${2:-}"
 printf '%s\t%s\t%s\n' "$data_root" "$action" "$*" >> "$TEST_CALLS_PATH"
+printf 'server\t%s\t%s\n' "$action" "$data_root" >> "$TEST_ORDER_AUDIT_PATH"
+printf '%s\t%s\t%s\n' "$action" "${AGENA_MACOS_PERMISSION_INSTALL:-}" "${AGENA_MACOS_OPEN_PERMISSIONS:-}" >> "$TEST_PRIVACY_AUDIT_PATH"
 case "$action" in
   start|install)
     if [[ -n "${TEST_ROUTING_PATH:-}" ]]; then
@@ -67,12 +105,39 @@ case "$action" in
   *) exit 93 ;;
 esac
 '''
-BAD_STUB = r'''#!/usr/bin/env bash
-if [[ "${1:-}" == "--version" ]]; then
-  echo 'agena 0.1.0'
-  exit 0
-fi
-exit 42
+BAD_STUB = STUB.replace(
+    '[[ "${1:-}" == "--data-dir" ]] || exit 90',
+    "echo 'Stub server startup failed.'\nexit 42",
+    1,
+)
+
+SETUP_MOCKS = r'''
+agena_setup_target_triple() {
+  case "$(uname -s):$(uname -m)" in
+    Linux:x86_64|Linux:amd64) printf x86_64-unknown-linux-gnu ;;
+    Linux:aarch64|Linux:arm64) printf aarch64-unknown-linux-gnu ;;
+    Darwin:x86_64|Darwin:amd64) printf x86_64-apple-darwin ;;
+    Darwin:aarch64|Darwin:arm64) printf aarch64-apple-darwin ;;
+    *) return 1 ;;
+  esac
+}
+agena_setup_bootstrap() {
+  printf 'bootstrap\t%s\t%s\n' "$1" "$2" >> "$TEST_SETUP_AUDIT_PATH"
+  printf 'setup\tbootstrap\t%s\n' "$1" >> "$TEST_ORDER_AUDIT_PATH"
+  if [[ "${TEST_SETUP_FAILURE:-}" == bootstrap ]]; then
+    echo "ERROR: fixture bootstrap preparation failed" >&2
+    return 31
+  fi
+}
+agena_setup_host() {
+  [[ "$3" == "$TEST_SANDBOX_ROOT/"* ]] || return 91
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${4:-}" >> "$TEST_SETUP_AUDIT_PATH"
+  printf 'setup\t%s\t%s\n' "$1" "$2" >> "$TEST_ORDER_AUDIT_PATH"
+  if [[ "${TEST_SETUP_FAILURE:-}" == "$1" ]]; then
+    echo "ERROR: fixture $1 host preparation failed" >&2
+    return 32
+  fi
+}
 '''
 
 
@@ -88,6 +153,15 @@ class InstallerStorageTests(unittest.TestCase):
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
         self.calls_path = self.root / "calls.tsv"
+        self.setup_audit = self.root / "setup.tsv"
+        self.probe_audit = self.root / "probe.tsv"
+        self.order_audit = self.root / "order.tsv"
+        self.privacy_audit = self.root / "privacy.tsv"
+        self.installer = self.root / "install.sh"
+        original = (SCRIPTS / "install.sh").read_text()
+        before, embedded = original.split("# BEGIN AGENA HOST SETUP", 1)
+        _, after = embedded.split("# END AGENA HOST SETUP", 1)
+        self.installer.write_text(before + SETUP_MOCKS + after)
         (self.root / "tmp").mkdir()
         self.env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -95,6 +169,10 @@ class InstallerStorageTests(unittest.TestCase):
             "TMPDIR": str(self.root / "tmp"),
             "TEST_SANDBOX_ROOT": str(self.root),
             "TEST_CALLS_PATH": str(self.calls_path),
+            "TEST_SETUP_AUDIT_PATH": str(self.setup_audit),
+            "TEST_PROBE_AUDIT_PATH": str(self.probe_audit),
+            "TEST_ORDER_AUDIT_PATH": str(self.order_audit),
+            "TEST_PRIVACY_AUDIT_PATH": str(self.privacy_audit),
         }
         self.archive = self.package("good", STUB)
         self.default_data = self.home / "agena"
@@ -123,7 +201,7 @@ class InstallerStorageTests(unittest.TestCase):
         env = dict(self.env)
         env.update(environment or {})
         command = [
-            "bash", str(SCRIPTS / "install.sh"), action,
+            "bash", str(self.installer), action,
             "--install-dir", str(self.install_dir), *map(str, arguments),
         ]
         if not update_path and action in {"install", "reinstall", "upgrade", "uninstall"}:
@@ -386,7 +464,7 @@ class InstallerStorageTests(unittest.TestCase):
         (copied / "install-state.env").write_bytes((self.install_dir / "install-state.env").read_bytes())
         original_calls = self.calls_path.read_bytes()
         result = subprocess.run(
-            ["bash", str(SCRIPTS / "install.sh"), "status", "--install-dir", str(copied)],
+            ["bash", str(self.installer), "status", "--install-dir", str(copied)],
             env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30,
         )
         self.assertNotEqual(result.returncode, 0, result.stdout)
@@ -777,6 +855,203 @@ class InstallerStorageTests(unittest.TestCase):
         )
         self.assertIn("is not an Agena checkout", result.stdout)
         self.assertFalse(self.calls_path.exists())
+
+    def test_host_preparation_failure_keeps_the_old_server_running(self):
+        self.install()
+        binary = (self.install_dir / "bin/agena").read_bytes()
+        state = (self.install_dir / "install-state.env").read_bytes()
+        report = (self.install_dir / "sandbox-report.json").read_bytes()
+        old_calls = len(self.calls_path.read_text().splitlines())
+        old_probes = self.probe_audit.read_text()
+        result = self.invoke(
+            "upgrade", "--archive", self.archive,
+            environment={"TEST_SETUP_FAILURE": "runtime"}, success=False,
+        )
+        self.assertIn("fixture runtime host preparation failed", result.stdout)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+        self.assertEqual((self.install_dir / "bin/agena").read_bytes(), binary)
+        self.assertEqual((self.install_dir / "install-state.env").read_bytes(), state)
+        self.assertEqual((self.install_dir / "sandbox-report.json").read_bytes(), report)
+        self.assertEqual(self.probe_audit.read_text(), old_probes)
+        later = self.calls_path.read_text().splitlines()[old_calls:]
+        self.assertFalse(any("\tstop\t" in line or "\tstart\t" in line for line in later), later)
+
+    def test_bootstrap_failure_does_not_activate_the_candidate(self):
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            environment={"TEST_SETUP_FAILURE": "bootstrap"}, success=False,
+        )
+        self.assertFalse((self.install_dir / "bin/agena").exists())
+        self.assertFalse(self.probe_audit.exists())
+        self.assertFalse(self.calls_path.exists())
+
+    def test_sandbox_probe_uses_the_final_binary_before_start(self):
+        self.install()
+        events = [line.split("\t") for line in self.order_audit.read_text().splitlines()]
+        runtime = next(index for index, event in enumerate(events) if event[:2] == ["setup", "runtime"])
+        probe = next(index for index, event in enumerate(events) if event[0] == "probe")
+        start = next(index for index, event in enumerate(events) if event[:2] == ["server", "start"])
+        self.assertLess(runtime, probe)
+        self.assertLess(probe, start)
+        self.assertEqual(events[probe][1], str(self.install_dir / "bin/agena"))
+        report = json.loads((self.install_dir / "sandbox-report.json").read_text())
+        self.assertTrue(report["ok"])
+        self.assertEqual({check["name"] for check in report["checks"]}, {"offline", "http_proxy"})
+
+    def test_check_mode_still_runs_and_records_the_native_probe(self):
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--service-mode", "detached", "--setup-mode", "check",
+        )
+        setups = [line.split("\t") for line in self.setup_audit.read_text().splitlines()]
+        self.assertTrue(setups)
+        self.assertTrue(all(row[1] == "check" for row in setups), setups)
+        self.assertEqual(len(self.probe_audit.read_text().splitlines()), 1)
+        self.assertTrue((self.install_dir / "sandbox-report.json").exists())
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_invalid_or_incomplete_probe_reports_roll_back_the_upgrade(self):
+        self.install()
+        binary = (self.install_dir / "bin/agena").read_bytes()
+        state = (self.install_dir / "install-state.env").read_bytes()
+        report = (self.install_dir / "sandbox-report.json").read_bytes()
+        for behavior in [
+            "malformed", "missing_network", "network_failed", "optional_network",
+            "duplicate", "wrong_platform", "schema_bool", "nonzero",
+        ]:
+            with self.subTest(behavior=behavior):
+                self.invoke(
+                    "upgrade", "--archive", self.archive,
+                    environment={"TEST_PROBE_BEHAVIOR": behavior}, success=False,
+                )
+                self.assertEqual((self.install_dir / "bin/agena").read_bytes(), binary)
+                self.assertEqual((self.install_dir / "install-state.env").read_bytes(), state)
+                self.assertEqual((self.install_dir / "sandbox-report.json").read_bytes(), report)
+                self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_failed_first_native_probe_leaves_no_installation_or_report(self):
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--service-mode", "detached",
+            environment={"TEST_PROBE_BEHAVIOR": "missing_network"}, success=False,
+        )
+        for relative in ["bin", "web-dist", "install-state.env", "sandbox-report.json"]:
+            self.assertFalse((self.install_dir / relative).exists(), relative)
+        self.assertFalse((self.data_dir / "run/stub-running").exists())
+
+    def test_failed_server_start_restores_the_previous_sandbox_report(self):
+        self.install()
+        previous = (self.install_dir / "sandbox-report.json").read_bytes()
+        bad = self.package("passing probe but broken startup", BAD_STUB)
+        self.invoke(
+            "upgrade", "--archive", bad,
+            environment={"TEST_PROBE_DETAIL": "candidate-probe-passed"}, success=False,
+        )
+        self.assertEqual((self.install_dir / "sandbox-report.json").read_bytes(), previous)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_successful_upgrade_replaces_the_report_with_private_permissions(self):
+        self.install()
+        self.invoke(
+            "upgrade", "--archive", self.archive,
+            environment={"TEST_PROBE_DETAIL": "replacement-probe-passed"},
+        )
+        report = self.install_dir / "sandbox-report.json"
+        value = json.loads(report.read_text())
+        self.assertEqual(value["checks"][0]["detail"], "replacement-probe-passed")
+        self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+
+    def test_permissions_rechecks_without_restarting_the_running_service(self):
+        self.install()
+        original_state = (self.install_dir / "install-state.env").read_bytes()
+        original_environment = (self.install_dir / "client-env.sh").read_bytes()
+        for mode in ["auto", "check"]:
+            with self.subTest(mode=mode):
+                before = len(self.calls_path.read_text().splitlines())
+                probes = len(self.probe_audit.read_text().splitlines())
+                self.invoke(
+                    "permissions", "--setup-mode", mode,
+                    environment={"TEST_PROBE_DETAIL": f"permissions-{mode}"},
+                )
+                later = [line.split("\t")[1] for line in self.calls_path.read_text().splitlines()[before:]]
+                self.assertFalse(set(later) & {"start", "stop", "install", "uninstall"}, later)
+                self.assertTrue((self.data_dir / "run/stub-running").exists())
+                self.assertEqual(len(self.probe_audit.read_text().splitlines()), probes + 1)
+                self.assertEqual((self.install_dir / "install-state.env").read_bytes(), original_state)
+                self.assertEqual((self.install_dir / "client-env.sh").read_bytes(), original_environment)
+                report = json.loads((self.install_dir / "sandbox-report.json").read_text())
+                self.assertEqual(report["checks"][0]["detail"], f"permissions-{mode}")
+
+    def macos_environment(self):
+        commands = self.root / "macos commands"
+        commands.mkdir()
+        uname = commands / "uname"
+        uname.write_text(
+            '#!/usr/bin/env bash\ncase "${1:-}" in\n'
+            '  -s) echo Darwin ;;\n  -m) echo x86_64 ;;\n  *) exit 97 ;;\nesac\n'
+        )
+        uname.chmod(0o755)
+        launchctl = commands / "launchctl"
+        # Only command discovery is needed; an accidental lifecycle invocation
+        # must fail instead of reaching a real service manager.
+        launchctl.write_text("#!/usr/bin/env bash\nexit 98\n")
+        launchctl.chmod(0o755)
+        return {"PATH": str(commands) + os.pathsep + self.env["PATH"], "TEST_PROBE_PLATFORM": "macos"}
+
+    def test_macos_privacy_preparation_follows_probe_and_precedes_native_start(self):
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--service-mode", "native", environment=self.macos_environment(),
+        )
+        events = [line.split("\t") for line in self.order_audit.read_text().splitlines()]
+        probe = next(index for index, event in enumerate(events) if event[0] == "probe")
+        privacy = next(index for index, event in enumerate(events) if event[:2] == ["server", "permissions"])
+        start = next(index for index, event in enumerate(events) if event[:2] == ["server", "install"])
+        self.assertLess(probe, privacy)
+        self.assertLess(privacy, start)
+        permissions = [line.split("\t") for line in self.privacy_audit.read_text().splitlines() if line.startswith("permissions\t")]
+        self.assertEqual(permissions, [["permissions", "1", "1"]])
+        report = json.loads((self.install_dir / "sandbox-report.json").read_text())
+        self.assertEqual(report["platform"], "macos")
+
+    def test_macos_check_mode_never_requests_privacy_or_restarts_for_permissions(self):
+        environment = self.macos_environment()
+        self.invoke(
+            "install", "--archive", self.archive, "--data-dir", self.data_dir,
+            "--service-mode", "native", "--setup-mode", "check", environment=environment,
+        )
+        rows = [line.split("\t") for line in self.privacy_audit.read_text().splitlines()]
+        self.assertIn(["permissions", "1", "0"], rows)
+        self.assertIn(["install", "", "0"], rows)
+        before = len(rows)
+        probes = len(self.probe_audit.read_text().splitlines())
+        self.invoke("permissions", "--setup-mode", "check", environment=environment)
+        later = [line.split("\t") for line in self.privacy_audit.read_text().splitlines()[before:]]
+        self.assertEqual(later, [["permissions", "", "0"]])
+        self.assertEqual(len(self.probe_audit.read_text().splitlines()), probes + 1)
+        self.assertTrue((self.data_dir / "run/stub-running").exists())
+
+    def test_source_preparation_occurs_before_build_and_runtime_before_activation(self):
+        checkout = self.source_checkout()
+        package = checkout / "scripts/agena/package-backend.sh"
+        package.write_text(package.read_text().replace(
+            "set -euo pipefail\n",
+            'set -euo pipefail\nprintf "build\\tpackage\\n" >> "$TEST_ORDER_AUDIT_PATH"\n',
+            1,
+        ))
+        self.invoke(
+            "install", "--source", checkout, "--data-dir", self.data_dir,
+            "--service-mode", "detached",
+        )
+        events = [line.split("\t") for line in self.order_audit.read_text().splitlines()]
+        names = [event[1] if event[0] == "setup" else event[0] for event in events]
+        self.assertLess(names.index("bootstrap"), names.index("source"))
+        self.assertLess(names.index("source"), names.index("build"))
+        self.assertLess(names.index("build"), names.index("runtime"))
+        self.assertLess(names.index("runtime"), names.index("probe"))
+        setups = [line.split("\t") for line in self.setup_audit.read_text().splitlines()]
+        source = next(row for row in setups if row[0] == "source")
+        self.assertEqual(source[3], str(checkout))
 
 
 if __name__ == "__main__":

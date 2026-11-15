@@ -12,6 +12,10 @@ function Install-VsComponents {
     [Parameter(Mandatory = $true)][string[]]$Components
   )
 
+  if ($env:AGENA_INSTALLER_SETUP_MODE -eq "check") {
+    throw "Visual Studio components are missing: $($Components -join ', '). -SetupMode check never installs or repairs build tools."
+  }
+
   # Invoke the native installer directly so PowerShell passes the installation
   # path as one argv element.  Start-Process flattens an ArgumentList array
   # into a command line before launching setup.exe; on hosted runners that
@@ -623,6 +627,15 @@ function Set-EnvFromVsDevCmd {
   [Environment]::SetEnvironmentVariable("CXX_$Key", $Compiler, "Process")
 }
 
+function Find-LlvmMingwBin([string]$Root) {
+  if (Test-Path -LiteralPath (Join-Path $Root "bin/clang.exe")) { return Join-Path $Root "bin" }
+  $top = Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue |
+    Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName "bin/clang.exe") } |
+    Select-Object -First 1
+  if ($top) { return Join-Path $top.FullName "bin" }
+  return $null
+}
+
 function Install-LlvmMingw {
   param([Parameter(Mandatory = $true)][string]$Target)
 
@@ -632,7 +645,12 @@ function Install-LlvmMingw {
   $Root = Join-Path $env:RUNNER_TEMP "agena-llvm-mingw-$Version"
   $Archive = Join-Path $Root $ArchiveName
   $Extracted = Join-Path $Root "toolchain"
-  New-Item -ItemType Directory -Force -Path $Root | Out-Null
+  if (-not (Test-Path -LiteralPath $Root)) {
+    if ($env:AGENA_INSTALLER_SETUP_MODE -eq "check") {
+      throw "llvm-mingw is missing; -SetupMode check never downloads or installs build tools."
+    }
+    New-Item -ItemType Directory -Force -Path $Root | Out-Null
+  }
 
   $NeedsDownload = $true
   if (Test-Path $Archive) {
@@ -640,6 +658,9 @@ function Install-LlvmMingw {
     $NeedsDownload = $Actual -ne $ExpectedSha256
   }
   if ($NeedsDownload) {
+    if ($env:AGENA_INSTALLER_SETUP_MODE -eq "check") {
+      throw "llvm-mingw archive is missing or invalid; -SetupMode check never downloads build tools."
+    }
     Remove-Item -Force -ErrorAction SilentlyContinue $Archive
     $Url = "https://github.com/mstorsjo/llvm-mingw/releases/download/$Version/$ArchiveName"
     Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Archive
@@ -649,18 +670,18 @@ function Install-LlvmMingw {
     }
   }
 
-  if (-not (Test-Path (Join-Path $Extracted "bin\clang.exe"))) {
+  $Bin = Find-LlvmMingwBin $Extracted
+  if (-not $Bin) {
+    if ($env:AGENA_INSTALLER_SETUP_MODE -eq "check") {
+      throw "llvm-mingw toolchain is missing; -SetupMode check never extracts or installs build tools."
+    }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Extracted
     New-Item -ItemType Directory -Force -Path $Extracted | Out-Null
     Expand-Archive -Path $Archive -DestinationPath $Extracted
+    $Bin = Find-LlvmMingwBin $Extracted
   }
 
-  $Top = Get-ChildItem -Path $Extracted -Directory | Select-Object -First 1
-  if ($Top -and (Test-Path (Join-Path $Top.FullName "bin\clang.exe"))) {
-    $Bin = Join-Path $Top.FullName "bin"
-  } elseif (Test-Path (Join-Path $Extracted "bin\clang.exe")) {
-    $Bin = Join-Path $Extracted "bin"
-  } else {
+  if (-not $Bin) {
     throw "llvm-mingw clang.exe not found after extraction"
   }
   $env:PATH = "$Bin;$env:PATH"

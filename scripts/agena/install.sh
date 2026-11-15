@@ -36,6 +36,9 @@ PORT_SET=0
 WORKSPACE_SET=0
 SERVER_PASSWORD_SET=0
 SERVICE_MODE_SET=0
+SETUP_MODE="${AGENA_INSTALL_SETUP_MODE:-auto}"
+SETUP_MODE_SET=0
+SANDBOX_REPORT=""
 
 usage() {
   cat <<'EOF'
@@ -45,7 +48,8 @@ Actions:
   install     Install into an empty installation root
   reinstall   Replace the installed program; reuse its version by default
   upgrade     Replace the installed program with the newest release
-  start, stop, restart, status, permissions, uninstall
+  start, stop, restart, status, uninstall
+  permissions Repair or check runtime dependencies and host permissions
 
 One-click install (latest beta release):
   curl -fsSL https://raw.githubusercontent.com/canxin121/agena/master/scripts/agena/install.sh | bash
@@ -82,6 +86,9 @@ Options:
   Release and source options apply to install, reinstall, and upgrade.
   Runtime options replace the saved values during reinstall and upgrade;
   omitted runtime options keep the saved values.
+  --setup-mode MODE        auto (default): prepare missing dependencies/permissions;
+                           check: verify existing host setup without changing it
+                           Applies to install, reinstall, upgrade, and permissions
   --no-path-update         Do not add the install bin directory to shell PATH
   --purge-data             With uninstall, also remove the installed instance data root
   -h, --help               Show this help
@@ -117,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --workspace) WORKSPACE="${2:-}"; WORKSPACE_SET=1; shift 2 ;;
     --password) SERVER_PASSWORD="${2:-}"; SERVER_PASSWORD_SET=1; shift 2 ;;
     --service-mode) SERVICE_MODE="${2:-}"; SERVICE_MODE_SET=1; shift 2 ;;
+    --setup-mode) SETUP_MODE="${2:-}"; SETUP_MODE_SET=1; shift 2 ;;
     --no-path-update) UPDATE_PATH=0; NO_PATH_UPDATE_SET=1; shift ;;
     --purge-data) PURGE_DATA=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -162,6 +170,15 @@ if (( PURGE_DATA == 1 )) && [[ "$ACTION" != "uninstall" ]]; then
   echo "ERROR: --purge-data only applies to uninstall" >&2
   exit 2
 fi
+if (( SETUP_MODE_SET )) && (( ! replacement_action )) && [[ "$ACTION" != permissions ]]; then
+  echo "ERROR: --setup-mode only applies to install, reinstall, upgrade, and permissions" >&2
+  exit 2
+fi
+case "$SETUP_MODE" in
+  auto|check) ;;
+  *) echo "ERROR: --setup-mode must be auto or check" >&2; exit 2 ;;
+esac
+
 case "$SERVICE_MODE" in
   auto|native|detached) ;;
   *) echo "ERROR: --service-mode must be auto, native, or detached" >&2; exit 2 ;;
@@ -191,6 +208,724 @@ if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
   echo "ERROR: invalid port: $PORT" >&2
   exit 2
 fi
+
+# BEGIN AGENA HOST SETUP
+# Embedded by install.sh; sourcing this section performs no host operations.
+# Official installers are downloaded as artifacts and checked before execution.
+
+agena_setup_error() { printf 'ERROR: %s\n' "$*" >&2; return 1; }
+agena_setup_note() { printf 'Agena setup: %s\n' "$*" >&2; }
+agena_setup_system_path() { printf '%s' "$1"; }
+agena_setup_has() {
+  local executable information
+  executable="$(command -v "$1" 2>/dev/null)" || return 1
+  if [[ "$1" == python3 ]]; then
+    # macOS can expose a non-working developer-tools shim at this path.
+    if [[ "$executable" == /usr/bin/python3 && "$(uname -s)" == Darwin ]] &&
+       ! xcode-select -p >/dev/null 2>&1; then return 1; fi
+    "$executable" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1
+  elif [[ "$1" == unshare ]]; then
+    information="$("$executable" --help 2>&1)" || return 1
+    [[ "$information" == *--map-current-user* && "$information" == *--keep-caps* ]]
+  elif [[ "$1" == nsenter ]]; then
+    information="$("$executable" --version 2>&1)" || return 1
+    [[ "$information" == *util-linux* ]]
+  elif [[ "$1" == ip ]]; then
+    information="$("$executable" -Version 2>&1)" || return 1
+    [[ "$information" == *iproute2* ]]
+  else
+    return 0
+  fi
+}
+agena_setup_has_tty() { ( : </dev/tty ) >/dev/null 2>&1; }
+agena_setup_from_tty() { "$@" </dev/tty; }
+
+agena_setup_quote_command() {
+  local argument part command=exec
+  for argument in "$@"; do
+    command="$command '"
+    # Avoid Bash-version-dependent replacement-string backslash handling.
+    # Close the single quotes, append a double-quoted apostrophe, and reopen.
+    while [[ "$argument" == *"'"* ]]; do
+      part="${argument%%\'*}"
+      command="$command$part'\"'\"'"
+      argument="${argument#*\'}"
+    done
+    command="$command$argument'"
+  done
+  printf '%s' "$command"
+}
+
+agena_setup_as_root() {
+  # Password input belongs to the OS elevation tool and its controlling TTY.
+  (( $# )) || { agena_setup_error "A privileged command is required."; return 1; }
+  if [[ "$(id -u)" == 0 ]]; then
+    "$@"
+  elif agena_setup_has sudo; then
+    if sudo -n true >/dev/null 2>&1; then
+      sudo -n -- "$@"
+    elif agena_setup_has_tty; then
+      agena_setup_from_tty sudo -- "$@"
+    else
+      agena_setup_error "Administrator authentication is required for: $*. Rerun this installer in an interactive terminal, or run sudo -v in that terminal first. Passwords are read only by sudo."
+    fi
+  elif agena_setup_has doas; then
+    if doas -n true >/dev/null 2>&1; then
+      doas -n "$@"
+    elif agena_setup_has_tty; then
+      agena_setup_from_tty doas "$@"
+    else
+      agena_setup_error "doas authentication is required for: $*. Run this installer in an interactive terminal or configure the administrator-approved doas authorization."
+    fi
+  elif agena_setup_has su && agena_setup_has_tty; then
+    local command
+    command="$(agena_setup_quote_command "$@")" || return
+    agena_setup_from_tty su -s /bin/sh -c "$command" root
+  else
+    agena_setup_error "Administrator access is required for: $*. Use a terminal with sudo, doas, or su (root password), or prepare the listed dependencies as an administrator."
+  fi
+}
+
+agena_setup_user() {
+  [[ "$(id -u)" != 0 ]] ||
+    agena_setup_error "Run this installer as your normal user, without sudo. It elevates only the required system preparation commands."
+}
+
+agena_setup_mode() {
+  case "$1" in auto|check) return 0 ;; esac
+  agena_setup_error "Host setup mode must be auto or check."
+}
+
+agena_setup_sha256() {
+  if agena_setup_has sha256sum; then sha256sum "$@" | awk '{print $1}'
+  elif agena_setup_has shasum; then shasum -a 256 "$@" | awk '{print $1}'
+  else agena_setup_error "sha256sum or shasum is required."; fi
+}
+
+agena_setup_ca_ready() {
+  local candidate
+  for candidate in "${SSL_CERT_FILE:-}" \
+    /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt \
+    /etc/ssl/ca-bundle.pem /etc/ssl/cert.pem; do
+    [[ -n "$candidate" ]] || continue
+    [[ -s "$(agena_setup_system_path "$candidate")" ]] && return 0
+  done
+  return 1
+}
+
+agena_setup_distro_words() {
+  local file key value words=""
+  file="$(agena_setup_system_path /etc/os-release)"
+  [[ -r "$file" ]] || file="$(agena_setup_system_path /usr/lib/os-release)"
+  [[ -r "$file" ]] || return 0
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    case "$key" in ID|ID_LIKE|VARIANT_ID)
+      value="${value#\"}"; value="${value%\"}"
+      value="${value#\'}"; value="${value%\'}"
+      [[ "$value" =~ ^[a-zA-Z0-9._\ -]*$ ]] ||
+        { agena_setup_error "Invalid distribution identity in $file"; return 1; }
+      words="$words $value"
+      ;;
+    esac
+  done < "$file"
+  printf '%s' "$words" | tr '[:upper:]' '[:lower:]'
+}
+
+agena_setup_package_manager() {
+  local words candidate managers=""
+  words=" $(agena_setup_distro_words) " || return
+  if [[ -e "$(agena_setup_system_path /run/ostree-booted)" ]]; then
+    agena_setup_error "This OSTree/immutable host must provision dependencies through its image or rpm-ostree configuration; the installer will not run a mutable-system package manager."
+    return 1
+  fi
+  case "$words" in
+    *' nixos '*) agena_setup_error "NixOS dependencies must be declared in the NixOS system configuration; this installer will not invoke apt or dnf."; return 1 ;;
+    *' opensuse-microos '*|*' microos '*|*' aeon '*|*' kalpa '*)
+      agena_setup_error "This transactional/immutable SUSE system must provision dependencies through its transactional system configuration."; return 1 ;;
+    *' alpine '*) managers=apk ;;
+    *' opensuse '*|*' opensuse-tumbleweed '*|*' opensuse-leap '*|*' suse '*|*' sles '*) managers=zypper ;;
+    *' arch '*|*' manjaro '*) managers=pacman ;;
+    *' debian '*|*' ubuntu '*|*' linuxmint '*) managers="apt-get apt" ;;
+    *' fedora '*|*' rhel '*|*' centos '*|*' rocky '*|*' almalinux '*|*' amzn '*|*' ol '*) managers="dnf dnf5 yum" ;;
+  esac
+  if [[ -n "$managers" ]]; then
+    for candidate in $managers; do
+      if agena_setup_has "$candidate"; then printf '%s' "$candidate"; return 0; fi
+    done
+    agena_setup_error "Distribution $words requires one of these package managers: $managers"
+    return 1
+  fi
+  if [[ -n "${words// /}" ]]; then
+    agena_setup_error "Unsupported distribution identity:$words. Install the listed dependencies using its native package manager."
+    return 1
+  fi
+  # Minimal containers may omit os-release. Infer only an unambiguous family.
+  local selected="" family count=0
+  for family in "apt-get apt" "dnf dnf5 yum" pacman zypper apk; do
+    for candidate in $family; do
+      if agena_setup_has "$candidate"; then
+        selected="$candidate"; count=$((count + 1)); break
+      fi
+    done
+  done
+  if (( count == 1 )); then printf '%s' "$selected"; return 0; fi
+  agena_setup_error "Cannot identify a unique supported Linux package manager; check /etc/os-release."
+}
+
+agena_setup_libc() {
+  local words information candidate
+  words=" $(agena_setup_distro_words) " || return
+  if [[ "$words" == *' alpine '* || -r "$(agena_setup_system_path /etc/alpine-release)" ]]; then
+    printf musl; return 0
+  fi
+  if agena_setup_has getconf; then
+    information="$(getconf GNU_LIBC_VERSION 2>/dev/null)" || information=""
+    if [[ "$information" == *glibc* ]]; then printf gnu; return 0; fi
+  fi
+  if agena_setup_has ldd; then
+    information="$(ldd --version 2>&1)" || :
+    case "$information" in
+      *musl*) printf musl; return 0 ;;
+      *GLIBC*|*'GNU libc'*|*'GNU C Library'*) printf gnu; return 0 ;;
+    esac
+  fi
+  for candidate in "$(agena_setup_system_path /lib)"/ld-musl-*.so.1; do
+    if [[ -f "$candidate" ]]; then printf musl; return 0; fi
+  done
+  case "$words" in
+    *' debian '*|*' ubuntu '*|*' fedora '*|*' rhel '*|*' centos '*|*' rocky '*|*' almalinux '*|*' amzn '*|*' arch '*|*' suse '*|*' opensuse '*)
+      printf gnu; return 0 ;;
+  esac
+  agena_setup_error "Cannot determine whether this Linux system uses glibc or musl."
+}
+
+agena_setup_target_triple() {
+  local os arch libc
+  os="$(uname -s)"; arch="$(uname -m)"
+  if [[ "$os" == Linux ]]; then libc="$(agena_setup_libc)" || return; fi
+  case "$os:$arch" in
+    Linux:x86_64|Linux:amd64)
+      case "$libc" in gnu) printf x86_64-unknown-linux-gnu ;; musl) printf x86_64-unknown-linux-musl ;; esac ;;
+    Linux:aarch64|Linux:arm64)
+      case "$libc" in gnu) printf aarch64-unknown-linux-gnu ;; musl) printf aarch64-unknown-linux-musl ;; esac ;;
+    Darwin:x86_64|Darwin:amd64) printf x86_64-apple-darwin ;;
+    Darwin:aarch64|Darwin:arm64) printf aarch64-apple-darwin ;;
+    *) agena_setup_error "Unsupported build host: $os/$arch"; return 1 ;;
+  esac
+}
+
+agena_setup_package_name() {
+  local manager="$1" item="$2"
+  case "$item" in
+    bwrap) printf bubblewrap ;;
+    slirp4netns) printf slirp4netns ;;
+    ip) case "$manager" in dnf|dnf5|yum) printf iproute ;; *) printf iproute2 ;; esac ;;
+    iptables|ip6tables|iptables-restore|ip6tables-restore)
+      case "$manager" in dnf|dnf5|yum) printf iptables-nft ;; *) printf iptables ;; esac ;;
+    unshare|nsenter) case "$manager" in apk) printf util-linux-misc ;; *) printf util-linux ;; esac ;;
+    modprobe) printf kmod ;;
+    apparmor_parser) case "$manager" in zypper) printf apparmor-parser ;; *) printf apparmor ;; esac ;;
+    apparmor-policy) case "$manager" in apk) printf apparmor-profiles-tunables ;; zypper) printf apparmor-abstractions ;; *) printf apparmor ;; esac ;;
+    openssl-dev)
+      case "$manager" in
+        apt-get|apt) printf libssl-dev ;;
+        dnf|dnf5|yum) printf openssl-devel ;;
+        zypper) printf libopenssl-devel ;;
+        pacman) printf openssl ;;
+        apk) printf openssl-dev ;;
+        *) agena_setup_error "No OpenSSL development package mapping for $manager"; return 1 ;;
+      esac ;;
+    cc|c++)
+      case "$manager:$item" in
+        apt-get:*|apt:*) printf build-essential ;;
+        dnf:c++|dnf5:c++|yum:c++) printf gcc-c++ ;;
+        zypper:c++) printf gcc-c++ ;;
+        apk:*) printf build-base ;;
+        *:c++) printf gcc ;;
+        *) printf gcc ;;
+      esac ;;
+    pkg-config) case "$manager" in dnf|dnf5|yum) printf pkgconf-pkg-config ;; pacman|apk|brew) printf pkgconf ;; *) printf pkg-config ;; esac ;;
+    sha256) printf coreutils ;;
+    python3) case "$manager" in brew) printf python ;; *) printf python3 ;; esac ;;
+    *) printf '%s' "$item" ;;
+  esac
+}
+
+agena_setup_packages() {
+  local mode="$1" os="$2"; shift 2
+  (( $# > 0 )) || return 0
+  local manager="" candidate item package seen
+  local packages=()
+  if [[ "$mode" == check ]]; then
+    agena_setup_error "Missing required tools/packages: $*. Rerun with --setup-mode auto to install them."
+    return 1
+  fi
+  if [[ "$os" == Darwin ]]; then
+    agena_setup_homebrew "$mode" || return
+    manager=brew
+  else
+    manager="$(agena_setup_package_manager)" || return
+  fi
+  for item in "$@"; do
+    package="$(agena_setup_package_name "$manager" "$item")" || return
+    seen=0
+    for candidate in "${packages[@]:-}"; do [[ "$candidate" == "$package" ]] && seen=1; done
+    (( seen )) || packages+=("$package")
+  done
+  agena_setup_note "Installing missing dependencies: ${packages[*]}"
+  case "$manager" in
+    apt-get|apt)
+      if [[ "${_AGENA_SETUP_APT_UPDATED:-0}" != 1 ]]; then
+        agena_setup_as_root "$manager" update || return
+        _AGENA_SETUP_APT_UPDATED=1
+      fi
+      agena_setup_as_root "$manager" install -y --no-install-recommends "${packages[@]}" ;;
+    dnf|dnf5|yum) agena_setup_as_root "$manager" install -y "${packages[@]}" ;;
+    pacman) agena_setup_as_root pacman -S --needed --noconfirm "${packages[@]}" ;;
+    zypper) agena_setup_as_root zypper --non-interactive install "${packages[@]}" ;;
+    apk) agena_setup_as_root apk add --no-cache "${packages[@]}" ;;
+    brew) HOMEBREW_NO_AUTO_UPDATE=1 brew install "${packages[@]}" ;;
+  esac
+}
+
+agena_setup_require_commands() {
+  local mode="$1" os="$2"; shift 2
+  local name missing=()
+  for name in "$@"; do agena_setup_has "$name" || missing+=("$name"); done
+  if (( ${#missing[@]} )); then
+    agena_setup_packages "$mode" "$os" "${missing[@]}" || return
+  fi
+  for name in "$@"; do
+    agena_setup_has "$name" ||
+      { agena_setup_error "$name is still unavailable on PATH after preparation."; return 1; }
+  done
+}
+
+agena_setup_find_homebrew() {
+  agena_setup_has brew && return 0
+  local candidate directory
+  for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    candidate="$(agena_setup_system_path "$candidate")"
+    if [[ -x "$candidate" ]]; then
+      directory="$(dirname "$candidate")"
+      export PATH="$directory:$(dirname "$directory")/sbin:$PATH"
+      return 0
+    fi
+  done
+  return 1
+}
+
+agena_setup_homebrew() {
+  local mode="$1" temp
+  agena_setup_find_homebrew && return 0
+  [[ "$mode" == auto ]] ||
+    { agena_setup_error "Homebrew is missing; rerun with --setup-mode auto to install it."; return 1; }
+  agena_setup_has curl ||
+    { agena_setup_error "The macOS system curl is required to download Homebrew."; return 1; }
+  if ! agena_setup_has sha256sum && ! agena_setup_has shasum; then
+    agena_setup_error "The macOS system shasum is required to verify Homebrew."; return 1
+  fi
+  # Official Homebrew/install snapshot, reviewed 2026-11-15. The immutable
+  # commit and digest are both pinned; a changed download is never executed.
+  local commit=09c62fc577ec170172b0a184060f141a2c622dc1
+  local checksum=5f333bbe53bc490e51e7ccb1df8779b3dd6ee73a1a7379efda216edb08ccb148
+  temp="$(mktemp -d "${TMPDIR:-/tmp}/agena-homebrew.XXXXXX")" || return
+  if ! agena_setup_download "https://raw.githubusercontent.com/Homebrew/install/$commit/install.sh" "$temp/install.sh" ||
+     ! agena_setup_verify_download "$temp/install.sh" "$checksum"; then
+    rm -rf "$temp"; return 1
+  fi
+  agena_setup_note "Installing Homebrew with its verified official installer; review its installation plan and administrator prompt."
+  if ( : </dev/tty ) >/dev/null 2>&1; then
+    if ! (unset CI NONINTERACTIVE; INTERACTIVE=1 /bin/bash "$temp/install.sh" </dev/tty); then
+      rm -rf "$temp"; agena_setup_error "The Homebrew installer did not complete."; return 1
+    fi
+  else
+    if ! (unset INTERACTIVE; NONINTERACTIVE=1 /bin/bash "$temp/install.sh"); then
+      rm -rf "$temp"
+      agena_setup_error "Homebrew installation failed without a terminal. Run the same command in a terminal for its confirmation and sudo authentication, or prepare passwordless administrator access."
+      return 1
+    fi
+  fi
+  rm -rf "$temp"
+  agena_setup_find_homebrew ||
+    { agena_setup_error "Homebrew is still unavailable after its installer completed."; return 1; }
+}
+
+agena_setup_openssl() {
+  local mode="$1" os="$2"
+  [[ "$os" == Linux ]] || return 0
+  if pkg-config --exists openssl; then return 0; fi
+  agena_setup_note "OpenSSL development headers/libraries are missing from pkg-config."
+  agena_setup_packages "$mode" "$os" openssl-dev || return
+  pkg-config --exists openssl ||
+    { agena_setup_error "OpenSSL development files are still unavailable to pkg-config after installation."; return 1; }
+}
+
+agena_setup_macos_clt() {
+  local mode="$1" timeout="${AGENA_SETUP_CLT_TIMEOUT_SECONDS:-1800}" deadline
+  if xcode-select -p >/dev/null 2>&1; then return 0; fi
+  [[ "$mode" == auto ]] ||
+    { agena_setup_error "Apple Command Line Tools are missing; rerun with --setup-mode auto."; return 1; }
+  [[ "$timeout" =~ ^[0-9]+$ && ${#timeout} -le 4 ]] ||
+    { agena_setup_error "AGENA_SETUP_CLT_TIMEOUT_SECONDS must be an integer from 1 to 3600."; return 1; }
+  timeout=$((10#$timeout))
+  (( timeout >= 1 && timeout <= 3600 )) ||
+    { agena_setup_error "AGENA_SETUP_CLT_TIMEOUT_SECONDS must be an integer from 1 to 3600."; return 1; }
+  if ! xcode-select --install; then
+    xcode-select -p >/dev/null 2>&1 ||
+      { agena_setup_error "Apple could not open its Command Line Tools installer."; return 1; }
+  fi
+  agena_setup_note "Complete the Apple Command Line Tools dialog. Waiting up to $timeout seconds; this installation continues automatically when the tools are ready."
+  deadline=$((SECONDS + timeout))
+  while ! xcode-select -p >/dev/null 2>&1; do
+    if (( SECONDS >= deadline )); then
+      agena_setup_error "Apple Command Line Tools installation did not finish within $timeout seconds. Complete the system dialog, then rerun this command."
+      return 1
+    fi
+    sleep 1 || return
+  done
+}
+
+agena_setup_macos() {
+  local phase="$1" mode="$2" version major
+  version="$(sw_vers -productVersion)" || return
+  major="${version%%.*}"
+  [[ "$major" =~ ^[0-9]+$ ]] || { agena_setup_error "Cannot determine the macOS version: $version"; return 1; }
+  agena_setup_note "macOS $version"
+  if [[ "$phase" == source ]]; then
+    if [[ "${AGENA_WEB_DIST_PREBUILT:-0}" != 1 ]] && (( major < 13 )); then
+      agena_setup_error "The pinned Bun build requires macOS 13 or later."
+      return 1
+    fi
+    agena_setup_macos_clt "$mode" || return
+  else
+    agena_setup_note "Desktop permissions are granted in System Settings > Privacy & Security > Accessibility, Screen & System Audio Recording (Screen Recording on older macOS), and Files and Folders / Full Disk Access, for the app that launches Agena."
+  fi
+}
+
+agena_setup_bootstrap() {
+  local mode="${1:-auto}" source_mode="${2:-0}" os
+  agena_setup_mode "$mode" || return
+  [[ "$source_mode" == 0 || "$source_mode" == 1 ]] ||
+    { agena_setup_error "source_mode must be 0 or 1."; return 1; }
+  [[ "$mode" == check ]] || agena_setup_user || return
+  os="$(uname -s)"
+  case "$os" in Linux|Darwin) ;; *) agena_setup_error "Unsupported Unix host: $os"; return 1 ;; esac
+  if [[ "$os" == Darwin && "$source_mode" == 1 ]]; then
+    agena_setup_macos source "$mode" || return
+  fi
+  local missing=() name
+  for name in curl python3 tar; do agena_setup_has "$name" || missing+=("$name"); done
+  if ! agena_setup_has sha256sum && ! agena_setup_has shasum; then missing+=(sha256); fi
+  if [[ "$source_mode" == 1 ]] && ! agena_setup_has git; then missing+=(git); fi
+  if [[ "$os" == Linux ]] && ! agena_setup_ca_ready; then missing+=(ca-certificates); fi
+  if (( ${#missing[@]} )); then agena_setup_packages "$mode" "$os" "${missing[@]}" || return; fi
+  agena_setup_require_commands check "$os" curl python3 tar || return
+  if ! agena_setup_has sha256sum && ! agena_setup_has shasum; then
+    agena_setup_error "A SHA256 tool is still unavailable after preparation."; return 1
+  fi
+  if [[ "$source_mode" == 1 ]]; then agena_setup_require_commands check "$os" git || return; fi
+  if [[ "$os" == Linux ]] && ! agena_setup_ca_ready; then
+    agena_setup_error "No readable system CA certificate bundle was found after preparation."; return 1
+  fi
+}
+
+agena_setup_download() {
+  curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --retry 3 \
+    --connect-timeout 15 --max-time 600 --output "$2" "$1"
+}
+
+agena_setup_verify_download() {
+  local file="$1" expected="$2" actual
+  [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] ||
+    { agena_setup_error "The official download checksum is missing or malformed."; return 1; }
+  actual="$(agena_setup_sha256 "$file")" || return
+  expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
+  [[ "$actual" == "$expected" ]] ||
+    agena_setup_error "SHA256 verification failed for $(basename "$file"); the downloaded artifact was not executed."
+}
+
+agena_setup_rust() {
+  local mode="$1" source_root="$2" os="$3" version cargo_bin target temp base expected
+  version="${AGENA_STABLE_TOOLCHAIN:-}"
+  if [[ -z "$version" && -r "$source_root/rust-toolchain.toml" ]]; then
+    version="$(sed -nE 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' "$source_root/rust-toolchain.toml" | head -1)"
+  fi
+  version="${version:-1.97.0}"
+  [[ "$version" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]] ||
+    { agena_setup_error "Invalid Rust toolchain pin: $version"; return 1; }
+  target="$(agena_setup_target_triple)" || return
+  if [[ "$target" == *-linux-musl ]]; then
+    case "$version" in
+      *-unknown-linux-*|*-apple-darwin)
+        [[ "$version" == *-"$target" ]] ||
+          { agena_setup_error "Rust toolchain $version does not match native musl host $target."; return 1; } ;;
+      *) version="$version-$target" ;;
+    esac
+  fi
+  cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin"
+  if [[ -x "$cargo_bin/rustup" ]]; then export PATH="$cargo_bin:$PATH"; fi
+  if agena_setup_has rustup && rustup which --toolchain "$version" rustc >/dev/null 2>&1 &&
+     rustup which --toolchain "$version" cargo >/dev/null 2>&1; then
+    export RUSTUP_TOOLCHAIN="$version"
+    return 0
+  fi
+  [[ "$mode" == auto ]] ||
+    { agena_setup_error "Rust toolchain $version is missing. Install it with rustup or rerun with --setup-mode auto."; return 1; }
+  if ! agena_setup_has rustup; then
+    temp="$(mktemp -d "${TMPDIR:-/tmp}/agena-rustup.XXXXXX")" || return
+    base="https://static.rust-lang.org/rustup/dist/$target/rustup-init"
+    if ! agena_setup_download "$base" "$temp/rustup-init" ||
+       ! agena_setup_download "$base.sha256" "$temp/rustup-init.sha256"; then
+      rm -rf "$temp"; return 1
+    fi
+    expected="$(awk 'NR==1 {print $1}' "$temp/rustup-init.sha256")"
+    if ! agena_setup_verify_download "$temp/rustup-init" "$expected" ||
+       ! chmod +x "$temp/rustup-init" ||
+       ! "$temp/rustup-init" -y --no-modify-path --profile minimal --default-toolchain none; then
+      rm -rf "$temp"; return 1
+    fi
+    rm -rf "$temp"
+    export PATH="$cargo_bin:$PATH"
+  fi
+  rustup toolchain install "$version" --profile minimal --component rustfmt --component clippy || return
+  rustup which --toolchain "$version" cargo >/dev/null || return
+  rustup which --toolchain "$version" rustc >/dev/null || return
+  export RUSTUP_TOOLCHAIN="$version"
+}
+
+agena_setup_bun() {
+  local mode="$1" source_root="$2" os="$3" version directory current target temp base expected libc=gnu
+  [[ "${AGENA_WEB_DIST_PREBUILT:-0}" != 1 ]] || return 0
+  [[ -r "$source_root/.bun-version" ]] ||
+    { agena_setup_error "Source checkout is missing its .bun-version pin."; return 1; }
+  version="$(tr -d '[:space:]' < "$source_root/.bun-version")"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    { agena_setup_error "Invalid Bun pin in $source_root/.bun-version"; return 1; }
+  if agena_setup_has bun && [[ "$(bun --version)" == "$version" ]]; then return 0; fi
+  directory="${XDG_CACHE_HOME:-$HOME/.cache}/agena/toolchains/bun-$version/bin"
+  if [[ -x "$directory/bun" && "$("$directory/bun" --version)" == "$version" ]]; then
+    export PATH="$directory:$PATH"; return 0
+  fi
+  [[ "$mode" == auto ]] ||
+    { agena_setup_error "Bun $version is required by .bun-version; rerun with --setup-mode auto."; return 1; }
+  case "$os:$(uname -m)" in
+    Linux:x86_64|Linux:amd64) target=bun-linux-x64-baseline ;;
+    Linux:aarch64|Linux:arm64) target=bun-linux-aarch64 ;;
+    Darwin:x86_64|Darwin:amd64) target=bun-darwin-x64 ;;
+    Darwin:aarch64|Darwin:arm64) target=bun-darwin-aarch64 ;;
+    *) agena_setup_error "No supported Bun artifact for $os/$(uname -m)."; return 1 ;;
+  esac
+  if [[ "$os" == Linux ]]; then
+    libc="$(agena_setup_libc)" || return
+    if [[ "$libc" == musl ]]; then
+      # These are the actual pinned Bun release asset names, not GNU builds.
+      case "$target" in
+        bun-linux-x64-baseline) target=bun-linux-x64-musl-baseline ;;
+        bun-linux-aarch64) target=bun-linux-aarch64-musl ;;
+      esac
+    fi
+  fi
+  temp="$(mktemp -d "${TMPDIR:-/tmp}/agena-bun.XXXXXX")" || return
+  base="https://github.com/oven-sh/bun/releases/download/bun-v$version"
+  if ! agena_setup_download "$base/$target.zip" "$temp/$target.zip" ||
+     ! agena_setup_download "$base/SHASUMS256.txt" "$temp/SHASUMS256.txt"; then
+    rm -rf "$temp"; return 1
+  fi
+  expected="$(awk -v name="$target.zip" '$2 == name || $2 == "*" name {print $1}' "$temp/SHASUMS256.txt")"
+  if ! agena_setup_verify_download "$temp/$target.zip" "$expected" ||
+     ! unzip -p "$temp/$target.zip" "$target/bun" > "$temp/bun" ||
+     ! chmod +x "$temp/bun"; then
+    rm -rf "$temp"; return 1
+  fi
+  if [[ "$("$temp/bun" --version)" != "$version" ]]; then
+    agena_setup_error "The downloaded Bun executable does not match pin $version."
+    rm -rf "$temp"; return 1
+  fi
+  if ! mkdir -p "$directory" || ! install -m 0755 "$temp/bun" "$directory/bun"; then
+    rm -rf "$temp"; return 1
+  fi
+  rm -rf "$temp"
+  export PATH="$directory:$PATH"
+}
+
+agena_setup_absolute_path() {
+  local path="$1" parent name
+  [[ "$path" == /* ]] || { agena_setup_error "An absolute installation path is required."; return 1; }
+  if [[ -d "$path" ]]; then (cd "$path" && pwd -P); return; fi
+  parent="$(agena_setup_absolute_path "$(dirname "$path")")" || return
+  name="$(basename "$path")"
+  case "$name" in .) printf '%s' "$parent" ;; ..) dirname "$parent" ;; *) printf '%s/%s' "${parent%/}" "$name" ;; esac
+}
+
+agena_setup_managed_file() {
+  local target="$1" body="$2" mode="$3" existing="" temp
+  [[ ! -L "$target" ]] || { agena_setup_error "Refusing a symlink at system configuration $target"; return 1; }
+  if [[ -e "$target" ]]; then
+    [[ -f "$target" && -r "$target" ]] ||
+      { agena_setup_error "Cannot inspect system configuration $target"; return 1; }
+    existing="$(cat "$target")"
+    [[ "$existing" == "$body" ]] && return 0
+    [[ "$existing" == '# Managed by Agena installer.'$'\n'* ]] ||
+      { agena_setup_error "Preserving existing administrator configuration: $target"; return 1; }
+  fi
+  [[ "$mode" == auto ]] ||
+    { agena_setup_error "Required Agena host configuration is missing or outdated: $target"; return 1; }
+  temp="$(mktemp "${TMPDIR:-/tmp}/agena-host-config.XXXXXX")" || return
+  if ! printf '%s\n' "$body" > "$temp"; then
+    rm -f "$temp"
+    agena_setup_error "Could not prepare system configuration: $target"
+    return 1
+  fi
+  if [[ ! -d "$(dirname "$target")" ]] &&
+     ! agena_setup_as_root install -d -m 0755 "$(dirname "$target")"; then
+    rm -f "$temp"; return 1
+  fi
+  if ! agena_setup_as_root install -o root -g root -m 0644 "$temp" "$target"; then
+    rm -f "$temp"; return 1
+  fi
+  rm -f "$temp"
+}
+
+agena_setup_apparmor() {
+  local mode="$1" install_dir="$2" restriction executable digest name profile body active
+  restriction="$(agena_setup_system_path /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+  [[ -r "$restriction" && "$(cat "$restriction")" == 1 ]] || return 0
+  if [[ ! -r "$(agena_setup_system_path /etc/apparmor.d/abi/4.0)" ||
+        ! -r "$(agena_setup_system_path /etc/apparmor.d/tunables/global)" ]]; then
+    agena_setup_packages "$mode" Linux apparmor-policy || return
+    if [[ ! -r "$(agena_setup_system_path /etc/apparmor.d/abi/4.0)" ||
+          ! -r "$(agena_setup_system_path /etc/apparmor.d/tunables/global)" ]]; then
+      agena_setup_error "AppArmor ABI 4.0/tunables are unavailable after installing distribution policy files."
+      return 1
+    fi
+  fi
+  executable="$(agena_setup_absolute_path "$install_dir")/bin/agena" || return
+  # Attachment paths are exact. Never turn an install directory into a glob.
+  case "$executable" in
+    *'*'*|*'?'*|*'['*|*']'*|*'{'*|*'}'*|*'"'*|*'\'*|*$'\n'*|*$'\r'*|*$'\t'*)
+      agena_setup_error "The AppArmor attachment path contains unsupported pattern/control characters: $executable"; return 1 ;;
+  esac
+  digest="$(printf '%s' "$executable" | agena_setup_sha256)" || return
+  [[ "$digest" =~ ^[0-9a-fA-F]{64}$ ]] ||
+    { agena_setup_error "Cannot compute the AppArmor attachment identity."; return 1; }
+  name="agena-userns-${digest:0:24}"
+  profile="$(agena_setup_system_path "/etc/apparmor.d/$name")"
+  body="$(printf '# Managed by Agena installer.\nabi <abi/4.0>,\ninclude <tunables/global>\n\nprofile %s "%s" flags=(unconfined) {\n  userns,\n}\n' "$name" "$executable")"
+  agena_setup_managed_file "$profile" "$body" "$mode" || return
+  if [[ "$mode" == auto ]]; then
+    agena_setup_as_root apparmor_parser -r "$profile" || {
+      agena_setup_error "Loading the Agena-specific AppArmor profile failed: $profile"
+      return 1
+    }
+  else
+    active="$(agena_setup_system_path /sys/kernel/security/apparmor/profiles)"
+    if [[ -r "$active" ]] && ! grep -Fq "$name (" "$active"; then
+      agena_setup_error "The Agena AppArmor profile exists but is not loaded: $profile"; return 1
+    fi
+  fi
+  agena_setup_note "AppArmor user-namespace profile: $profile (attachment: $executable)"
+}
+
+agena_setup_module_boot() {
+  local mode="$1" service runlevel enabled=0
+  service="$(agena_setup_system_path /etc/init.d/modules)"
+  # systemd-modules-load reads modules-load.d directly. Alpine's OpenRC
+  # modules service reads the same files, but must be in a boot runlevel.
+  if [[ -f "$service" ]]; then
+    for runlevel in boot sysinit default; do
+      if [[ -e "$(agena_setup_system_path "/etc/runlevels/$runlevel/modules")" ]]; then enabled=1; fi
+    done
+    if (( ! enabled )); then
+      [[ "$mode" == auto ]] ||
+        { agena_setup_error "OpenRC modules service is not enabled for boot."; return 1; }
+      agena_setup_has rc-update ||
+        { agena_setup_error "OpenRC modules service requires rc-update to enable boot-time loading."; return 1; }
+      agena_setup_as_root rc-update add modules boot || return
+    fi
+  fi
+}
+
+agena_setup_system_commands_path() {
+  local directory
+  for directory in /usr/local/sbin /usr/sbin /sbin; do
+    directory="$(agena_setup_system_path "$directory")"
+    if [[ -d "$directory" && ":$PATH:" != *":$directory:"* ]]; then
+      export PATH="$PATH:$directory"
+    fi
+  done
+}
+
+agena_setup_linux_runtime() {
+  local mode="$1" install_dir="$2" name version path body
+  local required=(bwrap slirp4netns ip unshare nsenter iptables ip6tables iptables-restore ip6tables-restore modprobe)
+  path="$(agena_setup_system_path /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
+  if [[ -r "$path" && "$(cat "$path")" == 1 ]]; then required+=(apparmor_parser); fi
+  agena_setup_require_commands "$mode" Linux "${required[@]}" || return
+  for name in iptables ip6tables iptables-restore ip6tables-restore; do
+    version="$("$name" --version)" || return
+    if [[ "$version" == *legacy* ]]; then
+      agena_setup_error "$name uses the legacy backend ($version). MXC requires an nft-compatible iptables toolchain. Ask your administrator to review the existing firewall and select the appropriate backend; Agena does not change firewall rules or alternatives."
+      return 1
+    fi
+    if [[ "$version" != *nf_tables* ]]; then
+      agena_setup_error "$name does not report the required nft backend: $version. Review the system iptables installation; Agena does not change firewall alternatives."
+      return 1
+    fi
+  done
+  for path in /proc/sys/kernel/unprivileged_userns_clone /proc/sys/user/max_user_namespaces; do
+    path="$(agena_setup_system_path "$path")"
+    if [[ -r "$path" && "$(cat "$path")" == 0 ]]; then
+      agena_setup_error "User namespaces are disabled by $path. An administrator must review this policy; Agena does not weaken global namespace restrictions."
+      return 1
+    fi
+  done
+  path="$(agena_setup_system_path /sys/module/nf_conntrack)"
+  if [[ ! -d "$path" && ! -r "$(agena_setup_system_path /proc/sys/net/netfilter/nf_conntrack_max)" ]]; then
+    [[ "$mode" == auto ]] ||
+      { agena_setup_error "nf_conntrack is not available; rerun with --setup-mode auto to load the required module."; return 1; }
+    agena_setup_as_root modprobe nf_conntrack || {
+      agena_setup_error "Cannot load nf_conntrack. The kernel/container host must provide it for MXC networking."
+      return 1
+    }
+    if [[ ! -d "$path" && ! -r "$(agena_setup_system_path /proc/sys/net/netfilter/nf_conntrack_max)" ]]; then
+      agena_setup_error "nf_conntrack is still unavailable after modprobe."; return 1
+    fi
+  fi
+  # A module already loaded by another process may disappear after reboot.
+  # Persist the requirement even when no modprobe was necessary this time.
+  body=$'# Managed by Agena installer.\nnf_conntrack'
+  agena_setup_managed_file "$(agena_setup_system_path /etc/modules-load.d/agena-sandbox.conf)" "$body" "$mode" || return
+  agena_setup_module_boot "$mode" || return
+  agena_setup_apparmor "$mode" "$install_dir"
+}
+
+agena_setup_host() {
+  local phase="${1:-runtime}" mode="${2:-auto}" install_dir="${3:-}" source_root="${4:-}" os
+  agena_setup_mode "$mode" || return
+  case "$phase" in source|runtime) ;; *) agena_setup_error "Host setup phase must be source or runtime."; return 1 ;; esac
+  [[ "$mode" == check ]] || agena_setup_user || return
+  [[ "$install_dir" == /* ]] || { agena_setup_error "Host setup requires an absolute installation directory."; return 1; }
+  os="$(uname -s)"
+  case "$os" in Linux|Darwin) ;; *) agena_setup_error "Unsupported Unix host: $os"; return 1 ;; esac
+  if [[ "$os" == Linux ]]; then agena_setup_system_commands_path; fi
+  if [[ "$phase" == source ]]; then
+    [[ -d "$source_root" ]] || { agena_setup_error "Source setup requires an existing checkout."; return 1; }
+    if [[ "$os" == Darwin ]]; then agena_setup_macos source "$mode" || return; fi
+    local build_tools=(cc c++ make cmake pkg-config python3 git curl tar)
+    if [[ "${AGENA_WEB_DIST_PREBUILT:-0}" != 1 ]]; then build_tools+=(unzip); fi
+    agena_setup_require_commands "$mode" "$os" "${build_tools[@]}" || return
+    agena_setup_openssl "$mode" "$os" || return
+    agena_setup_rust "$mode" "$source_root" "$os" || return
+    agena_setup_bun "$mode" "$source_root" "$os" || return
+  elif [[ "$os" == Linux ]]; then
+    agena_setup_linux_runtime "$mode" "$install_dir" || return
+  else
+    agena_setup_macos runtime "$mode" || return
+  fi
+  agena_setup_note "$phase host prerequisites are ready; the installed binary will verify actual sandbox execution."
+}
+# END AGENA HOST SETUP
 
 absolute_directory() {
   local path="$1" parent name
@@ -354,16 +1089,7 @@ latest_version() {
 }
 
 target_triple() {
-  local os arch
-  os="$(uname -s)"
-  arch="$(uname -m)"
-  case "${os}:${arch}" in
-    Linux:x86_64|Linux:amd64) printf 'x86_64-unknown-linux-gnu' ;;
-    Linux:aarch64|Linux:arm64) printf 'aarch64-unknown-linux-gnu' ;;
-    Darwin:x86_64|Darwin:amd64) printf 'x86_64-apple-darwin' ;;
-    Darwin:arm64|Darwin:aarch64) printf 'aarch64-apple-darwin' ;;
-    *) echo "ERROR: unsupported platform ${os}:${arch}" >&2; exit 1 ;;
-  esac
+  agena_setup_target_triple
 }
 
 is_source_root() {
@@ -456,18 +1182,26 @@ resolve_source_root() {
 }
 
 prepare_source_archive() {
-  local temp="$1" target="$2" source_root package_script build_log
+  local temp="$1" target="$2" source_root package_script build_log target_flags=""
   resolve_source_root "$temp" || exit 1
   source_root="$SOURCE_ROOT"
+  agena_setup_host source "$SETUP_MODE" "$INSTALL_DIR" "$source_root" || return
   if [[ -n "$SOURCE_REF" && "$source_root" != "$temp/source" ]]; then
     echo "WARNING: --source-ref only applies when cloning; using the existing checkout as-is" >&2
   fi
   package_script="$source_root/scripts/agena/package-backend.sh"
+  if [[ "$target" == *-linux-musl ]]; then
+    # Link the native musl build against the distribution's OpenSSL shared
+    # libraries. openssl-dev need not include a separate static-library package.
+    target_flags="-C target-feature=-crt-static"
+    agena_setup_note "Building native musl with dynamic system OpenSSL; no glibc compatibility layer is installed."
+  fi
   echo "Building Agena from source at $source_root"
   build_log="$temp/source-build.log"
   if ! (
     cd "$source_root"
-    bash "$package_script" "$target"
+    AGENA_INSTALLER_SETUP_MODE="$SETUP_MODE" AGENA_STABLE_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.97.0}" \
+      bash "$package_script" "$target" false "$target_flags"
   ) 2>&1 | tee "$build_log"; then
     echo "ERROR: Agena source build failed" >&2
     exit 1
@@ -698,10 +1432,11 @@ release_package_version() {
 #
 #   1. resolve_replacement   read saved state, overlay explicit options
 #   2. prepare_candidate     download or build, verify, unpack, probe version
-#   3. activate_candidate    stop the current instance, swap program files
-#   4. finalize_replacement  start, restore prior run state, save state
+#   3. prepare_host          dependencies and permissions while the old service runs
+#   4. activate_candidate    stop the current instance, swap program files
+#   5. finalize_replacement  verify sandbox, start, restore run state, save state
 #
-# A failure in 3 or 4 runs rollback_replacement, which restores the previous
+# A failure in 4 or 5 runs rollback_replacement, which restores the previous
 # program files, installer state, settings, and running state. The stages only
 # differ in their preconditions: install requires no existing installation,
 # while reinstall and upgrade require one.
@@ -797,6 +1532,10 @@ prepare_candidate() {
     archive_source="$SOURCE_ARCHIVE"
     checksum_source="$SOURCE_CHECKSUM"
   elif [[ -z "$ARCHIVE" ]]; then
+    if [[ "$target" == *-linux-musl ]]; then
+      echo "ERROR: Published Agena releases do not include $target. Rerun with --source for a native musl build, or provide a native package with --archive." >&2
+      return 1
+    fi
     if [[ -z "$RELEASE_VERSION" ]]; then
       RELEASE_VERSION="$(latest_version)"
     else
@@ -847,6 +1586,9 @@ activate_candidate() {
   if [[ -f "$STATE_FILE" ]]; then
     HAD_STATE=1
     cp "$STATE_FILE" "$BACKUP_DIR/install-state.env"
+    if [[ -f "$INSTALL_DIR/sandbox-report.json" ]]; then
+      cp -p "$INSTALL_DIR/sandbox-report.json" "$BACKUP_DIR/sandbox-report.json"
+    fi
   fi
 
   if [[ -x "$AGENA_BIN" ]]; then
@@ -863,8 +1605,83 @@ activate_candidate() {
   CANDIDATE_INSTALLED=1
 }
 
+verify_installed_sandbox() {
+  local report
+  echo "Verifying native sandbox filesystem and network access"
+  if ! report="$("$AGENA_BIN" --agena-sandbox-check)"; then
+    printf 'ERROR: native sandbox verification failed:\n%s\n' "$report" >&2
+    echo "Resolve the reported host requirement and rerun this installation command." >&2
+    return 1
+  fi
+  if ! printf '%s\n' "$report" | python3 -c '
+import json, sys
+try:
+    raw = sys.stdin.read(65537)
+    if len(raw) > 65536:
+        raise ValueError("sandbox report exceeds the size limit")
+    report = json.loads(raw)
+    if type(report.get("schema_version")) is not int or report["schema_version"] != 1 or report.get("ok") is not True:
+        raise ValueError("unsupported or unsuccessful sandbox report")
+    checks = report.get("checks")
+    if not isinstance(checks, list) or not checks or not all(isinstance(item, dict) for item in checks):
+        raise ValueError("sandbox report has no checks")
+    by_name = {item.get("name"): item for item in checks}
+    if len(by_name) != len(checks) or report.get("platform") not in ("linux", "macos"):
+        raise ValueError("sandbox report has invalid platform or duplicate checks")
+    for name in ("offline", "http_proxy"):
+        check = by_name.get(name, {})
+        if check.get("required") is not True or check.get("status") != "passed":
+            raise ValueError("required sandbox check did not pass: " + name)
+    for check in checks:
+        if type(check.get("required")) is not bool or check.get("status") not in ("passed", "failed", "unsupported"):
+            raise ValueError("invalid sandbox check result")
+        if check["required"] and check["status"] != "passed":
+            raise ValueError("required sandbox check failed")
+        print("  " + str(check.get("name")) + ": " + str(check["status"]) + " - " + str(check.get("detail", "")))
+except (ValueError, TypeError, AttributeError) as error:
+    print("ERROR: invalid sandbox verification report: " + str(error), file=sys.stderr)
+    sys.exit(1)
+'; then
+    return 1
+  fi
+  SANDBOX_REPORT="$report"
+}
+
+write_sandbox_report() {
+  local temporary
+  [[ -n "$SANDBOX_REPORT" ]] || return 1
+  temporary="$(umask 077; mktemp "$INSTALL_DIR/.sandbox-report.XXXXXX")" || return
+  if ! printf '%s\n' "$SANDBOX_REPORT" > "$temporary" ||
+     ! mv -f "$temporary" "$INSTALL_DIR/sandbox-report.json"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+start_candidate() {
+  if [[ "$SETUP_MODE" == check ]]; then
+    AGENA_MACOS_OPEN_PERMISSIONS=0 start_installed
+  else
+    start_installed
+  fi
+}
+
+prepare_macos_privacy() {
+  [[ "$(uname -s)" == Darwin ]] || return 0
+  if [[ "$SERVICE_MODE" != native ]]; then
+    echo "macOS privacy permissions follow the terminal for detached mode; use native service mode for a persistent Agena.app identity."
+    return 0
+  fi
+  local request="${AGENA_MACOS_OPEN_PERMISSIONS:-1}"
+  [[ "$SETUP_MODE" != check ]] || request=0
+  AGENA_MACOS_PERMISSION_INSTALL=1 AGENA_MACOS_OPEN_PERMISSIONS="$request" \
+    agena_lifecycle server permissions
+}
+
 finalize_replacement() {
-  if ! start_installed; then
+  verify_installed_sandbox || return
+  prepare_macos_privacy || return
+  if ! start_candidate; then
     echo "ERROR: the replacement Agena version failed to start" >&2
     return 1
   fi
@@ -875,7 +1692,7 @@ finalize_replacement() {
       return 1
     fi
   fi
-  if ! write_state || ! write_client_env; then
+  if ! write_state || ! write_client_env || ! write_sandbox_report; then
     echo "ERROR: the replacement started but its installer state could not be saved" >&2
     return 1
   fi
@@ -900,6 +1717,11 @@ rollback_replacement() {
   if (( HAD_STATE == 1 )); then
     cp "$BACKUP_DIR/install-state.env" "$STATE_FILE"
     load_state
+    if [[ -f "$BACKUP_DIR/sandbox-report.json" ]]; then
+      cp -p "$BACKUP_DIR/sandbox-report.json" "$INSTALL_DIR/sandbox-report.json"
+    else
+      rm -f "$INSTALL_DIR/sandbox-report.json"
+    fi
     write_client_env || echo "ERROR: rollback restored state but could not restore the client environment" >&2
     if [[ "$SERVICE_MODE" == "native" ]]; then
       if start_installed; then
@@ -916,7 +1738,7 @@ rollback_replacement() {
     if (( CANDIDATE_INSTALLED == 1 )); then
       rm -rf "$BIN_DIR" "$WEB_DIR"
     fi
-    rm -f "$STATE_FILE" "$CLIENT_ENV_FILE"
+    rm -f "$STATE_FILE" "$CLIENT_ENV_FILE" "$INSTALL_DIR/sandbox-report.json"
   fi
 }
 
@@ -938,6 +1760,7 @@ report_replacement() {
   esac
   echo "Agena $VERSION $verb at $INSTALL_DIR"
   echo "Instance data: $DATA_DIR"
+  echo "Sandbox verification: $INSTALL_DIR/sandbox-report.json"
   echo "Web UI: http://${HOST}:${PORT}"
   if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
     echo "Open a new shell to load the Agena PATH and client environment."
@@ -950,7 +1773,9 @@ run_replacement() {
   resolve_replacement
   TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/agena-install.XXXXXX")"
   trap cleanup_replacement EXIT
+  agena_setup_bootstrap "$SETUP_MODE" "$SOURCE_MODE"
   prepare_candidate "$TEMP_DIR"
+  agena_setup_host runtime "$SETUP_MODE" "$INSTALL_DIR" "${SOURCE_ROOT:-}"
   activate_candidate "$TEMP_DIR"
 
   local status=0
@@ -992,7 +1817,15 @@ do_status() {
 
 do_permissions() {
   load_state
-  agena_lifecycle server permissions
+  agena_setup_bootstrap "$SETUP_MODE" 0 || return
+  agena_setup_host runtime "$SETUP_MODE" "$INSTALL_DIR" "" || return
+  verify_installed_sandbox || return
+  write_sandbox_report || return
+  if [[ "$(uname -s)" == Darwin ]]; then
+    local request="${AGENA_MACOS_OPEN_PERMISSIONS:-1}"
+    [[ "$SETUP_MODE" != check ]] || request=0
+    AGENA_MACOS_OPEN_PERMISSIONS="$request" agena_lifecycle server permissions
+  fi
 }
 
 do_uninstall() {

@@ -5,10 +5,6 @@ export default {
   bot: {
     conversations: {
       openLocal: 'स्थानीय बातचीत खोलें',
-      history: 'इतिहास',
-      archivedHistory: 'संग्रहीत इतिहास · केवल पढ़ने के लिए',
-      historyReadOnlyHint: 'यह सहेजी गई स्थानीय बातचीत है। जारी रखने के लिए वर्तमान स्थानीय बातचीत खोलें।',
-      openCurrent: 'वर्तमान स्थानीय बातचीत में जारी रखें',
       title: '{name} की बातचीत',
       toggle: '{group} दिखाएँ या छिपाएँ',
       actions: '{name} के लिए क्रियाएँ',

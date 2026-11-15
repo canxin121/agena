@@ -14,7 +14,6 @@ export type BotConversation = {
   pinned: boolean
   state?: string
   running: boolean
-  localHistory: boolean
   updatedAtMs: number
   lastMessageAtMs: number
   messageCount: number
@@ -23,7 +22,6 @@ export type BotConversation = {
 export type BotConversationGroup = {
   surface: SessionOwnerSurface
   conversations: BotConversation[]
-  history: BotConversation[]
   total: number
   loaded: boolean
   loading: boolean
@@ -36,7 +34,6 @@ function emptyGroup(surface: SessionOwnerSurface): BotConversationGroup {
   return {
     surface,
     conversations: [],
-    history: [],
     total: 0,
     loaded: false,
     loading: false,
@@ -60,6 +57,7 @@ export function botConversationFromSession(
 ): BotConversation | null {
   if (!session.id || session.owner_bot_id?.toLowerCase() !== botId.toLowerCase() || session.owner_surface !== surface)
     return null
+  if (surface === 'local' && session.id !== String(localSessionId)) return null
   const state = session.state?.kind
   return {
     id: session.id,
@@ -69,7 +67,6 @@ export function botConversationFromSession(
     pinned: session.pinned === true,
     state,
     running: state === 'running' || state === 'awaiting_interaction',
-    localHistory: surface === 'local' && session.id !== String(localSessionId),
     updatedAtMs: updatedMs(session.updated_at),
     lastMessageAtMs: updatedMs(session.last_message_at),
     messageCount: typeof session.message_count === 'number' ? session.message_count : 0,
@@ -126,6 +123,21 @@ export function useBotConversations() {
     update(id, surface, { loading: true, error: '' })
     const localSessionId = localSessionIds.get(id) ?? null
     try {
+      // A Bot has one local entrance. Read its pinned session directly so old
+      // roots never become extra conversations or a paged history category.
+      if (surface === 'local') {
+        const session = localSessionId ? await getSession(String(localSessionId), request.signal) : null
+        if (requests.get(key) !== request) return
+        const conversation = session ? botConversationFromSession(session, id, surface, localSessionId) : null
+        update(id, surface, {
+          conversations: conversation ? [conversation] : [],
+          total: conversation ? 1 : 0,
+          hasMore: false,
+          nextCursor: null,
+          loaded: true,
+        })
+        return
+      }
       const page = await listSessions({
         ownerBotId: id,
         ownerSurface: surface,
@@ -139,18 +151,9 @@ export function useBotConversations() {
       if (requests.get(key) !== request) return
       const rows = new Map<string, BotConversation>()
       if (more) {
-        for (const conversation of [...previous.conversations, ...previous.history])
-          rows.set(conversation.id, conversation)
+        for (const conversation of previous.conversations) rows.set(conversation.id, conversation)
       }
       for (const session of page.sessions) {
-        const conversation = botConversationFromSession(session, id, surface, localSessionId)
-        if (conversation) rows.set(conversation.id, conversation)
-      }
-      // The canonical local conversation can be older than the first history
-      // page. Read it directly instead of choosing a recent historical session.
-      if (surface === 'local' && localSessionId && !rows.has(String(localSessionId))) {
-        const session = await getSession(String(localSessionId), request.signal)
-        if (requests.get(key) !== request) return
         const conversation = botConversationFromSession(session, id, surface, localSessionId)
         if (conversation) rows.set(conversation.id, conversation)
       }
@@ -158,8 +161,7 @@ export function useBotConversations() {
         (a, b) => b.lastMessageAtMs - a.lastMessageAtMs || b.updatedAtMs - a.updatedAtMs || a.id.localeCompare(b.id),
       )
       update(id, surface, {
-        conversations: sorted.filter((conversation) => !conversation.localHistory),
-        history: sorted.filter((conversation) => conversation.localHistory),
+        conversations: sorted,
         total: Math.max(sorted.length, page.total ?? 0),
         hasMore: page.hasMore,
         nextCursor: page.nextCursor ?? null,

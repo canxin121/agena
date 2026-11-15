@@ -3250,6 +3250,8 @@ bot-manager-title = 이름 있는 Bot
 bot-list-keys = ↑↓ 선택 · Enter 열기 · n 만들기
     e 편집 · a 보관 · r 새로 고침
     w 작업 공간 설정 · Esc 뒤로
+bot-conversation-keys = ↑↓ 선택 · Enter 열기 · n 로컬 대화
+    d 대화 삭제 · Tab Bot 목록 · Esc 뒤로
 bot-entry-keys = Enter/r 재시도 · l Bot 목록 · Esc 뒤로
 bot-confirm-keys = Enter 확인 · Esc 취소
 bot-editor-keys = Ctrl+Enter/Alt+Enter 적용 · Esc 취소

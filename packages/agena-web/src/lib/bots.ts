@@ -79,10 +79,9 @@ export async function resolveBotSession(id?: string, signal?: AbortSignal): Prom
 export type ResolvedBotConversation = BotSession & {
   profile: BotProfile
   surface: SessionOwnerSurface
-  localHistory: boolean
 }
 
-/** Explicit conversation links retain their identity and only perform reads. */
+/** Remote links keep their identity; legacy local links open the Bot's single local conversation. */
 export async function resolveBotConversation(
   id?: string,
   sessionId?: string,
@@ -92,7 +91,7 @@ export async function resolveBotConversation(
     const resolved = await resolveBotSession(id, signal)
     const profile = await getBot(resolved.bot_id, signal)
     if (profile.archived) throw new Error('Bot is archived')
-    return { ...resolved, profile, surface: 'local', localHistory: false }
+    return { ...resolved, profile, surface: 'local' }
   }
   if (botSessionIdQuery({ sessionId }) === '!invalid') throw new Error('Invalid Bot session ID')
   if (!id || !isBotId(id)) throw new Error('Invalid Bot ID')
@@ -111,12 +110,14 @@ export async function resolveBotConversation(
   )
     throw new Error('Invalid Bot session response')
   if (profile.archived) throw new Error('Bot is archived')
+  if (session.owner_surface === 'local' && session.id !== profile.local_session_id) {
+    return resolveBotConversation(id, undefined, signal)
+  }
   return {
     bot_id: profile.id,
     session_id: session.id,
     name: profile.name,
     profile,
     surface: session.owner_surface,
-    localHistory: session.owner_surface === 'local' && session.id !== profile.local_session_id,
   }
 }

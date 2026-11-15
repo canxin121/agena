@@ -5,7 +5,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { useBotConversation } from './chat/useBotConversation'
-import { provideConversationReadOnly } from './chat/conversationReadOnly'
 import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
 
@@ -136,7 +135,6 @@ const toasts = useToastsStore()
 const bots = useBotsStore()
 const { t } = useI18n()
 const bot = useBotConversation()
-provideConversationReadOnly(bot.readOnly)
 const openBotEditor = () => {
   if (bot.botId.value) bots.open('edit', bot.botId.value)
 }
@@ -1203,7 +1201,6 @@ const clearDialogOptions = computed(() => [
   },
 ])
 function handleClearDialogSelect(id: string) {
-  if (bot.readOnly.value) return
   void handleClearSession(id === 'context_only' ? 'context_only' : 'history')
 }
 
@@ -1322,7 +1319,6 @@ watch(
 )
 
 async function queueAction(action: 'pause' | 'resume' | 'clear' | 'remove', executionId = '') {
-  if (bot.readOnly.value) return
   const sid = chat.selectedSessionId
   if (!sid || queueBusy.value) return
   queueBusy.value = true
@@ -1491,7 +1487,6 @@ const composerBottomLeftStatus = computed(() => {
 const composerBottomRightStatus = computed(() => planViewer.snapshot.value?.progress || '')
 
 function handleSessionActionRequest(actionId: string) {
-  if (bot.readOnly.value && !['copy-transcript', 'export-transcript', 'edit-bot'].includes(actionId)) return
   switch (actionId) {
     case 'rename':
       openRenameDialog()
@@ -2483,8 +2478,6 @@ const viewCtx = {
   // Header.
   isBot: bot.isBot,
   botName: bot.name,
-  botReadOnly: bot.readOnly,
-  openCurrentBotConversation: bot.openCurrent,
   openBotEditor,
   openBotProjects,
   fillBotSuggestion: (text: string) => {

@@ -3305,6 +3305,8 @@ bot-manager-title = 命名 Bot
 bot-list-keys = ↑↓ 選擇 · Enter 開啟 · n 建立
     e 編輯 · a 封存 · r 重新整理
     w 工作區設定 · Esc 返回
+bot-conversation-keys = ↑↓ 選擇 · Enter 開啟 · n 本機會話
+    d 刪除會話 · Tab Bot 清單 · Esc 返回
 bot-entry-keys = Enter/r 重試 · l Bot 清單 · Esc 返回
 bot-confirm-keys = Enter 確認 · Esc 取消
 bot-editor-keys = Ctrl+Enter/Alt+Enter 套用 · Esc 取消

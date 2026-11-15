@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, type ComponentPublicInstance } from 'vue'
-import { RiChat3Line, RiHistoryLine } from '@remixicon/vue'
+import { RiChat3Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
@@ -32,7 +32,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const subtitle = computed(() => {
-  if (props.conversation.localHistory) return t('bot.conversations.archivedHistory')
   if (props.conversation.state === 'running') return t('bot.conversations.running')
   if (props.conversation.state === 'awaiting_interaction') return t('bot.conversations.awaiting')
   return props.conversation.messageCount > 0
@@ -50,7 +49,7 @@ function setMenuRef(el: Element | ComponentPublicInstance | null) {
     <SidebarListItem
       :data-keyboard-item="`bot-conversation:${conversation.id}`"
       :data-keyboard-label="`${botName} · ${conversation.title}`"
-      :data-keyboard-level="conversation.localHistory ? 4 : 3"
+      data-keyboard-level="3"
       :data-keyboard-selected="String(selectedSessionId === conversation.id)"
       :active="selectedSessionId === conversation.id"
       :actions-always-visible="uiIsCompactLayout"
@@ -58,11 +57,7 @@ function setMenuRef(el: Element | ComponentPublicInstance | null) {
       @click="emit('open', conversation)"
     >
       <template #icon>
-        <component
-          :is="conversation.localHistory ? RiHistoryLine : RiChat3Line"
-          class="h-4 w-4 shrink-0 text-muted-foreground"
-          aria-hidden="true"
-        />
+        <RiChat3Line class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       </template>
       <div class="flex w-full min-w-0 items-center gap-2">
         <div class="flex min-w-0 flex-1 flex-col justify-center">

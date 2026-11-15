@@ -104,8 +104,6 @@ const {
   revertBusyMessageId,
   isBot,
   botName,
-  botReadOnly,
-  openCurrentBotConversation,
   openBotEditor,
   openBotProjects,
   fillBotSuggestion,
@@ -401,13 +399,13 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 <template>
   <section ref="pageRef" class="h-full min-h-0 flex flex-col overflow-hidden relative">
     <VerticalSplitPane
-      :model-value="botReadOnly ? 104 : composerTargetHeight"
-      :collapse-top="!botReadOnly && composerSplitTopCollapsed"
+      :model-value="composerTargetHeight"
+      :collapse-top="composerSplitTopCollapsed"
       @update:model-value="handleComposerResize"
       @dblclick="resetComposerHeight"
-      :min-height="botReadOnly ? 104 : ui.isCompactLayout ? 128 : 112"
+      :min-height="ui.isCompactLayout ? 128 : 112"
       :max-height="composerMaxHeight"
-      :disabled="ui.isCompactLayout || botReadOnly"
+      :disabled="ui.isCompactLayout"
     >
       <template #top>
         <div class="relative flex h-full min-h-0 flex-col" data-vim-chat-surface="true">
@@ -545,7 +543,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     :name="botName"
                     v-if="
                       isBot &&
-                      !botReadOnly &&
                       !chat.messages.length &&
                       !chat.messagesLoading &&
                       !chat.selectedAttention &&
@@ -679,7 +676,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           <div class="shrink-0" :style="{ paddingInlineEnd: `${scrollbarGutter}px` }">
             <div class="chat-column">
               <QueuedMessages
-                v-if="!botReadOnly"
                 :messages="queuedMessages"
                 :session-id="chat.selectedSessionId"
                 :paused="queuePaused"
@@ -698,17 +694,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 
       <template #bottom>
         <div
-          v-if="botReadOnly"
-          data-testid="bot-local-history-read-only"
-          class="chat-column flex h-full flex-col justify-center gap-2 py-3"
-        >
-          <p class="text-xs text-muted-foreground">{{ t('bot.conversations.historyReadOnlyHint') }}</p>
-          <Button variant="outline" size="sm" class="self-start" @click="openCurrentBotConversation">
-            {{ t('bot.conversations.openCurrent') }}
-          </Button>
-        </div>
-        <div
-          v-else
           ref="composerBarRef"
           class="h-full flex flex-col min-h-0 bg-background/85 backdrop-blur ios-keyboard-safe-area"
           :style="{ paddingInlineEnd: `${scrollbarGutter}px` }"

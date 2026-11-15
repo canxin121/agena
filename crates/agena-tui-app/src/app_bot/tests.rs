@@ -117,13 +117,56 @@ fn mock_response(
     let path = parts.next().unwrap();
     let default = profiles.iter().find(|p| !p.archived).map(|p| p.id);
     let ok = |value| ("200 OK", value);
+    if method == "POST" && path == "/api/v1/queries" {
+        let (route, kind) = match serde_json::from_value::<agena_api::queries::Query>(body) {
+            Ok(agena_api::queries::Query::GetSession(params)) => (
+                format!("GET /api/v1/sessions/{} HTTP/1.1", params.session_id),
+                "session",
+            ),
+            Ok(agena_api::queries::Query::ListSessions(params)) => (
+                format!(
+                    "GET /api/v1/sessions?limit=200&owner_bot_id={}{} HTTP/1.1",
+                    params
+                        .owner_bot_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_default(),
+                    params
+                        .owner_surface
+                        .map(|surface| format!("&owner_surface={}", surface.as_str()))
+                        .unwrap_or_default()
+                ),
+                "sessions",
+            ),
+            _ => return ("404 Not Found", json!({"message":"query not found"})),
+        };
+        let (status, data) = mock_response(&route, serde_json::Value::Null, profiles, busy, None);
+        return if status == "200 OK" {
+            ok(json!({"result":kind,"data":data}))
+        } else {
+            (status, data)
+        };
+    }
+    if method == "POST" && path == "/api/v1/commands" {
+        return match serde_json::from_value::<agena_api::commands::Command>(body) {
+            Ok(agena_api::commands::Command::CancelRun(_)) => ok(json!({"result":"ack"})),
+            Ok(agena_api::commands::Command::DeleteSession(params)) => {
+                for profile in profiles.iter_mut() {
+                    if profile.local_session_id == Some(params.session_id) {
+                        profile.local_session_id = None;
+                    }
+                }
+                ok(json!({"result":"session_deleted","data":{"id":params.session_id}}))
+            }
+            _ => ("404 Not Found", json!({"message":"command not found"})),
+        };
+    }
     if method == "GET" && path.starts_with("/api/v1/sessions?") {
-        // Owner-filtered session list: one local and one group conversation so
-        // the sidebar has two surfaces to group.
+        // Legacy roots remain stored, but the picker reads the canonical
+        // local root directly and lists only the remote surfaces.
         let owner = path
             .split('&')
             .find_map(|part| part.trim_start_matches('?').strip_prefix("owner_bot_id="));
-        let items: Vec<serde_json::Value> = match owner {
+        let mut items: Vec<serde_json::Value> = match owner {
             Some(id) if !id.is_empty() => vec![
                 json!({"id": 901, "title": "Local chat", "depth": 0, "root_id": 901, "version": 1, "child_session_count": 0, "relation_kind": "root", "lifecycle_state": "ready", "owner_bot_id": id, "owner_surface": "local",
                        "message_count": 2, "favorite": false, "pinned": false, "state": {"kind": "ready", "data": {}},
@@ -133,9 +176,19 @@ fn mock_response(
                        "message_count": 5, "favorite": true, "pinned": false, "state": {"kind": "ready", "data": {}},
                        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
                        "last_message_at": "2026-01-01T00:02:00Z"}),
+                json!({"id": 899, "title": "Legacy local chat", "depth": 0, "root_id": 899, "version": 1, "child_session_count": 0, "relation_kind": "root", "lifecycle_state": "ready", "owner_bot_id": id, "owner_surface": "local",
+                       "message_count": 2, "favorite": false, "pinned": false, "state": {"kind": "ready", "data": {}},
+                       "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-02T00:00:00Z",
+                       "last_message_at": "2026-01-02T00:01:00Z"}),
             ],
             _ => vec![],
         };
+        if let Some(surface) = path
+            .split('&')
+            .find_map(|part| part.strip_prefix("owner_surface="))
+        {
+            items.retain(|item| item["owner_surface"].as_str() == Some(surface));
+        }
         let total = items.len();
         return ok(json!({
             "items": items,
@@ -149,6 +202,20 @@ fn mock_response(
             default_bot_id: default,
         })
         .unwrap());
+    }
+    if method == "GET"
+        && let Some(session) = path
+            .strip_prefix("/api/v1/sessions/")
+            .and_then(|id| id.parse::<i64>().ok())
+        && let Some(profile) = profiles
+            .iter()
+            .find(|profile| profile.local_session_id == Some(session))
+    {
+        return ok(
+            json!({"id":session,"title":"Local chat","depth":0,"root_id":session,"version":1,"child_session_count":0,"relation_kind":"root","lifecycle_state":"ready","owner_bot_id":profile.id,"owner_surface":"local",
+            "message_count":2,"favorite":false,"pinned":false,"state":{"kind":"ready","data":{}},
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","last_message_at":"2026-01-01T00:01:00Z"}),
+        );
     }
     if method == "POST" && path == "/api/v1/bot/session" {
         if profiles.is_empty() {
@@ -554,7 +621,7 @@ fn profile(id: u128, name: &str) -> BotProfile {
         persona: BotPersona::default(),
         revision: 1,
         archived: false,
-        local_session_id: None,
+        local_session_id: Some(900 + id as i64),
         created_at_ms: 0,
         updated_at_ms: 0,
     }
@@ -1142,6 +1209,7 @@ async fn tab_loads_one_bots_conversations_grouped_by_surface() {
     // Tab fetches only the highlighted Bot's conversations.
     app.handle_key_event(key(KeyCode::Tab));
     resolve(&mut app).await;
+    assert!(app.bot.error.is_none(), "{:?}", app.bot.error);
     let surfaces: Vec<&str> = app
         .bot
         .conversations
@@ -1166,6 +1234,29 @@ async fn tab_loads_one_bots_conversations_grouped_by_surface() {
         app.bot.focus_conversations,
         "Tab moves the cursor into the rooms"
     );
+    let local = app
+        .bot
+        .conversations
+        .iter()
+        .find(|group| group.surface == "local")
+        .unwrap();
+    assert_eq!(local.rows.len(), 1);
+    assert_eq!(local.rows[0].session_id, 901);
+    assert!(!screen(&mut app, 80, 24).contains("Legacy local chat"));
+    let requests = server.bodies.lock().unwrap().clone();
+    assert!(
+        requests
+            .iter()
+            .any(|(line, body)| line.contains("POST /api/v1/queries ")
+                && body["method"] == "get_session"
+                && body["params"]["session_id"] == 901)
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|(_, body)| body["method"] == "list_sessions"
+                && body["params"]["owner_surface"] == "local")
+    );
 
     // Newest first inside a surface.
     let group = app
@@ -1184,7 +1275,28 @@ async fn tab_loads_one_bots_conversations_grouped_by_surface() {
 }
 
 #[tokio::test]
-async fn new_and_delete_act_on_one_conversation_not_the_bot() {
+async fn local_row_resolves_again_when_the_canonical_session_changed_after_listing() {
+    let server = Server::start().await;
+    let (_temp, mut app) = app(Some(&server.endpoint));
+    app.open_bot_picker();
+    resolve(&mut app).await;
+    app.handle_key_event(key(KeyCode::Tab));
+    resolve(&mut app).await;
+    assert_eq!(app.bot.highlighted_conversation().unwrap().session_id, 901);
+
+    server.profiles.lock().unwrap()[0].local_session_id = Some(990);
+    *server.next_binding.lock().unwrap() = Some(BotSession {
+        session_id: 990,
+        bot_id: Uuid::from_u128(1),
+        name: "AI Bot".into(),
+    });
+    app.handle_key_event(key(KeyCode::Enter));
+    resolve(&mut app).await;
+    assert_eq!(app.transcript.session_id, Some(990));
+}
+
+#[tokio::test]
+async fn local_shortcut_reopens_the_only_local_conversation_and_delete_targets_one_room() {
     let server = Server::start().await;
     let (_temp, mut app) = app(Some(&server.endpoint));
     app.open_bot_picker();
@@ -1193,7 +1305,7 @@ async fn new_and_delete_act_on_one_conversation_not_the_bot() {
     resolve(&mut app).await;
     assert!(app.bot.focus_conversations);
 
-    // `n` while the cursor is in the rooms starts a conversation, not a Bot.
+    // In the room list `n` opens the same local conversation as the Bot entry.
     app.handle_key_event(key(KeyCode::Char('n')));
     resolve(&mut app).await;
     assert!(
@@ -1211,13 +1323,29 @@ async fn new_and_delete_act_on_one_conversation_not_the_bot() {
             .lock()
             .unwrap()
             .iter()
-            .any(|line| line.contains("/sessions")),
-        "the room list asks the server for a new conversation"
+            .any(|line| line.contains(&format!(
+                "POST /api/v1/bots/{}/session ",
+                Uuid::from_u128(1)
+            ))),
+        "the shortcut resolves the canonical local conversation"
+    );
+    assert!(
+        !server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line.contains(&format!(
+                "POST /api/v1/bots/{}/sessions ",
+                Uuid::from_u128(1)
+            )))
     );
 
     // `d` asks for confirmation before deleting.
-    app.bot.view = BotView::List;
-    app.bot.focus_conversations = true;
+    app.open_bot_picker();
+    resolve(&mut app).await;
+    app.handle_key_event(key(KeyCode::Tab));
+    resolve(&mut app).await;
     app.bot.conversation_index = 0;
     app.handle_key_event(key(KeyCode::Char('d')));
     assert!(matches!(app.bot.view, BotView::DeleteConversation));
@@ -1234,11 +1362,13 @@ async fn new_and_delete_act_on_one_conversation_not_the_bot() {
     resolve(&mut app).await;
     assert!(
         server
-            .requests
+            .bodies
             .lock()
             .unwrap()
             .iter()
-            .any(|line| line.contains(&format!("/api/v1/sessions/{}", pending.session_id))),
+            .any(|(line, body)| line.contains("POST /api/v1/commands ")
+                && body["method"] == "delete_session"
+                && body["params"]["session_id"] == pending.session_id),
         "the delete targets the conversation, not the Bot"
     );
 }

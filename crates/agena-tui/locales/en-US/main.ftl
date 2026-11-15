@@ -2939,8 +2939,10 @@ bot-ready = Ready
 # Named Bot registry and independent persona editor
 bot-manager-title = Named Bots
 bot-list-keys = ↑↓ select · Enter open · Tab rooms
-    n new (room) · d delete room · e edit · a archive
+    n new Bot · e edit · a archive
     r refresh · w workspace settings · Esc back
+bot-conversation-keys = ↑↓ select · Enter open · n local chat
+    d delete conversation · Tab Bot list · Esc back
 bot-entry-keys = Enter/r retry · l Bot list · Esc back
 bot-confirm-keys = Enter confirm · Esc cancel
 bot-editor-keys = Ctrl+Enter/Alt+Enter apply · Esc cancel

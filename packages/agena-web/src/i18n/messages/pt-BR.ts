@@ -5,10 +5,6 @@ export default {
   bot: {
     conversations: {
       openLocal: 'Abrir conversa local',
-      history: 'Histórico',
-      archivedHistory: 'Histórico arquivado · somente leitura',
-      historyReadOnlyHint: 'Esta é uma conversa local salva. Abra a conversa local atual para continuar.',
-      openCurrent: 'Continuar na conversa local atual',
       title: 'Conversas de {name}',
       toggle: 'Mostrar ou ocultar {group}',
       actions: 'Ações para {name}',

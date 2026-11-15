@@ -3269,6 +3269,8 @@ bot-manager-title = Bots con nombre
 bot-list-keys = ↑↓ elegir · Enter abrir · n crear
     e editar · a archivar · r recargar
     w ajustes del espacio · Esc volver
+bot-conversation-keys = ↑↓ elegir · Enter abrir · n chat local
+    d eliminar conversación · Tab lista de Bots · Esc volver
 bot-entry-keys = Enter/r reintentar · l lista · Esc volver
 bot-confirm-keys = Enter confirmar · Esc cancelar
 bot-editor-keys = Ctrl+Enter/Alt+Enter aplicar · Esc cancelar

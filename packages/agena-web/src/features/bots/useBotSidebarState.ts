@@ -4,7 +4,7 @@ import { getLocalJson, setLocalJson } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import type { SessionOwnerSurface } from '@/types/chat'
 
-export type BotSidebarGroupKey = SessionOwnerSurface | 'local-history'
+export type BotSidebarGroupKey = SessionOwnerSurface
 type SidebarState = {
   bots: Record<string, boolean>
   groups: Record<string, Partial<Record<BotSidebarGroupKey, boolean>>>
@@ -21,7 +21,7 @@ function readState(): SidebarState {
     for (const [id, values] of Object.entries(stored.groups || {})) {
       if (!values || typeof values !== 'object') continue
       const group: Partial<Record<BotSidebarGroupKey, boolean>> = {}
-      for (const key of ['local', 'direct', 'group', 'broadcast', 'local-history'] as const) {
+      for (const key of ['local', 'direct', 'group', 'broadcast'] as const) {
         if (typeof values[key] === 'boolean') group[key] = values[key]
       }
       groups[id] = group
@@ -49,7 +49,7 @@ export function useBotSidebarState() {
     hasGroupState: (id: string, key: BotSidebarGroupKey) =>
       Object.prototype.hasOwnProperty.call(state.value.groups[id] || {}, key),
     isBotOpen: (id: string) => state.value.bots[id] ?? false,
-    isGroupOpen: (id: string, key: BotSidebarGroupKey) => state.value.groups[id]?.[key] ?? key !== 'local-history',
+    isGroupOpen: (id: string, key: BotSidebarGroupKey) => state.value.groups[id]?.[key] ?? true,
     setBotOpen,
     setGroupOpen,
   }

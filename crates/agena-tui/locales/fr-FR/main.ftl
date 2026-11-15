@@ -3253,6 +3253,8 @@ bot-manager-title = Bots nommés
 bot-list-keys = ↑↓ choisir · Enter ouvrir · n créer
     e modifier · a archiver · r actualiser
     w réglages espace · Esc retour
+bot-conversation-keys = ↑↓ choisir · Enter ouvrir · n conversation locale
+    d supprimer · Tab liste des Bots · Esc retour
 bot-entry-keys = Enter/r réessayer · l liste · Esc retour
 bot-confirm-keys = Enter confirmer · Esc annuler
 bot-editor-keys = Ctrl+Enter/Alt+Enter appliquer · Esc annuler

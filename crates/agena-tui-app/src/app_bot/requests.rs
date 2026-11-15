@@ -76,6 +76,9 @@ impl App {
                         Ok(BotReply::Saved(profile))
                     }
                     BotOperation::Conversations(id) => {
+                        let profile = client.get_bot(id).await?;
+                        anyhow::ensure!(profile.id == id, "Server returned another Bot identity");
+                        let owner_id = id.to_string();
                         let mut groups = BOT_SURFACES
                             .iter()
                             .map(|surface| BotConversationGroup {
@@ -83,39 +86,64 @@ impl App {
                                 rows: Vec::new(),
                             })
                             .collect::<Vec<_>>();
-                        // The owner-filtered list is the same query the Web
-                        // sidebar uses; TUI reads one page and keeps the order
-                        // the server returns so both surfaces agree.
-                        let page = backend
-                            .list_sessions(agena_api::queries::ListSessionsParams {
-                                limit: Some(200),
-                                owner_bot_id: Some(id),
-                                exclude_subagents: true,
-                                ..Default::default()
-                            })
-                            .await?;
-                        for session in page.items {
-                            let Some(surface) = session.owner_surface.as_deref().map(str::to_owned)
-                            else {
-                                continue;
+                        for group in &mut groups {
+                            // Local is a single pinned conversation, never a
+                            // list of legacy roots. Remote surfaces are paged
+                            // independently so old local rows cannot crowd them out.
+                            let sessions = if group.surface == "local" {
+                                if let Some(session_id) = profile.local_session_id {
+                                    let result = client
+                                        .query_revalidated(agena_api::queries::Query::GetSession(
+                                            agena_api::queries::GetSessionParams { session_id },
+                                        ))
+                                        .await?;
+                                    let agena_api::queries::QueryResult::Session(session) = result
+                                    else {
+                                        anyhow::bail!(
+                                            "Server returned the wrong local conversation result"
+                                        );
+                                    };
+                                    vec![session]
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                backend
+                                    .list_sessions(agena_api::queries::ListSessionsParams {
+                                        limit: Some(200),
+                                        owner_bot_id: Some(id),
+                                        owner_surface: agena_domain::SessionSurface::parse(
+                                            group.surface,
+                                        ),
+                                        exclude_subagents: true,
+                                        ..Default::default()
+                                    })
+                                    .await?
+                                    .items
                             };
-                            let Some(group) = groups.iter_mut().find(|g| g.surface == surface)
-                            else {
-                                continue;
-                            };
-                            group.rows.push(BotConversationRow {
-                                session_id: session.id,
-                                title: session.title,
-                                favorite: session.favorite,
-                                message_count: session.message_count,
-                                last_message_at_ms: session
-                                    .last_message_at
-                                    .map(|t| t.timestamp_millis()),
-                                running: matches!(
-                                    session.state,
-                                    agena_api::resource::SessionState::Running { .. }
-                                ),
-                            });
+                            for session in sessions {
+                                if session.owner_bot_id.as_deref() != Some(owner_id.as_str())
+                                    || session.owner_surface.as_deref() != Some(group.surface)
+                                    || (group.surface == "local"
+                                        && Some(session.id) != profile.local_session_id)
+                                {
+                                    continue;
+                                }
+                                group.rows.push(BotConversationRow {
+                                    session_id: session.id,
+                                    local: group.surface == "local",
+                                    title: session.title,
+                                    favorite: session.favorite,
+                                    message_count: session.message_count,
+                                    last_message_at_ms: session
+                                        .last_message_at
+                                        .map(|t| t.timestamp_millis()),
+                                    running: matches!(
+                                        session.state,
+                                        agena_api::resource::SessionState::Running { .. }
+                                    ),
+                                });
+                            }
                         }
                         for group in &mut groups {
                             // Newest first inside a group, matching the sidebar.
@@ -126,20 +154,6 @@ impl App {
                             });
                         }
                         Ok(BotReply::Conversations { bot: id, groups })
-                    }
-                    BotOperation::NewConversation(id) => {
-                        let session = client.create_bot_conversation(id, None).await?;
-                        anyhow::ensure!(
-                            session.bot_id == id && session.session_id > 0,
-                            "Server returned an invalid conversation"
-                        );
-                        // Open the new conversation directly; it is empty and
-                        // already owned by this Bot.
-                        Ok(BotReply::Opened {
-                            profile: client.get_bot(id).await?,
-                            list: client.list_bots(true).await?,
-                            session,
-                        })
                     }
                     BotOperation::DeleteConversation { bot, session_id } => {
                         // Match the Web path: a conversation with live work is

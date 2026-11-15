@@ -50,8 +50,6 @@ export function useBotConversation() {
   const loading = ref(false)
   const error = ref('')
   const surface = ref<SessionOwnerSurface>('local')
-  const localHistory = ref(false)
-  const readOnly = computed(() => isBot.value && localHistory.value)
   let binding: { initialId: string; initialSessionId: string; id: string; generation: number } | null = null
   let generation = 0
   let request: AbortController | null = null
@@ -103,7 +101,6 @@ export function useBotConversation() {
     botId.value = null
     name.value = ''
     error.value = ''
-    localHistory.value = false
     loading.value = isBot.value
     if (
       !isBot.value ||
@@ -151,7 +148,6 @@ export function useBotConversation() {
       botId.value = resolved.bot_id
       name.value = resolved.name
       surface.value = resolved.surface
-      localHistory.value = resolved.localHistory
       const known = bots.profiles.find((profile) => profile.id === resolved.profile.id)
       if (
         !known ||
@@ -219,7 +215,7 @@ export function useBotConversation() {
     return !!target.value && (target.value.routeQuery.sessionId || null) === chat.selectedSessionId
   }
   const canSendConversation = () => {
-    if (readOnly.value || !documentActive.value || !ownsConversation()) return false
+    if (!documentActive.value || !ownsConversation()) return false
     if (pane && (!pane.isVisible.value || !pane.isFocused.value)) return false
     const id = pane?.windowId.value
     const sid = chat.selectedSessionId
@@ -240,7 +236,9 @@ export function useBotConversation() {
       return
     }
     name.value = profile.name
-    localHistory.value = surface.value === 'local' && Number(sessionId.value) !== profile.local_session_id
+    if (surface.value === 'local' && Number(sessionId.value) !== profile.local_session_id) {
+      void select(profile.id)
+    }
   }
   watch(
     () => bots.profiles,
@@ -288,8 +286,6 @@ export function useBotConversation() {
     isBot,
     botId,
     name,
-    readOnly,
-    openCurrent: () => (botId.value ? select(botId.value) : Promise.resolve()),
     ready,
     loading,
     error,

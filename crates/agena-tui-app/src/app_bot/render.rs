@@ -32,6 +32,7 @@ impl App {
         let text = |key: &str| self.i18n.text(key);
         let view = &self.bot.view;
         let help_key = match view {
+            BotView::List if self.bot.focus_conversations => "bot-conversation-keys",
             BotView::List => "bot-list-keys",
             BotView::Opening => "bot-entry-keys",
             BotView::Archive | BotView::Reload | BotView::DeleteConversation => "bot-confirm-keys",

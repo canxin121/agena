@@ -3400,6 +3400,8 @@ bot-manager-title = Benannte Bots
 bot-list-keys = ↑↓ wählen · Enter öffnen · n erstellen
     e bearbeiten · a archivieren · r laden
     w Arbeitsbereich · Esc zurück
+bot-conversation-keys = ↑↓ wählen · Enter öffnen · n lokaler Chat
+    d Gespräch löschen · Tab Bot-Liste · Esc zurück
 bot-entry-keys = Enter/r erneut · l Bot-Liste · Esc zurück
 bot-confirm-keys = Enter bestätigen · Esc abbrechen
 bot-editor-keys = Ctrl+Enter/Alt+Enter anwenden · Esc zurück

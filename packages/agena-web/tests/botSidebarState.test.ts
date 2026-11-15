@@ -27,15 +27,13 @@ afterEach(() => {
 })
 
 describe('Bot sidebar tree preferences', () => {
-  test('persists independent Bot and entrance disclosure state with history initially folded', () => {
+  test('persists independent Bot and entrance disclosure state', () => {
     const first = useBotSidebarState()
     expect(first.isBotOpen('atlas')).toBe(false)
     expect(first.isGroupOpen('atlas', 'local')).toBe(true)
-    expect(first.isGroupOpen('atlas', 'local-history')).toBe(false)
     first.setBotOpen('atlas', true)
     first.setBotOpen('muse', true)
     first.setGroupOpen('atlas', 'direct', false)
-    first.setGroupOpen('atlas', 'local-history', true)
     first.setBotOpen('muse', false)
 
     const restored = useBotSidebarState()
@@ -43,7 +41,6 @@ describe('Bot sidebar tree preferences', () => {
     expect(restored.isBotOpen('muse')).toBe(false)
     expect(restored.isGroupOpen('atlas', 'direct')).toBe(false)
     expect(restored.isGroupOpen('muse', 'direct')).toBe(true)
-    expect(restored.isGroupOpen('atlas', 'local-history')).toBe(true)
   })
 
   test('malformed saved entries do not turn text into expansion flags', () => {
@@ -59,6 +56,8 @@ describe('Bot sidebar tree preferences', () => {
     expect(tree.isBotOpen('muse')).toBe(true)
     expect(tree.isGroupOpen('atlas', 'local')).toBe(true)
     expect(tree.isGroupOpen('atlas', 'group')).toBe(false)
-    expect(tree.isGroupOpen('atlas', 'local-history')).toBe(true)
+    tree.setBotOpen('atlas', true)
+    const saved = JSON.parse(values.get(localStorageKeys.ui.botSidebarTree)!)
+    expect(saved.groups.atlas['local-history']).toBeUndefined()
   })
 })

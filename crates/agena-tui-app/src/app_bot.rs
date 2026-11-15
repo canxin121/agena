@@ -25,8 +25,7 @@ pub(crate) struct BotState {
     archive_request: Option<(Uuid, BotArchive)>,
     /// The selected Bot's conversations, grouped by entrance shape.
     ///
-    /// A Bot owns many conversations and no longer names a single one, so the
-    /// list view is the only place that can say which conversation Enter opens.
+    /// One local conversation and the Bot's separate remote rooms.
     conversations: Vec<BotConversationGroup>,
     conversation_index: usize,
     conversations_loading: bool,
@@ -48,6 +47,7 @@ pub(crate) struct BotConversationGroup {
 #[derive(Clone)]
 pub(crate) struct BotConversationRow {
     pub(crate) session_id: i64,
+    pub(crate) local: bool,
     pub(crate) title: String,
     pub(crate) favorite: bool,
     pub(crate) message_count: u64,
@@ -133,7 +133,6 @@ enum BotOperation {
     Archive(Uuid, BotArchive),
     Edit(Uuid),
     Conversations(Uuid),
-    NewConversation(Uuid),
     DeleteConversation { bot: Uuid, session_id: i64 },
 }
 impl BotState {
@@ -581,9 +580,9 @@ impl App {
                 }
                 KeyCode::Char('n') => {
                     if self.bot.focus_conversations {
-                        // A new conversation is the Bot's, not a new Bot.
+                        // Reopen the Bot's one local conversation.
                         if let Some(id) = self.bot.highlighted().map(|p| p.id) {
-                            self.request_bot(BotOperation::NewConversation(id));
+                            self.request_bot(BotOperation::Open(Some(id)));
                         }
                     } else {
                         self.new_bot_form();
@@ -600,10 +599,17 @@ impl App {
                     let conversation = self
                         .bot
                         .highlighted_conversation()
-                        .map(|row| (row.session_id, row.title.clone()));
+                        .map(|row| (row.session_id, row.title.clone(), row.local));
                     if self.bot.focus_conversations
-                        && let Some((session_id, title)) = conversation
+                        && let Some((session_id, title, local)) = conversation
                     {
+                        if local {
+                            if let Some(id) = self.bot.highlighted().map(|p| p.id) {
+                                self.bot.view = BotView::Opening;
+                                self.request_bot(BotOperation::Open(Some(id)));
+                            }
+                            return false;
+                        }
                         self.bot.view = BotView::Opening;
                         self.open_session(session_id, title);
                         // Ownership is already known: this row is one of the

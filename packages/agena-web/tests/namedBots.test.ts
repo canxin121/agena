@@ -42,23 +42,27 @@ describe('named Bot contracts', () => {
     const resolved = await resolveBotConversation(A, '73')
     expect(resolved.session_id).toBe(73)
     expect(resolved.surface).toBe('group')
-    expect(resolved.localHistory).toBe(false)
     expect(calls).toEqual([
       { path: `/api/v1/bots/${A}`, method: 'GET' },
       { path: '/api/v1/sessions/73', method: 'GET' },
     ])
   })
-  test('only the canonical local session is writable; history keeps its own ID', async () => {
-    globalThis.fetch = (async (url) => {
+  test('legacy local links resolve to the only current local conversation', async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (url, init) => {
       const path = String(url)
+      calls.push(`${init?.method || 'GET'} ${path}`)
       if (path === `/api/v1/bots/${A}`) return Response.json(profile(A, 42, 'Atlas'))
+      if (path === `/api/v1/bots/${A}/session`) return Response.json({ bot_id: A, session_id: 42, name: 'Atlas' })
       const id = Number(path.split('/').at(-1))
       return Response.json({ id, owner_bot_id: A, owner_surface: 'local' })
     }) as typeof fetch
-    expect((await resolveBotConversation(A, '42')).localHistory).toBe(false)
-    const history = await resolveBotConversation(A, '41')
-    expect(history.session_id).toBe(41)
-    expect(history.localHistory).toBe(true)
+    expect((await resolveBotConversation(A, '42')).session_id).toBe(42)
+    expect(calls.every((call) => call.startsWith('GET '))).toBe(true)
+    const current = await resolveBotConversation(A, '41')
+    expect(current.session_id).toBe(42)
+    expect(current.surface).toBe('local')
+    expect(calls.filter((call) => call.startsWith('POST '))).toEqual([`POST /api/v1/bots/${A}/session`])
   })
   test('explicit invalid or foreign session links never fall back to the canonical endpoint', async () => {
     const calls: string[] = []
@@ -89,7 +93,6 @@ describe('named Bot contracts', () => {
     const resolved = await resolveBotConversation(A)
     expect(resolved.session_id).toBe(42)
     expect(resolved.profile.local_session_id).toBe(42)
-    expect(resolved.localHistory).toBe(false)
     expect(calls).toEqual([`POST /api/v1/bots/${A}/session`, `GET /api/v1/bots/${A}`])
   })
   test('list and exact ensure select each server session, while default remains bodyless', async () => {

@@ -727,7 +727,6 @@ window.__botProbe = {activeComposerSession: () => {
       const toggle = (id) => `[data-testid="sidebar-bot-toggle-${id}"]`
       const group = (id, surface) => `[data-keyboard-item="bot-group:${id}:${surface}"]`
       const conversation = (id) => `[data-sidebar-bot-conversation-id="${id}"]`
-      const history = (id) => `[data-keyboard-item="bot-history:${id}"]`
       const expanded = (selector) =>
         cdp.evaluate(
           `document.querySelector(${JSON.stringify(selector)})?.getAttribute('data-keyboard-expanded') === 'true'`,
@@ -760,7 +759,8 @@ window.__botProbe = {activeComposerSession: () => {
         (await visible(conversation(71))) && (await visible(conversation(72))) && (await visible(conversation(73))),
         'remote conversations are grouped by direct, group and channel entrances',
       )
-      check(!(await visible(conversation(41))), 'local history starts folded separately')
+      check(!(await visible(conversation(41))), 'legacy local roots do not appear as extra conversations')
+      check(!(await visible('[data-testid="bot-local-history"]')), 'there is no local history category')
 
       const beforeDisclosure = botRequests
       await cdp.click(toggle(botA))
@@ -773,12 +773,11 @@ window.__botProbe = {activeComposerSession: () => {
       await cdp.click(group(botA, 'direct'))
       await wait(async () => !(await visible(conversation(71))), 'direct group folds')
       check(await visible(conversation(72)), 'surface groups fold independently')
-      await cdp.click(history(botA))
-      await wait(() => visible(conversation(41)), 'local history disclosure')
       await cdp.click(toggle(botB))
       check(botRequests === beforeDisclosure, 'disclosures read lists without creating local sessions')
       await cdp.send('Page.reload', { ignoreCache: true })
-      await wait(() => visible(conversation(41)), 'history disclosure restores on reload', 90000)
+      await wait(() => visible(conversation(42)), 'single local conversation restores on reload', 90000)
+      check(!(await visible(conversation(41))), 'reloading never restores a second local conversation')
       check(
         !(await visible(conversation(43))) &&
           !(await expanded(group(botA, 'direct'))) &&
@@ -798,28 +797,21 @@ window.__botProbe = {activeComposerSession: () => {
         'explicit remote room opens',
       )
       check(botRequests === beforeRemote, 'opening a remote room never resolves or substitutes a local session')
-      await cdp.click(conversation(41) + ' [data-oc-list-item-primary]')
-      await wait(() => visible('[data-testid="bot-local-history-read-only"]'), 'history read-only banner')
-      check(
-        await cdp.evaluate(`new URLSearchParams(location.search).get('sessionId') === '41'`),
-        'history browsing keeps its original session ID',
-      )
-      check(!(await visible(input)), 'history hides the composer and sending controls')
-      await wait(
-        () =>
-          cdp.evaluate(`document.body.innerText.includes('Preserved local history from the previous conversation.')`),
-        'preserved historical transcript',
-      )
-      await cdp.screenshot(path.join(evidence, 'web-bot-local-history.png'))
-      await cdp.click('[data-testid="bot-local-history-read-only"] button')
+      await cdp.evaluate(`window.__botProbe.router.push('/bot?botId=${botA}&sessionId=41')`)
       await wait(
         () => cdp.evaluate(`window.__botProbe.activeComposerSession() === '42'`),
-        'continue in canonical local conversation',
+        'old local link resolves to canonical local conversation',
       )
       check(
         await cdp.evaluate(`new URLSearchParams(location.search).get('sessionId') === '42'`),
-        'continue history reopens the one canonical local conversation',
+        'old local link adopts the one canonical local session ID',
       )
+      check(await visible(input), 'old local links keep the canonical composer available')
+      check(
+        !(await visible('[data-testid="bot-local-history-read-only"]')),
+        'old local links do not open a history page',
+      )
+      await cdp.screenshot(path.join(evidence, 'web-bot-single-local.png'))
 
       await cdp.send('Emulation.setDeviceMetricsOverride', {
         width: 375,
@@ -833,15 +825,17 @@ window.__botProbe = {activeComposerSession: () => {
       await wait(() => visible(conversation(42)), 'mobile canonical row')
       check(await noOverflow(), '375px Bot tree and disclosure groups fit the viewport')
       await cdp.screenshot(path.join(evidence, 'web-bot-tree-mobile.png'))
-      await cdp.click(conversation(41) + ' [data-oc-list-item-primary]')
-      await wait(() => visible('[data-testid="bot-local-history-read-only"]'), 'mobile history read-only banner')
-      check(
-        !(await visible(input)) && (await noOverflow()),
-        '375px historical conversation stays read only without overflow',
+      check(!(await visible(conversation(41))), 'mobile Bot tree contains only the canonical local conversation')
+      await cdp.click(conversation(42) + ' [data-oc-list-item-primary]')
+      await wait(
+        () => cdp.evaluate(`window.__botProbe.activeComposerSession() === '42'`),
+        'mobile canonical conversation',
       )
-      await cdp.screenshot(path.join(evidence, 'web-bot-local-history-mobile.png'))
-      await cdp.click('[data-testid="bot-local-history-read-only"] button')
-      await wait(() => cdp.evaluate(`window.__botProbe.activeComposerSession() === '42'`), 'mobile continue canonical')
+      check(
+        (await visible(input)) && (await noOverflow()),
+        '375px canonical conversation keeps its composer without overflow',
+      )
+      await cdp.screenshot(path.join(evidence, 'web-bot-single-local-mobile.png'))
       check(
         sent.length === 0 && profileRequests.length === 0,
         'tree navigation does not send messages or mutate Bot profiles',

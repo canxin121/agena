@@ -3254,6 +3254,8 @@ bot-manager-title = 名前付き Bot
 bot-list-keys = ↑↓ 選択 · Enter 開く · n 作成
     e 編集 · a アーカイブ · r 更新
     w ワークスペース設定 · Esc 戻る
+bot-conversation-keys = ↑↓ 選択 · Enter 開く · n ローカル会話
+    d 会話を削除 · Tab Bot 一覧 · Esc 戻る
 bot-entry-keys = Enter/r 再試行 · l Bot 一覧 · Esc 戻る
 bot-confirm-keys = Enter 確認 · Esc キャンセル
 bot-editor-keys = Ctrl+Enter/Alt+Enter 適用 · Esc 取消

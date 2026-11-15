@@ -29,7 +29,7 @@ function storedSession(id: number, botId: string, surface: string, state = 'read
 }
 
 describe('independent Bot sidebar trees', () => {
-  test('normalized sessions remain visible and the canonical local root is read even beyond the first history page', async () => {
+  test('loads exactly one local conversation without requesting or exposing legacy local roots', async () => {
     const calls: string[] = []
     globalThis.fetch = (async (input, init) => {
       const url = new URL(String(input), 'http://agena.test')
@@ -49,15 +49,36 @@ describe('independent Bot sidebar trees', () => {
     const local = tree.groups(BOT_ID).find((group) => group.surface === 'local')!
     expect(local.error).toBe('')
     expect(local.conversations.map((item) => item.id)).toEqual(['441'])
-    expect(local.history.map((item) => item.id)).toEqual(['442'])
-    expect(local.history[0].localHistory).toBe(true)
+    expect(local.total).toBe(1)
+    expect(local.hasMore).toBe(false)
+    expect(local.nextCursor).toBe(null)
     const room = tree.groups(BOT_ID).find((group) => group.surface === 'group')!.conversations[0]
     expect(room.id).toBe('471')
     expect(room.state).toBe('awaiting_interaction')
     expect(room.running).toBe(true)
-    expect(room.localHistory).toBe(false)
     expect(calls.some((call) => call === 'GET /api/v1/sessions/441')).toBe(true)
+    expect(calls.some((call) => call.includes('owner_surface=local'))).toBe(false)
+    await tree.loadMore(BOT_ID, 'local')
+    expect(calls.filter((call) => call === 'GET /api/v1/sessions/441')).toHaveLength(1)
     expect(calls.every((call) => call.startsWith('GET '))).toBe(true)
+    tree.reset()
+  })
+
+  test('a missing local root stays empty until the Bot is opened, even when legacy roots exist', async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (input) => {
+      const url = new URL(String(input), 'http://agena.test')
+      calls.push(url.pathname + url.search)
+      return Response.json({ items: [storedSession(442, BOT_ID, 'local')], total: 1, page: { has_more: false } })
+    }) as typeof fetch
+    const tree = useBotConversations()
+    await tree.load(BOT_ID, null, true)
+    const local = tree.groups(BOT_ID).find((group) => group.surface === 'local')!
+    expect(local.conversations).toEqual([])
+    expect(local.total).toBe(0)
+    expect(local.loaded).toBe(true)
+    expect(calls).toHaveLength(3)
+    expect(calls.every((call) => !call.includes('owner_surface=local'))).toBe(true)
     tree.reset()
   })
 

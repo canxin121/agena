@@ -161,11 +161,9 @@ watch(
     await conversations.load(id, profile.local_session_id, true)
     if (identity !== revealedRoute) return
     for (const group of conversations.groups(id)) {
-      const conversation = [...group.conversations, ...group.history].find((item) => item.id === sessionId)
+      const conversation = group.conversations.find((item) => item.id === sessionId)
       if (!conversation) continue
       if (!initial || !tree.hasGroupState(id, group.surface)) tree.setGroupOpen(id, group.surface, true)
-      if (conversation.localHistory && (!initial || !tree.hasGroupState(id, 'local-history')))
-        tree.setGroupOpen(id, 'local-history', true)
     }
   },
   { immediate: true },
@@ -221,22 +219,18 @@ const menuItems = computed<SessionActionItem[]>(() => {
   if (target && target.conversation.id === targetId) {
     const conversation = target.conversation
     items = buildSessionActionItemsForSessionI18n(t, conversation, { fork: false })
-    if (conversation.localHistory) {
-      items = items.filter((item) => item.id === 'copy-transcript' || item.id === 'export-transcript')
-    } else {
-      const busy = conversation.running
-      items.push({
-        id: 'delete-conversation',
-        label: String(t(busy ? 'bot.conversations.deleteBusy' : 'bot.conversations.delete')),
-        description: String(t(busy ? 'bot.conversations.deleteBusyHint' : 'bot.conversations.deleteHint')),
-        icon: RiDeleteBinLine,
-        variant: 'destructive',
-        confirmTitle: String(t(busy ? 'bot.conversations.deleteBusy' : 'bot.conversations.delete')),
-        confirmDescription: String(t(busy ? 'bot.conversations.deleteBusyHint' : 'bot.conversations.deleteHint')),
-        confirmText: String(t(busy ? 'bot.conversations.deleteBusy' : 'common.delete')),
-        cancelText: String(t('common.cancel')),
-      })
-    }
+    const busy = conversation.running
+    items.push({
+      id: 'delete-conversation',
+      label: String(t(busy ? 'bot.conversations.deleteBusy' : 'bot.conversations.delete')),
+      description: String(t(busy ? 'bot.conversations.deleteBusyHint' : 'bot.conversations.deleteHint')),
+      icon: RiDeleteBinLine,
+      variant: 'destructive',
+      confirmTitle: String(t(busy ? 'bot.conversations.deleteBusy' : 'bot.conversations.delete')),
+      confirmDescription: String(t(busy ? 'bot.conversations.deleteBusyHint' : 'bot.conversations.deleteHint')),
+      confirmText: String(t(busy ? 'bot.conversations.deleteBusy' : 'common.delete')),
+      cancelText: String(t('common.cancel')),
+    })
   } else {
     const profile = bots.profiles.find((item) => item.id === targetId)
     items = profile
@@ -269,7 +263,7 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
     try {
       if (item.id === 'copy-transcript') await conversationActions.copyTranscript(conversation.id)
       else if (item.id === 'export-transcript') await conversationActions.exportTranscript(conversation.id)
-      else if (!conversation.localHistory) {
+      else {
         if (item.id === 'toggle-favorite') {
           await chat.updateSessionMetadata(conversation.id, { favorite: !conversation.favorite })
         } else if (item.id === 'rename') {
@@ -349,7 +343,6 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
                 :bot-name="profile.name"
                 :group="group"
                 :open="tree.isGroupOpen(profile.id, group.surface)"
-                :history-open="tree.isGroupOpen(profile.id, 'local-history')"
                 :selected-session-id="selectedSessionId"
                 :ui-is-compact-layout="ui.isCompactLayout"
                 :menu-open-for="(id) => menu.sessionActionMenuTarget.value?.session.id === id"
@@ -360,12 +353,6 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
                 @update:open="
                   (open) => {
                     tree.setGroupOpen(profile.id, group.surface, open)
-                    closeMenu()
-                  }
-                "
-                @update:history-open="
-                  (open) => {
-                    tree.setGroupOpen(profile.id, 'local-history', open)
                     closeMenu()
                   }
                 "

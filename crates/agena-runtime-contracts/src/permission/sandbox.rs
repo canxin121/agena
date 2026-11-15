@@ -238,12 +238,14 @@ impl SandboxPermissionSnapshot {
             decision = intersect(decision, layer.check(access, &self.workspace_root, target));
         }
         let target = normalize_path_string(target);
-        self.apply_persisted(decision, |action| matches!(action,
-            PermissionAction::PathAccess { access_kind, workspace_root, target_path }
-                if access_kind == access_name(access)
-                    && normalize_path_string(Path::new(workspace_root)) == normalize_path_string(&self.workspace_root)
-                    && normalize_path_string(Path::new(target_path)) == target
-        ))
+        self.apply_persisted(decision, |action| {
+            matches!(action,
+                PermissionAction::PathAccess { access_kind, workspace_root, target_path }
+                    if access_kind == access_name(access)
+                        && path_identity::equal(Path::new(workspace_root), &self.workspace_root)
+                        && path_identity::equal(Path::new(target_path), Path::new(&target))
+            )
+        })
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
@@ -313,12 +315,9 @@ impl SandboxPermissionSnapshot {
                             return denied(format!("invalid sandbox network policy: {error}"));
                         }
                     };
-                    // An ordinary '*' baseline already participated in
-                    // hostname approval. Only address-specific rules add a
-                    // DNS-result constraint; domain wildcards do not match IPs.
-                    if matches!(matcher.host, NetworkHostMatcher::Any) {
-                        continue;
-                    }
+                    // Only concrete address rules add a DNS-result
+                    // constraint. Hostname decisions already participated in
+                    // approval of the original destination.
                     if matcher.matches(&resolved) {
                         address_decision =
                             decide_from_mode(rule.mode, "matched resolved IP address rule");
@@ -578,9 +577,7 @@ impl SandboxPermissionSnapshot {
             else {
                 continue;
             };
-            if normalize_path_string(Path::new(workspace_root))
-                != normalize_path_string(&self.workspace_root)
-            {
+            if !path_identity::equal(Path::new(workspace_root), &self.workspace_root) {
                 continue;
             }
             let access = match access_kind.as_str() {
@@ -742,15 +739,11 @@ impl SandboxPathPattern {
     fn matches(&self, target: &Path) -> bool {
         let absolute = normalize_path_string(target);
         match self {
-            Self::Absolute { pattern } => WildcardPattern::new(pattern).matches(&absolute),
+            Self::Absolute { pattern } => WildcardPattern::new(pattern).matches_path(&absolute),
             Self::Relative { root, pattern } => {
                 let root = normalize_path_string(root);
-                let relative = if absolute == root {
-                    Some(".")
-                } else {
-                    absolute.strip_prefix(&format!("{root}/"))
-                };
-                relative.is_some_and(|relative| WildcardPattern::new(pattern).matches(relative))
+                relative_path_norm(Path::new(&absolute), Path::new(&root))
+                    .is_some_and(|relative| WildcardPattern::new(pattern).matches_path(&relative))
             }
         }
     }
@@ -835,7 +828,7 @@ fn within(path: &Path, root: &Path) -> bool {
     }
     let path = PathBuf::from(normalize_path_string(path));
     let root = PathBuf::from(normalize_path_string(root));
-    path.starts_with(root)
+    path_identity::within(&path, &root)
 }
 
 fn access_name(access: AccessKind) -> &'static str {

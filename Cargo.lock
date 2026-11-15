@@ -977,6 +977,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
@@ -998,6 +999,7 @@ dependencies = [
  "agena-tool",
  "async-trait",
  "indexmap",
+ "mxc-sdk",
  "path-clean",
  "schemars",
  "sea-orm",
@@ -1005,6 +1007,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1273,6 +1276,7 @@ dependencies = [
  "agena-provider",
  "agena-skills",
  "chrono",
+ "indexmap",
  "schemars",
  "serde",
  "serde_json",

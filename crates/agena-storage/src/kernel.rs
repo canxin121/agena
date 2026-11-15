@@ -18,6 +18,7 @@ use crate::backend::kernel::{Command, KernelBackend, Mutation, Scope};
 pub use crate::backend::kernel::KernelPorts as SessionKernel;
 
 mod import;
+pub use import::SessionImportValidator;
 mod lifecycle;
 pub use lifecycle::*;
 

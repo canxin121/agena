@@ -1,8 +1,16 @@
 //! Execution capability and permission composition, independent of Agena identity.
 
+mod path_rules;
+mod path_validation;
+mod platform_validation;
+#[cfg(test)]
+mod policy_validation_tests;
+pub(crate) use path_validation::canonical_resource_path;
+pub use path_validation::validate_permission_config_for_workspace;
+
 use std::path::Path;
 
-use agena_domain::{AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode};
+use agena_domain::{AccessKind, NetworkTarget, PermissionDecision, PermissionMode};
 pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
     ToolPermissionConfig, ToolPermissionRules,
@@ -54,6 +62,7 @@ pub fn apply_to_network_permission_policy(
 /// session/runtime execution principal. Configuration loading uses this narrow adapter so
 /// policy validation can move independently of the concrete execution principal.
 pub fn validate_permission_config(config: &PermissionConfig) -> Result<(), PermissionConfigError> {
+    platform_validation::validate(config)?;
     let _ = apply_to_permission_policy(config, PermissionPolicy::allow_all())?;
     let _ = apply_to_network_permission_policy(config, NetworkPermissionPolicy::allow_all())?;
     let _ = apply_to_tool_permission_policy(config, ToolPermissionPolicy::allow_all())?;
@@ -62,37 +71,9 @@ pub fn validate_permission_config(config: &PermissionConfig) -> Result<(), Permi
 
 fn apply_path_permission_config(
     value: &PathPermissionConfig,
-    mut base: PermissionPolicy,
+    base: PermissionPolicy,
 ) -> Result<PermissionPolicy, PermissionConfigError> {
-    if let Some(workspace) = value.workspace.as_ref() {
-        if let Some(mode) = workspace.read {
-            base.workspace_read_default = mode;
-        }
-        if let Some(mode) = workspace.write {
-            base.workspace_write_default = mode;
-        }
-    }
-    if let Some(external) = value.external.as_ref() {
-        if let Some(mode) = external.read {
-            base.external_read_default = mode;
-        }
-        if let Some(mode) = external.write {
-            base.external_write_default = mode;
-        }
-    }
-    for (pattern, modes) in &value.rules {
-        let trimmed = pattern.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(mode) = modes.read {
-            base.add_path_pattern_rule(AccessSelector::Read, mode, trimmed)?;
-        }
-        if let Some(mode) = modes.write {
-            base.add_path_pattern_rule(AccessSelector::Write, mode, trimmed)?;
-        }
-    }
-    Ok(base)
+    path_rules::apply(value, base)
 }
 
 fn apply_network_permission_config(
@@ -110,8 +91,11 @@ fn apply_network_permission_config(
     }
     for (pattern, mode) in &value.rules {
         let trimmed = pattern.trim();
-        if trimmed.is_empty() {
-            continue;
+        if trimmed.is_empty() || trimmed != pattern {
+            return Err(PermissionConfigError::InvalidNetworkRule {
+                pattern: pattern.clone(),
+                reason: "network rules must name a non-empty host, IP or CIDR without surrounding whitespace".into(),
+            });
         }
         base.add_rule(trimmed, *mode)?;
     }
@@ -122,6 +106,7 @@ pub fn apply_tool_permission_config(
     value: &ToolPermissionConfig,
     mut base: ToolPermissionPolicy,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
+    validate_tool_permission_names(value)?;
     let value = value.clone().with_canonical_tool_names();
     if let Some(mode) = value.default {
         base.default_mode = mode;
@@ -143,6 +128,41 @@ pub fn apply_tool_permission_config(
     Ok(base)
 }
 
+fn validate_tool_permission_names(
+    value: &ToolPermissionConfig,
+) -> Result<(), PermissionConfigError> {
+    value
+        .validate_aliases()
+        .map_err(|reason| PermissionConfigError::InvalidToolRule {
+            tool: "aliases".into(),
+            pattern: "names/rules".into(),
+            reason,
+        })?;
+    for (name, is_rule) in value
+        .names
+        .keys()
+        .map(|name| (name, false))
+        .chain(value.plugin.keys().map(|name| (name, false)))
+        .chain(value.rules.keys().map(|name| (name, true)))
+    {
+        if name.is_empty()
+            || name.trim() != name
+            || name.chars().any(char::is_whitespace)
+            || name.chars().any(char::is_control)
+            || (name.contains(['*', '?']) && !(is_rule && name == "*"))
+        {
+            return Err(PermissionConfigError::InvalidToolRule {
+                tool: name.clone(),
+                pattern: name.clone(),
+                reason:
+                    "use an exact, non-empty tool name; tools.default controls the default decision"
+                        .into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn apply_tool_permission_rules(
     mut base: ToolPermissionPolicy,
     tool_name: &str,
@@ -150,36 +170,75 @@ fn apply_tool_permission_rules(
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
     match rules {
         ToolPermissionRules::Mode(mode) => {
+            if tool_name == "*" {
+                return Err(PermissionConfigError::InvalidToolRule {
+                    tool: tool_name.into(),
+                    pattern: "*".into(),
+                    reason: "a wildcard tool name is not a default rule; use tools.default, or tools.rules.\"*\".\"read-only\" for the supported tool class".into(),
+                });
+            }
             base.tool_modes.insert(tool_name.to_string(), *mode);
             Ok(base)
         }
         ToolPermissionRules::Ordered(entries) => {
             if let Some(tool_name) = crate::permission::normalized_shell_command_tool(tool_name) {
-                for (pattern, mode) in sorted_rule_entries(entries) {
+                for (pattern, mode) in ordered_rule_entries(entries) {
                     let trimmed = pattern.trim();
-                    if trimmed.is_empty() {
-                        continue;
+                    if trimmed.is_empty()
+                        || trimmed != pattern
+                        || trimmed.chars().any(char::is_control)
+                    {
+                        return Err(PermissionConfigError::InvalidToolRule {
+                            tool: tool_name.to_owned(),
+                            pattern: pattern.to_owned(),
+                            reason: "command rules must be non-empty and must not contain surrounding whitespace or control characters".into(),
+                        });
+                    }
+                    // JavaScript orders array-index object keys numerically, so a
+                    // web edit cannot preserve their position in this ordered map.
+                    if trimmed
+                        .parse::<u32>()
+                        .is_ok_and(|index| index != u32::MAX && index.to_string() == trimmed)
+                    {
+                        return Err(PermissionConfigError::InvalidToolRule {
+                            tool: tool_name.to_owned(),
+                            pattern: pattern.to_owned(),
+                            reason: "numeric-only command keys cannot preserve rule order in JSON editors; use a command pattern with nonnumeric text or tools.names for a tool-level decision".into(),
+                        });
                     }
                     if let Some(class) = command_class_keyword(trimmed) {
                         base.add_shell_tool_class(tool_name, class, trimmed, mode);
-                    } else if trimmed == "*" {
-                        base.tool_modes.insert(tool_name.to_string(), mode);
                     } else {
+                        // "*" is a command pattern too: preserve its position
+                        // instead of turning it into an overriding tool grant.
                         base.add_shell_tool_pattern(tool_name, trimmed, mode);
                     }
                 }
                 Ok(base)
             } else {
                 let mut fallback = None;
-                for (pattern, mode) in sorted_rule_entries(entries) {
+                for (pattern, mode) in ordered_rule_entries(entries) {
                     let trimmed = pattern.trim();
-                    if trimmed.is_empty() {
-                        continue;
+                    if trimmed.is_empty()
+                        || trimmed != pattern
+                        || trimmed.chars().any(char::is_control)
+                    {
+                        return Err(PermissionConfigError::InvalidToolRule {
+                            tool: tool_name.to_owned(),
+                            pattern: pattern.to_owned(),
+                            reason: "tool conditions must be non-empty and must not contain surrounding whitespace or control characters".into(),
+                        });
                     }
                     if tool_name == "*" && tool_class_keyword(trimmed).is_some() {
                         base.set_read_only_mode(Some(mode));
-                    } else if trimmed == "*" {
+                    } else if trimmed == "*" && tool_name != "*" {
                         fallback = Some(mode);
+                    } else {
+                        return Err(PermissionConfigError::InvalidToolRule {
+                            tool: tool_name.to_owned(),
+                            pattern: pattern.to_owned(),
+                            reason: "conditional patterns are supported only for shell commands; use permission.path for filesystem rules, permission.network for destinations, or tools.names for a tool-level decision".into(),
+                        });
                     }
                 }
                 if let Some(mode) = fallback {
@@ -217,18 +276,13 @@ fn normalized_keyword(value: &str) -> String {
     value.trim().to_ascii_lowercase().replace('_', "-")
 }
 
-fn sorted_rule_entries(entries: &IndexMap<String, PermissionMode>) -> Vec<(&str, PermissionMode)> {
-    let mut out = entries
+fn ordered_rule_entries(entries: &IndexMap<String, PermissionMode>) -> Vec<(&str, PermissionMode)> {
+    // Command patterns explicitly use insertion order: the last matching
+    // command rule wins. Sorting by string length changes the user's policy.
+    entries
         .iter()
         .map(|(pattern, mode)| (pattern.as_str(), *mode))
-        .collect::<Vec<_>>();
-    out.sort_by(|(left_pattern, _), (right_pattern, _)| {
-        left_pattern
-            .len()
-            .cmp(&right_pattern.len())
-            .then_with(|| left_pattern.cmp(right_pattern))
-    });
-    out
+        .collect()
 }
 
 #[derive(Debug, Clone)]

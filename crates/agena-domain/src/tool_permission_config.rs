@@ -71,6 +71,27 @@ impl ToolPermissionConfig {
         self.rules.extend(overlay.rules);
     }
 
+    /// Reject contradictory spellings before canonicalization can discard one.
+    pub fn validate_aliases(&self) -> Result<(), String> {
+        fn check<T: PartialEq>(values: &BTreeMap<String, T>, section: &str) -> Result<(), String> {
+            let mut seen = BTreeMap::<&str, (&str, &T)>::new();
+            for (name, value) in values {
+                let canonical =
+                    ToolPermissionConfig::canonical_command_policy_tool_name(name).unwrap_or(name);
+                if let Some((previous_name, previous)) = seen.insert(canonical, (name, value))
+                    && previous != value
+                {
+                    return Err(format!(
+                        "permission.tools.{section}: {previous_name:?} and {name:?} identify the same tool but have conflicting rules; keep one spelling"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        check(&self.names, "names")?;
+        check(&self.rules, "rules")
+    }
+
     /// Normalize the registered tool identity spellings without policy
     /// inheritance between distinct operations.
     pub fn with_canonical_tool_names(mut self) -> Self {

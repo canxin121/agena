@@ -15,6 +15,7 @@ agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-prompt-layers = { workspace = true }
 chrono = { workspace = true }
+indexmap = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

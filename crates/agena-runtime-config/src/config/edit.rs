@@ -349,41 +349,44 @@ pub fn validate_layered_file_settings_with_env(
 fn finish_edit(
     config_path: PathBuf,
     config_found: bool,
-    doc: JsonValue,
+    mut doc: JsonValue,
     before: JsonValue,
     path: Option<String>,
     operation: &'static str,
     dry_run: bool,
-    validate: bool,
+    _validate: bool,
     reload_requested: bool,
     created: bool,
     deleted: bool,
     env: &dyn ConfigEnvironment,
     layered: Option<&LayeredValidation>,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
+    crate::runtime_config_settings_service::normalize_permission_settings_document(&mut doc)
+        .map_err(|error| ConfigError::Validation(error.diagnostic().to_owned()))?;
     let text = serde_json::to_string_pretty(&doc)?;
-    if validate {
-        match layered {
-            Some(layered) => super::raw::validate_layered_config_text(
-                &layered.global_path,
-                &layered.workspace_path,
-                layered.edited_layer,
-                text.as_str(),
-                env,
-            )?,
-            None => super::raw::validate_config_text(&config_path, text.as_str())?,
-        }
+    // CLI edits and application settings share the same mandatory checks.
+    match layered {
+        Some(layered) => super::raw::validate_layered_config_text(
+            &layered.global_path,
+            &layered.workspace_path,
+            layered.edited_layer,
+            text.as_str(),
+            env,
+        )?,
+        None => super::raw::validate_config_text(&config_path, text.as_str())?,
     }
     let previous = get_json_path(&before, path.as_deref())?;
     let current = get_json_path(&doc, path.as_deref())?;
-    let changed = before != doc;
+    let before_revision = crate::runtime_config_settings_service::document_revision(&before);
+    let after_revision = crate::runtime_config_settings_service::document_revision(&doc);
+    let changed = before_revision != after_revision;
     if changed && !dry_run {
         write_doc(&config_path, text.as_str())?;
     }
 
     Ok(ConfigSettingsEditResponse {
-        before_revision: crate::runtime_config_settings_service::document_revision(&before),
-        after_revision: crate::runtime_config_settings_service::document_revision(&doc),
+        before_revision,
+        after_revision,
         config_path,
         config_found,
         operation: operation.to_string(),
@@ -392,7 +395,7 @@ fn finish_edit(
         changed,
         created,
         deleted,
-        validated: validate,
+        validated: true,
         reload_requested,
         reload_required: changed && !dry_run && reload_requested,
         reload: None,

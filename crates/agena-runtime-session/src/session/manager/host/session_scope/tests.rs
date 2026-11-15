@@ -190,10 +190,15 @@ impl Fixture {
             .unwrap();
         let permissions: agena_domain::PermissionConfig = serde_json::from_value(json!({
             "path": {
-                "workspace": {"read": "allow", "write": write_mode},
-                "external": {"read": "deny", "write": "deny"}
+                "workspace": if write_mode == "deny" { "readonly" } else { "readwrite" },
+                "external": "deny"
             },
-            "tools": {"default": "allow"}
+            "tools": {
+                "default": "allow",
+                "names": {
+                    "test.session_scope.write": if matches!(write_mode, "ask" | "auto") { write_mode } else { "allow" }
+                }
+            }
         }))
         .unwrap();
         let executor = ToolExecutor::new(

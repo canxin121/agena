@@ -365,6 +365,8 @@ impl SessionManager {
                         "a child from a different channel authority cannot be reused".into(),
                     ));
                 }
+                self.validate_session_permission_configuration(parent.workspace_id, &previous)
+                    .await?;
                 denials.extend(previous.capability_denied_tool_names.iter().cloned());
                 let change = SessionConfigurationChange {
                     agent: Some(Some(agent.clone())),
@@ -402,6 +404,8 @@ impl SessionManager {
                     agent: Some(agent.clone()),
                     ..Default::default()
                 };
+                self.validate_session_permission_configuration(parent.workspace_id, &configuration)
+                    .await?;
                 persist(|| async {
                     match parent.workspace_id {
                         Some(workspace) => {

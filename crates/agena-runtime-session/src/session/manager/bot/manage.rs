@@ -121,6 +121,11 @@ impl SessionManager {
                 let workspace = r.workspace_id.expect("validated workspace");
                 self.bot_workspace(workspace).await?;
                 let title = required_text(&r.title, "title", 512)?;
+                self.validate_session_permission_configuration(
+                    Some(workspace),
+                    &SessionConfiguration::default(),
+                )
+                .await?;
                 let session = persist(|| {
                     self.kernel().sessions.create_configured(
                         command,
@@ -170,6 +175,8 @@ impl SessionManager {
                         "fork boundary is missing; inspect source and use a new request key",
                     ));
                 };
+                self.validate_existing_session_permissions(session_id(target)?)
+                    .await?;
                 let fork = persist(|| {
                     self.kernel().sessions.fork_checked(
                         command,

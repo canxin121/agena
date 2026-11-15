@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ApprovalModelSelection, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig,
-    PermissionMode, ToolPermissionConfig, ToolPermissionRules,
+    PathPermissionMode, PermissionMode, ToolPermissionConfig, ToolPermissionRules,
 };
 
 /// Stable, serializable permission configuration independent of policy
@@ -36,16 +36,19 @@ fn deserialize_tools<'de, D>(deserializer: D) -> Result<Option<ToolPermissionCon
 where
     D: serde::Deserializer<'de>,
 {
-    Option::<ToolPermissionConfig>::deserialize(deserializer)
-        .map(|tools| tools.map(ToolPermissionConfig::with_canonical_tool_names))
+    let tools = Option::<ToolPermissionConfig>::deserialize(deserializer)?;
+    if let Some(tools) = &tools {
+        tools.validate_aliases().map_err(serde::de::Error::custom)?;
+    }
+    Ok(tools.map(ToolPermissionConfig::with_canonical_tool_names))
 }
 
 /// The selected instance's managed directory for the current workspace.
 /// The permission matcher resolves this alias per request; the instance's
 /// credentials and other workspaces are outside this grant.
 pub const RUNTIME_STATE_PATH: &str = "<state>";
-/// The same directory and everything under it. The alias itself matches only
-/// the root, so the contents need their own entry.
+/// Legacy subtree spelling retained for migration and internal callers.
+/// Public concrete directory rules already include all descendants.
 pub const RUNTIME_STATE_PATH_GLOB: &str = "<state>/**";
 
 /// The command-class keywords a `tools.rules.<tool>` entry may use instead of a
@@ -59,10 +62,7 @@ pub const COMMAND_CLASS_DANGEROUS: &str = "dangerous";
 pub const TOOL_CLASS_READ_ONLY: &str = "read-only";
 
 fn allow_rw() -> PathAccessModes {
-    PathAccessModes {
-        read: Some(PermissionMode::Allow),
-        write: Some(PermissionMode::Allow),
-    }
+    PathAccessModes::from_mode(PathPermissionMode::Readwrite)
 }
 
 /// Which of the approval prompt's conditional path promises are in effect.
@@ -82,7 +82,7 @@ pub struct PathClassPromptFlags {
 
 impl PathClassPromptFlags {
     /// The flags for a sandbox whose path policy approves both classes
-    /// outright - the shipped configuration.
+    /// outright.
     pub fn all_allowed() -> Self {
         Self {
             internal_paths_allowed: true,
@@ -102,36 +102,34 @@ impl PermissionConfig {
     /// about permissions.
     ///
     /// The class defaults live here as ordinary entries of the sections they
-    /// belong to, not as keys of their own — the temp and runtime-state paths
-    /// are `path.rules` entries, the interaction tool is a `tools.names` entry,
+    /// belong to, not as keys of their own — the runtime-state path
+    /// is a `path.rules` entry, the interaction tool is a `tools.names` entry,
     /// and the read-only and command classes are `tools.rules` entries. That is
     /// what makes them editable and restorable (a user writes the same key, or
     /// deletes it) without the schema growing a parallel set of keys.
     pub fn global_default() -> Self {
         let auto = PermissionMode::Auto;
+        let network_default = if cfg!(target_os = "windows") {
+            PermissionMode::Deny
+        } else {
+            auto
+        };
         let allow = PermissionMode::Allow;
         let deny = PermissionMode::Deny;
         Self {
             path: Some(PathPermissionConfig {
-                workspace: Some(PathAccessModes {
-                    read: Some(allow),
-                    write: Some(auto),
-                }),
-                external: Some(PathAccessModes {
-                    read: Some(auto),
-                    write: Some(auto),
-                }),
-                rules: IndexMap::from([
-                    ("<tmp>".to_string(), allow_rw()),
-                    ("<tmp>/**".to_string(), allow_rw()),
-                    (RUNTIME_STATE_PATH.to_string(), allow_rw()),
-                    (RUNTIME_STATE_PATH_GLOB.to_string(), allow_rw()),
-                ]),
+                // Resource defaults are concrete. Broader access must be
+                // granted explicitly; ask/auto remains a tool/task decision.
+                workspace: Some(PathAccessModes::from_mode(PathPermissionMode::Readonly)),
+                external: Some(PathAccessModes::from_mode(PathPermissionMode::Deny)),
+                // Shared OS temporary roots cannot be safely mounted into one
+                // sandbox. Each worker receives its own private temporary area.
+                rules: IndexMap::from([(RUNTIME_STATE_PATH.to_string(), allow_rw())]),
             }),
             network: Some(NetworkPermissionConfig {
-                internet: Some(auto),
-                private: Some(auto),
-                loopback: Some(auto),
+                internet: Some(network_default),
+                private: Some(network_default),
+                loopback: Some(network_default),
                 ..Default::default()
             }),
             tools: Some(ToolPermissionConfig {

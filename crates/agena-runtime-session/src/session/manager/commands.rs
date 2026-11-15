@@ -52,6 +52,8 @@ impl SessionManager {
             configuration.permission = inherited.permission.clone();
             configuration.permission_ceiling = inherited.permission_ceiling.clone();
         }
+        self.validate_session_permission_configuration(Some(workspace), &configuration)
+            .await?;
         let command = RequestId::new();
         let metadata = persist(|| {
             self.kernel().sessions.create_configured(
@@ -277,11 +279,28 @@ impl SessionManager {
         id: i64,
         permission: agena_domain::PermissionConfig,
     ) -> Result<(), AppError> {
+        let session = session_id(id)?;
+        let metadata = self
+            .kernel()
+            .reader
+            .metadata(session)
+            .await
+            .map_err(kernel_error)?;
+        let saved = self
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .map_err(kernel_error)?;
+        let mut configuration = (*saved).clone();
+        configuration.permission = permission.clone();
+        self.validate_session_permission_configuration(metadata.workspace_id, &configuration)
+            .await?;
         self.kernel()
             .sessions
             .configure(
                 RequestId::new(),
-                session_id(id)?,
+                session,
                 SessionConfigurationChange {
                     permission: Some(permission),
                     ..Default::default()
@@ -297,6 +316,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         self.require_bot_branch_allowed(request.session_id).await?;
         let session = session_id(request.session_id)?;
+        self.validate_existing_session_permissions(session).await?;
         self.check_version(session, request.expected_version)
             .await?;
         let through = match request.at_message_id {
@@ -386,6 +406,7 @@ impl SessionManager {
                     .await
             }
             crate::RewindMode::Fork => {
+                self.validate_existing_session_permissions(session).await?;
                 self.kernel()
                     .sessions
                     .rewind(RequestId::new(), session, message)
@@ -1208,12 +1229,19 @@ impl SessionExecutionCommandService for SessionManager {
         path: &std::path::Path,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
         let workspace = self.current_workspace_id().await.map_err(command_error)?;
+        let validator = self
+            .session_archive_permission_validator(workspace)
+            .await
+            .map_err(command_error)?;
         // Parsing stays in this future until a self-owned disk staging
         // database exists. Detached writer work never needs the caller's file.
         let imported = persist(|| {
-            self.kernel()
-                .sessions
-                .import_archive(request_id, workspace, path)
+            self.kernel().sessions.import_archive_validated(
+                request_id,
+                workspace,
+                path,
+                validator.clone(),
+            )
         })
         .await
         .map_err(|error| SessionExecutionCommandError::from_failure(archive_failure(error)))?;
@@ -1422,5 +1450,7 @@ pub(super) fn validate_answers(
     }
     Ok(())
 }
+#[cfg(test)]
+mod permission_tests;
 #[cfg(test)]
 mod queue_tests;

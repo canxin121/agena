@@ -388,13 +388,24 @@ impl KernelBackend for Backend {
         workspace_id: i64,
         path: &std::path::Path,
     ) -> Result<CommitReceipt<SessionMetadata>> {
+        self.import_archive_validated(request, workspace_id, path, Arc::new(|_| Ok(())))
+            .await
+    }
+
+    async fn import_archive_validated(
+        &self,
+        request: RequestId,
+        workspace_id: i64,
+        path: &std::path::Path,
+        validator: SessionImportValidator,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
         self.cache.ensure_open()?;
         let permit = self
             .imports
             .clone()
             .try_acquire_owned()
             .map_err(|_| KernelError::Busy)?;
-        let staged = import::prepare(path, request, workspace_id).await?;
+        let staged = import::prepare(path, request, workspace_id, &validator).await?;
         self.cache.ensure_open()?;
         let (response, receiver) = oneshot::channel();
         self.sender

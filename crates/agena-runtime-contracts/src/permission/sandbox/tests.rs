@@ -5,13 +5,49 @@ fn root() -> PathBuf {
     std::env::temp_dir().join("agena-sandbox-policy-tests")
 }
 
-fn principal(value: serde_json::Value) -> ExecutionPrincipal {
-    ExecutionPrincipal::new(
-        PermissionPolicy::allow_all(),
-        ToolPermissionPolicy::allow_all(),
-    )
-    .try_apply_permission_config(&serde_json::from_value(value).unwrap())
-    .unwrap()
+// These low-level snapshot regressions also exercise captured approvals and
+// legacy in-memory patterns. Build that internal state explicitly: public JSON
+// acceptance/migration is tested in authorization::path_rules and agena-domain.
+fn principal(mut value: serde_json::Value) -> ExecutionPrincipal {
+    let mut policy = PermissionPolicy::allow_all();
+    if let Some(path) = value.as_object_mut().unwrap().remove("path") {
+        let mode = |value: &serde_json::Value| {
+            serde_json::from_value::<PermissionMode>(value.clone()).unwrap()
+        };
+        if let Some(workspace) = path.get("workspace") {
+            if let Some(read) = workspace.get("read") {
+                policy.workspace_read_default = mode(read);
+            }
+            if let Some(write) = workspace.get("write") {
+                policy.workspace_write_default = mode(write);
+            }
+        }
+        if let Some(external) = path.get("external") {
+            if let Some(read) = external.get("read") {
+                policy.external_read_default = mode(read);
+            }
+            if let Some(write) = external.get("write") {
+                policy.external_write_default = mode(write);
+            }
+        }
+        if let Some(rules) = path.get("rules").and_then(serde_json::Value::as_object) {
+            for (pattern, modes) in rules {
+                if let Some(read) = modes.get("read") {
+                    policy
+                        .add_path_pattern_rule(AccessSelector::Read, mode(read), pattern)
+                        .unwrap();
+                }
+                if let Some(write) = modes.get("write") {
+                    policy
+                        .add_path_pattern_rule(AccessSelector::Write, mode(write), pattern)
+                        .unwrap();
+                }
+            }
+        }
+    }
+    ExecutionPrincipal::new(policy, ToolPermissionPolicy::allow_all())
+        .try_apply_permission_config(&serde_json::from_value(value).unwrap())
+        .unwrap()
 }
 
 #[test]
@@ -22,8 +58,8 @@ fn serialization_preserves_all_ceiling_layers_and_network_rules() {
         "network":{"internet":"allow","private":"deny","loopback":"deny"}
     }));
     let ceiling: PermissionConfig = serde_json::from_value(serde_json::json!({
-        "path":{"rules":{"<workspace>/locked/**":{"write":"deny"}}},
-        "network":{"rules":{"*.example.test:443":"deny"}}
+        "path":{"rules":{"<workspace>/locked":"readonly"}},
+        "network":{"rules":{"foo.example.test:443":"deny"}}
     }))
     .unwrap();
     let later: PermissionConfig = serde_json::from_value(serde_json::json!({
@@ -304,7 +340,7 @@ fn explicit_denials_outside_grants_protect_platform_baseline_access() {
 fn resolved_public_address_inherits_approved_domain_in_deny_default_policy() {
     let snapshot = principal(serde_json::json!({"network":{
         "internet":"deny","private":"deny","loopback":"deny",
-        "rules":{"*":"deny","example.com:443":"allow"}
+        "rules":{"example.com:443":"allow"}
     }}))
     .sandbox_permission_snapshot(&root());
     assert!(matches!(
@@ -327,7 +363,7 @@ fn resolved_public_address_inherits_approved_domain_in_deny_default_policy() {
 
 #[test]
 fn resolved_ip_restrictions_from_each_ceiling_override_domain_approval() {
-    for pattern in ["8.8.8.8:443", "8.8.8.0/24:443", "8.8.*:443"] {
+    for pattern in ["8.8.8.8:443", "8.8.8.0/24:443", "8.8.0.0/16:443"] {
         let base = principal(
             serde_json::json!({"network":{"internet":"deny","rules":{"example.com:443":"allow"}}}),
         );

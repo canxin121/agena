@@ -3,6 +3,26 @@ use super::*;
 use agena_domain::SessionRelationKind;
 use std::collections::BTreeMap;
 
+/// Keep the storage boundary safe for programmatic callers and archive imports,
+/// which do not necessarily pass through a transport's configuration decoder.
+pub(super) fn normalize_configuration_permissions(
+    configuration: &mut SessionConfiguration,
+) -> Result<()> {
+    for (field, permission) in [
+        ("session.permission", &mut configuration.permission),
+        (
+            "session.permission_ceiling",
+            &mut configuration.permission_ceiling,
+        ),
+    ] {
+        if let Some(path) = permission.path.as_mut() {
+            path.normalize_rules()
+                .map_err(|reason| invalid(format!("{field}: {reason}")))?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn configuration(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -216,6 +236,7 @@ async fn configure(
         }
         next.agent = value.clone();
     }
+    normalize_configuration_permissions(&mut next)?;
     let body = encode(&next)?;
     if body.len() > 65536 {
         return Err(invalid("session configuration exceeds 64 KiB"));
@@ -493,6 +514,7 @@ async fn fork(
         mode,
         parent_session_id: session.get(),
     });
+    normalize_configuration_permissions(&mut config)?;
     let row = sqlx::query(
         "SELECT COALESCE(root_session_id,id) AS root,depth FROM agena_sessions WHERE id=?",
     )

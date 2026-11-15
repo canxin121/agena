@@ -344,7 +344,7 @@ pub fn validate_runtime_file_settings(
 fn finish_runtime_settings_edit(
     config_path: PathBuf,
     config_found: bool,
-    document: JsonValue,
+    mut document: JsonValue,
     before: JsonValue,
     path: Option<String>,
     operation: &'static str,
@@ -353,25 +353,36 @@ fn finish_runtime_settings_edit(
     deleted: bool,
     validator: Option<&RuntimeSettingsDocumentValidator>,
 ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError> {
+    // Security-sensitive configuration is never persisted without validation.
+    // This also canonicalizes safe legacy path rules before writing them.
+    normalize_permission_settings_document(&mut document)?;
     let text = serde_json::to_string_pretty(&document)
         .map_err(|error| RuntimeConfigSettingsError::internal_error(&error))?;
-    if options.validate {
-        let validator = validator.ok_or_else(|| {
-            RuntimeConfigSettingsError::internal(
-                "runtime settings edit requested validation without a schema validator",
-            )
-        })?;
+    let validated = if let Some(validator) = validator {
+        // Public settings services always supply the composed-layer validator.
+        // validate=false may not bypass it, including through raw JSON edits.
         validator(&config_path, &text)?;
-    }
+        true
+    } else if options.validate {
+        return Err(RuntimeConfigSettingsError::internal(
+            "runtime settings edit requested validation without a schema validator",
+        ));
+    } else {
+        false
+    };
     let previous = get_json_path(&before, path.as_deref())?;
     let current = get_json_path(&document, path.as_deref())?;
-    let changed = before != document;
+    let before_revision = document_revision(&before);
+    let after_revision = document_revision(&document);
+    // Object equality ignores insertion order, but network and command rule
+    // order changes the authorization decision and must be persisted.
+    let changed = before_revision != after_revision;
     if changed && !options.dry_run {
         write_runtime_settings_document(&config_path, &text)?;
     }
     Ok(ConfigSettingsEditResponse {
-        before_revision: document_revision(&before),
-        after_revision: document_revision(&document),
+        before_revision,
+        after_revision,
         config_path,
         config_found,
         operation: operation.to_string(),
@@ -380,13 +391,42 @@ fn finish_runtime_settings_edit(
         changed,
         created,
         deleted,
-        validated: options.validate,
+        validated,
         reload_requested: options.reload,
         reload_required: changed && !options.dry_run && options.reload,
         reload: None,
         previous,
         current,
     })
+}
+
+/// Normalize the permission section before any settings document reaches disk.
+/// The complete layer validator subsequently checks inherited rules as well.
+pub(crate) fn normalize_permission_settings_document(
+    document: &mut JsonValue,
+) -> Result<(), RuntimeConfigSettingsError> {
+    let Some(value) = document.get("permission").filter(|value| !value.is_null()) else {
+        return Ok(());
+    };
+    let mut permission: agena_domain::PermissionConfig =
+        serde_path_to_error::deserialize(value.clone()).map_err(|error| {
+            RuntimeConfigSettingsError::invalid_input(format!(
+                "permission.{}: {}",
+                error.path(),
+                error.inner()
+            ))
+        })?;
+    if let Some(paths) = &mut permission.path {
+        paths
+            .normalize_rules()
+            .map_err(RuntimeConfigSettingsError::invalid_input)?;
+    }
+    agena_runtime_contracts::authorization::validate_permission_config(&permission)
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input(error.to_string()))?;
+    let canonical = serde_json::to_value(permission)
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+    document["permission"] = canonical;
+    Ok(())
 }
 
 fn write_runtime_settings_document(

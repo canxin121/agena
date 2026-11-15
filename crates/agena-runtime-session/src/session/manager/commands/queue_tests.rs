@@ -47,7 +47,9 @@ async fn fixture() -> (SessionManager, SessionId) {
     fixture_with_config(RuntimeSessionManagerConfig::default()).await
 }
 
-async fn fixture_with_config(config: RuntimeSessionManagerConfig) -> (SessionManager, SessionId) {
+pub(super) async fn fixture_with_config(
+    config: RuntimeSessionManagerConfig,
+) -> (SessionManager, SessionId) {
     fixture_with_providers(config, ProviderRegistry::default()).await
 }
 

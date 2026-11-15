@@ -106,6 +106,12 @@ where
         }
 
         let mut config = merged.resolve()?;
+        if !global {
+            super::raw::validate_permission_config_in_workspace(
+                &config.permission,
+                &workspace_root,
+            )?;
+        }
         config.prompts = PromptLayersConfig {
             global: global_prompts,
             workspace: workspace_prompts,

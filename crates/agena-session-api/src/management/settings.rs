@@ -38,6 +38,8 @@ pub struct ConfigSettingsEditOptions {
     /// Revision of the complete persisted JSON document, not of a leaf value.
     pub expected_revision: Option<String>,
     pub dry_run: bool,
+    /// Retained for wire compatibility. Permission and composed configuration
+    /// validation is mandatory on public save operations, even when false.
     #[serde(default = "default_true")]
     pub validate: bool,
     #[serde(default = "default_true")]

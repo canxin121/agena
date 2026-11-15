@@ -1,5 +1,10 @@
 //! Runtime-neutral permission types shared across layers.
 
+#[cfg(test)]
+mod network_identity_tests;
+#[cfg(all(test, unix))]
+mod path_alias_tests;
+pub(crate) mod path_identity;
 mod sandbox;
 pub use sandbox::{
     SandboxFilesystemRestrictions, SandboxNetworkPolicy, SandboxNetworkRule, SandboxPathAccess,
@@ -150,6 +155,26 @@ impl WildcardPattern {
             pattern,
             optional_prefix,
         }
+    }
+
+    fn matches_path(&self, input: &str) -> bool {
+        if !self.pattern.contains(['*', '?']) {
+            return path_identity::equal(Path::new(&self.pattern), Path::new(input));
+        }
+        let prefix = self.pattern.trim_end_matches('*');
+        if prefix.len() != self.pattern.len() && !prefix.contains(['*', '?']) {
+            if prefix.is_empty() {
+                return true;
+            }
+            if prefix.ends_with('/') {
+                let root = Path::new(prefix);
+                let target = Path::new(input);
+                return path_identity::within(target, root) && !path_identity::equal(target, root);
+            }
+        }
+        // Legacy in-memory glob rules retain their previous matching behavior.
+        // New resource settings compile only literals and complete subtrees.
+        self.matches(input)
     }
 
     fn matches(&self, input: &str) -> bool {
@@ -427,10 +452,9 @@ impl ToolPermissionPolicy {
             }
             return decision;
         }
-        if let Some((matched_name, mode)) = self.tool_name_mode(names) {
-            // A rule the user wrote for this tool names an action, so it
-            // outranks the command-class defaults below.
-            return self.decision_for_mode(matched_name, mode);
+        let named_mode = self.tool_name_mode(names);
+        if let Some((matched_name, PermissionMode::Deny)) = named_mode {
+            return self.decision_for_mode(matched_name, PermissionMode::Deny);
         }
         if ToolTag::is_shell(tags)
             && let Some(command) = command
@@ -438,8 +462,13 @@ impl ToolPermissionPolicy {
             if let Some(decision) = self.evaluate_bash_deny(command, names) {
                 return decision;
             }
+            // An explicit command restriction cannot be bypassed by a broad
+            // tool-name Allow. Class defaults remain below named decisions.
             if let Some(decision) = self.evaluate_bash_overlay_pattern(command, names) {
                 return decision;
+            }
+            if let Some((matched_name, mode)) = named_mode {
+                return self.decision_for_mode(matched_name, mode);
             }
             if let Some(decision) = self.evaluate_bash_pattern(command, names) {
                 return decision;
@@ -450,6 +479,9 @@ impl ToolPermissionPolicy {
             if let Some(decision) = self.evaluate_command_class(command, names) {
                 return decision;
             }
+        }
+        if let Some((matched_name, mode)) = named_mode {
+            return self.decision_for_mode(matched_name, mode);
         }
         // The read-only class default. Like the interaction default it is
         // ranked above `tools.default`, and below a rule naming the tool.
@@ -617,7 +649,10 @@ impl ToolPermissionPolicy {
             return None;
         }
         for rule in self.bash_overlay_rules.iter().rev() {
-            if rule.applies_to(names) && rule.matches(normalized) {
+            if matches!(rule.matcher, CommandPatternMatcher::Wildcard(_))
+                && rule.applies_to(names)
+                && rule.matches(normalized)
+            {
                 let decision = match rule.mode {
                     PermissionMode::Allow => PermissionDecision::Allow,
                     PermissionMode::Auto => PermissionDecision::Auto {
@@ -676,12 +711,22 @@ pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> 
 #[derive(Debug, Error)]
 /// Error building a permission policy from configuration.
 pub enum PermissionConfigError {
+    #[error("invalid permission path rule `{pattern}`: {reason}")]
+    InvalidPathRule { pattern: String, reason: String },
     #[error("unknown permission path marker `{alias}` in pattern `{pattern}`")]
     UnknownPathAlias { pattern: String, alias: String },
     #[error("permission path marker `{alias}` cannot be resolved for pattern `{pattern}`")]
     UnresolvedPathAlias { pattern: String, alias: String },
     #[error("invalid permission network rule `{pattern}`: {reason}")]
     InvalidNetworkRule { pattern: String, reason: String },
+    #[error("invalid permission.tools.rules[{tool:?}][{pattern:?}]: {reason}")]
+    InvalidToolRule {
+        tool: String,
+        pattern: String,
+        reason: String,
+    },
+    #[error("{field} cannot be enforced by the current MXC sandbox: {reason}")]
+    UnsupportedSandbox { field: String, reason: String },
 }
 
 #[derive(Debug, Clone)]
@@ -778,10 +823,16 @@ struct NetworkRuleMatcher {
 impl NetworkRuleMatcher {
     fn new(pattern: &str) -> Result<Self, PermissionConfigError> {
         let trimmed = pattern.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty()
+            || trimmed != pattern
+            || trimmed.chars().any(char::is_whitespace)
+            || trimmed.chars().any(char::is_control)
+            || trimmed.contains(['*', '?', '#', '@', '\\'])
+            || trimmed.contains("://")
+        {
             return Err(PermissionConfigError::InvalidNetworkRule {
                 pattern: pattern.to_string(),
-                reason: "empty pattern".to_string(),
+                reason: "use a concrete hostname, IP or CIDR with an optional port; wildcards, URLs, URL paths, credentials and whitespace are not network rules".to_string(),
             });
         }
         let (host, port) = split_network_rule_host_port(trimmed).map_err(|reason| {
@@ -813,7 +864,6 @@ impl NetworkRuleMatcher {
 
 #[derive(Debug, Clone)]
 enum NetworkHostMatcher {
-    Any,
     ExactIp(IpAddr),
     Cidr { base: IpAddr, prefix: u8 },
     Wildcard(WildcardPattern),
@@ -823,7 +873,7 @@ impl NetworkHostMatcher {
     fn new(host: &str) -> Result<Self, String> {
         let host = host.trim();
         if host.is_empty() || host == "*" {
-            return Ok(Self::Any);
+            return Err("a concrete hostname, IP or CIDR is required before the port".into());
         }
         if let Some((addr, prefix)) = host.split_once('/') {
             let base = addr
@@ -839,23 +889,52 @@ impl NetworkHostMatcher {
             if prefix > max {
                 return Err(format!("CIDR prefix `{prefix}` exceeds {max}"));
             }
+            let (base, prefix) = if let IpAddr::V6(address) = base
+                && let Some(mapped) = address.to_ipv4_mapped()
+            {
+                if prefix < 96 {
+                    return Err("an IPv4-mapped IPv6 CIDR must use /96 through /128; use a separate native IPv4 or IPv6 CIDR for a broader range".into());
+                }
+                (IpAddr::V4(mapped), prefix - 96)
+            } else {
+                (base, prefix)
+            };
             return Ok(Self::Cidr { base, prefix });
         }
         if let Ok(addr) = host.parse::<IpAddr>() {
-            return Ok(Self::ExactIp(addr));
+            return Ok(Self::ExactIp(canonical_ip_address(addr)));
         }
-        Ok(Self::Wildcard(WildcardPattern::new(normalize_host(host))))
+        let hostname = normalize_host(host);
+        if hostname.is_empty()
+            || hostname.len() > 253
+            || !hostname.is_ascii()
+            || hostname.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            })
+            || hostname.bytes().all(|c| c.is_ascii_digit() || c == b'.')
+        {
+            return Err(
+                "invalid hostname; use a concrete DNS name (IDNs in ASCII/punycode), IP or CIDR"
+                    .into(),
+            );
+        }
+        Ok(Self::Wildcard(WildcardPattern::new(hostname)))
     }
 
     fn matches(&self, host: &str) -> bool {
         match self {
-            Self::Any => true,
             Self::ExactIp(expected) => host
                 .parse::<IpAddr>()
-                .is_ok_and(|actual| &actual == expected),
+                .is_ok_and(|actual| &canonical_ip_address(actual) == expected),
             Self::Cidr { base, prefix } => host
                 .parse::<IpAddr>()
-                .is_ok_and(|actual| cidr_contains(*base, *prefix, actual)),
+                .is_ok_and(|actual| cidr_contains(*base, *prefix, canonical_ip_address(actual))),
             Self::Wildcard(pattern) => pattern.matches(&normalize_host(host)),
         }
     }
@@ -869,15 +948,21 @@ enum NetworkPortMatcher {
 
 impl NetworkPortMatcher {
     fn new(port: Option<&str>) -> Result<Self, String> {
-        let Some(port) = port.map(str::trim).filter(|port| !port.is_empty()) else {
+        let Some(port) = port else {
             return Ok(Self::Any);
         };
-        if port == "*" {
-            return Ok(Self::Any);
+        if port.is_empty() || !port.bytes().all(|c| c.is_ascii_digit()) {
+            return Err(format!(
+                "invalid port {port:?}; use a number from 1 to 65535"
+            ));
         }
-        port.parse::<u16>()
-            .map(Self::Exact)
-            .map_err(|_| format!("invalid port `{port}`"))
+        let value = port
+            .parse::<u16>()
+            .map_err(|_| format!("invalid port `{port}`; use a number from 1 to 65535"))?;
+        if value == 0 {
+            return Err("network port must be between 1 and 65535".into());
+        }
+        Ok(Self::Exact(value))
     }
 
     fn matches(&self, port: Option<u16>) -> bool {
@@ -917,9 +1002,9 @@ fn classify_network_target(target: &NetworkTarget) -> NetworkClass {
 
 fn classify_ip_addr(addr: IpAddr) -> NetworkClass {
     match addr {
-        IpAddr::V6(addr) if addr.to_ipv4_mapped().is_some() => {
-            classify_ip_addr(IpAddr::V4(addr.to_ipv4_mapped().expect("mapped IPv4 checked")))
-        }
+        IpAddr::V6(addr) if addr.to_ipv4_mapped().is_some() => classify_ip_addr(IpAddr::V4(
+            addr.to_ipv4_mapped().expect("mapped IPv4 checked"),
+        )),
         IpAddr::V4(addr) if addr.is_loopback() => NetworkClass::Loopback,
         IpAddr::V6(addr) if addr.is_loopback() => NetworkClass::Loopback,
         IpAddr::V4(addr)
@@ -940,11 +1025,29 @@ fn is_private_ipv6(addr: Ipv6Addr) -> bool {
 }
 
 fn split_network_rule_host_port(pattern: &str) -> Result<(&str, Option<&str>), String> {
-    if let Some(rest) = pattern.strip_prefix('[')
-        && let Some((host, tail)) = rest.split_once(']')
-    {
-        let port = tail.strip_prefix(':');
+    if let Some(rest) = pattern.strip_prefix('[') {
+        let (host, tail) = rest
+            .split_once(']')
+            .ok_or_else(|| "unterminated bracketed IPv6 address".to_string())?;
+        if host.parse::<Ipv6Addr>().is_err()
+            && host
+                .split_once('/')
+                .is_none_or(|(ip, _)| ip.parse::<Ipv6Addr>().is_err())
+        {
+            return Err("brackets are reserved for IPv6 addresses or IPv6 CIDRs".into());
+        }
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(
+                tail.strip_prefix(':')
+                    .ok_or_else(|| "unexpected text after the IPv6 closing bracket".to_string())?,
+            )
+        };
         return Ok((host, port));
+    }
+    if pattern.contains(['[', ']']) {
+        return Err("invalid bracketed network target".into());
     }
 
     if pattern.matches(':').count() == 1
@@ -961,6 +1064,15 @@ fn normalize_host(host: impl AsRef<str>) -> String {
         .trim()
         .trim_end_matches('.')
         .to_ascii_lowercase()
+}
+
+fn canonical_ip_address(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map_or(IpAddr::V6(address), IpAddr::V4),
+        address => address,
+    }
 }
 
 fn cidr_contains(base: IpAddr, prefix: u8, actual: IpAddr) -> bool {
@@ -1186,15 +1298,15 @@ impl PathPattern {
             Self::Workspace(pattern) => ctx
                 .workspace_relative_norm
                 .as_deref()
-                .is_some_and(|relative| pattern.matches(relative)),
+                .is_some_and(|relative| pattern.matches_path(relative)),
             Self::ManagedWorkspace(pattern) => ctx
                 .managed_relative_norm
                 .as_deref()
-                .is_some_and(|relative| pattern.matches(relative)),
-            Self::Absolute(pattern) => pattern.matches(&ctx.absolute_norm),
+                .is_some_and(|relative| pattern.matches_path(relative)),
+            Self::Absolute(pattern) => pattern.matches_path(&ctx.absolute_norm),
             Self::AbsoluteAny(patterns) => patterns
                 .iter()
-                .any(|pattern| pattern.matches(&ctx.absolute_norm)),
+                .any(|pattern| pattern.matches_path(&ctx.absolute_norm)),
         }
     }
 }
@@ -1223,12 +1335,15 @@ fn workspace_alias_pattern(rest: &str) -> String {
 /// user or a tool spelled `/tmp/...` to the external default, so writing a
 /// scratch file there asked for permission even though the temp class is
 /// allowed outright.
-fn temp_roots() -> Vec<PathBuf> {
-    vec![
-        std::env::temp_dir(),
-        PathBuf::from("/tmp"),
-        PathBuf::from("/private/tmp"),
-    ]
+pub(crate) fn temp_roots() -> Vec<PathBuf> {
+    let roots = vec![std::env::temp_dir()];
+    #[cfg(unix)]
+    let roots = {
+        let mut roots = roots;
+        roots.extend([PathBuf::from("/tmp"), PathBuf::from("/private/tmp")]);
+        roots
+    };
+    roots
 }
 
 fn absolute_alias_patterns(
@@ -1240,16 +1355,27 @@ fn absolute_alias_patterns(
     let rest = rest.trim_start_matches('/');
     let mut expansions: Vec<String> = Vec::new();
     for root in roots {
-        let mut normalized = normalize_path_string(&root);
-        if normalized.is_empty() {
-            continue;
-        }
-        if !rest.is_empty() {
-            normalized.push('/');
-            normalized.push_str(rest);
-        }
-        if !expansions.contains(&normalized) {
-            expansions.push(normalized);
+        let canonical = crate::authorization::canonical_resource_path(&root).map_err(|reason| {
+            PermissionConfigError::InvalidPathRule {
+                pattern: pattern.to_owned(),
+                reason,
+            }
+        })?;
+        // Capture both the platform spelling and the real identity. Tool
+        // effects use canonical paths; macOS /tmp and relocated HOME roots
+        // must keep the same policy after that normalization.
+        for root in [&root, &canonical] {
+            let mut normalized = normalize_path_string(root);
+            if normalized.is_empty() {
+                continue;
+            }
+            if !rest.is_empty() {
+                normalized.push('/');
+                normalized.push_str(rest);
+            }
+            if !expansions.contains(&normalized) {
+                expansions.push(normalized);
+            }
         }
     }
     if expansions.is_empty() {
@@ -1274,7 +1400,7 @@ fn unknown_angle_alias(pattern: &str) -> Option<String> {
     Some(alias.to_string())
 }
 
-fn home_dir() -> Option<PathBuf> {
+pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -1329,33 +1455,15 @@ impl MatchContext {
         };
         let absolute_norm = normalize_path_string(&absolute_target);
 
-        let in_workspace =
-            absolute_norm == root_norm || absolute_norm.starts_with(&format!("{root_norm}/"));
-
-        let workspace_relative_norm = if in_workspace {
-            if absolute_norm == root_norm {
-                Some(".".to_string())
-            } else {
-                Some(
-                    absolute_norm
-                        .trim_start_matches(&format!("{root_norm}/"))
-                        .to_string(),
-                )
-            }
-        } else {
-            None
-        };
+        let workspace_relative_norm =
+            relative_path_norm(Path::new(&absolute_norm), Path::new(&root_norm));
+        let in_workspace = workspace_relative_norm.is_some();
 
         let managed_root =
             agena_storage_layout::StorageLayout::current().workspace_dir(&root_absolute);
         let managed_norm = normalize_path_string(&managed_root);
-        let managed_relative_norm = if absolute_norm == managed_norm {
-            Some(".".to_owned())
-        } else {
-            absolute_norm
-                .strip_prefix(&format!("{managed_norm}/"))
-                .map(str::to_owned)
-        };
+        let managed_relative_norm =
+            relative_path_norm(Path::new(&absolute_norm), Path::new(&managed_norm));
         Self {
             absolute_norm,
             managed_relative_norm,
@@ -1365,6 +1473,16 @@ impl MatchContext {
     }
 }
 
+fn relative_path_norm(path: &Path, root: &Path) -> Option<String> {
+    path_identity::relative(path, root).map(|relative| {
+        if relative.as_os_str().is_empty() {
+            ".".to_owned()
+        } else {
+            normalize_path_string(&relative)
+        }
+    })
+}
+
 fn normalize_path_string(path: &Path) -> String {
     let cleaned = path.clean();
     let mut out = cleaned.to_string_lossy().replace('\\', "/");
@@ -1372,6 +1490,9 @@ fn normalize_path_string(path: &Path) -> String {
         out.pop();
     }
     if cfg!(windows) {
+        if let Some(ordinary) = out.strip_prefix("//?/") {
+            out = ordinary.to_owned();
+        }
         out.make_ascii_lowercase();
     }
     out

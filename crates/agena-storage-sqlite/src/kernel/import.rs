@@ -466,7 +466,12 @@ async fn close_blob(
     Ok(())
 }
 
-pub(super) async fn prepare(path: &Path, request: RequestId, workspace: i64) -> Result<Staged> {
+pub(super) async fn prepare(
+    path: &Path,
+    request: RequestId,
+    workspace: i64,
+    validator: &SessionImportValidator,
+) -> Result<Staged> {
     if workspace <= 0 {
         return Err(invalid("workspace identity must be positive"));
     }
@@ -587,6 +592,8 @@ pub(super) async fn prepare(path: &Path, request: RequestId, workspace: i64) -> 
                     serde_json::from_value(data["configuration"].clone()).map_err(invalid)?;
                 configuration.parent_session_id = None;
                 configuration.relation_kind = agena_domain::SessionRelationKind::Root;
+                lifecycle::normalize_configuration_permissions(&mut configuration)?;
+                validator(&configuration).map_err(invalid)?;
                 put(&mut db,"agena_sessions",&json!({"id":1,"workspace_id":1,"root_session_id":1,"title":metadata.title,"favorite":metadata.favorite,"pinned":metadata.pinned,"selection_json":metadata.selection.map(|value|encode(&value)).transpose()?,"configuration_json":encode(&configuration)?,"created_at_ms":now_ms(),"updated_at_ms":now_ms()}),&[]).await?;
                 let mut window = object(&data["prompt_window"])?;
                 window.insert("session_id".into(), json!(1));

@@ -130,8 +130,30 @@ pub fn validate_layered_config_text(
     let mut merged = global;
     merged.merge_project_from_with_keys(workspace, workspace_merge_keys);
     merged.merge_from(RawConfig::from_env(env)?);
-    merged.resolve()?;
+    let resolved = merged.resolve()?;
+    if !workspace_path.as_os_str().is_empty() {
+        let parent = workspace_path.parent().unwrap_or_else(|| Path::new("."));
+        let workspace_root = if parent.file_name().is_some_and(|name| name == ".agena") {
+            parent.parent().unwrap_or_else(|| Path::new("."))
+        } else {
+            parent
+        };
+        validate_permission_config_in_workspace(&resolved.permission, workspace_root)?;
+    }
     Ok(())
+}
+
+/// Validate real filesystem identities after layering, while the owning
+/// workspace and platform capabilities are still available.
+pub(super) fn validate_permission_config_in_workspace(
+    permission: &agena_domain::PermissionConfig,
+    workspace_root: &Path,
+) -> Result<(), ConfigError> {
+    agena_runtime_contracts::authorization::validate_permission_config_for_workspace(
+        permission,
+        workspace_root,
+    )
+    .map_err(|error| ConfigError::Validation(error.to_string()))
 }
 
 fn parse_raw_config_text(

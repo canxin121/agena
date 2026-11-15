@@ -286,6 +286,8 @@ impl SessionManager {
             effective_workspace_root: (!global).then_some(root),
             ..Default::default()
         };
+        self.validate_session_permission_configuration(workspace, &configuration)
+            .await?;
         let command = request_key("channel-principal-session", scope_key);
         let session = persist(|| async {
             match workspace {

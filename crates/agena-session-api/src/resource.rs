@@ -6,6 +6,7 @@ use agena_domain::{
     WorkflowState, session_kernel::ExecutionAttemptSettlement,
 };
 use chrono::{DateTime, Utc};
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -725,7 +726,7 @@ pub struct ApprovalModelSelectionResource {
     pub verbosity: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 /// Network permission configuration of a session.
 pub struct NetworkPermissionConfigResource {
@@ -735,19 +736,29 @@ pub struct NetworkPermissionConfigResource {
     pub private: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loopback: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, PermissionMode>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub rules: IndexMap<String, PermissionMode>,
 }
+
+impl PartialEq for NetworkPermissionConfigResource {
+    fn eq(&self, other: &Self) -> bool {
+        self.internet == other.internet
+            && self.private == other.private
+            && self.loopback == other.loopback
+            && self.rules.iter().eq(other.rules.iter())
+    }
+}
+
+impl Eq for NetworkPermissionConfigResource {}
 
 /// Path permission configuration of a session.
 ///
 /// Every key is optional: an omitted key keeps the built-in default, so
 /// deleting a key restores it. The built-ins are ordinary entries in `rules`,
 /// which a user's same-pattern entry replaces; deleting the user's entry brings
-/// the built-in back. A rule always takes the explicit read/write object form —
-/// there is no shorthand string form.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
+/// the built-in back. Paths use the canonical `readonly`, `readwrite`, or `deny`
+/// string mode shared with the runtime configuration.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct PathPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<PathAccessModesResource>,
@@ -755,6 +766,23 @@ pub struct PathPermissionConfigResource {
     pub external: Option<PathAccessModesResource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rules: BTreeMap<String, PathAccessModesResource>,
+}
+
+impl<'de> Deserialize<'de> for PathPermissionConfigResource {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Validate legacy rule pairs before converting individual access values.
+        // Otherwise the DTO would erase the distinction between an old
+        // root-only object and a newly approved recursive string rule.
+        let path = agena_domain::PathPermissionConfig::deserialize(deserializer)?;
+        Ok(Self {
+            workspace: path.workspace,
+            external: path.external,
+            rules: path.rules.into_iter().collect(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -782,19 +810,14 @@ pub struct ToolPermissionConfigResource {
     pub default: Option<PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<String, PermissionMode>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub rules: BTreeMap<String, ToolPermissionRulesResource>,
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub rules: IndexMap<String, ToolPermissionRulesResource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-/// Read/write access modes for a path scope.
-pub struct PathAccessModesResource {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read: Option<PermissionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub write: Option<PermissionMode>,
-}
+/// A path resource serializes as `readonly`, `readwrite`, or `deny`.
+/// Reuse the domain wire contract so session updates and configuration files
+/// perform identical legacy conversion and reject invalid access combinations.
+pub type PathAccessModesResource = agena_domain::PathAccessModes;
 
 /// Wire status for a scheduler delivery attempt.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -805,13 +828,25 @@ pub enum ScheduledJobRunStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 /// Tool permission rules: a single mode or an ordered name-to-mode map.
 pub enum ToolPermissionRulesResource {
     Mode(PermissionMode),
-    Ordered(BTreeMap<String, PermissionMode>),
+    Ordered(IndexMap<String, PermissionMode>),
 }
+
+impl PartialEq for ToolPermissionRulesResource {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Mode(left), Self::Mode(right)) => left == right,
+            (Self::Ordered(left), Self::Ordered(right)) => left.iter().eq(right.iter()),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ToolPermissionRulesResource {}
 
 impl Default for SessionState {
     fn default() -> Self {
@@ -1138,43 +1173,40 @@ impl From<PermissionConfigResource> for agena_domain::PermissionConfig {
                         .map(|(pattern, mode)| (pattern, permission_mode_to_domain(mode)))
                         .collect(),
                 }),
-            tools: value.tools.map(|tools| {
-                agena_domain::ToolPermissionConfig {
-                    default: tools.default.map(permission_mode_to_domain),
-                    names: tools
-                        .names
-                        .into_iter()
-                        .map(|(name, mode)| (name, permission_mode_to_domain(mode)))
-                        .collect(),
-                    plugin: Default::default(),
-                    rules: tools
-                        .rules
-                        .into_iter()
-                        .map(|(name, rules)| {
-                            (
-                                name,
-                                match rules {
-                                    ToolPermissionRulesResource::Mode(mode) => {
-                                        agena_domain::ToolPermissionRules::Mode(
-                                            permission_mode_to_domain(mode),
-                                        )
-                                    }
-                                    ToolPermissionRulesResource::Ordered(rules) => {
-                                        agena_domain::ToolPermissionRules::Ordered(
-                                            rules
-                                                .into_iter()
-                                                .map(|(pattern, mode)| {
-                                                    (pattern, permission_mode_to_domain(mode))
-                                                })
-                                                .collect(),
-                                        )
-                                    }
-                                },
-                            )
-                        })
-                        .collect(),
-                }
-                .with_canonical_tool_names()
+            tools: value.tools.map(|tools| agena_domain::ToolPermissionConfig {
+                default: tools.default.map(permission_mode_to_domain),
+                names: tools
+                    .names
+                    .into_iter()
+                    .map(|(name, mode)| (name, permission_mode_to_domain(mode)))
+                    .collect(),
+                plugin: Default::default(),
+                rules: tools
+                    .rules
+                    .into_iter()
+                    .map(|(name, rules)| {
+                        (
+                            name,
+                            match rules {
+                                ToolPermissionRulesResource::Mode(mode) => {
+                                    agena_domain::ToolPermissionRules::Mode(
+                                        permission_mode_to_domain(mode),
+                                    )
+                                }
+                                ToolPermissionRulesResource::Ordered(rules) => {
+                                    agena_domain::ToolPermissionRules::Ordered(
+                                        rules
+                                            .into_iter()
+                                            .map(|(pattern, mode)| {
+                                                (pattern, permission_mode_to_domain(mode))
+                                            })
+                                            .collect(),
+                                    )
+                                }
+                            },
+                        )
+                    })
+                    .collect(),
             }),
             approval_model: value.approval_model.map(|model| {
                 agena_domain::ApprovalModelSelection {
@@ -1217,10 +1249,7 @@ impl From<agena_domain::PermissionScope> for PermissionScope {
 fn path_access_modes_resource_from_domain(
     value: &agena_domain::PathAccessModes,
 ) -> PathAccessModesResource {
-    PathAccessModesResource {
-        read: value.read.map(permission_mode_resource_from_domain),
-        write: value.write.map(permission_mode_resource_from_domain),
-    }
+    value.clone()
 }
 
 const fn permission_mode_resource_from_domain(
@@ -1235,10 +1264,7 @@ const fn permission_mode_resource_from_domain(
 }
 
 fn path_access_modes_to_domain(value: PathAccessModesResource) -> agena_domain::PathAccessModes {
-    agena_domain::PathAccessModes {
-        read: value.read.map(permission_mode_to_domain),
-        write: value.write.map(permission_mode_to_domain),
-    }
+    value
 }
 
 const fn permission_mode_to_domain(value: PermissionMode) -> agena_domain::PermissionMode {
@@ -1471,4 +1497,185 @@ pub struct ServerIdentityResource {
     pub pid: u32,
     pub started_at: DateTime<Utc>,
     pub protocol_version: u32,
+}
+
+#[cfg(test)]
+mod permission_path_wire_tests {
+    use super::{
+        PermissionConfigResource, PermissionMode, ToolPermissionConfigResource,
+        ToolPermissionRulesResource,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn session_api_equality_detects_reordered_permission_rules() {
+        for (left, right) in [
+            (
+                r#"{"network":{"rules":{"8.8.8.8:443":"deny","8.0.0.0/8":"allow"}}}"#,
+                r#"{"network":{"rules":{"8.0.0.0/8":"allow","8.8.8.8:443":"deny"}}}"#,
+            ),
+            (
+                r#"{"tools":{"rules":{"agena.shell.exec":{"git push *":"deny","git *":"ask"}}}}"#,
+                r#"{"tools":{"rules":{"agena.shell.exec":{"git *":"ask","git push *":"deny"}}}}"#,
+            ),
+        ] {
+            let left: PermissionConfigResource = serde_json::from_str(left).unwrap();
+            let right: PermissionConfigResource = serde_json::from_str(right).unwrap();
+            assert_eq!(left, left.clone());
+            assert_ne!(left, right);
+        }
+    }
+
+    #[test]
+    fn session_api_preserves_ordered_network_and_command_rule_precedence() {
+        let input = r#"{
+            "network": {"rules": {"8.8.8.8:443": "deny", "8.0.0.0/8": "allow"}},
+            "tools": {"rules": {
+                "agena.shell.exec": {"git push *": "deny", "git *": "ask"}
+            }}
+        }"#;
+        let resource: PermissionConfigResource = serde_json::from_str(input).unwrap();
+        let network_keys = |value: &PermissionConfigResource| {
+            value
+                .network
+                .as_ref()
+                .unwrap()
+                .rules
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let command_keys = |value: &PermissionConfigResource| {
+            let ToolPermissionRulesResource::Ordered(rules) =
+                &value.tools.as_ref().unwrap().rules["agena.shell.exec"]
+            else {
+                panic!("expected ordered command rules")
+            };
+            rules.keys().cloned().collect::<Vec<_>>()
+        };
+        assert_eq!(network_keys(&resource), ["8.8.8.8:443", "8.0.0.0/8"]);
+        assert_eq!(command_keys(&resource), ["git push *", "git *"]);
+        let domain: agena_domain::PermissionConfig = resource.into();
+        assert_eq!(
+            domain
+                .network
+                .as_ref()
+                .unwrap()
+                .rules
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["8.8.8.8:443", "8.0.0.0/8"],
+        );
+        let round_trip = PermissionConfigResource::from(&domain);
+        assert_eq!(network_keys(&round_trip), ["8.8.8.8:443", "8.0.0.0/8"]);
+        assert_eq!(command_keys(&round_trip), ["git push *", "git *"]);
+        let encoded = serde_json::to_string(&round_trip).unwrap();
+        assert!(encoded.find("8.8.8.8:443").unwrap() < encoded.find("8.0.0.0/8").unwrap());
+        assert!(encoded.find("git push *").unwrap() < encoded.find("git *").unwrap());
+    }
+
+    #[test]
+    fn dto_conversion_keeps_conflicting_tool_aliases_for_validation() {
+        for resource_tools in [
+            ToolPermissionConfigResource {
+                names: [
+                    ("shell.exec".to_owned(), PermissionMode::Allow),
+                    ("agena.shell.exec".to_owned(), PermissionMode::Deny),
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+            ToolPermissionConfigResource {
+                rules: [
+                    (
+                        "shell.exec".to_owned(),
+                        ToolPermissionRulesResource::Mode(PermissionMode::Allow),
+                    ),
+                    (
+                        "agena.shell.exec".to_owned(),
+                        ToolPermissionRulesResource::Mode(PermissionMode::Deny),
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+                ..Default::default()
+            },
+        ] {
+            let resource = PermissionConfigResource {
+                tools: Some(resource_tools),
+                ..Default::default()
+            };
+            let domain: agena_domain::PermissionConfig = resource.into();
+            let tools = domain.tools.unwrap();
+            assert_eq!(tools.names.len() + tools.rules.len(), 2);
+            assert!(
+                tools
+                    .validate_aliases()
+                    .unwrap_err()
+                    .contains("conflicting")
+            );
+        }
+    }
+
+    #[test]
+    fn path_modes_round_trip_as_strings() {
+        let value = json!({
+            "path": {
+                "workspace": "deny",
+                "rules": {
+                    "<workspace>/input": "readonly",
+                    "<workspace>/output": "readwrite"
+                }
+            }
+        });
+        let config: PermissionConfigResource = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(config).unwrap(), value);
+    }
+
+    #[test]
+    fn session_api_rejects_implicit_legacy_scope_expansion() {
+        let value = json!({
+            "path": {
+                "rules": {
+                    "<workspace>/input": { "read": "allow", "write": "deny" }
+                }
+            }
+        });
+        assert!(serde_json::from_value::<PermissionConfigResource>(value).is_err());
+    }
+
+    #[test]
+    fn session_api_normalizes_complete_legacy_directory_rules() {
+        let value = json!({
+            "path": {
+                "rules": {
+                    "<workspace>/input": { "read": "allow", "write": "deny" },
+                    "<workspace>/input/**": { "read": "allow", "write": "deny" }
+                }
+            }
+        });
+        let config: PermissionConfigResource = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            serde_json::to_value(config).unwrap(),
+            json!({ "path": { "rules": { "<workspace>/input": "readonly" } } })
+        );
+    }
+
+    #[test]
+    fn session_api_rejects_legacy_approval_and_write_only_modes() {
+        for mode in [
+            json!({ "read": "allow", "write": "ask" }),
+            json!({ "read": "deny", "write": "allow" }),
+            json!({ "read": "allow" }),
+        ] {
+            assert!(
+                serde_json::from_value::<PermissionConfigResource>(
+                    json!({ "path": { "workspace": mode } })
+                )
+                .is_err()
+            );
+        }
+    }
 }

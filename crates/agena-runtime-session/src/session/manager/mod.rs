@@ -36,6 +36,7 @@ mod integration_execution;
 mod managed;
 mod media;
 mod memory;
+mod permission_config;
 mod queries;
 mod results;
 mod results_text;
@@ -566,6 +567,23 @@ fn archive_failure(error: KernelError) -> agena_failure::Failure {
                 error,
             );
         }
+    };
+    // Permission validators produce bounded field-oriented diagnostics that
+    // callers need to correct the imported policy. Keep unrelated archive and
+    // storage diagnostics behind their existing safe summaries.
+    let message = match &error {
+        KernelError::Invalid(detail)
+            if [
+                "session.permission:",
+                "session.permission_ceiling:",
+                "effective session.permission:",
+            ]
+            .iter()
+            .any(|prefix| detail.starts_with(prefix)) =>
+        {
+            detail.as_str()
+        }
+        _ => message,
     };
     let failure = Failure::new(
         FailureCode::new(code),

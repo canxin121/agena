@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::{fmt, net::IpAddr, str::FromStr};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,10 +66,20 @@ pub enum NetworkTargetParseError {
     InvalidPort { target: String, port: String },
 }
 fn normalize_host(host: impl AsRef<str>) -> String {
-    host.as_ref()
-        .trim()
-        .trim_end_matches('.')
-        .to_ascii_lowercase()
+    let host = host.as_ref().trim().trim_end_matches('.');
+    // URL::host_str includes IPv6 brackets, while raw host:port parsing
+    // already removes them. Authorize both spellings against one identity.
+    let address = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    match address.parse::<IpAddr>() {
+        Ok(IpAddr::V6(address)) => address
+            .to_ipv4_mapped()
+            .map_or_else(|| address.to_string(), |address| address.to_string()),
+        Ok(address) => address.to_string(),
+        Err(_) => host.to_ascii_lowercase(),
+    }
 }
 fn split_host_port(target: &str) -> Result<(&str, Option<u16>), NetworkTargetParseError> {
     if let Some(rest) = target.strip_prefix('[')
@@ -88,6 +98,28 @@ fn split_host_port(target: &str) -> Result<(&str, Option<u16>), NetworkTargetPar
     }
     Ok((target, None))
 }
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn raw_and_url_ipv6_targets_have_the_same_host_identity() {
+        for (input, host, port) in [
+            ("http://[::1]/", "::1", Some(80)),
+            ("[0:0:0:0:0:0:0:1]:80", "::1", Some(80)),
+            ("https://[::ffff:127.0.0.1]:8443/", "127.0.0.1", Some(8443)),
+            ("[::ffff:7f00:1]:8443", "127.0.0.1", Some(8443)),
+            ("::ffff:127.0.0.1", "127.0.0.1", None),
+            ("127.0.0.1:8443", "127.0.0.1", Some(8443)),
+            ("https://EXAMPLE.COM./", "example.com", Some(443)),
+        ] {
+            let target: NetworkTarget = input.parse().unwrap();
+            assert_eq!(target.host(), host, "{input}");
+            assert_eq!(target.port(), port, "{input}");
+        }
+    }
+}
+
 fn parse_port(target: &str, port: &str) -> Result<Option<u16>, NetworkTargetParseError> {
     let port = port.trim();
     if port.is_empty() || port == "*" {

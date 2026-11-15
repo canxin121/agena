@@ -542,6 +542,17 @@ pub trait KernelBackend: Send + Sync {
         workspace_id: i64,
         path: &std::path::Path,
     ) -> Result<CommitReceipt<SessionMetadata>>;
+    async fn import_archive_validated(
+        &self,
+        _request: RequestId,
+        _workspace_id: i64,
+        _path: &std::path::Path,
+        _validator: crate::kernel::SessionImportValidator,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        Err(KernelError::Invalid(
+            "this storage backend does not support validated archive imports".into(),
+        ))
+    }
     async fn latest_round(&self, session: SessionId)
     -> Result<ReadView<Option<ProviderRoundView>>>;
     /// Most recent completed round that retained provider usage. A later

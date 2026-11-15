@@ -666,6 +666,20 @@ impl AppError {
             Self::Internal(diagnostic) => {
                 UserPresentation::validated_with_context(code, diagnostic)
             }
+            // Permission validation already provides the field, conflicting
+            // resource and corrective reason. Treating its colons as a generic
+            // error chain would discard the field and the offending rule.
+            Self::Config(detail)
+                if [
+                    "session.permission:",
+                    "session.permission_ceiling:",
+                    "effective session.permission:",
+                ]
+                .iter()
+                .any(|prefix| detail.starts_with(prefix)) =>
+            {
+                UserPresentation::validated(code, detail)
+            }
             // Manager-level configuration stops carry the actionable reason
             // (repeat guard, continuation limit, turn cap). Keep the generic
             // static prose for settings-validation errors only.

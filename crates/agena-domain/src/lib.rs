@@ -176,8 +176,8 @@ pub use network_permission::NetworkPermissionConfig;
 pub use network_target::{NetworkTarget, NetworkTargetParseError};
 pub use operation_error::OperationError;
 pub use part_kind::PartKind;
-pub use path_access::PathAccessModes;
-pub use path_permission::PathPermissionConfig;
+pub use path_access::{PathAccessModes, PathPermissionMode};
+pub use path_permission::{PathPermissionConfig, canonical_permission_path};
 pub use pending_interactive_request::{
     PendingInteractiveRequest, PendingInteractiveRequestContext,
 };

@@ -11,6 +11,7 @@ use std::time::Duration;
 pub mod blocking;
 pub mod pty;
 pub mod sandbox;
+pub mod sandbox_check;
 mod sandbox_proxy;
 pub mod shell;
 #[cfg(unix)]

@@ -917,7 +917,7 @@ pub enum ServerLifecycleAction {
     Stop,
     Install,
     Uninstall,
-    /// Open the installed macOS service's one-time Full Disk Access setup.
+    /// Check and request the macOS service's file, accessibility, and screen permissions.
     Permissions,
 }
 

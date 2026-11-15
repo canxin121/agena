@@ -10,6 +10,8 @@ mod git {
 mod lifecycle;
 #[cfg(target_os = "macos")]
 mod macos_permissions;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos_privacy_probe;
 pub(crate) mod mcp;
 mod path_utils;
 mod persistence;

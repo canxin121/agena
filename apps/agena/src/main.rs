@@ -34,6 +34,13 @@ fn main() -> ExitCode {
     if let Some(code) = agena_process::sandbox::try_run_launcher() {
         std::process::exit(code);
     }
+    if let Some(code) = agena_process::sandbox_check::try_run_cli() {
+        std::process::exit(code);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(code) = server::macos_privacy_probe::try_run_cli() {
+        std::process::exit(code);
+    }
     if let Some(code) = agena_runtime_tools::sandbox_worker::try_run_worker(
         agena_bundled_plugins::execute_sandbox_tool_with_read_filter,
     ) {

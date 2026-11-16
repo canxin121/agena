@@ -3,8 +3,9 @@
 use std::net::IpAddr;
 
 use crate::{
-    NetworkEgressConfig, NetworkPeerConfig, NetworkPermissionConfig, NetworkPortConfig,
-    NetworkProtocol, NetworkRuleConfig, NetworkTarget, PermissionAction, PermissionMode,
+    NetworkAction, NetworkEgressConfig, NetworkPeerConfig, NetworkPermissionConfig,
+    NetworkPortConfig, NetworkProtocol, NetworkRuleConfig, NetworkTarget, PermissionAction,
+    PermissionMode,
 };
 
 /// Other permission subjects retain their own approval modes. Network decisions
@@ -74,9 +75,15 @@ pub fn validate_persisted_network_decision(
         },
     };
     let egress = NetworkEgressConfig {
+        // Validate the remembered rule where it has an effect. A deny on an
+        // offline base would simplify away and hide unsupported native filters.
+        default: Some(if mode == PermissionMode::Deny {
+            NetworkAction::Allow
+        } else {
+            NetworkAction::Deny
+        }),
         allow: (mode == PermissionMode::Allow).then(|| vec![rule.clone()]),
         deny: (mode == PermissionMode::Deny).then_some(vec![rule]),
-        ..Default::default()
     };
     NetworkPermissionConfig {
         egress: Some(egress),

@@ -121,21 +121,14 @@ impl PathPermissionConfig {
             let parent_mode = parent_modes.sandbox_mode().expect("validated mode");
             for (child, child_modes) in ordered.iter().skip(index + 1) {
                 let child_mode = child_modes.sandbox_mode().expect("validated mode");
-                if !child.starts_with(&format!("{parent}/")) || parent_mode == child_mode {
+                if !child.starts_with(&format!("{}/", parent.trim_end_matches('/')))
+                    || parent_mode == child_mode
+                {
                     continue;
                 }
-                let reason = if parent_mode == crate::PathPermissionMode::Deny {
-                    Some("an explicitly denied directory cannot contain a granted child")
-                } else if child_mode != crate::PathPermissionMode::Deny {
-                    Some(
-                        "nested readonly/readwrite grants are not portable; use separate authorization roots",
-                    )
-                } else {
-                    None
-                };
-                if let Some(reason) = reason {
+                if parent_mode == crate::PathPermissionMode::Deny {
                     return Err(format!(
-                        "invalid permission.path.rules[{child:?}]: {reason}; conflicts with {parent:?}"
+                        "invalid permission.path.rules[{child:?}]: an explicitly denied directory cannot contain a granted child; conflicts with {parent:?}"
                     ));
                 }
             }
@@ -168,10 +161,10 @@ pub fn canonical_permission_path(pattern: &str) -> Result<String, String> {
         return Err("control characters are not allowed in a permission path".into());
     }
     let normalized = pattern.replace('\\', "/");
-    let normalized = normalized.strip_suffix("/**").unwrap_or(&normalized);
-    if normalized.is_empty() {
-        return Err("filesystem roots cannot be granted or denied as a resource rule; name a specific directory".into());
-    }
+    let normalized = normalized
+        .strip_suffix("**")
+        .filter(|path| path.ends_with('/'))
+        .unwrap_or(&normalized);
     if normalized.contains(['*', '?']) {
         return Err(
             "file-name wildcards are unsupported by MXC path rules; name a concrete file or directory (directories include descendants)"
@@ -231,9 +224,6 @@ pub fn canonical_permission_path(pattern: &str) -> Result<String, String> {
         }
     }
     if parts.is_empty() {
-        if prefix.ends_with('/') {
-            return Err("filesystem roots cannot be granted or denied as a resource rule; name a specific directory".into());
-        }
         return Ok(prefix);
     }
     if prefix.ends_with('/') {
@@ -258,6 +248,10 @@ mod tests {
             ("<home>/.ssh", "<home>/.ssh"),
             ("/srv/project/output", "/srv/project/output"),
             ("c:\\work\\output", "C:/work/output"),
+            ("/", "/"),
+            ("/**", "/"),
+            ("c:\\", "C:/"),
+            ("C:/**", "C:/"),
         ] {
             assert_eq!(canonical_permission_path(input).unwrap(), expected);
         }
@@ -313,6 +307,43 @@ mod tests {
     }
 
     #[test]
+    fn concrete_directory_rules_accept_nested_readonly_and_readwrite_modes() {
+        for (parent, child) in [("readonly", "readwrite"), ("readwrite", "readonly")] {
+            let value = serde_json::json!({"rules": {
+                "<workspace>/data": parent,
+                "<workspace>/data/output": child,
+                "<workspace>/data/output/reference": parent
+            }});
+            let config: PathPermissionConfig = serde_json::from_value(value.clone()).unwrap();
+            config.validate().unwrap();
+            assert_eq!(serde_json::to_value(config).unwrap(), value);
+        }
+        for child in ["readonly", "readwrite"] {
+            let error =
+                serde_json::from_value::<PathPermissionConfig>(serde_json::json!({"rules": {
+                    "<workspace>/secrets": "deny",
+                    "<workspace>/secrets/public": child
+                }}))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("explicitly denied"), "{error}");
+        }
+    }
+
+    #[test]
+    fn explicit_filesystem_root_denials_cannot_be_reopened_by_a_child() {
+        for (parent, child) in [("/", "/srv/output"), ("C:/", "C:/work/output")] {
+            let error =
+                serde_json::from_value::<PathPermissionConfig>(serde_json::json!({"rules": {
+                    parent:"deny", child:"readwrite"
+                }}))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("explicitly denied"), "{error}");
+        }
+    }
+
+    #[test]
     fn ambiguous_or_unrepresentable_paths_fail_early() {
         for value in [
             "",
@@ -327,10 +358,7 @@ mod tests {
             "secret?.txt",
             "<workspace>/input/**/**",
             "~/.ssh",
-            "/",
-            "/**",
-            "C:/",
-            "C:/**",
+            "C:",
             "C:relative",
             "//server/share",
             "/tmp/file:stream",

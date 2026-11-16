@@ -17,6 +17,95 @@ fn compiled(config: &NetworkPermissionConfig) -> NetworkPermissionPolicy {
 }
 
 #[test]
+fn lossless_simplification_preserves_endpoint_decisions() {
+    let mut policies = policy_matrix();
+    for value in [
+        json!({"default":"allow","allow":[{"to":"192.0.2.0/24","protocol":"tcp","ports":[443]}]}),
+        json!({"default":"deny","deny":[{"to":"192.0.2.0/24"}]}),
+        json!({"default":"deny","allow":[{"to":"*"}]}),
+        json!({"default":"allow","deny":[{"to":"*"}]}),
+        json!({"allow":[{"to":"*"}],"deny":[{"to":"*"}]}),
+        json!({"allow":[{"to":"*"}],"deny":[{"to":"192.0.2.0/24","except":["192.0.2.64/26"],"protocol":"tcp","ports":[443]}]}),
+        json!({"default":"allow","allow":[{"to":"::/0"}],"inbound":"allow","hostLoopback":"allow"}),
+        json!({"allow":[{"to":"*","ports":["1-65535"]}]}),
+    ] {
+        policies.push(serde_json::from_value(value).unwrap());
+    }
+    for config in policies {
+        // Evaluate the authored rules directly as an independent reference;
+        // from_config now lowers policies before runtime permission checks.
+        let authored = NetworkPermissionPolicy {
+            config: config.resolved(),
+        };
+        let simplified = compiled(&config);
+        for address in [
+            "192.0.2.1",
+            "192.0.2.64",
+            "192.0.2.127",
+            "192.0.2.128",
+            "198.51.100.1",
+            "10.20.10.7",
+            "::ffff:192.0.2.1",
+            "2001:db8::1",
+            "fd20:20::7",
+            "127.0.0.1",
+            "::1",
+        ] {
+            for protocol in [
+                NetworkProtocol::Tcp,
+                NetworkProtocol::Udp,
+                NetworkProtocol::Icmp,
+                NetworkProtocol::Any,
+            ] {
+                for port in [None, Some(1), Some(53), Some(443), Some(1005), Some(65535)] {
+                    assert_eq!(
+                        allowed(&authored, address, protocol, port),
+                        allowed(&simplified, address, protocol, port),
+                        "{address} {protocol:?} {port:?}: {config:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unconditional_denies_do_not_grant_a_full_native_request() {
+    let any = "*".parse().unwrap();
+    for value in [
+        json!({"default":"allow","deny":[{"to":"*"}]}),
+        json!({"allow":[{"to":"*"}],"deny":[{"to":"*"}]}),
+    ] {
+        let config = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            compiled(&config).check_connect(&any),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+}
+
+#[test]
+fn authority_intersections_lower_equivalent_defaults_for_native_adapters() {
+    let wildcard: NetworkPermissionConfig =
+        serde_json::from_value(json!({"allow":[{"to":"*"}]})).unwrap();
+    let redundant: NetworkPermissionConfig =
+        serde_json::from_value(json!({"default":"allow","allow":[{"to":"192.0.2.1"}]})).unwrap();
+    let closed: NetworkPermissionConfig =
+        serde_json::from_value(json!({"default":"allow","deny":[{"to":"*"}]})).unwrap();
+    let open = intersect_policies(&[wildcard.clone(), redundant.clone()]).unwrap();
+    assert_eq!(open, NetworkPermissionConfig::allow_all());
+    open.validate_for_platform("macos").unwrap();
+    for layers in [
+        vec![wildcard.clone(), redundant.clone(), closed.clone()],
+        vec![closed.clone(), wildcard, redundant],
+    ] {
+        let result = intersect_policies(&layers).unwrap();
+        assert_eq!(result, NetworkPermissionConfig::offline());
+        result.validate_for_platform("macos").unwrap();
+    }
+}
+
+#[test]
 fn full_native_request_includes_ingress_and_host_loopback_capabilities() {
     let any = "*".parse().unwrap();
     for (inbound, host_loopback, macos_supported) in [

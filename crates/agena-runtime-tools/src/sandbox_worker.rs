@@ -751,6 +751,84 @@ pub fn try_run_worker(bundled: BundledWorker) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires AGENA_TEST_SANDBOX_LAUNCHER and native MXC prerequisites"]
+    fn native_filesystem_worker_writes_only_the_writable_child_of_a_readonly_parent() {
+        use sha2::Digest;
+
+        let launcher = std::env::var_os("AGENA_TEST_SANDBOX_LAUNCHER")
+            .expect("set AGENA_TEST_SANDBOX_LAUNCHER to an existing Agena executable");
+        agena_process::sandbox::configure_launcher(PathBuf::from(launcher)).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap();
+        fs::create_dir(root.join("output")).unwrap();
+        let path = root.join("output/result.txt");
+        let executor = ToolExecutor::new(
+            &root,
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            PluginHost::new_empty(),
+            None,
+            None,
+        )
+        .with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path": {"workspace":"readonly", "external":"deny", "rules": {
+                    "<workspace>/output":"readwrite"
+                }},
+                "network": {"default":"deny"}
+            }))
+            .unwrap(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for content in ["created through MXC", "replaced through MXC"] {
+            let mut input = serde_json::json!({"path":path,"content":content});
+            if path.exists() {
+                input["expected_sha256"] =
+                    Value::String(hex::encode(sha2::Sha256::digest(fs::read(&path).unwrap())));
+            }
+            let plan = Plan {
+                operation: "fs.write".into(),
+                input,
+                workspace_root: root.clone(),
+                reads: vec![path.clone()],
+                writes: vec![path.clone()],
+                labels: vec![("output/result.txt".into(), path.clone())],
+                moves: vec![],
+            };
+            let result = runtime.block_on(execute(&executor, plan)).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), content);
+            assert_eq!(
+                result.view.metadata.get("sandbox").map(String::as_str),
+                Some("mxc")
+            );
+        }
+        let readonly = root.join("readonly.txt");
+        fs::write(&readonly, "unchanged").unwrap();
+        let denied = Plan {
+            operation: "fs.write".into(),
+            input: serde_json::json!({
+                "path":readonly,
+                "content":"forbidden",
+                "expected_sha256":hex::encode(sha2::Sha256::digest(fs::read(&readonly).unwrap()))
+            }),
+            workspace_root: root,
+            reads: vec![readonly.clone()],
+            writes: vec![readonly.clone()],
+            labels: vec![("readonly.txt".into(), readonly.clone())],
+            moves: vec![],
+        };
+        assert!(runtime.block_on(execute(&executor, denied)).is_err());
+        assert_eq!(fs::read_to_string(readonly).unwrap(), "unchanged");
+    }
+
     #[test]
     fn sandbox_mutation_rechecks_write_before_reading_or_starting_worker() {
         let directory = tempfile::tempdir().unwrap();

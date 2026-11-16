@@ -30,15 +30,13 @@ impl NetworkPermissionPolicy {
     }
 
     pub fn from_config(config: &NetworkPermissionConfig) -> Result<Self, PermissionConfigError> {
-        config
-            .validate()
-            .map_err(|reason| PermissionConfigError::InvalidNetworkRule {
+        let config = config.simplified_for_sandbox().map_err(|reason| {
+            PermissionConfigError::InvalidNetworkRule {
                 pattern: "permission.network".into(),
                 reason,
-            })?;
-        Ok(Self {
-            config: config.resolved(),
-        })
+            }
+        })?;
+        Ok(Self { config })
     }
 
     /// Hostnames must be resolved by the caller; a DNS name is never a grant.
@@ -213,7 +211,7 @@ fn rule_matches(
     })
 }
 
-/// Intersection of independent authority layers. Denies are always retained;
+/// Intersection of independent authority layers. Effective denies are retained;
 /// only default-deny layers constrain the union of positive grants.
 pub(crate) fn intersect_policies(
     layers: &[NetworkPermissionConfig],
@@ -225,8 +223,7 @@ pub(crate) fn intersect_policies(
     let mut inbound = NetworkAction::Allow;
     let mut loopback = NetworkAction::Allow;
     for layer in layers {
-        layer.validate()?;
-        let layer = layer.resolved();
+        let layer = layer.simplified_for_sandbox()?;
         let egress = layer.egress.expect("resolved egress");
         let ingress = layer.ingress.expect("resolved ingress");
         if ingress.default == Some(NetworkAction::Deny) {
@@ -286,8 +283,7 @@ pub(crate) fn intersect_policies(
             host_loopback: Some(loopback),
         }),
     };
-    result.validate()?;
-    Ok(result)
+    result.simplified_for_sandbox()
 }
 
 fn dedup<T: Clone + Eq + std::hash::Hash>(values: &mut Vec<T>) {

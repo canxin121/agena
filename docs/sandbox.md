@@ -80,6 +80,27 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 
 目录规则覆盖目录及其完整子树，文件规则只作用于具体文件。不再分别填写 `read`、`write`，也不需要同时写目录本身和 `/**`。规则顺序不构成授权优先级，调整 JSON 条目顺序不会扩大资源权限。
 
+### 工作区与外部路径的默认模式
+
+`workspace` 和 `external` 都可以独立选择 `deny`、`readonly`、`readwrite`，九种默认组合都支持。`workspace` 决定所属工作区内的默认权限，`external` 决定工作区之外的默认权限，具体路径规则再细化各个文件和目录。
+
+例如，下面的配置允许修改工作区，工作区之外默认只读，可以直接在全局或工作区设置中保存：
+
+```json
+{
+  "permission": {
+    "path": {
+      "workspace": "readwrite",
+      "external": "readonly"
+    }
+  }
+}
+```
+
+具体规则可以覆盖普通的只读、读写默认值：可写工作区中的 `"<workspace>/reference": "readonly"` 会保护参考资料；进一步设置 `"<workspace>/reference/generated": "readwrite"` 可以允许修改该子目录。只读工作区中单独开放可写输出目录也有效。
+
+显式 `deny` 是不可重新开放的边界。例如 `"<workspace>/secrets": "deny"` 下面再设置允许读取或写入的子路径会拒绝保存。独立权限上限仍与最终规则取交集。
+
 ### 项目配置示例
 
 项目配置位于项目根目录的 `.agena/agena.json`。下面把 `input` 设为只读、`output` 设为读写，`secrets` 及其余未授权路径沿用默认拒绝；shell 启动需要确认，网络关闭。
@@ -107,9 +128,7 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 }
 ```
 
-`workspace: "deny"` 是没有具体规则时的默认拒绝，不会把整个工作区加入 MXC 的 `deniedPaths`。因此它可以与 `input: "readonly"` 同时使用。支持显式路径拒绝的后端还可以增加 `"<workspace>/secrets": "deny"`，用于封锁已有授权根下面的秘密子树；在它下面重新开放子路径会报错。
-
-将需要不同权限的数据放在并列的授权目录中。`readonly` 目录下面再设 `readwrite` 子目录，或 `readwrite` 目录下面再设 `readonly` 子目录，当前都会拒绝保存；启用沙盒时，`workspace: "readonly"` 加可写子目录，或 `workspace: "readwrite"` 加只读子目录也会报错；改用 `workspace: "deny"` 并列出分离的授权目录。Agena 当前统一使用分离的只读、读写授权根，避免依赖各后端的嵌套优先级。允许在已授权根内设置后端支持的明确 `deny`。
+`workspace: "deny"` 表示未被具体规则授权的工作区路径默认拒绝，仍可为 `input` 授予读取、为 `output` 授予读写。支持显式路径拒绝的后端还可以设置 `"<workspace>/secrets": "deny"`，用于封锁已有授权范围下面的秘密子树。
 
 路径的项目覆盖仍与全局设置合并，空的路径 `rules` 不会清空已经继承的路径规则。保存时必须验证合并后的生效配置，不能用项目中的宽松项绕过独立的权限上限。
 
@@ -123,13 +142,17 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 | `<tmp>` 宿主临时目录根 | 无内置规则 |
 | 所有平台的出站、入站和宿主回环网络默认动作 | `deny` |
 
-MXC 和工具 worker 所需的任务私有临时目录由宿主通过受信任的 `private_paths` 提供。需要处理宿主临时文件时，显式授权自己的具体任务目录，例如 `"<tmp>/my-task": "readwrite"`。
+launcher 会把宽泛的默认授权范围沿共享临时目录、Linux 内核与控制目录，以及可信 launcher/后端的写保护边界分解为具体挂载。这样可以落实工作区与外部路径的默认模式，同时保留沙盒运行所需的隔离和保护；读写挂载始终限定在已授权范围内。
+
+宽泛默认值只展开当前宿主用户实际可访问的资源；无权读取的兄弟目录和失效链接不会使整个沙盒启动失败。宿主只读父目录中已有的可写子树仍可单独挂载。可信程序的安装目录及其祖先目录保留只读保护，因此不能在这些祖先目录中直接新建、删除或重命名目录项；普通已授权子目录保持自己的访问模式。将 Agena 安装在独立程序目录中；若把可执行文件直接放在任务工作区根目录，该安装目录也会受到写保护。
+
+MXC 和工具 worker 的任务私有临时目录由宿主通过受信任的 `private_paths` 提供，继续与其他任务隔离。需要处理普通宿主临时文件时，显式授权自己的具体目录，例如 `"<tmp>/my-task": "readwrite"`。即使该规则与 `external` 的默认模式相同，也会保留这项明确授权，避免在分解默认范围时丢失。
 
 首次执行时，Agena 会初始化已获准读写的 `<state>` 托管目录；用户自定义的授权文件和目录仍需预先创建。
 
 路径规则保留 `<workspace>`、`<cwd>`、`<home>`、`<tmp>`、`<state>` 别名。路径设置中的 `<cwd>` 规范为所属工作区；回退声明检查中的相对路径按本次调用实际工作目录解析。`<state>` 只指当前实例、当前工作区的受管状态目录。
 
-全局或 Bot 会话没有隐含项目根，需要使用绝对路径或工具支持的显式绝对 `folder`。未列出的用户数据不会因为运行程序而被整体加入本次沙盒，Shell 的资源集合来自当前配置、运行时依赖和私有临时目录。
+全局或 Bot 会话没有隐含项目根，`<workspace>`、`<state>` 模板在该作用域内不展开；通过 `external` 默认模式、绝对路径规则或工具支持的显式绝对 `folder` 定义资源范围。Shell 的资源集合来自当前配置的默认模式与具体规则、运行时依赖和私有临时目录。
 
 ### 保存校验与旧配置迁移
 
@@ -140,7 +163,7 @@ MXC 和工具 worker 所需的任务私有临时目录由宿主通过受信任�
 - 旧正向路径规则对象只有在目录本身与同模式 `/**` 规则完整配对时，才会自动合并为一条递归目录规则。未配对的旧正向对象要求用户明确改成字符串，以确认新的路径范围；不根据扩展名猜测文件或目录。旧完整拒绝对象可以转成递归 `deny`，只会收紧访问。
 - 旧 `read: allow, write: ask` 不能自动变成 `readwrite`。先把写入审批迁移到合适的工具或任务审批，再明确选择资源权限。
 - TUI/Web 显示保存错误并保留可修正的编辑内容。校验失败不更新原有设置。
-- 校验当前宿主的已知后端能力。macOS 拒绝非空的细粒度出站规则，Linux 拒绝允许入站或宿主回环的设置。如果所选 Windows 后端不支持 `FileSystemDeny`，明确的路径 `deny` 规则不能保存。默认 `workspace: "deny"`、`external: "deny"` 配合分离的只读/读写根仍可表达最小授权。
+- 校验当前宿主的已知后端能力。macOS 拒绝无法等价简化的细粒度出站规则，Linux 拒绝允许入站或宿主回环的设置。如果所选 Windows 后端不支持 `FileSystemDeny`，明确的路径 `deny` 规则不能保存。
 
 路径和主机状态可能在保存后改变；启动前仍需核对真实路径、符号链接、当前权限及后端能力。保存成功表示规则通过当前配置与已知能力校验，不代替在目标系统上启动沙盒。
 
@@ -161,8 +184,8 @@ Windows 使用对应 Shell 命令和实际路径。`workdir` 本身需要读取�
 
 - 配置中的挂载目标必须存在。新文件可以放在已授权且已存在的输出目录中，或先通过 `fs.write` 创建准确目标；执行器不会自动把父目录扩大为读写授权。
 - 文件的原子替换可能需要同目录临时文件和父目录操作。Agena 文件修改工具通过私有暂存区和固定目标提交处理。
-- 共享临时根（例如 `/tmp`、`/var/tmp`）及其祖先不能被整体开放。其他任务的 `agena-sandbox-*`、`agena-tool-worker-*`、`agena-media-worker-*` 保留目录同样受保护。
-- 启用 MXC 时，`external` 必须为 `deny`，再用具体外部文件或目录规则授权。`external: "readonly"` 或 `"readwrite"` 会开放整个宿主文件系统，与上述受保护路径冲突，保存时会报错；关闭沙盒后可使用这种外部默认模式。
+- 不能显式整体开放共享临时根（例如 `/tmp`、`/var/tmp`）。授权这些目录的祖先或设置宽泛的 `external` 默认值时，launcher 会排除共享临时目录；可以另行授权自己使用的具体临时子目录。其他任务的 `agena-sandbox-*`、`agena-tool-worker-*`、`agena-media-worker-*` 保留目录继续受保护。
+- `external: "readonly"`、`"readwrite"` 均可在启用 MXC 时保存。launcher 按上述隔离边界分解实际挂载；工作区仍按 `workspace` 和具体路径规则执行。
 
 ### 运行时依赖
 
@@ -193,6 +216,10 @@ launcher 另行加入程序和系统库所需的只读路径，以及任务私�
 ## 网络设置与执行
 
 `permission.network` 使用扁平规则，由 Agena 转换为 MXC 的原生网络策略。配置描述数值 IP/CIDR、协议和端口，进程通过原生 socket 联网，不启动沙盒权限代理。
+
+保存和执行都先校验完整输入，再作严格等价简化：默认允许时删除没有额外作用的 `allow`；默认拒绝且没有允许项时删除冗余的 `deny`；未限制协议和端口的 `to: "*"` 可以折叠为默认允许或默认拒绝，仍保持 `deny` 优先。带协议、端口或网段限制的规则保留这些限制。编辑器保留用户写入的结构，平台能力和原生规则数量限制按实际生效的策略检查。
+
+因此，macOS 也可以保存最终等价于全开或全关的规则写法。例如 `{"allow":[{"to":"*"}]}` 会转换为出站默认允许；确实需要按 IP、协议或端口筛选的策略仍会明确报错。
 
 ### 常用配置
 
@@ -374,7 +401,7 @@ TUI 使用 `Tab` 切换面板，`Ctrl+N` 新增规则，`Enter` 编辑字段，`
 | --- | --- |
 | Linux / Bubblewrap | 支持上述 CIDR、排除子网、协议与端口规则；`inbound` 和 `hostLoopback` 必须为 `deny` |
 | Windows / ProcessContainer | 使用原生数值 IP、协议和端口规则；运行时检查当前 Windows 版本与 ProcessContainer/PSEC 能力 |
-| macOS / Seatbelt | 支持出站默认动作；非空的 `allow` / `deny` 规则不能保存。允许出站默认动作时，进程直接使用该配置范围；具体目标限制因需要细粒度规则而不能执行 |
+| macOS / Seatbelt | 支持出站默认动作，以及可等价简化为默认动作的规则；仍需按 IP、协议或端口限制目标的策略不能保存 |
 
 Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒限制的进程。
 
@@ -525,7 +552,7 @@ sudo apt update
 sudo apt install bubblewrap slirp4netns iproute2 iptables util-linux kmod apparmor-profiles apparmor-utils
 ```
 
-Agena 可执行文件、MXC 后端工具及宿主 PATH 中的程序目录必须安装在任务可写目录之外；启动前会拒绝覆盖这些受信任路径的读写授权，包括符号链接别名。
+Agena 可执行文件、MXC 后端工具及宿主 PATH 中的程序目录受到写保护，包括符号链接别名。launcher 会在分解宽泛的读写授权时保留这些路径的只读边界；显式要求写入受保护的程序路径会报错。
 
 为实际运行的 Agena 可执行文件建立精确路径 profile。下面以安装路径 `/opt/agena/bin/agena` 为例，保存为 `/etc/apparmor.d/agena-userns`；部署到其他位置时替换这一条绝对路径：
 
@@ -607,7 +634,7 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | 找不到 `slirp4netns` | 先安装当前发行版支持的联网依赖；离线策略与联网策略分开验证 |
 | 原生网络规则提示后端不支持 | macOS 只使用出站默认动作或离线；Windows 检查宿主 ProcessContainer/PSEC 能力；不能静默改用代理或无沙盒执行 |
 | `configured MXC writable path must already exist` | 在 `permission.path` 配置现有输出目录，或先通过文件工具创建已授权的准确目标；执行器不会自动扩大到父目录 |
-| 路径规则 `Unsupported` | 检查负向文件名通配、字面量目录与子树默认值、拒绝父目录中的子授权；使用可表达的明确目录边界 |
+| 路径规则 `Unsupported` | 按错误指出的路径检查显式 `deny` 下的子授权、符号链接导致的同路径冲突，以及当前后端能力 |
 | `ReadApprovalRequired` | 读写挂载会包含读取能力，需要补足该写入目标的读取授权 |
 | 域名没有可用的获准 IP | 检查实际 DNS 结果是否命中原生允许规则，以及是否被配置或权限上限拒绝；主机名本身不授予访问权限 |
 | 补丁修订冲突 | 文件在暂存后被修改；重新读取最新版本并准备修改，不覆盖外部变更 |

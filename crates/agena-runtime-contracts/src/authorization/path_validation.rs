@@ -58,10 +58,10 @@ pub fn validate_permission_config_for_workspace(
             }
             if mode != PathPermissionMode::Deny {
                 for root in &shared_temporary_roots {
-                    if path_within(root, &identity) {
+                    if same_path_spelling(root, &identity) {
                         return Err(invalid(
                             pattern,
-                            "a grant cannot contain a shared OS temporary root; grant a specific task subdirectory instead (sandbox-private temporary directories are provided automatically)",
+                            "a grant cannot name a shared OS temporary root; grant a specific task subdirectory instead (sandbox-private temporary directories are provided automatically)",
                         ));
                     }
                     if path_within(&identity, root) {
@@ -113,10 +113,7 @@ pub fn validate_permission_config_for_workspace(
             } else {
                 continue;
             };
-            if same
-                || parent.mode == PathPermissionMode::Deny
-                || child.mode != PathPermissionMode::Deny
-            {
+            if same || parent.mode == PathPermissionMode::Deny {
                 return Err(invalid(
                     &child.source,
                     format!(
@@ -191,6 +188,23 @@ mod tests {
     }
 
     #[test]
+    fn distinct_nested_resources_can_override_readonly_and_readwrite_modes() {
+        let dir = TestDir::new();
+        std::fs::create_dir_all(dir.0.join("data/output/reference")).unwrap();
+        for (parent, child) in [("readonly", "readwrite"), ("readwrite", "readonly")] {
+            validate_permission_config_for_workspace(
+                &config(serde_json::json!({
+                    "<workspace>/data":parent,
+                    "<workspace>/data/output":child,
+                    "<workspace>/data/output/reference":parent
+                })),
+                &dir.0,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
     fn equivalent_alias_and_absolute_rules_cannot_conflict() {
         let dir = TestDir::new();
         let target = dir.0.join("secret");
@@ -203,6 +217,48 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("conflicts"), "{error}");
+    }
+
+    #[test]
+    fn broad_temporary_ancestors_are_valid_but_exact_shared_roots_are_not() {
+        let temporary = canonical_resource_path(&std::env::temp_dir()).unwrap();
+        let filesystem_root = temporary.ancestors().last().unwrap();
+        for mode in ["readonly", "readwrite"] {
+            // An alias can name a volume root without introducing platform
+            // spelling differences into the public concrete-path syntax.
+            validate_permission_config_for_workspace(
+                &config(serde_json::json!({"<workspace>":mode})),
+                filesystem_root,
+            )
+            .unwrap();
+            let error = validate_permission_config_for_workspace(
+                &config(serde_json::json!({"<tmp>":mode})),
+                filesystem_root,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("shared OS temporary root"), "{error}");
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn explicit_filesystem_root_grants_are_valid_but_root_denial_cannot_start_a_sandbox() {
+        let dir = TestDir::new();
+        for mode in ["readonly", "readwrite"] {
+            validate_permission_config_for_workspace(
+                &config(serde_json::json!({"/":mode})),
+                &dir.0,
+            )
+            .unwrap();
+        }
+        let error = validate_permission_config_for_workspace(
+            &config(serde_json::json!({"/":"deny"})),
+            &dir.0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("no sandbox could start"), "{error}");
     }
 
     #[test]
@@ -493,7 +549,7 @@ fn path_within(path: &Path, root: &Path) -> bool {
     crate::permission::path_identity::within(path, root)
 }
 
-fn same_existing_file(left: &Path, right: &Path) -> Result<bool, String> {
+pub(crate) fn same_existing_file(left: &Path, right: &Path) -> Result<bool, String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

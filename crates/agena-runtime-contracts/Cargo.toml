@@ -27,7 +27,7 @@ tracing = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 mxc-sdk = { workspace = true }
-windows-sys = { version = "0.61.2", features = ["Win32_Globalization"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Globalization", "Win32_Storage_FileSystem"] }
 
 [lints]
 workspace = true

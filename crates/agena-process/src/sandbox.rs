@@ -25,6 +25,10 @@ use mxc_sdk::v1::{
 };
 use serde::{Deserialize, Serialize};
 
+mod configured;
+mod host_access;
+mod path_aliases;
+
 const LAUNCH_ARGUMENT: &str = "--agena-sandbox-launch";
 const PAYLOAD_ARGUMENT: &str = "--agena-sandbox-payload";
 const PAYLOAD_ENV_PREFIX: &str = "AGENA_SANDBOX_PAYLOAD_ENV_";
@@ -80,6 +84,14 @@ pub struct SandboxPolicy {
     pub readwrite_paths: Vec<PathBuf>,
     #[serde(default)]
     pub denied_paths: Vec<PathBuf>,
+    /// A complete, host-compiled configuration. Broad grants are partitioned
+    /// around private host resources before they reach the native backend.
+    #[serde(default)]
+    pub configured_filesystem: bool,
+    /// Class defaults that remove an inherited grant while allowing separately
+    /// granted descendants. These are not explicit MXC denied paths.
+    #[serde(default)]
+    pub default_denied_paths: Vec<PathBuf>,
     /// Additional installation files required by a configured tool or language server.
     #[serde(default)]
     pub runtime_paths: Vec<PathBuf>,
@@ -135,22 +147,15 @@ pub fn configure_launcher(path: impl Into<PathBuf>) -> io::Result<()> {
             "sandbox launcher must be an existing absolute executable path",
         ));
     }
-    if let Some(existing) = LAUNCHER_PATH.get() {
-        return if existing == &path {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                "sandbox launcher is already configured",
-            ))
-        };
-    }
-    LAUNCHER_PATH.set(path).map_err(|_| {
-        io::Error::new(
+    let existing = LAUNCHER_PATH.get_or_init(|| path.clone());
+    if existing == &path {
+        Ok(())
+    } else {
+        Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "sandbox launcher is already configured",
-        )
-    })
+        ))
+    }
 }
 
 /// Resolve the trusted launcher used for sandbox and application worker modes.
@@ -354,7 +359,17 @@ fn launcher_argv(
     environment: &HashMap<String, String>,
     policy: &SandboxPolicy,
 ) -> io::Result<(Vec<String>, HashMap<String, String>)> {
-    validate_policy(policy)?;
+    let temporary_root = capture_temporary_root()?;
+    let executable = launcher_executable()?;
+    let mut launcher_environment = trusted_launcher_environment();
+    let policy = configured::prepare(
+        policy,
+        &temporary_root,
+        &executable,
+        cwd,
+        &launcher_environment,
+    )?;
+    validate_policy_for_root(&policy, &temporary_root)?;
     if argv.is_empty() || argv[0].is_empty() || argv.iter().any(|s| s.contains('\0')) {
         return Err(invalid(
             "sandbox requires a nonempty program and NUL-free arguments",
@@ -366,7 +381,7 @@ fn launcher_argv(
     let request = LauncherRequest {
         argv: argv.to_vec(),
         cwd: cwd.to_path_buf(),
-        temporary_root: capture_temporary_root()?,
+        temporary_root,
         environment_keys: environment.keys().cloned().collect(),
         environment: environment.clone(),
         policy: policy.clone(),
@@ -387,9 +402,7 @@ fn launcher_argv(
             "sandbox launch request is too large for one command-line argument",
         ));
     }
-    let executable = launcher_executable()?;
-    let mut launcher_environment = trusted_launcher_environment();
-    reject_writable_launcher_paths(policy, &executable, cwd, &launcher_environment)?;
+    reject_writable_launcher_paths(&policy, &executable, cwd, &launcher_environment)?;
     for (index, name) in request.environment_keys.iter().enumerate() {
         reject_loader_environment(name)?;
         launcher_environment.insert(
@@ -419,10 +432,64 @@ fn reject_writable_launcher_paths(
     if policy.readwrite_paths.is_empty() {
         return Ok(());
     }
-    let mut protected = vec![
-        (launcher.to_path_buf(), false),
-        (std::env::current_exe()?, false),
-    ];
+    let protected = protected_launcher_paths(launcher, cwd, native_environment)?;
+    let writes: Vec<_> = policy
+        .readwrite_paths
+        .iter()
+        .map(|grant| Ok((grant, policy_path_identity(grant)?)))
+        .collect::<io::Result<_>>()?;
+    for (protected_path, is_search_directory) in protected {
+        let identities = protected_path_identities(&protected_path)?;
+        for (grant, canonical_grant) in &writes {
+            let conflicts = identities.iter().any(|protected| {
+                [grant.as_path(), canonical_grant.as_path()]
+                    .iter()
+                    .any(|write| {
+                        identity_within(protected, write)
+                            || (is_search_directory && identity_within(write, protected))
+                    })
+            });
+            if conflicts {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "sandbox writable resource {} overlaps trusted sandbox launcher/backend path {}; install Agena and backend tools outside writable task trees",
+                        grant.display(),
+                        protected_path.display()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn protected_path_identities(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut identities = vec![path.to_path_buf(), policy_path_identity(path)?];
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        // Retain the replaceable directory entry as well as a symlink target.
+        identities.push(policy_path_identity(parent)?.join(name));
+    }
+    Ok(identities)
+}
+
+fn protected_launcher_paths(
+    launcher: &Path,
+    cwd: &Path,
+    native_environment: &HashMap<String, String>,
+) -> io::Result<Vec<(PathBuf, bool)>> {
+    let mut protected = Vec::new();
+    for executable in [launcher.to_path_buf(), std::env::current_exe()?] {
+        // Keep installation trees immutable, including a symlink entry point's
+        // real installation directory. Protecting only one binary would split
+        // large build/install directories into a mount for every sibling file.
+        for identity in protected_path_identities(&executable)? {
+            if let Some(directory) = identity.parent() {
+                protected.push((directory.to_path_buf(), true));
+            }
+        }
+        protected.push((executable, false));
+    }
     let path = native_environment.get("PATH");
     if let Some(path) = path {
         for directory in std::env::split_paths(path) {
@@ -465,49 +532,23 @@ fn reject_writable_launcher_paths(
         if let Some(system) = native_environment.get("SYSTEMROOT") {
             protected.push((PathBuf::from(system), true));
         }
-        // Windows additionally searches the executable directory for DLLs.
-        if let Some(directory) = launcher.parent() {
-            protected.push((directory.to_path_buf(), true));
-        }
     }
 
-    let writes: Vec<_> = policy
-        .readwrite_paths
-        .iter()
-        .map(|grant| Ok((grant, policy_path_identity(grant)?)))
-        .collect::<io::Result<_>>()?;
-    for (protected_path, is_search_directory) in protected {
-        let mut identities = vec![
-            protected_path.clone(),
-            policy_path_identity(&protected_path)?,
-        ];
-        if let (Some(parent), Some(name)) = (protected_path.parent(), protected_path.file_name()) {
-            // Canonicalizing only the parent retains a replaceable symlink's
-            // own directory entry, not just the file it currently points to.
-            identities.push(policy_path_identity(parent)?.join(name));
-        }
-        for (grant, canonical_grant) in &writes {
-            let conflicts = identities.iter().any(|protected| {
-                [grant.as_path(), canonical_grant.as_path()]
-                    .iter()
-                    .any(|write| {
-                        identity_within(protected, write)
-                            || (is_search_directory && identity_within(write, protected))
-                    })
-            });
-            if conflicts {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "sandbox writable resource {} overlaps trusted sandbox launcher/backend path {}; install Agena and backend tools outside writable task trees",
-                        grant.display(),
-                        protected_path.display()
-                    ),
-                ));
-            }
+    let mut libraries = Vec::new();
+    for (path, is_directory) in &protected {
+        let directory = if *is_directory {
+            Some(path.as_path())
+        } else {
+            path.parent()
+        };
+        if let Some(directory) = directory {
+            add_installation_libraries(directory, &mut libraries);
         }
     }
-    Ok(())
+    #[cfg(target_os = "macos")]
+    libraries.push(PathBuf::from("/System/Library"));
+    protected.extend(libraries.into_iter().map(|path| (path, true)));
+    Ok(protected)
 }
 
 fn ambient_environment() -> HashMap<String, String> {
@@ -791,6 +832,15 @@ pub fn validate_resource_paths(paths: &[PathBuf]) -> io::Result<()> {
     reject_shared_temporary_grants(paths, &capture_temporary_root()?, &[])
 }
 
+/// Full settings may grant broad roots. The launcher partitions those roots;
+/// explicit references to another task's private directory remain forbidden.
+pub fn validate_configured_resource_paths(paths: &[PathBuf]) -> io::Result<()> {
+    if paths.iter().any(|path| !path.is_absolute()) {
+        return Err(invalid("sandbox resource path must be absolute"));
+    }
+    check_temporary_grants(paths, &capture_temporary_root()?, &[], true)
+}
+
 const PRIVATE_TEMP_PREFIXES: &[&str] = &[
     "agena-sandbox-",
     "agena-tool-worker-",
@@ -816,6 +866,10 @@ fn reject_shared_temporary_grants(
     temporary_root: &Path,
     private_paths: &[PathBuf],
 ) -> io::Result<()> {
+    check_temporary_grants(grants, temporary_root, private_paths, false)
+}
+
+fn shared_temporary_roots(temporary_root: &Path) -> io::Result<Vec<PathBuf>> {
     let shared_roots = vec![temporary_root.to_path_buf()];
     #[cfg(unix)]
     let shared_roots = {
@@ -827,13 +881,16 @@ fn reject_shared_temporary_grants(
         ]);
         roots
     };
-    let mut roots = shared_roots.clone();
-    roots.extend(
-        shared_roots
-            .iter()
-            .map(|root| policy_path_identity(root))
-            .collect::<io::Result<Vec<_>>>()?,
-    );
+    path_aliases::identities(&shared_roots)
+}
+
+fn check_temporary_grants(
+    grants: &[PathBuf],
+    temporary_root: &Path,
+    private_paths: &[PathBuf],
+    allow_shared_ancestors: bool,
+) -> io::Result<()> {
+    let roots = shared_temporary_roots(temporary_root)?;
     let mut owned = Vec::new();
     for path in private_paths {
         let identity = path.canonicalize()?;
@@ -851,9 +908,10 @@ fn reject_shared_temporary_grants(
     }
     for grant in grants {
         let identity = policy_path_identity(grant)?;
-        if roots
-            .iter()
-            .any(|root| identity_within(root, &identity) || identity_within(root, grant))
+        if !allow_shared_ancestors
+            && roots
+                .iter()
+                .any(|root| identity_within(root, &identity) || identity_within(root, grant))
         {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -879,6 +937,7 @@ fn reject_shared_temporary_grants(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_policy(policy: &SandboxPolicy) -> io::Result<()> {
     validate_policy_for_root(policy, &capture_temporary_root()?)
 }
@@ -886,6 +945,11 @@ fn validate_policy(policy: &SandboxPolicy) -> io::Result<()> {
 fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io::Result<()> {
     if !temporary_root.is_absolute() {
         return Err(invalid("sandbox temporary root must be absolute"));
+    }
+    if !policy.default_denied_paths.is_empty() {
+        return Err(invalid(
+            "configured default path denials must be compiled before launching MXC",
+        ));
     }
     if let Some(timeout) = policy.timeout_ms
         && (timeout == 0 || timeout > u64::from(u32::MAX))
@@ -899,6 +963,7 @@ fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io
         .iter()
         .chain(&policy.readwrite_paths)
         .chain(&policy.denied_paths)
+        .chain(&policy.default_denied_paths)
         .chain(&policy.runtime_paths)
         .chain(&policy.private_paths)
     {
@@ -1068,6 +1133,7 @@ fn network_policy(network: &SandboxNetwork) -> io::Result<NetworkPolicy> {
         SandboxNetwork::Native { policy } => policy,
     };
     validate_network_config_for_platform(config, std::env::consts::OS)?;
+    let config = config.simplified_for_sandbox().map_err(invalid)?;
     let egress = config.egress.as_ref();
     let ingress = config.ingress.as_ref();
     Ok(NetworkPolicy {
@@ -1815,7 +1881,7 @@ mod tests {
     #[test]
     fn native_network_preserves_cidr_exceptions_protocols_ranges_and_denies() {
         let config = serde_json::from_value(serde_json::json!({
-            "default": "allow",
+            "default": "deny",
             "allow": [
                 {"to":"10.20.0.0/16","except":["10.20.10.0/24"],"protocol":"tcp","ports":["8000-8099"]},
                 {"to":"fd20:20::/48","except":["fd20:20:0:10::/64"],"protocol":"icmp"},
@@ -1827,7 +1893,7 @@ mod tests {
         let policy = network_policy(&SandboxNetwork::Native { policy: config }).unwrap();
         assert!(policy.runtime_config.is_none());
         let egress = policy.egress.unwrap();
-        assert!(matches!(egress.default, Some(NetworkAction::Allow)));
+        assert!(matches!(egress.default, Some(NetworkAction::Deny)));
         let allow = egress.allow.unwrap();
         assert_eq!(allow.len(), 4);
         assert_eq!(
@@ -1854,6 +1920,35 @@ mod tests {
             policy.ingress.unwrap().host_loopback,
             Some(NetworkAction::Deny)
         ));
+    }
+
+    #[test]
+    fn native_network_redundant_rules_are_lowered_before_mxc_mapping() {
+        for (value, allowed) in [
+            (
+                serde_json::json!({"default":"allow","allow":[{"to":"192.0.2.1","ports":[443]}]}),
+                true,
+            ),
+            (
+                serde_json::json!({"default":"deny","deny":[{"to":"192.0.2.1"}]}),
+                false,
+            ),
+            (serde_json::json!({"allow":[{"to":"*"}]}), true),
+            (
+                serde_json::json!({"allow":[{"to":"192.0.2.1"}],"deny":[{"to":"*"}]}),
+                false,
+            ),
+        ] {
+            let config = serde_json::from_value(value).unwrap();
+            let policy = network_policy(&SandboxNetwork::Native { policy: config }).unwrap();
+            let egress = policy.egress.unwrap();
+            assert_eq!(
+                matches!(egress.default, Some(NetworkAction::Allow)),
+                allowed
+            );
+            assert!(egress.allow.unwrap_or_default().is_empty());
+            assert!(egress.deny.unwrap_or_default().is_empty());
+        }
     }
 
     #[test]

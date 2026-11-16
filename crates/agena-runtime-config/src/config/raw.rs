@@ -99,8 +99,14 @@ impl RawProjectMergeKeys {
 
 pub fn validate_config_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     let (config, _) = parse_raw_config_text(path, text)?;
-    config.resolve()?;
-    Ok(())
+    let resolved = config.resolve()?;
+    // A standalone document has no owning workspace. Its templates remain
+    // inactive while active host paths and the global native policy are checked.
+    validate_permission_config_in_workspace(
+        &resolved.permission,
+        Path::new(""),
+        resolved.sandbox.enabled,
+    )
 }
 
 pub fn validate_layered_config_text(
@@ -116,6 +122,9 @@ pub fn validate_layered_config_text(
     };
     let (edited, edited_merge_keys) = parse_raw_config_text(edited_path, edited_text)?;
     let (global, workspace, workspace_merge_keys) = match edited_layer {
+        super::ConfigSettingsLayer::Global if workspace_path.as_os_str().is_empty() => {
+            (edited, RawConfig::default(), RawProjectMergeKeys::default())
+        }
         super::ConfigSettingsLayer::Global => {
             let file = RawConfigFile::read(workspace_path)?;
             (edited, file.config, file.merge_keys)
@@ -131,20 +140,21 @@ pub fn validate_layered_config_text(
     merged.merge_project_from_with_keys(workspace, workspace_merge_keys);
     merged.merge_from(RawConfig::from_env(env)?);
     let resolved = merged.resolve()?;
-    if !workspace_path.as_os_str().is_empty() {
+    let workspace_root = if workspace_path.as_os_str().is_empty() {
+        Path::new("")
+    } else {
         let parent = workspace_path.parent().unwrap_or_else(|| Path::new("."));
-        let workspace_root = if parent.file_name().is_some_and(|name| name == ".agena") {
+        if parent.file_name().is_some_and(|name| name == ".agena") {
             parent.parent().unwrap_or_else(|| Path::new("."))
         } else {
             parent
-        };
-        validate_permission_config_in_workspace(
-            &resolved.permission,
-            workspace_root,
-            resolved.sandbox.enabled,
-        )?;
-    }
-    Ok(())
+        }
+    };
+    validate_permission_config_in_workspace(
+        &resolved.permission,
+        workspace_root,
+        resolved.sandbox.enabled,
+    )
 }
 
 /// Validate real filesystem identities after layering, while the owning
@@ -154,8 +164,30 @@ pub(super) fn validate_permission_config_in_workspace(
     workspace_root: &Path,
     sandbox_enabled: bool,
 ) -> Result<(), ConfigError> {
+    // Global settings carry templates for future project sessions. Validate
+    // their syntax, then resolve only aliases that are active in this scope.
+    let active_permission = if workspace_root.as_os_str().is_empty() {
+        validate_permission_config("permission", permission)?;
+        let mut active = permission.clone();
+        if let Some(paths) = &mut active.path {
+            paths.rules.retain(|pattern, _| {
+                let Ok(canonical) = agena_domain::canonical_permission_path(pattern) else {
+                    return true;
+                };
+                !["<workspace>", "<state>"].iter().any(|alias| {
+                    canonical == *alias
+                        || canonical
+                            .strip_prefix(*alias)
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                })
+            });
+        }
+        Some(active)
+    } else {
+        None
+    };
     agena_runtime_contracts::authorization::validate_permission_config_for_workspace(
-        permission,
+        active_permission.as_ref().unwrap_or(permission),
         workspace_root,
     )
     .map_err(|error| ConfigError::Validation(error.to_string()))?;
@@ -447,11 +479,8 @@ impl RawConfig {
             &providers,
         )?;
         validate_permission_config("permission", &permission)?;
-        if sandbox.enabled {
-            // Global resolution has no workspace identity. Validate its external
-            // policy now; loaders and layered edits bind workspace aliases below.
-            validate_native_sandbox_permission_config(&permission, Path::new(""))?;
-        }
+        // Native filesystem compilation needs the actual execution scope.
+        // ConfigLoader and settings validators bind it after all layers resolve.
 
         Ok(ResolvedConfig {
             default_selection,

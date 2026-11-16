@@ -5,8 +5,8 @@ mod path_validation;
 mod platform_validation;
 #[cfg(test)]
 mod policy_validation_tests;
-pub(crate) use path_validation::canonical_resource_path;
 pub use path_validation::validate_permission_config_for_workspace;
+pub(crate) use path_validation::{canonical_resource_path, same_existing_file};
 
 use std::path::Path;
 

@@ -204,27 +204,24 @@ mod sandbox_mode_tests {
     }
 
     #[test]
-    fn full_filesystem_validation_follows_configured_sandbox_mode() {
+    fn broad_defaults_and_nested_modes_validate_with_or_without_sandbox() {
         let workspace = workspace();
         let base = PermissionConfig::global_default();
-        let external = configuration(serde_json::json!({
-            "path": {"external": "readonly"}
-        }));
-        let error = validate_configuration_permissions(&base, &external, Some(&workspace), true)
-            .unwrap_err();
-        assert!(error.contains("permission.path.external"), "{error}");
-        validate_configuration_permissions(&base, &external, Some(&workspace), false).unwrap();
-
-        let nested = configuration(serde_json::json!({
-            "path": {"rules": {"<workspace>/output": "readwrite"}}
-        }));
-        let error =
-            validate_configuration_permissions(&base, &nested, Some(&workspace), true).unwrap_err();
-        assert!(
-            error.contains("separate readonly/readwrite roots"),
-            "{error}"
-        );
-        validate_configuration_permissions(&base, &nested, Some(&workspace), false).unwrap();
+        for permission in [
+            serde_json::json!({"path": {"workspace":"readwrite", "external":"readonly"}}),
+            serde_json::json!({"path": {"rules": {"<workspace>/output":"readwrite"}}}),
+        ] {
+            let configuration = configuration(permission);
+            for sandbox_enabled in [true, false] {
+                validate_configuration_permissions(
+                    &base,
+                    &configuration,
+                    Some(&workspace),
+                    sandbox_enabled,
+                )
+                .unwrap();
+            }
+        }
     }
 
     #[test]

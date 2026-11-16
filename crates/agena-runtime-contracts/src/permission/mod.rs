@@ -1103,14 +1103,19 @@ fn relative_path_norm(path: &Path, root: &Path) -> Option<String> {
 fn normalize_path_string(path: &Path) -> String {
     let cleaned = path.clean();
     let mut out = cleaned.to_string_lossy().replace('\\', "/");
-    while out.ends_with('/') && out.len() > 1 {
-        out.pop();
-    }
     if cfg!(windows) {
-        if let Some(ordinary) = out.strip_prefix("//?/") {
+        if let Some(ordinary) = out.strip_prefix("//?/UNC/") {
+            out = format!("//{ordinary}");
+        } else if let Some(ordinary) = out.strip_prefix("//?/") {
             out = ordinary.to_owned();
         }
         out.make_ascii_lowercase();
+    }
+    while out.ends_with('/')
+        && out.len() > 1
+        && !(cfg!(windows) && out.len() == 3 && out.as_bytes().get(1) == Some(&b':'))
+    {
+        out.pop();
     }
     out
 }

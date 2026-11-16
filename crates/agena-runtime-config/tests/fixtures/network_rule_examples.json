@@ -1,0 +1,611 @@
+[
+  {
+    "name": "empty object is offline",
+    "selective": false,
+    "network": {},
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "udp",
+        "port": 53,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "explicit offline defaults",
+    "selective": false,
+    "network": {
+      "default": "deny",
+      "allow": [],
+      "deny": [],
+      "inbound": "deny",
+      "hostLoopback": "deny"
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "unrestricted outbound retains host loopback denial",
+    "selective": false,
+    "network": {
+      "default": "allow"
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": true
+      },
+      {
+        "ip": "127.0.0.1",
+        "protocol": "tcp",
+        "port": 3000,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "one TCP HTTPS destination",
+    "selective": true,
+    "network": {
+      "default": "deny",
+      "allow": [
+        {
+          "to": "192.0.2.10",
+          "protocol": "tcp",
+          "ports": [443]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "192.0.2.10",
+        "protocol": "udp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "192.0.2.11",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "UDP DNS destination",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "192.0.2.53",
+          "protocol": "udp",
+          "ports": [53]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.53",
+        "protocol": "udp",
+        "port": 53,
+        "allowed": true
+      },
+      {
+        "ip": "192.0.2.53",
+        "protocol": "tcp",
+        "port": 53,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "ICMP for IPv4 and IPv6 subnets",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "192.0.2.0/24",
+          "protocol": "icmp"
+        },
+        {
+          "to": "2001:db8::/32",
+          "protocol": "icmp"
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.25",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::25",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::25",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "IPv4 CIDR exclusion and UDP port range",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "10.20.0.0/16",
+          "except": ["10.20.10.0/24"],
+          "protocol": "udp",
+          "ports": [53, "8000-8099"]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "10.20.1.2",
+        "protocol": "udp",
+        "port": 8000,
+        "allowed": true
+      },
+      {
+        "ip": "10.20.1.2",
+        "protocol": "udp",
+        "port": 8099,
+        "allowed": true
+      },
+      {
+        "ip": "10.20.1.2",
+        "protocol": "udp",
+        "port": 8100,
+        "allowed": false
+      },
+      {
+        "ip": "10.20.10.2",
+        "protocol": "udp",
+        "port": 8000,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "IPv6 CIDR exclusion and TCP port range",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "2001:db8::/32",
+          "except": ["2001:db8:ffff::/48"],
+          "protocol": "tcp",
+          "ports": [443, "8443-8445"]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "2001:db8:1::10",
+        "protocol": "tcp",
+        "port": 8445,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8:1::10",
+        "protocol": "tcp",
+        "port": 8446,
+        "allowed": false
+      },
+      {
+        "ip": "2001:db8:ffff::10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "any protocol port selectors cover TCP and UDP in both IP families",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "*",
+          "protocol": "any",
+          "ports": [1, 443, "65534-65535"]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 1,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "udp",
+        "port": 65535,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "tcp",
+        "port": 80,
+        "allowed": false
+      },
+      {
+        "ip": "192.0.2.10",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "deny overrides an allow and except reopens only that deny subtree",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "10.0.0.0/8",
+          "protocol": "tcp",
+          "ports": [443]
+        }
+      ],
+      "deny": [
+        {
+          "to": "10.20.0.0/16",
+          "except": ["10.20.1.0/24"]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "10.21.1.1",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "10.20.2.1",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "10.20.1.1",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "10.20.1.1",
+        "protocol": "udp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "default allow with specific destination and service denies",
+    "selective": true,
+    "network": {
+      "default": "allow",
+      "deny": [
+        {
+          "to": "169.254.169.254"
+        },
+        {
+          "to": "*",
+          "protocol": "tcp",
+          "ports": [25, 465]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 25,
+        "allowed": false
+      },
+      {
+        "ip": "192.0.2.10",
+        "protocol": "udp",
+        "port": 25,
+        "allowed": true
+      },
+      {
+        "ip": "169.254.169.254",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "IPv4 mapped IPv6 literal retains its effective IPv4 identity",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "::ffff:192.0.2.10",
+          "protocol": "tcp",
+          "ports": [443]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "::ffff:192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "192.0.2.11",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "default allow ignores redundant narrow grants",
+    "selective": false,
+    "network": {
+      "default": "allow",
+      "allow": [
+        {
+          "to": "192.0.2.0/24",
+          "protocol": "tcp",
+          "ports": [443]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "198.51.100.10",
+        "protocol": "tcp",
+        "port": 80,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": true
+      },
+      {
+        "ip": "127.0.0.1",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "default deny without grants ignores redundant denies",
+    "selective": false,
+    "network": {
+      "default": "deny",
+      "deny": [
+        {
+          "to": "192.0.2.0/24",
+          "protocol": "udp",
+          "ports": [53]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "udp",
+        "port": 53,
+        "allowed": false
+      },
+      {
+        "ip": "198.51.100.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "unconditional wildcard grant lowers to outbound allow",
+    "selective": false,
+    "network": {
+      "default": "deny",
+      "allow": [
+        {
+          "to": "*"
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "any",
+        "port": null,
+        "allowed": true
+      },
+      {
+        "ip": "::1",
+        "protocol": "udp",
+        "port": 53,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "unconditional wildcard deny overrides allow default and grants",
+    "selective": false,
+    "network": {
+      "default": "allow",
+      "allow": [
+        {
+          "to": "192.0.2.10",
+          "ports": [443]
+        }
+      ],
+      "deny": [
+        {
+          "to": "*"
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "icmp",
+        "port": null,
+        "allowed": false
+      },
+      {
+        "ip": "198.51.100.10",
+        "protocol": "udp",
+        "port": 53,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "unconditional deny wins when both lists grant every endpoint",
+    "selective": false,
+    "network": {
+      "allow": [
+        {
+          "to": "*"
+        }
+      ],
+      "deny": [
+        {
+          "to": "*"
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "udp",
+        "port": 53,
+        "allowed": false
+      }
+    ]
+  },
+  {
+    "name": "wildcard grant retains concrete deny and its exclusions",
+    "selective": true,
+    "network": {
+      "allow": [
+        {
+          "to": "*"
+        }
+      ],
+      "deny": [
+        {
+          "to": "192.0.2.0/24",
+          "except": ["192.0.2.64/26"],
+          "protocol": "tcp",
+          "ports": [443]
+        }
+      ]
+    },
+    "checks": [
+      {
+        "ip": "192.0.2.10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": false
+      },
+      {
+        "ip": "192.0.2.80",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "192.0.2.10",
+        "protocol": "udp",
+        "port": 443,
+        "allowed": true
+      },
+      {
+        "ip": "2001:db8::10",
+        "protocol": "tcp",
+        "port": 443,
+        "allowed": true
+      }
+    ]
+  }
+]

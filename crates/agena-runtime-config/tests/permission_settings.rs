@@ -41,7 +41,6 @@ fn invalid_permission_never_replaces_the_file_even_when_validation_is_disabled()
         json!({"path":{"workspace":"ask"}}),
         json!({"path":{"rules":{"<workspace>/**/*.key":"deny"}}}),
         json!({"path":{"rules":{"<workspace>/secret":"deny","<workspace>/secret/file":"readwrite"}}}),
-        json!({"path":{"rules":{"<workspace>/data":"readwrite","<workspace>/data/reference":"readonly"}}}),
         json!({"network":{"rules":{"https://example.com/private":"allow"}}}),
         json!({"network":{"internet":"allow"}}),
         json!({"network":{"egress":{"default":"allow"}}}),
@@ -408,4 +407,39 @@ fn cli_layered_save_enforces_permissions_even_when_validate_is_false() {
     .unwrap_err();
     assert!(error.to_string().contains("permission"), "{error}");
     assert_eq!(fs::read_to_string(&global).unwrap(), "{}\n");
+}
+
+#[test]
+fn ordinary_nested_read_and_write_modes_can_be_saved() {
+    for (parent_mode, child_mode) in [("readonly", "readwrite"), ("readwrite", "readonly")] {
+        let directory = tempfile::tempdir().unwrap();
+        let global = directory.path().join("global.json");
+        let workspace = directory.path().join("workspace/.agena/agena.json");
+        let permission = json!({"path":{"workspace":"deny", "external":"deny", "rules":{
+            "<workspace>/data":parent_mode,
+            "<workspace>/data/reference":child_mode
+        }}});
+        let validator_global = global.clone();
+        let validator_workspace = workspace.clone();
+        let validator = move |_: &std::path::Path, text: &str| {
+            validate_layered_config_text(
+                &validator_global,
+                &validator_workspace,
+                ConfigSettingsLayer::Global,
+                text,
+                &EmptyEnvironment,
+            )
+            .map_err(agena_runtime_config::config_error_to_settings_error)
+        };
+        set_runtime_file_setting(&global, input(permission), Some(&validator)).unwrap();
+        let saved: Value = serde_json::from_str(&fs::read_to_string(&global).unwrap()).unwrap();
+        assert_eq!(
+            saved["permission"]["path"]["rules"]["<workspace>/data"],
+            parent_mode
+        );
+        assert_eq!(
+            saved["permission"]["path"]["rules"]["<workspace>/data/reference"],
+            child_mode
+        );
+    }
 }

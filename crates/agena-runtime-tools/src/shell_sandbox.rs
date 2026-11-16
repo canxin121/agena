@@ -125,11 +125,11 @@ pub(crate) fn policy_from_settings(executor: &ToolExecutor) -> Result<SandboxPol
         }
         resolved.sort();
         resolved.dedup();
-        agena_process::sandbox::validate_resource_paths(&resolved)
+        agena_process::sandbox::validate_configured_resource_paths(&resolved)
             .map_err(|error| ToolError::invalid_input(format!("sandbox resource path: {error}")))?;
         Ok(resolved)
     };
-    let mut readonly_paths = resolve(scope.readonly_paths, agena_domain::AccessKind::Read)?;
+    let readonly_paths = resolve(scope.readonly_paths, agena_domain::AccessKind::Read)?;
     let readwrite_paths = resolve(scope.readwrite_paths, agena_domain::AccessKind::Write)?;
     for path in &readwrite_paths {
         if !path.exists() {
@@ -139,20 +139,20 @@ pub(crate) fn policy_from_settings(executor: &ToolExecutor) -> Result<SandboxPol
             )));
         }
     }
-    let restrictions = snapshot
-        .filesystem_restrictions(&readonly_paths, &readwrite_paths)
-        .map_err(|error| ToolError::invalid_input(format!("sandbox permission policy: {error}")))?;
-    readonly_paths.extend(restrictions.readonly_paths);
-    readonly_paths.sort();
-    readonly_paths.dedup();
     let mut denied_paths = scope.denied_paths;
-    denied_paths.extend(restrictions.denied_paths);
     denied_paths = denied_paths
         .into_iter()
         .map(|path| crate::canonicalize_mutation_path(&path))
         .collect();
     denied_paths.sort();
     denied_paths.dedup();
+    let mut default_denied_paths: Vec<_> = scope
+        .default_denied_paths
+        .into_iter()
+        .map(|path| crate::canonicalize_mutation_path(&path))
+        .collect();
+    default_denied_paths.sort();
+    default_denied_paths.dedup();
     let network = snapshot
         .native_network_policy(None)
         .map_err(|error| ToolError::invalid_input(format!("sandbox network policy: {error}")))?;
@@ -163,6 +163,8 @@ pub(crate) fn policy_from_settings(executor: &ToolExecutor) -> Result<SandboxPol
         readonly_paths,
         readwrite_paths,
         denied_paths,
+        configured_filesystem: true,
+        default_denied_paths,
         network: SandboxNetwork::Native { policy: network },
         ..Default::default()
     })
@@ -252,6 +254,9 @@ pub(crate) fn policy_for_paths(
     let restrictions = snapshot
         .filesystem_restrictions(&reads, &writes)
         .map_err(|error| ToolError::invalid_input(format!("sandbox permission policy: {error}")))?;
+    writes.extend(restrictions.readwrite_paths);
+    writes.sort();
+    writes.dedup();
     // Read/write mounts already include reading. A duplicate read-only mount
     // overrides writes on Seatbelt, so ordinary read grants covered by a write
     // grant must be omitted. Keep explicit policy read-only exceptions below.
@@ -513,6 +518,9 @@ fn native_network(
     })?;
     Ok(SandboxNetwork::Native { policy })
 }
+
+#[cfg(all(test, unix))]
+mod native_filesystem_tests;
 
 #[cfg(test)]
 mod tests {

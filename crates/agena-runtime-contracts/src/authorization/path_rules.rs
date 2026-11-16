@@ -38,22 +38,17 @@ pub(super) fn apply(
 
     for (index, (parent, parent_mode)) in rules.iter().enumerate() {
         for (child, child_mode) in rules.iter().skip(index + 1) {
-            if !child.starts_with(&format!("{parent}/")) || parent_mode == child_mode {
+            if !child.starts_with(&format!("{}/", parent.trim_end_matches('/')))
+                || parent_mode == child_mode
+            {
                 continue;
             }
-            let reason = if *parent_mode == PathPermissionMode::Deny {
-                Some("an explicitly denied directory cannot contain a granted child")
-            } else if *child_mode != PathPermissionMode::Deny {
-                Some(
-                    "nested readonly/readwrite grants are not portable; use separate authorization roots",
-                )
-            } else {
-                None
-            };
-            if let Some(reason) = reason {
+            if *parent_mode == PathPermissionMode::Deny {
                 return Err(PermissionConfigError::InvalidPathRule {
                     pattern: child.clone(),
-                    reason: format!("{reason}: conflicts with {parent:?}"),
+                    reason: format!(
+                        "an explicitly denied directory cannot contain a granted child: conflicts with {parent:?}"
+                    ),
                 });
             }
         }
@@ -65,7 +60,7 @@ pub(super) fn apply(
     // accidentally broaden or shrink its permission when compiling settings.
     for (path, mode) in rules {
         let access = PathAccessModes::from_mode(mode);
-        for pattern in [path.clone(), format!("{path}/**")] {
+        for pattern in [path.clone(), format!("{}/**", path.trim_end_matches('/'))] {
             base.add_path_pattern_rule(
                 AccessSelector::Read,
                 access.read.expect("concrete read mode"),
@@ -194,8 +189,6 @@ mod tests {
         for rules in [
             serde_json::json!({"<workspace>/secrets":"deny","<workspace>/secrets/public":"readonly"}),
             serde_json::json!({"<workspace>/secrets/public":"readonly","<workspace>/secrets":"deny"}),
-            serde_json::json!({"<workspace>":"readonly","<workspace>/output":"readwrite"}),
-            serde_json::json!({"<workspace>/output":"readwrite","<workspace>":"readonly"}),
         ] {
             let config = serde_json::from_value::<PermissionConfig>(
                 serde_json::json!({"path":{"rules":rules}}),
@@ -209,6 +202,40 @@ mod tests {
             principal(&one).sandbox_permission_snapshot(&root),
             principal(&two).sandbox_permission_snapshot(&root),
         );
+    }
+
+    #[test]
+    fn nested_readonly_and_readwrite_follow_the_most_specific_rule() {
+        let root = root();
+        for (parent, child) in [("readonly", "readwrite"), ("readwrite", "readonly")] {
+            for rules in [
+                serde_json::json!({"<workspace>":parent,"<workspace>/output":child}),
+                serde_json::json!({"<workspace>/output":child,"<workspace>":parent}),
+            ] {
+                let config: PermissionConfig = serde_json::from_value(serde_json::json!({
+                    "path":{"workspace":"deny","external":"deny","rules":rules}
+                }))
+                .unwrap();
+                validate_permission_config(&config).unwrap();
+                let snapshot = principal(&config).sandbox_permission_snapshot(&root);
+                for (path, mode) in [
+                    (root.join("file.txt"), parent),
+                    (root.join("output/file.txt"), child),
+                ] {
+                    assert!(matches!(
+                        snapshot.authorize_path_access(AccessKind::Read, &path),
+                        PermissionDecision::Allow
+                    ));
+                    assert_eq!(
+                        matches!(
+                            snapshot.authorize_path_access(AccessKind::Write, &path),
+                            PermissionDecision::Allow
+                        ),
+                        mode == "readwrite"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

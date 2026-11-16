@@ -98,6 +98,9 @@ pub enum SandboxPathPattern {
 pub struct SandboxFilesystemRestrictions {
     /// Additional read-only boundaries inside an approved writable tree.
     pub readonly_paths: Vec<PathBuf>,
+    /// More specific write overrides, always inside the original write grants.
+    #[serde(default)]
+    pub readwrite_paths: Vec<PathBuf>,
     /// Boundaries which must remain inaccessible even inside an allowed tree.
     pub denied_paths: Vec<PathBuf>,
 }
@@ -110,6 +113,11 @@ pub struct SandboxFilesystemPolicy {
     pub readonly_paths: Vec<PathBuf>,
     pub readwrite_paths: Vec<PathBuf>,
     pub denied_paths: Vec<PathBuf>,
+    /// Closed class/default boundaries inside broader grants. The launcher
+    /// subtracts these from ancestor grants without masking explicit allowed
+    /// descendants. They are not irreversible MXC deniedPaths rules.
+    #[serde(default)]
+    pub default_denied_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -415,10 +423,19 @@ impl SandboxPermissionSnapshot {
                     .iter()
                     .any(|path| within(target, path))
                     || (access == AccessKind::Write
-                        && restrictions
-                            .readonly_paths
-                            .iter()
-                            .any(|path| within(target, path)))
+                        && matches!(
+                            writes
+                                .iter()
+                                .chain(&restrictions.readwrite_paths)
+                                .map(|path| (path, true))
+                                .chain(restrictions.readonly_paths.iter().map(|path| (path, false)))
+                                .filter(|(path, _)| within(target, path))
+                                .max_by_key(|(path, allowed)| (
+                                    path.components().count(),
+                                    !*allowed
+                                )),
+                            Some((_, false))
+                        ))
                 {
                     denied("a more specific sandbox path rule restricts this access")
                 } else {
@@ -494,84 +511,66 @@ impl SandboxPermissionSnapshot {
                 }
             }
             for (index, rule) in layer.rules.iter().enumerate() {
-                if rule.mode == PermissionMode::Allow {
+                if rule.mode == PermissionMode::Allow || !rule.access.matches(AccessKind::Read) {
                     continue;
                 }
                 for pattern in &rule.patterns {
-                    for access in [AccessKind::Read, AccessKind::Write] {
-                        if !rule.access.matches(access) {
-                            continue;
-                        }
-                        let grants = if access == AccessKind::Read {
-                            &all_reads
-                        } else {
-                            &writes
-                        };
-                        let global_deny =
-                            access == AccessKind::Read && rule.mode == PermissionMode::Deny;
-                        if grants.is_empty() && !global_deny {
-                            continue;
-                        }
-                        // Explicit read denials also cover platform runtime
-                        // baselines and inherited ACL access outside grants.
-                        let global_roots = [pattern.filesystem_root()];
-                        let boundary =
-                            pattern.boundary(if global_deny { &global_roots } else { grants })?;
-                        let Some((path, recursive)) = boundary else {
-                            continue;
-                        };
-                        let mode = if recursive {
-                            layer.rules[index + 1..]
-                                .iter()
-                                .filter(|later| {
-                                    later.access.matches(access)
-                                        && later
-                                            .patterns
-                                            .iter()
-                                            .any(|pattern| pattern.covers_subtree(&path))
-                                })
-                                .next_back()
-                                .map_or(rule.mode, |later| later.mode)
-                        } else {
-                            rule.mode
-                        };
-                        if mode != PermissionMode::Allow {
-                            self.add_boundary(
-                                &mut restrictions,
-                                access,
-                                mode,
-                                &path,
-                                recursive,
-                                grants,
-                                global_deny,
-                            )?;
-                        }
+                    let grants = &all_reads;
+                    let global_deny = rule.mode == PermissionMode::Deny;
+                    if grants.is_empty() && !global_deny {
+                        continue;
+                    }
+                    // Explicit read denials also cover platform runtime
+                    // baselines and inherited ACL access outside grants.
+                    let global_roots = [pattern.filesystem_root()];
+                    let boundary =
+                        pattern.boundary(if global_deny { &global_roots } else { grants })?;
+                    let Some((path, recursive)) = boundary else {
+                        continue;
+                    };
+                    let mode = if recursive {
+                        layer.rules[index + 1..]
+                            .iter()
+                            .filter(|later| {
+                                later.access.matches(AccessKind::Read)
+                                    && later
+                                        .patterns
+                                        .iter()
+                                        .any(|pattern| pattern.covers_subtree(&path))
+                            })
+                            .next_back()
+                            .map_or(rule.mode, |later| later.mode)
+                    } else {
+                        rule.mode
+                    };
+                    if mode != PermissionMode::Allow {
+                        self.add_read_boundary(
+                            &mut restrictions,
+                            mode,
+                            &path,
+                            recursive,
+                            grants,
+                            global_deny,
+                        )?;
                     }
                 }
             }
             // A grant outside a workspace can contain that workspace, whose
             // more restrictive class defaults must still be enforced.
-            if !self.workspace_root.as_os_str().is_empty() {
-                for (access, mode, grants) in [
-                    (AccessKind::Read, layer.workspace_read_default, &all_reads),
-                    (AccessKind::Write, layer.workspace_write_default, &writes),
-                ] {
-                    if mode != PermissionMode::Allow
-                        && grants.iter().any(|grant| {
-                            self.workspace_root != *grant && within(&self.workspace_root, grant)
-                        })
-                    {
-                        self.add_boundary(
-                            &mut restrictions,
-                            access,
-                            mode,
-                            &self.workspace_root,
-                            true,
-                            grants,
-                            false,
-                        )?;
-                    }
-                }
+            if !self.workspace_root.as_os_str().is_empty()
+                && layer.workspace_read_default != PermissionMode::Allow
+                && all_reads.iter().any(|grant| {
+                    self.workspace_root != *grant && within(&self.workspace_root, grant)
+                })
+            {
+                self.add_read_boundary(
+                    &mut restrictions,
+                    layer.workspace_read_default,
+                    &self.workspace_root,
+                    true,
+                    &all_reads,
+                    false,
+                )?;
             }
         }
         for rule in &self.persisted_rules {
@@ -586,24 +585,17 @@ impl SandboxPermissionSnapshot {
             if !path_identity::equal(Path::new(workspace_root), &self.workspace_root) {
                 continue;
             }
-            let access = match access_kind.as_str() {
-                "read" => AccessKind::Read,
-                "write" => AccessKind::Write,
-                _ => continue,
-            };
-            let grants = if access == AccessKind::Read {
-                &all_reads
-            } else {
-                &writes
-            };
+            if access_kind != "read" {
+                continue;
+            }
+            let grants = &all_reads;
             let path = PathBuf::from(normalize_path_string(Path::new(target_path)));
-            let global_deny = access == AccessKind::Read && rule.mode == PermissionMode::Deny;
+            let global_deny = rule.mode == PermissionMode::Deny;
             if rule.mode != PermissionMode::Allow
                 && (global_deny || grants.iter().any(|grant| within(&path, grant)))
             {
-                self.add_boundary(
+                self.add_read_boundary(
                     &mut restrictions,
-                    access,
                     rule.mode,
                     &path,
                     false,
@@ -614,21 +606,14 @@ impl SandboxPermissionSnapshot {
         }
         restrictions.denied_paths.sort();
         restrictions.denied_paths.dedup();
-        restrictions.readonly_paths.sort();
-        restrictions.readonly_paths.dedup();
-        restrictions.readonly_paths.retain(|path| {
-            !restrictions
-                .denied_paths
-                .iter()
-                .any(|denied| within(path, denied))
-        });
+        (restrictions.readonly_paths, restrictions.readwrite_paths) =
+            self.scoped_write_boundaries(&all_reads, &writes, &restrictions.denied_paths)?;
         Ok(restrictions)
     }
 
-    fn add_boundary(
+    fn add_read_boundary(
         &self,
         result: &mut SandboxFilesystemRestrictions,
-        access: AccessKind,
         rule_mode: PermissionMode,
         path: &Path,
         recursive: bool,
@@ -647,7 +632,7 @@ impl SandboxPermissionSnapshot {
         if rule_mode != PermissionMode::Deny && grants.iter().any(|grant| within(grant, path)) {
             return Ok(());
         }
-        let decision = self.authorize_path_access(access, path);
+        let decision = self.authorize_path_access(AccessKind::Read, path);
         // A subtree cannot be proven safe by probing a synthetic filename:
         // another rule may allow that one name while denying the rest.
         let restricted = recursive || !matches!(decision, PermissionDecision::Allow);
@@ -663,10 +648,7 @@ impl SandboxPermissionSnapshot {
                     .into(),
             });
         }
-        match access {
-            AccessKind::Read => result.denied_paths.push(path.to_path_buf()),
-            AccessKind::Write => result.readonly_paths.push(path.to_path_buf()),
-        }
+        result.denied_paths.push(path.to_path_buf());
         Ok(())
     }
 }
@@ -780,7 +762,13 @@ impl SandboxPathPattern {
         if !without_stars.contains(['*', '?'])
             && (without_stars.ends_with('/') || (without_stars.is_empty() && root.is_some()))
         {
-            let path = path_for(without_stars.trim_end_matches('/'));
+            // Absolute root prefixes must retain their separator: "/" must
+            // not become a relative empty path and "C:/" must not become C:.
+            let path = path_for(if root.is_some() {
+                without_stars.trim_end_matches('/')
+            } else {
+                without_stars
+            });
             return Ok(grants
                 .iter()
                 .any(|grant| within(&path, grant) || within(grant, &path))
@@ -866,3 +854,4 @@ fn intersect(left: PermissionDecision, right: PermissionDecision) -> PermissionD
 mod tests;
 
 mod configured;
+mod scoped;

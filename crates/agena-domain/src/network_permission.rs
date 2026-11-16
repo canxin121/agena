@@ -1,6 +1,7 @@
 //! Flat network settings compiled to the native MXC network model.
 
 mod flat;
+mod simplification;
 
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
@@ -294,15 +295,15 @@ impl NetworkPermissionConfig {
 impl NetworkPermissionConfig {
     /// Reject native policies the selected OS backend cannot enforce.
     pub fn validate_for_platform(&self, platform: &str) -> Result<(), String> {
-        self.validate()?;
-        let ingress = self.ingress.as_ref();
+        let policy = self.simplified_for_sandbox()?;
+        let ingress = policy.ingress.as_ref();
         let inbound = ingress.and_then(|value| value.default).unwrap_or_default();
         let loopback = ingress
             .and_then(|value| value.host_loopback)
             .unwrap_or_default();
         match platform {
             "linux" => {
-                if let Some(egress) = &self.egress {
+                if let Some(egress) = &policy.egress {
                     for (kind, rules) in [("allow", &egress.allow), ("deny", &egress.deny)] {
                         for (rule_index, rule) in rules.iter().flatten().enumerate() {
                             for (peer_index, peer) in rule.to.iter().flatten().enumerate() {
@@ -332,12 +333,12 @@ impl NetworkPermissionConfig {
                             .into(),
                     );
                 }
-                if let Some(egress) = &self.egress {
+                if let Some(egress) = &policy.egress {
                     validate_bubblewrap_budget(egress)?;
                 }
             }
             "macos" => {
-                if let Some(egress) = &self.egress {
+                if let Some(egress) = &policy.egress {
                     for (field, rules) in [("allow", &egress.allow), ("deny", &egress.deny)] {
                         if rules.as_ref().is_some_and(|rules| !rules.is_empty()) {
                             return Err(format!(

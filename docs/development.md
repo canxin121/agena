@@ -92,11 +92,12 @@ can be skipped in either profile, but only incremental compilation can reuse
 codegen within a changed workspace crate. sccache does not cache final binary
 linking and does not replace that incremental cache.
 
-Unix source installs and packaging use the same native Cargo graph as a plain
-`cargo build --release`: `target/release/`, or the target directory selected by
-Cargo configuration / `CARGO_TARGET_DIR`. They preserve inherited Rust flags
-and read Cargo's reported executable instead of guessing an artifact path.
-To build the executable before a source reinstall, run:
+Source installs and packaging on Unix and Windows use the same native Cargo
+graph as a plain `cargo build --release`: `target/release/`, or the target
+directory selected by Cargo configuration / `CARGO_TARGET_DIR`. They preserve
+inherited Rust flags and run Cargo from the checkout root so its configuration
+is loaded. They read Cargo's reported executable instead of guessing an
+artifact path. To build the executable before a source reinstall, run:
 
 ```sh
 cargo build --release -p agena --bin agena --locked
@@ -107,10 +108,23 @@ an explicit `--target` and a separate `target/<triple>/release/` graph. Set
 `AGENA_FORCE_EXPLICIT_TARGET=1` to select that graph for a host build too,
 for example when overriding a different `build.target` in Cargo configuration.
 
-Windows packaging deliberately uses the shorter `.agena-target/` root to keep
-compiler command lines within the Windows process limit. Pass that same
-`--target-dir` when reusing its artifacts. Changing the toolchain, target,
-features, profile overrides, or `RUSTFLAGS` can invalidate existing artifacts.
+Windows packaging also respects Cargo's configured target directory. If a long
+checkout path requires a shorter cache root, set `CARGO_TARGET_DIR` consistently
+for both ordinary builds and packaging. Changing the toolchain, target,
+features, profile overrides, or Rust flags can invalidate existing artifacts.
+
+Keep Cargo output between source reinstalls. When repairing confirmed cache
+corruption, limit cleanup to the affected packages and profile: `cargo clean -p`
+without a profile can remove that package's release artifacts as well as its
+debug artifacts. For example, preview a debug-only repair before deleting:
+
+```sh
+cargo clean --profile dev -p agena-runtime -p agena-bundled-plugins --dry-run --verbose
+cargo clean --profile dev -p agena-runtime -p agena-bundled-plugins
+```
+
+Use `--profile release` only when the release cache itself needs repair. A
+cleanup forces the selected artifacts and their affected dependents to rebuild.
 
 To diagnose a slow rebuild, add `--timings` to the actual build command and
 inspect the report under the target directory's `cargo-timings/`. Compare an

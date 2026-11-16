@@ -507,9 +507,11 @@ checkout keeps its build output: Cargo output stays in `target/`, the Web build
 stays in `packages/agena-web/dist/`, and the package archive stays in
 `artifacts/agena/`.
 
-On Unix, native source installs reuse the same Cargo cache as
+On Unix and Windows, native source installs reuse the same Cargo cache as
 `cargo build --release`, including a configured `CARGO_TARGET_DIR`; no extra
-host `--target` is added. Repeated `reinstall --source` commands also reuse a
+host `--target` is added. Cargo runs from the checkout root and preserves the
+caller's Rust flags, so packaging loads the same workspace configuration.
+Repeated `reinstall --source` commands on Unix also reuse a
 successful Web build when its inputs and complete output match, and reuse a
 verified package archive when its contents have not changed. Cargo still runs
 to detect Rust changes, and the normal install, verification and activation
@@ -533,9 +535,10 @@ when cloning a branch or tag. Source mode cannot be combined with `-Version`,
 
 The same checkout resolution order applies: current directory, installer
 checkout, then a shallow remote clone. A local checkout keeps its package
-archive under `artifacts/agena/`; Windows packaging normally builds in
-`.agena-target` under the checkout (or under the CI workspace when one is set).
-A temporary remote clone is removed after installation.
+archive under `artifacts/agena/` and its Cargo cache in the target directory
+reported by Cargo, normally `target/`. Set `CARGO_TARGET_DIR` consistently for
+ordinary builds and source installs if a shorter cache path is needed. A
+temporary remote clone is removed after installation.
 
 ### Source build requirements
 

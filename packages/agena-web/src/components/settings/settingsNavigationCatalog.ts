@@ -35,9 +35,9 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   permissions: [
     {
       id: 'sandbox',
-      label: () => st('Sandbox & checks'),
-      description: () => st('Choose MXC isolation and the checks used when the sandbox is disabled.'),
-      keywords: ['sandbox', 'mxc', 'isolation', 'resource', 'checks', 'command', 'hints', '沙盒', '声明', '检查'],
+      label: () => st('Sandbox & resource preflight'),
+      description: () => st('Configure native sandbox isolation and resource preflight.'),
+      keywords: ['sandbox', 'mxc', 'isolation', 'resource guard', 'preflight', '沙盒', '资源预检', '声明'],
     },
     {
       id: 'overview',

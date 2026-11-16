@@ -5,8 +5,10 @@ use super::{
 };
 use crate::ui_text;
 
-fn sandbox_boolean(source: &JsonValue, key: &str) -> Option<bool> {
-    source.get("sandbox")?.get(key)?.as_bool()
+fn execution_boolean(source: &JsonValue, path: &str) -> Option<bool> {
+    path.split('.')
+        .try_fold(source, |value, key| value.get(key))?
+        .as_bool()
 }
 
 pub(crate) fn settings_studio_sandbox_items(
@@ -15,41 +17,35 @@ pub(crate) fn settings_studio_sandbox_items(
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
     let configured = |key: &str, workspace: bool| {
         workspace
-            .then(|| sandbox_boolean(&sources.project_file, key))
+            .then(|| execution_boolean(&sources.project_file, key))
             .flatten()
-            .or_else(|| sandbox_boolean(&sources.file, key))
+            .or_else(|| execution_boolean(&sources.file, key))
             .unwrap_or(true)
     };
     let effective = |key: &str| {
-        sandbox_boolean(&sources.effective, key).unwrap_or_else(|| configured(key, true))
+        execution_boolean(&sources.effective, key).unwrap_or_else(|| configured(key, true))
     };
-    let isolated = effective("enabled");
-    let resource_checks = !isolated && effective("resource_checks");
-    let environment_disabled = !isolated && configured("enabled", true);
+    let isolated = effective("sandbox.enabled");
+    let resource_guard = !isolated && effective("resource_guard");
+    let environment_disabled = !isolated && configured("sandbox.enabled", true);
     let fields = [
         (
-            "enabled",
+            "sandbox.enabled",
             "settings-sandbox-enabled-label",
             "settings-sandbox-enabled-description",
             isolated,
         ),
         (
-            "resource_checks",
-            "settings-sandbox-resource-checks-label",
-            "settings-sandbox-resource-checks-description",
-            resource_checks,
-        ),
-        (
-            "command_hints",
-            "settings-sandbox-command-hints-label",
-            "settings-sandbox-command-hints-description",
-            resource_checks && effective("command_hints"),
+            "resource_guard",
+            "settings-resource-guard-label",
+            "settings-resource-guard-description",
+            resource_guard,
         ),
     ];
-    let mut items = Vec::with_capacity(6);
+    let mut items = Vec::with_capacity(4);
     for workspace in [false, true] {
         for (key, label_key, description_key, active) in fields {
-            let path = format!("sandbox.{key}");
+            let path = key.to_string();
             let label = i18n.text_args(
                 if workspace {
                     "settings-sandbox-workspace-label"
@@ -59,12 +55,10 @@ pub(crate) fn settings_studio_sandbox_items(
                 &agena_tui::fl_args!("label" => ui_text::t(i18n, label_key)),
             );
             let mut description = ui_text::t(i18n, description_key);
-            let inactive_reason = if key == "enabled" && environment_disabled {
+            let inactive_reason = if key == "sandbox.enabled" && environment_disabled {
                 Some("settings-sandbox-environment-disabled")
-            } else if key != "enabled" && isolated {
+            } else if key == "resource_guard" && isolated && effective("resource_guard") {
                 Some("settings-sandbox-inactive-isolated")
-            } else if key == "command_hints" && !resource_checks {
-                Some("settings-sandbox-inactive-checks")
             } else {
                 None
             };
@@ -77,7 +71,7 @@ pub(crate) fn settings_studio_sandbox_items(
             } else {
                 &sources.file
             };
-            let current_summary = sandbox_boolean(file, key)
+            let current_summary = execution_boolean(file, key)
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset"));
             let status = ui_text::t(
@@ -94,7 +88,7 @@ pub(crate) fn settings_studio_sandbox_items(
                     sources,
                     &path,
                     &current_summary,
-                    active.to_string(),
+                    effective(key).to_string(),
                 )
             } else {
                 settings_source_rows_for_config_path(
@@ -102,7 +96,7 @@ pub(crate) fn settings_studio_sandbox_items(
                     sources,
                     &path,
                     &current_summary,
-                    active.to_string(),
+                    effective(key).to_string(),
                 )
             };
             let field = SettingsFieldSpec {
@@ -121,7 +115,7 @@ pub(crate) fn settings_studio_sandbox_items(
                 description,
                 Some(path),
                 Some(current_summary),
-                Some(active.to_string()),
+                Some(effective(key).to_string()),
                 source_rows,
                 SettingsPickerAction::EditField(field),
             ));
@@ -154,12 +148,20 @@ mod tests {
             &I18n::english(),
             &sources(json!({}), json!({}), json!({})),
         );
-        assert_eq!(items.len(), 6);
+        assert_eq!(items.len(), 4);
         for (index, item) in items.iter().enumerate() {
             let SettingsPickerAction::EditField(field) = &item.action else {
                 panic!("expected sandbox editor")
             };
-            assert_eq!(field.workspace, index >= 3);
+            assert_eq!(field.workspace, index >= 2);
+            assert_eq!(
+                field.path,
+                if index % 2 == 0 {
+                    "sandbox.enabled"
+                } else {
+                    "resource_guard"
+                }
+            );
             assert!(matches!(field.kind, SettingsFieldKind::Bool));
             assert_eq!(
                 crate::App::settings_field_choice_overlay_style(field),
@@ -167,36 +169,51 @@ mod tests {
             );
         }
         assert_eq!(items[0].effective_value.as_deref(), Some("true"));
+        assert_eq!(items[1].effective_value.as_deref(), Some("true"));
+        assert!(items[1].detail.contains("On standby while"));
+    }
+
+    #[test]
+    fn disabled_resource_guard_is_not_presented_as_waiting_for_mxc() {
+        let items = settings_studio_sandbox_items(
+            &I18n::english(),
+            &sources(
+                json!({"resource_guard":false}),
+                json!({}),
+                json!({"sandbox":{"enabled":true},"resource_guard":false}),
+            ),
+        );
+        assert!(items[1].value.starts_with("false"));
+        assert!(!items[1].detail.contains("On standby"));
         assert_eq!(items[1].effective_value.as_deref(), Some("false"));
-        assert!(items[1].detail.contains("Inactive while"));
     }
 
     #[test]
     fn sandbox_fields_keep_each_layer_editable_when_overridden() {
         let state = sources(
-            json!({"sandbox":{"enabled":false,"resource_checks":false}}),
-            json!({"sandbox":{"resource_checks":true,"command_hints":false}}),
-            json!({"sandbox":{"enabled":false,"resource_checks":true,"command_hints":false}}),
+            json!({"sandbox":{"enabled":false},"resource_guard":false}),
+            json!({"resource_guard":true}),
+            json!({"sandbox":{"enabled":false},"resource_guard":true}),
         );
         let items = settings_studio_sandbox_items(&I18n::english(), &state);
         assert!(items[1].value.starts_with("false"));
-        assert!(items[4].value.starts_with("true"));
-        assert_eq!(items[4].effective_value.as_deref(), Some("true"));
-        assert_eq!(items[5].effective_value.as_deref(), Some("false"));
+        assert!(items[3].value.starts_with("true"));
+        assert_eq!(items[3].effective_value.as_deref(), Some("true"));
+        assert_eq!(items[2].effective_value.as_deref(), Some("false"));
     }
 
     #[test]
-    fn sandbox_fields_explain_environment_and_dependency_overrides() {
+    fn sandbox_fields_explain_explicit_environment_override_without_changing_guard() {
         let state = sources(
-            json!({"sandbox":{"enabled":true,"resource_checks":false,"command_hints":true}}),
+            json!({"sandbox":{"enabled":true},"resource_guard":false}),
             json!({}),
-            json!({"sandbox":{"enabled":false,"resource_checks":false,"command_hints":true}}),
+            json!({"sandbox":{"enabled":false},"resource_guard":false}),
         );
         let items = settings_studio_sandbox_items(&I18n::english(), &state);
         assert!(items[0].value.starts_with("true"));
         assert!(items[0].detail.contains("runtime environment"));
         assert_eq!(items[0].effective_value.as_deref(), Some("false"));
-        assert_eq!(items[2].effective_value.as_deref(), Some("false"));
-        assert!(items[2].detail.contains("declaration checks are disabled"));
+        assert_eq!(items[1].effective_value.as_deref(), Some("false"));
+        assert!(items[1].value.starts_with("false"));
     }
 }

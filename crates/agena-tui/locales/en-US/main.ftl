@@ -3055,14 +3055,11 @@ permission-studio-network-column-rule = Rule / Field
 permission-studio-network-column-value = Value
 
 # Sandbox execution settings
-settings-sandbox-enabled-label = Enable MXC sandbox
+settings-sandbox-enabled-label = Native sandbox
 settings-sandbox-enabled-description = Run agent tools with MXC filesystem and network isolation.
-settings-sandbox-resource-checks-label = Check declared paths and network
-settings-sandbox-resource-checks-description = When the sandbox is disabled, check tool reads, writes, and network declarations against permissions.
-settings-sandbox-command-hints-label = Suggest command resource declarations
-settings-sandbox-command-hints-description = When declaration checks are active, recognize command keywords and ask the AI to supply missing paths or network targets.
-settings-sandbox-inactive-isolated = Inactive while the MXC sandbox is enabled.
-settings-sandbox-inactive-checks = Inactive while declaration checks are disabled.
+settings-resource-guard-label = Resource preflight
+settings-resource-guard-description = When MXC is not used, validate declared paths and network targets against permissions and ask the AI to add missing command resources.
+settings-sandbox-inactive-isolated = On standby while the MXC sandbox is enabled.
 settings-sandbox-environment-disabled = The runtime environment has disabled the sandbox. Remove that override to enable MXC.
 settings-sandbox-active = Active now
 settings-sandbox-inactive = Inactive now

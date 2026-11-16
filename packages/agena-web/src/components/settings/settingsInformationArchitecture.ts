@@ -109,8 +109,8 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
         id: 'sandbox',
         section: 'permissions',
         view: 'sandbox',
-        label: () => st('Sandbox & checks'),
-        keywords: ['sandbox', 'mxc', 'resource checks', 'command hints', '沙盒', '声明', '检查'],
+        label: () => st('Sandbox & resource preflight'),
+        keywords: ['sandbox', 'mxc', 'resource guard', 'resource preflight', '沙盒', '资源预检', '声明'],
       },
       {
         id: 'overview',

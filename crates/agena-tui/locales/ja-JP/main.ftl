@@ -3368,14 +3368,11 @@ permission-studio-network-column-rule = ルール / 項目
 permission-studio-network-column-value = 値
 
 # Sandbox execution settings
-settings-sandbox-enabled-label = MXC サンドボックスを有効にする
+settings-sandbox-enabled-label = ネイティブサンドボックス
 settings-sandbox-enabled-description = MXC のファイルシステムとネットワークの分離でエージェントツールを実行します。
-settings-sandbox-resource-checks-label = 宣言されたパスとネットワークを確認する
-settings-sandbox-resource-checks-description = サンドボックスが無効な場合、ツールの reads、writes、network 宣言を権限に照らして確認します。
-settings-sandbox-command-hints-label = コマンドのリソース宣言を提案する
-settings-sandbox-command-hints-description = 宣言の確認が有効な場合、コマンドのキーワードを認識し、不足するパスやネットワーク接続先を AI に求めます。
-settings-sandbox-inactive-isolated = MXC サンドボックスが有効な間は無効です。
-settings-sandbox-inactive-checks = 宣言の確認が無効な間は無効です。
+settings-resource-guard-label = リソース事前チェック
+settings-resource-guard-description = MXC を使用しない場合、宣言されたパスとネットワーク接続先を権限と照合し、コマンドに不足しているリソース宣言を AI に補完させます。
+settings-sandbox-inactive-isolated = MXC サンドボックスが有効な間、リソース事前チェックは待機します。
 settings-sandbox-environment-disabled = 実行環境によってサンドボックスが無効化されています。MXC を有効にするには、その上書きを解除してください。
 settings-sandbox-active = 現在有効
 settings-sandbox-inactive = 現在無効

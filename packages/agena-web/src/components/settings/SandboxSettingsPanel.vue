@@ -11,18 +11,19 @@ import {
   readRuntimeSettingSources,
   setRuntimeSetting,
   type RuntimeSettingsLayer,
-  type RuntimeSettingsReadBundle,
 } from '@/lib/runtimeSettings'
 import {
+  SANDBOX_SETTING_PATHS,
   sandboxExecutionState,
   sandboxLayerOverride,
   sandboxLayerSettings,
   type SandboxSettingKey,
+  type SandboxSettingSources,
 } from '@/lib/sandboxSettings'
 
 const props = defineProps<{ scope: string }>()
 const layer = computed<RuntimeSettingsLayer>(() => (props.scope === 'workspace' ? 'workspace' : 'global'))
-const sources = ref<RuntimeSettingsReadBundle | null>(null)
+const sources = ref<SandboxSettingSources | null>(null)
 const loading = ref(false)
 const saving = ref(false)
 const error = ref('')
@@ -42,32 +43,19 @@ let disposed = false
 const fields = computed(() => [
   {
     key: 'enabled' as const,
-    label: st('Enable MXC sandbox'),
+    label: st('Native sandbox'),
     description: st('Run agent tools with MXC filesystem and network isolation.'),
     active: execution.value.enabled,
     status: '',
   },
   {
-    key: 'resource_checks' as const,
-    label: st('Check declared paths and network'),
+    key: 'resource_guard' as const,
+    label: st('Resource preflight'),
     description: st(
-      'When the sandbox is disabled, check tool reads, writes, and network declarations against permissions.',
+      'When MXC is not used, validate declared paths and network targets against permissions and ask the AI to add missing command resources.',
     ),
-    active: execution.value.resourceChecks,
-    status: execution.value.enabled ? st('Inactive while the MXC sandbox is enabled.') : '',
-  },
-  {
-    key: 'command_hints' as const,
-    label: st('Suggest command resource declarations'),
-    description: st(
-      'When declaration checks are active, recognize command keywords and ask the AI to supply missing paths or network targets.',
-    ),
-    active: execution.value.commandHints,
-    status: execution.value.enabled
-      ? st('Inactive while the MXC sandbox is enabled.')
-      : !execution.value.resourceChecks
-        ? st('Inactive while declaration checks are disabled.')
-        : '',
+    active: execution.value.resourceGuard,
+    status: execution.value.resourceGuardStandby ? st('On standby while the MXC sandbox is enabled.') : '',
   },
 ])
 
@@ -80,8 +68,13 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const next = await readRuntimeSettingSources('sandbox', controller.signal)
-    if (!controller.signal.aborted && sequence === readSequence) sources.value = next
+    const [enabled, resourceGuard] = await Promise.all([
+      readRuntimeSettingSources(SANDBOX_SETTING_PATHS.enabled, controller.signal),
+      readRuntimeSettingSources(SANDBOX_SETTING_PATHS.resource_guard, controller.signal),
+    ])
+    if (!controller.signal.aborted && sequence === readSequence) {
+      sources.value = { enabled, resource_guard: resourceGuard }
+    }
   } catch (reason) {
     if (!controller.signal.aborted && sequence === readSequence) {
       error.value = reason instanceof Error ? reason.message : String(reason)
@@ -105,7 +98,7 @@ async function save(key: SandboxSettingKey, value: boolean | undefined) {
     value: value ?? (target === 'workspace' ? sandboxLayerSettings(sources.value, 'global')[key] : true),
   }
   try {
-    const path = `sandbox.${key}`
+    const path = SANDBOX_SETTING_PATHS[key]
     if (value === undefined) await deleteRuntimeSetting(path, { reload: true }, target)
     else await setRuntimeSetting(path, value, { reload: true }, target)
   } catch (reason) {
@@ -163,7 +156,7 @@ defineExpose({ refresh })
     </SettingsCard>
 
     <SettingsCard
-      :title="st('Sandbox & checks')"
+      :title="st('Sandbox & resource preflight')"
       :description="st('Changes save automatically to the selected layer.')"
     >
       <div

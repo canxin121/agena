@@ -3367,14 +3367,11 @@ permission-studio-network-column-rule = Règle / Champ
 permission-studio-network-column-value = Valeur
 
 # Sandbox execution settings
-settings-sandbox-enabled-label = Activer le sandbox MXC
+settings-sandbox-enabled-label = Sandbox natif
 settings-sandbox-enabled-description = Exécutez les outils de l’agent avec l’isolation du système de fichiers et du réseau de MXC.
-settings-sandbox-resource-checks-label = Vérifier les chemins et le réseau déclarés
-settings-sandbox-resource-checks-description = Lorsque le sandbox est désactivé, vérifiez les déclarations reads, writes et network des outils selon les permissions.
-settings-sandbox-command-hints-label = Suggérer les déclarations de ressources de la commande
-settings-sandbox-command-hints-description = Lorsque les vérifications sont actives, reconnaissez les mots-clés de la commande et demandez à l’IA les chemins ou destinations réseau manquants.
-settings-sandbox-inactive-isolated = Inactif lorsque le sandbox MXC est activé.
-settings-sandbox-inactive-checks = Inactif lorsque la vérification des déclarations est désactivée.
+settings-resource-guard-label = Vérification préalable des ressources
+settings-resource-guard-description = Lorsque MXC n’est pas utilisé, vérifiez les chemins et les destinations réseau déclarés selon les autorisations et demandez à l’IA de compléter les ressources manquantes de la commande.
+settings-sandbox-inactive-isolated = En attente lorsque le sandbox MXC est activé.
 settings-sandbox-environment-disabled = L’environnement d’exécution a désactivé le sandbox. Supprimez cette priorité pour activer MXC.
 settings-sandbox-active = Actif actuellement
 settings-sandbox-inactive = Inactif actuellement

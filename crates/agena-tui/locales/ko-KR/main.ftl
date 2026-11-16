@@ -3364,14 +3364,11 @@ permission-studio-network-column-rule = 규칙 / 필드
 permission-studio-network-column-value = 값
 
 # Sandbox execution settings
-settings-sandbox-enabled-label = MXC 샌드박스 활성화
+settings-sandbox-enabled-label = 네이티브 샌드박스
 settings-sandbox-enabled-description = MXC의 파일 시스템 및 네트워크 격리로 에이전트 도구를 실행합니다.
-settings-sandbox-resource-checks-label = 선언된 경로와 네트워크 확인
-settings-sandbox-resource-checks-description = 샌드박스가 꺼져 있을 때 도구의 reads, writes, network 선언을 권한에 따라 확인합니다.
-settings-sandbox-command-hints-label = 명령 리소스 선언 제안
-settings-sandbox-command-hints-description = 선언 확인이 활성화되어 있으면 명령 키워드를 인식하고 AI에 누락된 경로나 네트워크 대상을 요청합니다.
-settings-sandbox-inactive-isolated = MXC 샌드박스가 켜져 있는 동안 비활성 상태입니다.
-settings-sandbox-inactive-checks = 선언 확인이 꺼져 있는 동안 비활성 상태입니다.
+settings-resource-guard-label = 리소스 사전 검사
+settings-resource-guard-description = MXC를 사용하지 않을 때 선언된 경로와 네트워크 대상을 권한에 따라 검사하고, 명령에 누락된 리소스 선언을 AI에 요청합니다.
+settings-sandbox-inactive-isolated = MXC 샌드박스가 켜져 있으면 리소스 사전 검사는 대기합니다.
 settings-sandbox-environment-disabled = 실행 환경에서 샌드박스를 껐습니다. MXC를 활성화하려면 해당 재정의를 제거하세요.
 settings-sandbox-active = 현재 활성
 settings-sandbox-inactive = 현재 비활성

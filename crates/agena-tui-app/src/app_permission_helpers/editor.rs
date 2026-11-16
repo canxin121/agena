@@ -592,9 +592,9 @@ pub(crate) fn apply_permission_studio_network_input(
 ) -> UiResult<()> {
     let network: agena_domain::NetworkPermissionConfig = serde_json::from_str(input)
         .map_err(|error| crate::UiFailure::message(error.to_string()))?;
-    network
-        .validate_for_platform(std::env::consts::OS)
-        .map_err(crate::UiFailure::message)?;
+    // The TUI can connect to a host running a different OS. Validate the shared
+    // shape here; the server checks its native backend before saving.
+    network.validate().map_err(crate::UiFailure::message)?;
     permission.network = (!network.is_empty()).then_some(network);
     Ok(())
 }
@@ -730,5 +730,31 @@ mod tests {
             permission.network.unwrap().egress.unwrap().allow,
             Some(vec![])
         );
+    }
+
+    #[test]
+    fn native_network_json_defers_platform_capabilities_to_execution_host() {
+        for (input, supported_platform, unsupported_platform) in [
+            (
+                r#"{"egress":{"allow":[{"to":[{"cidr":"192.0.2.10/32"}],"ports":[{"protocol":"tcp","port":443}]}]}}"#,
+                "linux",
+                "macos",
+            ),
+            (
+                r#"{"ingress":{"default":"allow","hostLoopback":"allow"}}"#,
+                "windows",
+                "linux",
+            ),
+        ] {
+            let mut permission = PermissionConfig::default();
+            apply_permission_studio_network_input(&mut permission, input).unwrap();
+            let network = permission.network.unwrap();
+            assert_eq!(
+                serde_json::to_value(&network).unwrap(),
+                serde_json::from_str::<serde_json::Value>(input).unwrap()
+            );
+            network.validate_for_platform(supported_platform).unwrap();
+            assert!(network.validate_for_platform(unsupported_platform).is_err());
+        }
     }
 }

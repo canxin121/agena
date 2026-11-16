@@ -52,7 +52,11 @@ export async function readContentForCopy(
       cursor = { ...chunk.cursor, sequence: Math.min(chunk.cursor.sequence, target.sequence) }
     }
     if (!page.has_more || cursor.sequence >= target.sequence || page.next_cursor.sequence >= target.sequence) {
-      if (cursor.sequence < target.sequence || ((page.resource.dropped_bytes > 0 || page.resource.dropped_packets > 0) && !marked)) await mark()
+      if (
+        cursor.sequence < target.sequence ||
+        ((page.resource.dropped_bytes > 0 || page.resource.dropped_packets > 0) && !marked)
+      )
+        await mark()
       return
     }
     if (cursor.sequence === before) throw new Error(gapMarker)
@@ -61,8 +65,8 @@ export async function readContentForCopy(
 
 /** Standard emulator cells distinguish written spaces from empty padding.
  * Wrapped rows join without introducing line breaks; the final cursor row
- * preserves real blank and trailing lines. */
-export function terminalBufferPlainText(buffer: IBuffer): string {
+ * preserves real blank and trailing lines. Pass buffer.baseY to omit scrollback. */
+export function terminalBufferPlainText(buffer: IBuffer, startRow = 0): string {
   let end = buffer.baseY + buffer.cursorY
   for (let row = buffer.length - 1; row > end; row--) {
     const line = buffer.getLine(row)
@@ -72,7 +76,7 @@ export function terminalBufferPlainText(buffer: IBuffer): string {
     }
   }
   const output: string[] = []
-  for (let row = 0; row <= end; row++) {
+  for (let row = Math.max(0, startRow); row <= end; row++) {
     const line = buffer.getLine(row)
     if (!line) continue
     let col = line.length

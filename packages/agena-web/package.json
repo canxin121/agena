@@ -17,6 +17,7 @@
     "test:slash-commands:browser": "node ./scripts/probe-slash-commands.cjs",
     "test:tool-input": "bun test ./tests/toolInputPresentation.test.ts",
     "test:tool-input:browser": "node ./scripts/probe-tool-input.cjs",
+    "test:content-output:browser": "node ./scripts/probe-content-output.cjs",
     "test:notifications": "bun test ./tests/browserNotifications.test.ts",
     "test:preview": "bun test ./tests/previewArgs.test.ts ./tests/previewAccess.test.ts ./tests/previewAccessLifecycle.test.ts ./tests/previewReadiness.test.ts ./tests/previewHealth.test.ts ./tests/previewRefreshScope.test.ts ./tests/interactiveAppLifecycle.test.ts",
     "test:preview:browser": "node ./scripts/probe-workspace-preview.cjs",

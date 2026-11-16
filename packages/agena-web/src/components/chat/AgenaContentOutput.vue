@@ -12,10 +12,12 @@ import {
   terminalSnapshotText,
   type ContentBuffer,
   type ContentChunk,
+  type ContentCursor,
   type ContentFormat,
   type ContentRef,
 } from '@/lib/content'
 import AgenaContentText from './AgenaContentText.vue'
+import AgenaContentStatic from './AgenaContentStatic.vue'
 import PartLoadingIndicator from './PartLoadingIndicator.vue'
 import OperationBlock from './AgenaOperationBlock.vue'
 import { observeContent } from '@/lib/contentSubscriptions'
@@ -30,6 +32,7 @@ const { t } = useI18n()
 const pane = useWorkspacePaneContext()
 const isVisible = () => !pane || pane.isVisible.value
 const surface = ref<HTMLDivElement>()
+const terminalHost = ref<HTMLDivElement>()
 const outputRoot = ref<HTMLDivElement>()
 const status = ref('active')
 const error = ref('')
@@ -42,9 +45,11 @@ const hasStderr = ref(false)
 const gap = ref(false)
 const windowed = ref(false)
 const terminalHeight = ref<number>()
+const staticOutput = shallowRef<{ text: string; cursor: ContentCursor; followTail: boolean } | null>(null)
 let buffer: ContentBuffer | undefined
 const copying = ref(false)
 let terminal: Terminal | undefined
+let fit: FitAddon | undefined
 let resize: ResizeObserver | undefined
 let theme: MutationObserver | undefined
 let stop: (() => void) | undefined
@@ -56,16 +61,104 @@ let pendingBytes = 0
 let fitting = false
 let mounted = false
 let resizeFrame = 0
+let lastTerminalCols = 240
 
-function updateLogHeight() {
-  if (props.resource.kind !== 'log' || !terminal || paused.value || selectionActive.value) return
-  const screen = terminal.element?.querySelector('.xterm-screen')
-  const cellHeight = screen ? screen.getBoundingClientRect().height / terminal.rows : 0
-  if (!cellHeight) return
-  // Keep the cursor row (including the newline after the last output), so
-  // following a short log never scrolls its final text off a one-row screen.
-  const rows = Math.min(12, Math.max(1, terminal.buffer.active.baseY + terminal.buffer.active.cursorY + 1))
-  terminalHeight.value = Math.ceil(cellHeight * rows) + 8
+function receivedFinalContent() {
+  const resource = buffer?.resource
+  const cursor = buffer?.cursor
+  return Boolean(
+    resource &&
+    cursor &&
+    resource.state !== 'active' &&
+    cursor.epoch === resource.cursor.epoch &&
+    cursor.sequence >= resource.cursor.sequence,
+  )
+}
+
+function canKeepStaticOutput() {
+  const snapshot = staticOutput.value
+  if (!snapshot) return false
+  const resource = buffer?.resource
+  // A fresh subscription may still be paging towards a result we already have.
+  // Its final target, rather than its current read cursor, identifies that result.
+  return (
+    !resource ||
+    (resource.state !== 'active' &&
+      resource.cursor.epoch === snapshot.cursor.epoch &&
+      resource.cursor.sequence === snapshot.cursor.sequence)
+  )
+}
+
+function disposeTerminal() {
+  resize?.disconnect()
+  resize = undefined
+  theme?.disconnect()
+  theme = undefined
+  if (resizeFrame) cancelAnimationFrame(resizeFrame)
+  resizeFrame = 0
+  const current = terminal
+  terminal = undefined
+  fit = undefined
+  current?.dispose()
+}
+
+function settleOutput() {
+  const cursor = buffer?.cursor
+  if (!terminal || !cursor || !receivedFinalContent() || writing || fitting || pending.length || needsReplay) return
+  if (paused.value || selectionActive.value || terminal.getSelection()) return
+  const screen = terminal.buffer.active
+  lastTerminalCols = terminal.cols
+  staticOutput.value = {
+    text: terminalBufferPlainText(screen, props.resource.kind === 'terminal' ? screen.baseY : 0),
+    cursor: { ...cursor },
+    followTail: Boolean(terminal.element),
+  }
+  loading.value = false
+  unseen.value = 0
+  document.removeEventListener('selectionchange', updateSelection)
+  disposeTerminal()
+}
+
+function updateTerminalLayout() {
+  // A replay resets the buffer before xterm asynchronously parses its text.
+  // Keep its existing viewport until that write completes, rather than fitting
+  // the transient empty buffer and disturbing the user's follow position.
+  if (writing || !isVisible() || !terminal || !terminalHost.value?.clientWidth) return
+  if (props.resource.kind === 'log' && (paused.value || selectionActive.value)) return
+  // Xterm defers renderer resizes while offscreen, even though terminal.rows
+  // changes immediately. A rendered row's own CSS height stays valid; dividing
+  // the stale screen height by the new row count creates a sizing feedback loop.
+  const row = terminal.element?.querySelector<HTMLElement>('.xterm-rows > div')
+  const cellHeight = row ? Number.parseFloat(getComputedStyle(row).height) : 0
+  if (!Number.isFinite(cellHeight) || cellHeight <= 0) return
+
+  fitting = true
+  try {
+    if (props.resource.kind === 'log') {
+      const dimensions = fit?.proposeDimensions()
+      if (dimensions && Number.isFinite(dimensions.cols) && terminal.cols !== dimensions.cols)
+        terminal.resize(dimensions.cols, terminal.rows)
+      // Reflow after a width change can alter the occupied rows. Keep the
+      // trailing cursor row, but never derive log rows from the host height.
+      const rows = Math.min(12, Math.max(1, terminal.buffer.active.baseY + terminal.buffer.active.cursorY + 1))
+      if (terminal.rows !== rows) terminal.resize(terminal.cols, rows)
+    }
+    terminalHeight.value = Math.min(384, Math.ceil(cellHeight * terminal.rows) + 8)
+    // Even a no-op scrollToBottom requests another xterm render. Avoid an
+    // onRender/layout loop once the viewport has already reached the tail.
+    if (props.resource.kind === 'log' && terminal.buffer.active.viewportY !== terminal.buffer.active.baseY)
+      terminal.scrollToBottom()
+  } finally {
+    fitting = false
+  }
+}
+
+function scheduleTerminalLayout() {
+  if (stopped || !isVisible() || resizeFrame) return
+  resizeFrame = requestAnimationFrame(() => {
+    resizeFrame = 0
+    if (!stopped) updateTerminalLayout()
+  })
 }
 
 function applyTheme() {
@@ -184,18 +277,28 @@ async function copy() {
   if (copying.value) return
   copying.value = true
   try {
-    const selected = terminal?.getSelection()
+    const selection = document.getSelection()
+    const selected =
+      terminal?.getSelection() ||
+      (selection && !selection.isCollapsed && selection.anchorNode && outputRoot.value?.contains(selection.anchorNode)
+        ? selection.toString()
+        : '')
     if (selected) {
       await navigator.clipboard.writeText(selected)
       return
     }
-    if (!buffer?.cursor) return
-    const targetCursor = { ...buffer.cursor }
-    const documentText = buffer.document ? contentDocumentText(buffer.document) : ''
+    const cursor = staticOutput.value?.cursor || buffer?.cursor
+    if (!cursor) return
+    const targetCursor = { ...cursor }
+    const resultDocument = staticOutput.value ? semanticDocument.value : buffer?.document || semanticDocument.value
+    const documentText = resultDocument ? contentDocumentText(resultDocument) : ''
     const text: string[] = []
-    if (props.resource.kind === 'terminal' && terminal) {
-      text.push(terminalBufferPlainText(terminal.buffer.active))
-      if (buffer.gap) text.push(`\n[${t('content.gap')}]\n`)
+    if (props.resource.kind === 'terminal') {
+      text.push(
+        staticOutput.value?.text ??
+          (terminal ? terminalBufferPlainText(terminal.buffer.active, terminal.buffer.active.baseY) : ''),
+      )
+      if (gap.value) text.push(`\n[${t('content.gap')}]\n`)
     } else if (props.resource.kind === 'text') {
       await readContentForCopy(
         targetCursor,
@@ -210,7 +313,7 @@ async function copy() {
       // An unopened emulator provides the same VT semantics as the widget,
       // without copying escape sequences or depending on its visible window.
       const capture = new Terminal({
-        cols: terminal?.cols || 240,
+        cols: terminal?.cols || lastTerminalCols,
         rows: 16,
         scrollback: 100000,
         convertEol: true,
@@ -249,12 +352,23 @@ async function copy() {
 
 function flushOutput() {
   if (stopped || writing || !isVisible()) return
-  if (!terminal) {
+  if (props.resource.kind !== 'log' && props.resource.kind !== 'terminal') {
     pending = []
     pendingBytes = 0
     return
   }
-  if (paused.value || terminal.getSelection()) {
+  if (staticOutput.value) {
+    if (canKeepStaticOutput()) {
+      pending = []
+      pendingBytes = 0
+      needsReplay = false
+      return
+    }
+    staticOutput.value = null
+  }
+  ensureTerminal()
+  if (!terminal) return
+  if (paused.value || selectionActive.value || terminal.getSelection()) {
     needsReplay = true
     pending = []
     pendingBytes = 0
@@ -272,6 +386,7 @@ function flushOutput() {
   }
   if (!pending.length) {
     writing = false
+    settleOutput()
     return
   }
   const pieces: string[] = []
@@ -280,8 +395,6 @@ function flushOutput() {
     if (payload.type === 'text' || payload.type === 'log') pieces.push(payload.text)
     else if (payload.type === 'terminal') {
       terminal.resize(payload.screen.cols, payload.screen.rows)
-      const screen = terminal.element?.querySelector('.xterm-screen')
-      if (screen) terminalHeight.value = screen.getBoundingClientRect().height + 8
       pieces.push(terminalSnapshotText(payload.screen))
     } else if (payload.type === 'terminal_patch')
       pieces.push(terminalSnapshotText(payload.screen, payload.rows_changed))
@@ -291,7 +404,9 @@ function flushOutput() {
   terminal.write(pieces.join(''), () => {
     writing = false
     if (stopped || !isVisible()) return
-    updateLogHeight()
+    // Size the committed buffer before starting the next queued write, even
+    // when a busy stream leaves no animation frame between write callbacks.
+    updateTerminalLayout()
     if (!paused.value && !terminal?.getSelection()) terminal?.scrollToBottom()
     flushOutput()
   })
@@ -303,12 +418,25 @@ function connect() {
   if (!isVisible() || stopped) return
   stop = observeContent(props.sessionId, props.resource, (frame) => {
     buffer = frame.buffer
+    // A completed widget can outlive the shared subscription's idle cache.
+    // Keep its snapshot and metadata while a new subscription catches up.
+    if (canKeepStaticOutput()) {
+      if (buffer.resource) status.value = buffer.resource.state
+      error.value = frame.error
+      return
+    }
     if (!paused.value && !selectionActive.value) semanticDocument.value = buffer.document
-    status.value = buffer.resource?.state || 'active'
+    status.value = buffer.resource?.state || (staticOutput.value ? status.value : 'active')
     gap.value = buffer.gap
     windowed.value = buffer.windowed
     error.value = frame.error
-    loading.value = !buffer.resource && !buffer.chunks.length && !buffer.document && !frame.error
+    loading.value =
+      !staticOutput.value &&
+      ((!buffer.resource && !buffer.chunks.length && !buffer.document && !frame.error) ||
+        ((props.resource.kind === 'log' || props.resource.kind === 'terminal') &&
+          Boolean(buffer.resource) &&
+          status.value !== 'active' &&
+          !terminal?.element))
     needsReplay ||= frame.reset
     for (const { payload } of frame.appended) {
       const input = payload.type === 'document_event' ? payload.input : payload
@@ -341,17 +469,11 @@ function updateSelection() {
   }
 }
 
-onMounted(async () => {
-  await nextTick()
-  if (stopped) return
-  mounted = true
-  document.addEventListener('selectionchange', updateSelection)
-  if (!surface.value) {
-    connect()
-    return
-  }
-  const fit = new FitAddon()
-  terminal = new Terminal({
+function ensureTerminal() {
+  if (!buffer?.resource) return
+  terminal ||= new Terminal({
+    cols: buffer.resource.state === 'active' ? 80 : 240,
+    rows: props.resource.kind === 'log' ? (buffer.resource.state === 'active' ? 1 : 16) : 24,
     disableStdin: true,
     convertEol: props.resource.kind !== 'terminal',
     scrollback: 5000,
@@ -362,31 +484,34 @@ onMounted(async () => {
     cursorStyle: 'bar',
     allowProposedApi: false,
   })
+  // Completed history still needs VT parsing, but never needs a live DOM
+  // terminal. Drain its remaining pages before publishing a static result.
+  if (terminal.element || buffer.resource.state !== 'active' || !terminalHost.value) return
+  fit = new FitAddon()
   terminal.loadAddon(fit)
-  terminal.open(surface.value)
+  terminal.open(terminalHost.value)
   applyTheme()
-  fit.fit()
-  updateLogHeight()
+  updateTerminalLayout()
   terminal.onScroll((line) => {
     if (fitting) return
+    const wasPaused = paused.value
     paused.value = line < (terminal?.buffer.active.baseY || 0)
+    if (wasPaused && !paused.value) queueMicrotask(flushOutput)
   })
   terminal.onSelectionChange(updateSelection)
-  resize = new ResizeObserver(() => {
-    if (!isVisible() || props.resource.kind !== 'log' || resizeFrame) return
-    resizeFrame = requestAnimationFrame(() => {
-      resizeFrame = 0
-      if (!isVisible() || stopped || !surface.value?.clientWidth) return
-      fitting = true
-      fit.fit()
-      updateLogHeight()
-      if (!paused.value && !selectionActive.value) terminal?.scrollToBottom()
-      fitting = false
-    })
-  })
-  resize.observe(surface.value)
+  document.addEventListener('selectionchange', updateSelection)
+  terminal.onRender(scheduleTerminalLayout)
+  resize = new ResizeObserver(scheduleTerminalLayout)
+  resize.observe(terminalHost.value)
   theme = new MutationObserver(applyTheme)
   theme.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+}
+
+onMounted(async () => {
+  await nextTick()
+  if (stopped) return
+  mounted = true
+  document.addEventListener('selectionchange', updateSelection)
   connect()
 })
 
@@ -405,10 +530,11 @@ if (pane)
         resizeFrame = 0
         return
       }
-      if (surface.value) resize?.observe(surface.value)
+      if (terminalHost.value) resize?.observe(terminalHost.value)
       applyTheme()
       updateSelection()
       connect()
+      scheduleTerminalLayout()
     },
     { flush: 'post' },
   )
@@ -417,10 +543,7 @@ onBeforeUnmount(() => {
   stopped = true
   document.removeEventListener('selectionchange', updateSelection)
   stop?.()
-  resize?.disconnect()
-  if (resizeFrame) cancelAnimationFrame(resizeFrame)
-  theme?.disconnect()
-  terminal?.dispose()
+  disposeTerminal()
 })
 
 watch(
@@ -435,13 +558,15 @@ watch(
     unseen.value = 0
     hasOutput.value = hasStderr.value = false
     semanticDocument.value = null
+    staticOutput.value = null
+    lastTerminalCols = 240
     connect()
   },
 )
 </script>
 
 <template>
-  <div ref="outputRoot" class="my-1 min-w-0" data-content-output :aria-busy="loading">
+  <div ref="outputRoot" class="my-1 min-w-0" data-content-output :data-content-state="status" :aria-busy="loading">
     <div class="part-toolbar text-[11px] text-muted-foreground">
       <div class="flex min-w-0 flex-wrap items-center gap-2">
         <PartLoadingIndicator v-if="loading && resource.kind !== 'text'" />
@@ -457,7 +582,13 @@ watch(
         <span v-if="hasStderr" class="rounded bg-amber-500/10 px-1.5 text-amber-600">stderr</span>
       </div>
       <div class="part-actionbar">
-        <button tabindex="0" v-if="paused || selectionActive" class="part-action" type="button" @click="follow">
+        <button
+          tabindex="0"
+          v-if="!staticOutput && (paused || selectionActive)"
+          class="part-action"
+          type="button"
+          @click="follow"
+        >
           <RiArrowDownLine aria-hidden="true" />{{ t('content.follow')
           }}<span v-if="unseen" class="rounded bg-muted px-1 text-[10px]">+{{ unseen }}</span>
         </button>
@@ -482,14 +613,24 @@ watch(
       :format="format || 'plain'"
       class="px-2 py-1"
     />
+    <AgenaContentStatic
+      v-if="staticOutput"
+      :text="staticOutput.text"
+      :format="format || 'plain'"
+      :wrap="resource.kind !== 'terminal'"
+      :follow-tail="staticOutput.followTail"
+    />
     <div
-      v-else-if="resource.kind === 'log' || resource.kind === 'terminal'"
+      v-if="resource.kind === 'log' || resource.kind === 'terminal'"
+      v-show="!staticOutput"
       ref="surface"
-      class="content-terminal bg-background p-1 text-foreground"
-      :class="resource.kind === 'terminal' ? 'max-h-[24rem] overflow-auto' : ''"
+      class="content-terminal max-h-[24rem] bg-background p-1 text-foreground"
+      :class="resource.kind === 'terminal' ? 'overflow-auto' : 'overflow-hidden'"
       :style="{ height: `${terminalHeight ?? 32}px` }"
       :aria-label="t('content.label')"
-    />
+    >
+      <div ref="terminalHost" class="h-full min-w-0" />
+    </div>
     <div
       v-if="!loading && !hasOutput && status === 'active'"
       class="border-t border-border/40 px-2 py-0.5 text-xs text-muted-foreground"
@@ -503,6 +644,11 @@ watch(
 <style scoped>
 .content-terminal :deep(.xterm) {
   height: 100%;
+}
+.content-terminal :deep(.xterm-screen) {
+  /* Xterm's selection/helper layers can retain their old height after a
+     snapshot shrinks. Keep them within the current screen's scroll extent. */
+  overflow: hidden;
 }
 .content-terminal :deep(.xterm-viewport) {
   scrollbar-width: thin;

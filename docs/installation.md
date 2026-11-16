@@ -191,6 +191,11 @@ keep their meaning. Web and TUI show the effective inherited modes; resetting a
 scope restores its inherited settings. The shipped `config.example.json` and
 `config.full.json` use this native permission format.
 
+The separate top-level `resource_guard` boolean defaults to `true` and combines
+resource declaration checks with command hints whenever MXC is not used.
+`sandbox` only controls native isolation. A sandbox startup failure remains an
+error; it does not silently retry without isolation.
+
 Network settings now use the flat `permission.network` fields `default`,
 `allow`, `deny`, `inbound`, and `hostLoopback`. On startup, recognized directional
 `egress` / `ingress` settings are resolved using their former inheritance rules

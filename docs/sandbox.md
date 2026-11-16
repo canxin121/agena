@@ -1,4 +1,4 @@
-# 工具沙盒：配置、执行与部署
+# 执行保护：原生沙盒与资源预检
 
 Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作。作为 MCP 服务提供工具时，调用默认关闭 MXC，直接在宿主执行。路径权限放在 `permission.path`，网络权限使用 `permission.network` 的扁平规则，工具审批放在 `permission.tools`；启用沙盒时，Shell 和托管子进程直接把当前生效的路径、网络配置转换为 MXC 策略。
 
@@ -13,10 +13,9 @@ Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工
 ```json
 {
   "sandbox": {
-    "enabled": true,
-    "resource_checks": true,
-    "command_hints": true
+    "enabled": true
   },
+  "resource_guard": true,
   "permission": {
     "path": {
       "workspace": "readwrite",
@@ -31,45 +30,62 @@ Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工
 
 省略这些字段即可使用内置值。全局、项目和会话中已保存的覆盖仍按原有继承规则生效；例如显式的 `readonly`、`deny` 或离线网络不会因升级而改变。Web 和 TUI 的“继承”显示上层实际模式，重置当前范围会恢复继承。
 
-## 沙盒与回退检查开关
+## 沙盒与资源预检
 
-Web 的“权限与安全 → 沙盒与检查”和 TUI 的“设置 → 权限”都可以编辑以下配置，支持全局默认与工作区覆盖。每个字段独立继承；删除当前层字段恢复上层值。
+Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → 权限”提供两个独立的策略开关，支持全局默认与工作区覆盖。删除当前层字段恢复上层值。
 
 ```json
 {
   "sandbox": {
-    "enabled": true,
-    "resource_checks": true,
-    "command_hints": true
-  }
+    "enabled": true
+  },
+  "resource_guard": true
 }
 ```
 
-三个字段均默认为 `true`，只接受 JSON 布尔值：
+两个开关均默认为 `true`，只接受 JSON 布尔值。`sandbox` 只包含原生隔离设置；`resource_guard` 是独立的顶层字段。
 
-| 字段 | 生效条件与行为 |
+| 配置 | 策略与行为 |
 | --- | --- |
-| `enabled` | 启用 MXC；Shell、PTY 和托管子进程使用当前生效的资源策略 |
-| `resource_checks` | 仅在 MXC 实际关闭时，检查工具额外声明的 `reads`、`writes`、`network` |
-| `command_hints` | 仅在 MXC 关闭且 `resource_checks` 开启时，按命令分析结果提示补充遗漏的资源声明 |
+| `sandbox.enabled` | 原生沙盒：通过 MXC 约束 Shell、PTY 和托管子进程的文件系统与网络访问 |
+| `resource_guard` | 资源预检：在未使用 MXC 时，统一检查工具声明的 `reads`、`writes`、`network`，并根据命令分析提示补齐遗漏声明 |
 
-启用 MXC 时，模型可以省略上述三个资源声明字段；即使传入，也不会用于缩小或扩大沙盒权限。网络是否可用由 `permission.network` 决定，省略 `network` 不再意味着离线。工具定义会标明当前执行模式及资源声明是否生效。
+资源预检发生在调用前，依赖工具声明和命令分析。它适合直接执行时做基础检查；原生沙盒还会约束进程随后实际发生的 I/O。
 
-完全关闭沙盒和这两项回退机制：
+| 本次调用实际使用 MXC | `resource_guard` | 执行方式 |
+| --- | --- | --- |
+| 是 | `true` | MXC 隔离，资源预检待用 |
+| 是 | `false` | MXC 隔离，资源预检关闭 |
+| 否 | `true` | 资源声明校验与命令补充提示一起启用 |
+| 否 | `false` | 两项预检一起关闭 |
+
+启用 MXC 时，模型可以省略上述三个资源声明字段；即使传入，也不会用于缩小或扩大沙盒权限。网络是否可用由 `permission.network` 决定，省略工具的 `network` 参数不再意味着离线。工具定义会标明当前执行模式及声明要求。
+
+只使用资源预检：
 
 ```json
 {
-  "sandbox": {
-    "enabled": false,
-    "resource_checks": false,
-    "command_hints": false
-  }
+  "sandbox": { "enabled": false },
+  "resource_guard": true
 }
 ```
 
-只设置 `enabled: false` 会保留默认开启的声明检查和命令提示。关闭 `command_hints` 后，已提供的声明仍可检查，但不会因命令关键词而要求补填。关闭 `resource_checks` 后，声明与补填提示都不执行，`command_hints` 保存的值保留，方便以后重新启用。
+关闭这两种执行保护：
 
-工具名称、命令审批，以及文件发布、宿主 HTTP 等操作对真实资源的授权继续生效。关闭 MXC 后，子进程按宿主用户权限访问文件和网络；声明检查发生在调用入口，不能约束进程随后实际进行的 I/O。
+```json
+{
+  "sandbox": { "enabled": false },
+  "resource_guard": false
+}
+```
+
+工具审批，以及文件发布、宿主 HTTP 等操作对真实资源的授权继续生效。MXC 启动失败仍返回错误，不会自动以直接执行方式重试；需要直接执行时显式关闭沙盒。
+
+### 旧配置兼容
+
+读取旧配置时，`sandbox.resource_checks` 映射到顶层 `resource_guard`。旧 `sandbox.command_hints` 合并到同一预检策略，不再提供单独开关；只有该旧字段时不会产生新的覆盖值。这样，旧的 `resource_checks: false` 会继续关闭预检，旧的 `resource_checks: true` 会统一启用声明检查和命令提示。
+
+`resource_guard` 与 `sandbox.resource_checks` 同时出现且值不一致时，配置会报冲突；相同值只保留新字段。设置读取结果使用新结构，下一次正常保存时写入规范化的新结构。
 
 ### 环境变量与 MCP 调用
 
@@ -82,7 +98,7 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 
 `false`、`0`、`off` 也表示关闭。未设置或设置为 `enabled` 时遵循配置的 `sandbox.enabled`，不会重新开启已在设置中关闭的沙盒。兼容旧的 `AGENA_SHELL_SANDBOX=disabled`；存在 `AGENA_SANDBOX` 时以它为准。环境在进程启动时捕获，修改后需要重启服务；工具 `env` 中的同名值不能改变运行模式。
 
-`agena mcp-server` 是常驻服务的 stdio 桥接客户端，工具实际在服务端执行。桥接调用与 HTTP `/mcp` 调用在服务端为本次执行关闭沙盒，无须额外环境变量；这类调用按配置决定是否启用回退声明检查和提示。这个受信任标记跟随调用执行器与宿主回调，不改变普通会话的模式，也不会复用另一模式下的 LSP、MCP 子连接或插件进程。
+`agena mcp-server` 是常驻服务的 stdio 桥接客户端，工具实际在服务端执行。桥接调用与 HTTP `/mcp` 调用在服务端为本次执行关闭沙盒，无须额外环境变量；这类调用按 `resource_guard` 决定是否启用资源预检。这个受信任标记跟随调用执行器与宿主回调，不改变普通会话的模式，也不会复用另一模式下的 LSP、MCP 子连接或插件进程。
 
 关闭后，Shell、PTY、文件工具和辅助子进程直接执行，不要求 MXC 后端或沙盒挂载。命令保留宿主环境及调用方的显式环境设置；浏览器入口也不再因缺少 MXC 浏览器隔离而拒绝启动。
 
@@ -399,7 +415,7 @@ TUI 使用 `Tab` 切换面板，`Ctrl+N` 新增规则，`Enter` 编辑字段，`
 
 已保存的网络批准不能扩大静态策略，保存的拒绝会编译为原生拒绝规则。不能转换成数值 IP/CIDR 的旧域名拒绝会返回具体错误，要求修改或移除该决定。
 
-只有关闭 MXC 且开启 `sandbox.resource_checks` 时，工具 `network` 数组才作为调用前的资源声明检查，例如 `["192.0.2.10:443"]` 或 `["https://api.example.com"]`。空数组表示没有声明网络操作，不能使宿主直接执行的命令自动离线。
+只有关闭 MXC 且开启 `resource_guard` 时，工具 `network` 数组才作为调用前的资源声明检查，例如 `["192.0.2.10:443"]` 或 `["https://api.example.com"]`。空数组表示没有声明网络操作，不能使宿主直接执行的命令自动离线。
 
 ### 宿主 HTTP 请求与 DNS 地址校验
 
@@ -505,7 +521,7 @@ MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<n
 
 服务的 `cwd` 必须是现有目录；显式相对 `cwd` 按服务配置所在工作区解析。启用 MXC 时，`cwd` 需要读取权限，配置中的可写挂载目标须已存在，并同时具有读取权限。
 
-只有关闭 MXC 且开启 `sandbox.resource_checks` 时，`process.reads`、`process.writes`、`process.network` 才用于调用前的回退声明检查。此时相对资源路径基于服务实际 `cwd`，`<workspace>` 指向当前会话项目；声明检查不会给直接运行的服务建立内核隔离。
+只有关闭 MXC 且开启 `resource_guard` 时，`process.reads`、`process.writes`、`process.network` 才用于调用前的回退声明检查。此时相对资源路径基于服务实际 `cwd`，`<workspace>` 指向当前会话项目；声明检查不会给直接运行的服务建立内核隔离。
 
 加载配置只登记 stdio 定义，管理列表以 `scoped` 表示需要执行作用域。实际使用时，宿主验证当前会话、调用或 operator 能力，选取当前执行模式并生成策略。实例按服务器、配置版本、宿主 scope、工作区、实际工作目录和完整策略隔离；不同会话或更窄策略不会借用已有宽权限进程。实例退出后，下一次合法调用会重新检查当前权限再连接；显式重连也走相同流程，后台不会脱离授权以旧策略创建进程。
 
@@ -515,7 +531,7 @@ MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<n
 
 ### 外部 stdio 插件
 
-`plugins.list["<plugin-id>"].package` 在 `kind: "stdio"` 时保留 `reads`、`writes`、`network` 声明，仅在 MXC 关闭且 `sandbox.resource_checks` 开启时用于回退检查。启用 MXC 时，bootstrap 使用独立空工作目录，只读开放已配置插件包、明确解释器入口及必要运行时，网络关闭；它负责 manifest、初始化和关闭等基础生命周期。会话工具和其他操作使用当前完整配置策略，不通过这些声明缩小或扩大权限。
+`plugins.list["<plugin-id>"].package` 在 `kind: "stdio"` 时保留 `reads`、`writes`、`network` 声明，仅在 MXC 关闭且 `resource_guard` 开启时用于回退检查。启用 MXC 时，bootstrap 使用独立空工作目录，只读开放已配置插件包、明确解释器入口及必要运行时，网络关闭；它负责 manifest、初始化和关闭等基础生命周期。会话工具和其他操作使用当前完整配置策略，不通过这些声明缩小或扩大权限。
 
 其他工具、流式工具、hooks 和 services 必须取得当前有效的宿主授权作用域。实例按 scope、工作区、工作目录及完整策略隔离，初始化继承当前会话上下文；动态工具注册进入对应会话 overlay，并随进程 effect scope 清理。子进程回调只能使用该进程当前活跃请求收到的 token，同时匹配其会话、工作区和适用的调用边界。
 

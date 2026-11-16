@@ -272,7 +272,7 @@ impl ToolExecutor {
     ) -> Result<ToolInvocationExecution, ToolError> {
         // Bare host callers get the same immutable view that session callers
         // capture before model dispatch. Every subsequent lookup uses this view.
-        let mut executor = self.clone();
+        let mut executor = self.clone().with_sandbox_enabled(self.sandbox_enabled());
         if executor.definition_catalog.is_none() {
             executor.definition_catalog = Some(Arc::new(
                 executor

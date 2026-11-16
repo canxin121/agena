@@ -38,6 +38,7 @@ fn raw(value: Value) -> RawConfig {
 fn sandbox_defaults_preserve_isolation_and_direct_execution_checks() {
     let config = RawConfig::default().resolve().unwrap();
     assert_eq!(config.sandbox, SandboxConfig::default());
+    assert!(config.resource_guard);
     // Like other optional top-level sections, null means no layer override.
     assert_eq!(
         raw(json!({"sandbox":null})).resolve().unwrap().sandbox,
@@ -49,27 +50,24 @@ fn sandbox_defaults_preserve_isolation_and_direct_execution_checks() {
     assert!(!round_trip.resolve().unwrap().sandbox.enabled);
     assert_eq!(
         serde_json::to_value(config).unwrap()["sandbox"],
-        json!({"enabled":true,"resource_checks":true,"command_hints":true})
+        json!({"enabled":true})
     );
 }
 
 #[test]
-fn sandbox_fields_inherit_independently_and_false_is_an_override() {
-    let mut global = raw(json!({"sandbox":{
-        "enabled":false,"resource_checks":false,"command_hints":true
-    }}));
-    global.merge_project_from_with_keys(
-        raw(json!({"sandbox":{"enabled":true,"command_hints":false}})),
-        Default::default(),
-    );
-    assert_eq!(
-        global.resolve().unwrap().sandbox,
-        SandboxConfig {
-            enabled: true,
-            resource_checks: false,
-            command_hints: false,
-        }
-    );
+fn sandbox_and_resource_guard_inherit_independently_and_false_is_an_override() {
+    let mut global = raw(json!({"sandbox":{"enabled":false}, "resource_guard":false}));
+    global
+        .merge_project_from_with_keys(raw(json!({"sandbox":{"enabled":true}})), Default::default());
+    let resolved = global.resolve().unwrap();
+    assert!(resolved.sandbox.enabled);
+    assert!(!resolved.resource_guard);
+
+    let mut global = raw(json!({"sandbox":{"enabled":false}, "resource_guard":false}));
+    global.merge_project_from_with_keys(raw(json!({"resource_guard":true})), Default::default());
+    let resolved = global.resolve().unwrap();
+    assert!(!resolved.sandbox.enabled);
+    assert!(resolved.resource_guard);
 }
 
 #[test]
@@ -96,17 +94,12 @@ fn sandbox_settings_reject_unknown_fields_and_non_boolean_values() {
 fn environment_disable_is_visible_in_resolved_settings() {
     for variable in ["AGENA_SANDBOX", "AGENA_SHELL_SANDBOX"] {
         for value in ["disabled", "false", "0", "off", " Disabled "] {
-            let mut config = raw(json!({"sandbox":{"enabled":true,"command_hints":false}}));
+            let mut config = raw(json!({"sandbox":{"enabled":true}, "resource_guard":false}));
             config
                 .merge_from(RawConfig::from_env(&Environment::new(&[(variable, value)])).unwrap());
-            assert_eq!(
-                config.resolve().unwrap().sandbox,
-                SandboxConfig {
-                    enabled: false,
-                    resource_checks: true,
-                    command_hints: false,
-                }
-            );
+            let resolved = config.resolve().unwrap();
+            assert!(!resolved.sandbox.enabled);
+            assert!(!resolved.resource_guard);
         }
     }
 }

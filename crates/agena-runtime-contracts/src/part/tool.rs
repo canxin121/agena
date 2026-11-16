@@ -51,21 +51,21 @@ pub struct ShellCommandInput {
     pub folder: Option<String>,
     /// Optional fallback declaration of files/directories read by this command.
     /// Omit when MXC is enabled: the sandbox uses configured path permissions.
-    /// Checked only when the sandbox is off and resource_checks is enabled.
+    /// Checked only when the sandbox is off and resource_guard is enabled.
     /// Declare actual data paths, not executable installations.
     #[serde(default)]
     #[schemars(example = example_reads())]
     pub reads: Vec<String>,
     /// Optional fallback declaration of files/directories created, modified or
     /// deleted. Omit when MXC is enabled: configured path permissions apply.
-    /// Checked only when the sandbox is off and resource_checks is enabled.
+    /// Checked only when the sandbox is off and resource_guard is enabled.
     #[serde(default)]
     #[schemars(example = example_writes())]
     pub writes: Vec<String>,
     /// Optional fallback declaration of outbound targets (IP/host, host:port,
     /// or URL). Omit when MXC is enabled: the sandbox uses the full configured
     /// network policy, including independent ceilings and persisted denials.
-    /// Checked only when the sandbox is off and resource_checks is enabled;
+    /// Checked only when the sandbox is off and resource_guard is enabled;
     /// an empty declaration does not isolate a directly executed process.
     #[serde(default)]
     #[schemars(example = example_network())]
@@ -288,15 +288,15 @@ pub struct ShellWriteInput {
     #[serde(default)]
     pub include_screen: bool,
     /// Optional fallback read paths, relative to the Agena workspace. Checked
-    /// only when the sandbox is off and resource_checks is enabled; omit for MXC.
+    /// only when the sandbox is off and resource_guard is enabled; omit for MXC.
     #[serde(default)]
     pub reads: Vec<String>,
     /// Optional fallback write paths, relative to the Agena workspace. Checked
-    /// only when the sandbox is off and resource_checks is enabled; omit for MXC.
+    /// only when the sandbox is off and resource_guard is enabled; omit for MXC.
     #[serde(default)]
     pub writes: Vec<String>,
     /// Optional fallback outbound targets for this input. Checked only when the
-    /// sandbox is off and resource_checks is enabled; omit for MXC. A sandboxed
+    /// sandbox is off and resource_guard is enabled; omit for MXC. A sandboxed
     /// terminal keeps the configured network policy captured when it started.
     #[serde(default)]
     pub network: Vec<String>,

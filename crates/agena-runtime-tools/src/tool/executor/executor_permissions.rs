@@ -362,7 +362,7 @@ impl ToolExecutor {
     ) -> Result<(), ToolError> {
         // MXC receives the configured resource policy. Model declarations are
         // an optional fallback for commands running without native isolation.
-        if !self.resource_checks_enabled() {
+        if !self.resource_guard_enabled() {
             return Ok(());
         }
         let (command, effects, network, workdir) =
@@ -441,11 +441,10 @@ impl ToolExecutor {
         command: &str,
         targets: &[String],
     ) -> Result<(), ToolError> {
-        if !self.resource_checks_enabled() {
+        if !self.resource_guard_enabled() {
             return Ok(());
         }
-        if self.command_hints_enabled()
-            && targets.is_empty()
+        if targets.is_empty()
             && let Some(reason) = agena_tool::shell_analysis::network_command_reason(command)
         {
             return Err(ToolError::invalid_input(format!(
@@ -481,7 +480,7 @@ mod sandbox_network_tests {
     use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
 
     #[test]
-    fn direct_resource_checks_reject_denied_network_before_a_shell_launch() {
+    fn direct_resource_guard_rejects_denied_network_before_a_shell_launch() {
         let principal = ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
@@ -534,10 +533,9 @@ mod sandbox_network_tests {
         );
     }
 
-    #[test]
-    fn fallback_switches_gate_resource_validation_and_command_hints_together() {
-        let base = ToolExecutor::new(
-            std::env::temp_dir().join("agena-fallback-switches"),
+    fn resource_guard_executor() -> ToolExecutor {
+        ToolExecutor::new(
+            std::env::temp_dir().join("agena-resource-guard"),
             ExecutionPrincipal::new(
                 PermissionPolicy::allow_all(),
                 ToolPermissionPolicy::allow_all(),
@@ -545,45 +543,129 @@ mod sandbox_network_tests {
             agena_plugin_host::PluginHost::new_empty(),
             None,
             None,
+        )
+    }
+
+    fn missing_declaration_errors(executor: &ToolExecutor) -> (bool, bool) {
+        let filesystem = crate::tool::shell_tools::validate_declared_filesystem_effects(
+            executor,
+            "shell",
+            "printf secret > output.txt",
+            &Default::default(),
         );
-        for (sandbox, resources, hints) in [
-            (true, true, true),
-            (false, true, true),
-            (false, true, false),
-            (false, false, true),
-            (false, false, false),
-        ] {
+        let mut checks = Vec::new();
+        let network =
+            executor.push_declared_network_checks(&mut checks, "curl https://192.0.2.1", &[]);
+        assert!(checks.is_empty());
+        (filesystem.is_err(), network.is_err())
+    }
+
+    #[test]
+    fn resource_guard_gates_declarations_and_command_prompts_together() {
+        let base = resource_guard_executor();
+        for (sandbox, resource_guard) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
             let executor = base
                 .clone()
-                .with_sandbox_settings(sandbox, resources, hints);
+                .with_execution_settings(sandbox, resource_guard);
             let active_sandbox = sandbox && agena_process::sandbox::enabled();
             assert_eq!(executor.sandbox_enabled(), active_sandbox);
-            assert_eq!(
-                executor.resource_checks_enabled(),
-                !active_sandbox && resources
-            );
-            assert_eq!(
-                executor.command_hints_enabled(),
-                !active_sandbox && resources && hints
-            );
-            let filesystem = crate::tool::shell_tools::validate_declared_filesystem_effects(
-                &executor,
-                "shell",
-                "printf secret > output.txt",
-                &Default::default(),
-            );
-            assert_eq!(filesystem.is_err(), executor.command_hints_enabled());
-            let mut checks = Vec::new();
-            let network =
-                executor.push_declared_network_checks(&mut checks, "curl https://192.0.2.1", &[]);
-            assert_eq!(network.is_err(), executor.command_hints_enabled());
-            assert!(checks.is_empty());
+            let guarded = !active_sandbox && resource_guard;
+            assert_eq!(executor.resource_guard_enabled(), guarded);
+            assert_eq!(missing_declaration_errors(&executor), (guarded, guarded));
         }
-        let trusted = base
-            .with_sandbox_enabled(false)
-            .with_sandbox_settings(true, true, true);
-        assert!(!trusted.sandbox_enabled());
-        assert!(trusted.resource_checks_enabled());
+        for resource_guard in [false, true] {
+            let trusted = base
+                .clone()
+                .with_sandbox_enabled(false)
+                .with_execution_settings(true, resource_guard);
+            assert!(!trusted.sandbox_enabled());
+            assert_eq!(trusted.resource_guard_enabled(), resource_guard);
+            assert_eq!(
+                missing_declaration_errors(&trusted),
+                (resource_guard, resource_guard)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invocation_without_mxc_preserves_guard_in_blocking_preflight() {
+        let base = resource_guard_executor();
+        agena_process::sandbox::scope_enabled(false, async {
+            for resource_guard in [false, true] {
+                let executor = base.clone().with_execution_settings(true, resource_guard);
+                let (sandbox, missing) = executor
+                    .run_permission_preflight(|executor| {
+                        Ok((
+                            executor.sandbox_enabled(),
+                            missing_declaration_errors(&executor),
+                        ))
+                    })
+                    .await
+                    .unwrap();
+                assert!(!sandbox);
+                assert_eq!(missing, (resource_guard, resource_guard));
+            }
+        })
+        .await;
+    }
+
+    #[test]
+    fn disabling_resource_guard_preserves_actual_resource_and_tool_authorization() {
+        let executor = resource_guard_executor()
+            .with_execution_settings(false, false)
+            .with_permission_config(
+                &serde_json::from_value(serde_json::json!({
+                    "path": {"workspace": "deny", "external": "deny"},
+                    "network": {"default": "deny"},
+                    "tools": {"default": "deny"}
+                }))
+                .unwrap(),
+            );
+        assert_eq!(missing_declaration_errors(&executor), (false, false));
+        let target = executor.workspace_root().join("private.txt");
+        assert!(matches!(
+            executor
+                .path_permission_check(AccessKind::Read, &target.to_string_lossy())
+                .decision,
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            executor
+                .network_permission_check("192.0.2.1:443")
+                .unwrap()
+                .decision,
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            executor
+                .principal
+                .authorize_tool("agena.shell.exec", Some("printf ok"), &[]),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn guard_changes_invalidate_direct_terminal_authority() {
+        let base = resource_guard_executor();
+        let direct = base.clone().with_execution_settings(false, false);
+        let guarded = base.clone().with_execution_settings(false, true);
+        assert_ne!(
+            direct.execution_policy_identity().unwrap(),
+            guarded.execution_policy_identity().unwrap()
+        );
+        if base.sandbox_enabled() {
+            assert_eq!(
+                base.clone()
+                    .with_execution_settings(true, false)
+                    .execution_policy_identity()
+                    .unwrap(),
+                base.with_execution_settings(true, true)
+                    .execution_policy_identity()
+                    .unwrap()
+            );
+        }
     }
 
     #[test]

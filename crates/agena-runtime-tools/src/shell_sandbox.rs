@@ -609,7 +609,7 @@ mod tests {
             std::fs::read(root.join("input/source.txt")).unwrap(),
             b"authorized input\n"
         );
-        let direct = run(&executor.with_sandbox_settings(false, false, false));
+        let direct = run(&executor.with_execution_settings(false, false));
         assert!(direct.contains("secret:visible"), "{direct}");
         assert!(direct.contains("input:writable"), "{direct}");
         assert_eq!(

@@ -74,6 +74,7 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) sandbox: agena_runtime_config::SandboxConfig,
+    pub(crate) resource_guard: bool,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
     pub(crate) max_concurrent_tools: usize,
     /// Cap on model turns within one stable run; `None` uses the session
@@ -113,6 +114,7 @@ pub(crate) fn session_build_config_from_resolved(
         auto_title: config.session.auto_title.clone(),
         permission: config.permission.clone(),
         sandbox: config.sandbox,
+        resource_guard: config.resource_guard,
         auto_compaction: agena_domain::SessionAutoCompactionConfig {
             enabled: config.session.compaction.auto,
             reserved_tokens: config.session.compaction.reserved_tokens,
@@ -128,6 +130,7 @@ pub(crate) fn session_build_config_from_resolved(
 /// Typed inputs for tool-executor construction.
 pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Session> {
     pub(crate) sandbox: agena_runtime_config::SandboxConfig,
+    pub(crate) resource_guard: bool,
     pub(crate) plugins: Plugins,
     pub(crate) lsp_registry: Lsp,
     pub(crate) workspace_root: Workspace,

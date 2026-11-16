@@ -11,12 +11,10 @@ impl ToolExecutor {
     ) -> Vec<RegisteredTool> {
         let mode = if self.sandbox_enabled() {
             "MXC is enabled. Omit reads, writes and network. The sandbox enforces configured path and network permissions, including authority ceilings; command keyword prompts for declarations are disabled."
-        } else if !self.resource_checks_enabled() {
-            "MXC and resource declaration checks are disabled. Omit reads, writes and network. Tool and command approval rules still apply."
-        } else if self.command_hints_enabled() {
-            "MXC is disabled. Resource declaration checks and command keyword prompts are enabled. Declare the actual reads, writes and network effects; declarations are checked before direct execution."
+        } else if self.resource_guard_enabled() {
+            "MXC is disabled and resource_guard is enabled. Declare actual reads, writes and network effects. The resource guard checks declarations and prompts for missing declarations before direct execution."
         } else {
-            "MXC is disabled. Supplied reads, writes and network declarations are checked before direct execution. Command keyword prompts for missing declarations are disabled."
+            "MXC and resource_guard are disabled. Omit reads, writes and network. Tool and command approval rules still apply."
         };
 
         tools

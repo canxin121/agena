@@ -39,7 +39,7 @@ pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspace
 
 /// Resources reported by a native, host-managed child process.
 /// With MXC enabled, the host compiles configured permissions directly. These
-/// declarations are fallback checks when MXC is off and resource_checks is on;
+/// declarations are fallback checks when MXC is off and resource_guard is on;
 /// they never grant authority beyond the current host scope.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -48,7 +48,7 @@ pub struct HostProcessResources {
     pub reads: Vec<String>,
     pub writes: Vec<String>,
     /// Optional fallback outbound targets, checked only for direct execution
-    /// with resource_checks enabled. MXC uses the full configured native network
+    /// with resource_guard enabled. MXC uses the full configured native network
     /// policy, including every independent ceiling and persisted denial.
     pub network: Vec<String>,
 }

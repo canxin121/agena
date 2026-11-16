@@ -230,6 +230,8 @@ pub struct ResolvedConfig {
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
     pub sandbox: super::SandboxConfig,
+    /// Resource declarations and command hints used only without MXC isolation.
+    pub resource_guard: bool,
     pub session: SessionConfig,
     /// Both configuration prompt layers plus their fragment directories.
     #[serde(default, skip_serializing_if = "PromptLayersConfig::is_empty")]

@@ -11,7 +11,8 @@ impl ToolExecutor {
     {
         self.ensure_not_cancelled()?;
         let cancel = self.cancellation_token().cloned();
-        let executor = self.clone();
+        // Tokio task-local sandbox overrides do not cross into blocking workers.
+        let executor = self.clone().with_sandbox_enabled(self.sandbox_enabled());
         let work = PERMISSION_CHECK_WORKERS.run(move || {
             executor.ensure_not_cancelled()?;
             operation(executor)

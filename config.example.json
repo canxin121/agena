@@ -31,10 +31,9 @@
     "auxiliary_model": null
   },
   "sandbox": {
-    "enabled": true,
-    "resource_checks": true,
-    "command_hints": true
+    "enabled": true
   },
+  "resource_guard": true,
   "prompts": {
     "mode": "append",
     "order": ["house-style"],

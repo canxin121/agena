@@ -48,12 +48,12 @@ pub fn read_file_setting(
     input: ConfigSettingsGetInput,
 ) -> Result<ConfigSettingsReadResponse, ConfigError> {
     let config_path = config_path.into();
-    let (config_found, file_value) = read_or_create_doc(&config_path)?;
+    let (config_found, mut file_value) = read_or_create_doc(&config_path)?;
+    let revision = crate::runtime_config_settings_service::document_revision(&file_value);
+    crate::normalize_resource_guard_document(&mut file_value).map_err(ConfigError::Validation)?;
     let value = get_json_path(&file_value, input.target.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
-        revision: Some(crate::runtime_config_settings_service::document_revision(
-            &file_value,
-        )),
+        revision: Some(revision),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
@@ -68,12 +68,12 @@ pub fn list_file_settings(
     input: ConfigSettingsListInput,
 ) -> Result<ConfigSettingsListResponse, ConfigError> {
     let config_path = config_path.into();
-    let (config_found, file_value) = read_or_create_doc(&config_path)?;
+    let (config_found, mut file_value) = read_or_create_doc(&config_path)?;
+    let revision = crate::runtime_config_settings_service::document_revision(&file_value);
+    crate::normalize_resource_guard_document(&mut file_value).map_err(ConfigError::Validation)?;
     let items = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
-        revision: Some(crate::runtime_config_settings_service::document_revision(
-            &file_value,
-        )),
+        revision: Some(revision),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
@@ -137,7 +137,8 @@ fn set_file_setting_impl(
             ));
         }
         let before = doc.clone();
-        let previous = get_json_path(&before, Some(input.path.as_str()))?;
+        crate::normalize_resource_guard_document(&mut doc).map_err(ConfigError::Validation)?;
+        let previous = get_json_path(&doc, Some(input.path.as_str()))?;
         let created = previous.is_null();
         set_json_path(&mut doc, &segments, input.value)?;
         finish_edit(
@@ -213,6 +214,7 @@ fn delete_file_setting_impl(
             ));
         }
         let before = doc.clone();
+        crate::normalize_resource_guard_document(&mut doc).map_err(ConfigError::Validation)?;
         let deleted = remove_json_path(&mut doc, &segments)?;
         finish_edit(
             config_path,
@@ -289,8 +291,9 @@ fn patch_file_settings_impl(
             ));
         }
         let before = doc.clone();
+        crate::normalize_resource_guard_document(&mut doc).map_err(ConfigError::Validation)?;
         let created = match input.target.path.as_deref() {
-            Some(path) => get_json_path(&before, Some(path))?.is_null(),
+            Some(path) => get_json_path(&doc, Some(path))?.is_null(),
             None => false,
         };
         let target = ensure_object_path(&mut doc, input.target.path.as_deref())?;
@@ -362,7 +365,7 @@ fn finish_edit(
     env: &dyn ConfigEnvironment,
     layered: Option<&LayeredValidation>,
 ) -> Result<ConfigSettingsEditResponse, ConfigError> {
-    crate::runtime_config_settings_service::normalize_permission_settings_document(&mut doc)
+    crate::runtime_config_settings_service::normalize_settings_document(&mut doc)
         .map_err(|error| ConfigError::Validation(error.diagnostic().to_owned()))?;
     let text = serde_json::to_string_pretty(&doc)?;
     // CLI edits and application settings share the same mandatory checks.
@@ -376,9 +379,12 @@ fn finish_edit(
         )?,
         None => super::raw::validate_config_text(&config_path, text.as_str())?,
     }
-    let previous = get_json_path(&before, path.as_deref())?;
-    let current = get_json_path(&doc, path.as_deref())?;
     let before_revision = crate::runtime_config_settings_service::document_revision(&before);
+    let mut previous_document = before;
+    crate::normalize_resource_guard_document(&mut previous_document)
+        .map_err(ConfigError::Validation)?;
+    let previous = get_json_path(&previous_document, path.as_deref())?;
+    let current = get_json_path(&doc, path.as_deref())?;
     let after_revision = crate::runtime_config_settings_service::document_revision(&doc);
     let changed = before_revision != after_revision;
     if changed && !dry_run {

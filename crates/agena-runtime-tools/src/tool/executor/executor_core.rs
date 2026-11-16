@@ -18,8 +18,7 @@ impl ToolExecutor {
             principal,
             sandbox_enabled: true,
             configured_sandbox_enabled: true,
-            configured_resource_checks: true,
-            configured_command_hints: true,
+            configured_resource_guard: true,
             sandbox_persisted_rules: Arc::new(Vec::new()),
             allowed_tool_names: None,
             model_id: None,
@@ -75,24 +74,16 @@ impl ToolExecutor {
 
     /// Configuration is independent of the trusted invocation override used
     /// by inbound MCP requests. A settings refresh cannot undo that override.
-    pub fn with_sandbox_settings(
-        mut self,
-        enabled: bool,
-        resource_checks: bool,
-        command_hints: bool,
-    ) -> Self {
-        self.configured_sandbox_enabled = enabled;
-        self.configured_resource_checks = resource_checks;
-        self.configured_command_hints = command_hints;
+    pub fn with_execution_settings(mut self, sandbox_enabled: bool, resource_guard: bool) -> Self {
+        self.configured_sandbox_enabled = sandbox_enabled;
+        self.configured_resource_guard = resource_guard;
         self
     }
 
-    pub fn resource_checks_enabled(&self) -> bool {
-        !self.sandbox_enabled() && self.configured_resource_checks
-    }
-
-    pub fn command_hints_enabled(&self) -> bool {
-        self.resource_checks_enabled() && self.configured_command_hints
+    /// Resource declarations and command hints share one preflight guard. It
+    /// applies only when this invocation actually runs without native isolation.
+    pub fn resource_guard_enabled(&self) -> bool {
+        !self.sandbox_enabled() && self.configured_resource_guard
     }
 
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {

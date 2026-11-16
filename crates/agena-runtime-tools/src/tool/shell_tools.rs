@@ -137,7 +137,7 @@ pub(crate) fn validate_declared_filesystem_effects(
     command: &str,
     effects: &FilesystemEffects,
 ) -> Result<(), ToolError> {
-    if !executor.command_hints_enabled() {
+    if !executor.resource_guard_enabled() {
         return Ok(());
     }
     // Only require declarations when the command provably mutates or reads

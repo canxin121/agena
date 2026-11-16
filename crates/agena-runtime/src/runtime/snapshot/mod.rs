@@ -503,6 +503,10 @@ impl RuntimeSnapshot {
         &self.state.resolution().sandbox
     }
 
+    pub(crate) fn resource_guard(&self) -> bool {
+        self.state.resolution().resource_guard
+    }
+
     pub(crate) fn tracing_config(&self) -> &agena_runtime::RuntimeTracingConfiguration {
         &self.state.resolution().tracing
     }

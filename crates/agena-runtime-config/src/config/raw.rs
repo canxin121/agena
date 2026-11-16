@@ -268,15 +268,15 @@ impl Merge for RawProvidersConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, Default)]
 /// Raw, unvalidated configuration as parsed from file or environment.
 pub struct RawConfig {
     pub tracing: Option<RawTracingConfig>,
     pub ui: Option<RawUiConfig>,
     pub runtime: Option<RawRuntimeConfig>,
-    #[serde(deserialize_with = "deserialize_optional_sandbox")]
     pub sandbox: Option<RawSandboxConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_guard: Option<bool>,
     pub session: Option<RawSessionConfig>,
     /// This file's prompt layer: global in the global file, workspace in the
     /// project file. The loader keeps both layers separate.
@@ -286,12 +286,111 @@ pub struct RawConfig {
     pub providers: RawProvidersConfig,
 }
 
+/// Project legacy direct-execution settings onto the single resource guard.
+/// This changes only the in-memory document; readers retain the original revision.
+pub fn normalize_resource_guard_document(document: &mut Value) -> Result<(), String> {
+    let Some(root) = document.as_object_mut() else {
+        return Ok(());
+    };
+    let resource_guard = root
+        .get("resource_guard")
+        .map(|value| {
+            value
+                .as_bool()
+                .ok_or_else(|| "resource_guard must be a boolean".to_owned())
+        })
+        .transpose()?;
+    let mut legacy_guard = None;
+    let mut has_legacy = false;
+    if let Some(value) = root.get("sandbox").filter(|value| !value.is_null()) {
+        let sandbox = value
+            .as_object()
+            .ok_or_else(|| "sandbox must be an object".to_owned())?;
+        for (name, value) in sandbox {
+            if !matches!(
+                name.as_str(),
+                "enabled" | "resource_checks" | "command_hints"
+            ) {
+                return Err(format!(
+                    "unknown sandbox setting {name:?}; use sandbox.enabled or resource_guard"
+                ));
+            }
+            if !value.is_boolean() {
+                return Err(format!("sandbox.{name} must be a boolean"));
+            }
+        }
+        legacy_guard = sandbox.get("resource_checks").and_then(Value::as_bool);
+        has_legacy =
+            sandbox.contains_key("resource_checks") || sandbox.contains_key("command_hints");
+    }
+    if resource_guard
+        .zip(legacy_guard)
+        .is_some_and(|(current, legacy)| current != legacy)
+    {
+        return Err("resource_guard conflicts with legacy sandbox.resource_checks; keep only resource_guard".into());
+    }
+    if let Some(legacy) = legacy_guard {
+        root.insert("resource_guard".into(), Value::Bool(legacy));
+    }
+    if has_legacy {
+        let sandbox = root
+            .get_mut("sandbox")
+            .and_then(Value::as_object_mut)
+            .expect("validated sandbox");
+        sandbox.remove("resource_checks");
+        sandbox.remove("command_hints");
+        if sandbox.is_empty() {
+            root.remove("sandbox");
+        }
+    }
+    Ok(())
+}
+
+impl<'de> Deserialize<'de> for RawConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize, Default)]
+        #[serde(default, deny_unknown_fields)]
+        struct Input {
+            tracing: Option<RawTracingConfig>,
+            ui: Option<RawUiConfig>,
+            runtime: Option<RawRuntimeConfig>,
+            #[serde(deserialize_with = "deserialize_optional_sandbox")]
+            sandbox: Option<RawSandboxConfig>,
+            resource_guard: Option<bool>,
+            session: Option<RawSessionConfig>,
+            prompts: Option<crate::PromptScopeConfig>,
+            permission: Option<agena_domain::PermissionConfig>,
+            plugins: Option<PluginConfig>,
+            providers: RawProvidersConfig,
+        }
+        let mut document = Value::deserialize(deserializer)?;
+        normalize_resource_guard_document(&mut document).map_err(serde::de::Error::custom)?;
+        let input = Input::deserialize(document).map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            tracing: input.tracing,
+            ui: input.ui,
+            runtime: input.runtime,
+            sandbox: input.sandbox,
+            resource_guard: input.resource_guard,
+            session: input.session,
+            prompts: input.prompts,
+            permission: input.permission,
+            plugins: input.plugins,
+            providers: input.providers,
+        })
+    }
+}
+
 impl RawConfig {
     pub fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.sandbox, overlay.sandbox);
+        merge_option(&mut self.resource_guard, overlay.resource_guard);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -310,6 +409,7 @@ impl RawConfig {
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
         merge_option_struct(&mut self.sandbox, overlay.sandbox);
+        merge_option(&mut self.resource_guard, overlay.resource_guard);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
@@ -321,6 +421,7 @@ impl RawConfig {
             && self.ui.is_none()
             && self.runtime.is_none()
             && self.sandbox.is_none()
+            && self.resource_guard.is_none()
             && self.session.is_none()
             && self.permission.is_none()
             && self.plugins.is_none()
@@ -410,6 +511,7 @@ impl RawConfig {
             ui,
             runtime,
             sandbox,
+            resource_guard: None,
             session,
             prompts: None,
             permission: None,
@@ -445,6 +547,7 @@ impl RawConfig {
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
         let sandbox = crate::SandboxConfig::from_raw(self.sandbox.unwrap_or_default());
+        let resource_guard = self.resource_guard.unwrap_or(true);
         if let Some(prompts) = &self.prompts {
             prompts.validate().map_err(ConfigError::Validation)?;
         }
@@ -488,6 +591,7 @@ impl RawConfig {
             ui,
             runtime,
             sandbox,
+            resource_guard,
             session,
             prompts: crate::PromptLayersConfig::default(),
             permission,
@@ -736,18 +840,6 @@ pub struct RawSandboxConfig {
         skip_serializing_if = "Option::is_none"
     )]
     pub enabled: Option<bool>,
-    #[merge(strategy = option_override)]
-    #[serde(
-        deserialize_with = "deserialize_present_bool",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub resource_checks: Option<bool>,
-    #[merge(strategy = option_override)]
-    #[serde(
-        deserialize_with = "deserialize_present_bool",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub command_hints: Option<bool>,
 }
 
 /// Optional sections use null as absence throughout RawConfig. A present
@@ -782,8 +874,6 @@ impl crate::SandboxConfig {
     fn from_raw(raw: RawSandboxConfig) -> Self {
         Self {
             enabled: raw.enabled.unwrap_or(true),
-            resource_checks: raw.resource_checks.unwrap_or(true),
-            command_hints: raw.command_hints.unwrap_or(true),
         }
     }
 }

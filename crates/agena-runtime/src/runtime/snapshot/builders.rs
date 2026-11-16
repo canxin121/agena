@@ -104,6 +104,7 @@ pub(super) fn build_or_prepare_session_manager(
         let executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
                 sandbox: build_config.sandbox,
+                resource_guard: build_config.resource_guard,
                 plugins,
                 lsp_registry: lsp_registry.clone(),
                 workspace_root,
@@ -116,6 +117,7 @@ pub(super) fn build_or_prepare_session_manager(
         let global_executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
                 sandbox: global_build_config.sandbox,
+                resource_guard: global_build_config.resource_guard,
                 plugins: global_plugins,
                 lsp_registry: global_lsp_registry,
                 workspace_root: global_internal_root,
@@ -145,6 +147,7 @@ pub(super) fn build_or_prepare_session_manager(
     let bootstrap_executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
             sandbox: build_config.sandbox,
+            resource_guard: build_config.resource_guard,
             plugins: Arc::clone(&plugins),
             lsp_registry: lsp_registry.clone(),
             workspace_root,
@@ -165,6 +168,7 @@ pub(super) fn build_or_prepare_session_manager(
     let executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
             sandbox: build_config.sandbox,
+            resource_guard: build_config.resource_guard,
             plugins,
             lsp_registry: lsp_registry.clone(),
             workspace_root,
@@ -184,6 +188,7 @@ pub(super) fn build_or_prepare_session_manager(
     let global_executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
             sandbox: global_build_config.sandbox,
+            resource_guard: global_build_config.resource_guard,
             plugins: global_plugins,
             lsp_registry: global_lsp_registry,
             workspace_root: global_internal_root,
@@ -285,6 +290,7 @@ pub(super) fn build_tool_executor(
 ) -> ToolExecutor {
     let agena_runtime::ToolCompositionInputs {
         sandbox,
+        resource_guard,
         plugins,
         lsp_registry,
         workspace_root,
@@ -309,11 +315,7 @@ pub(super) fn build_tool_executor(
         scheduler,
         lsp_registry,
     )
-    .with_sandbox_settings(
-        sandbox.enabled,
-        sandbox.resource_checks,
-        sandbox.command_hints,
-    )
+    .with_execution_settings(sandbox.enabled, resource_guard)
     .with_permission_inspector(permission_inspector);
     if let Some(registry) = monitor_registry {
         executor = executor.with_monitor_registry(registry);

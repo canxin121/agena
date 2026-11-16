@@ -10,7 +10,7 @@ impl ToolExecutor {
         &self,
         input: HostProcessResources,
     ) -> Result<HostProcessResources, ToolError> {
-        if self.resource_checks_enabled()
+        if self.resource_guard_enabled()
             && (input.reads.len() + input.writes.len() > 512 || input.network.len() > 128)
         {
             return Err(ToolError::invalid_input(
@@ -31,7 +31,7 @@ impl ToolExecutor {
                 "process working directory must be an existing absolute directory",
             ));
         }
-        if !self.resource_checks_enabled() {
+        if !self.resource_guard_enabled() {
             return Ok(HostProcessResources {
                 cwd: Some(cwd.to_string_lossy().into_owned()),
                 ..Default::default()
@@ -101,7 +101,7 @@ impl ToolExecutor {
         &self,
         resources: &HostProcessResources,
     ) -> Result<Vec<agena_tool::ToolPermissionCheck>, ToolError> {
-        if !self.resource_checks_enabled() {
+        if !self.resource_guard_enabled() {
             return Ok(Vec::new());
         }
         let mut checks = Vec::new();
@@ -135,7 +135,7 @@ impl ToolExecutor {
         resources: HostProcessResources,
     ) -> Result<(serde_json::Value, bool), ToolError> {
         self.run_permission_preflight(move |executor| {
-            if executor.sandbox_enabled() || !executor.resource_checks_enabled() {
+            if executor.sandbox_enabled() || !executor.resource_guard_enabled() {
                 let cwd = resources.cwd.as_deref().ok_or_else(|| {
                     ToolError::invalid_input("process working directory is missing")
                 })?;

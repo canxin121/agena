@@ -14,8 +14,7 @@ fn assert_supported_defaults(name: &str, text: &str) {
     assert_eq!(permission["path"]["external"], "deny", "{name}");
     assert_eq!(permission["network"], json!({"default":"allow"}), "{name}");
     assert!(config.sandbox.enabled, "{name}");
-    assert!(config.sandbox.resource_checks, "{name}");
-    assert!(config.sandbox.command_hints, "{name}");
+    assert!(config.resource_guard, "{name}");
 }
 
 #[test]

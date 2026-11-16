@@ -27,8 +27,7 @@ impl ToolExecutor {
         });
         serde_json::to_string(&(
             self.sandbox_enabled(),
-            self.resource_checks_enabled(),
-            self.command_hints_enabled(),
+            self.resource_guard_enabled(),
             resources,
         ))
         .map_err(|error| ToolError::invalid_input_error(&error))
@@ -267,7 +266,7 @@ mod tests {
         executor
             .validate_sandbox_workdir(&root.join("input"))
             .unwrap();
-        let direct = executor.clone().with_sandbox_settings(false, false, false);
+        let direct = executor.clone().with_execution_settings(false, false);
         direct.validate_sandbox_workdir(&root).unwrap();
         assert_ne!(
             executor.execution_policy_identity().unwrap(),

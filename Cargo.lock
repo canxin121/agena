@@ -918,6 +918,7 @@ dependencies = [
  "agena-mcp-client",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-process",
  "agena-provider",
  "agena-runtime-config",
  "agena-runtime-contracts",

@@ -113,6 +113,7 @@ impl PluginHost {
         build: PluginHostBuildConfig,
         dispatcher: crate::PluginCallbackDispatcher,
     ) -> Result<Arc<PluginHost>, HostError> {
+        let sandbox_enabled = agena_process::sandbox::enabled();
         if let Some(previous) = &build.previous
             && !Arc::ptr_eq(&previous._host_handle.callback_routes, &dispatcher.routes)
         {
@@ -128,10 +129,16 @@ impl PluginHost {
             callback_base_url,
             host_client,
             previous,
-            previous_plugins,
+            mut previous_plugins,
         } = build;
         let profile_resolution = config.profile_resolution.clone();
         let configured_plugins_for_inspect = config.list.clone();
+        if previous
+            .as_ref()
+            .is_some_and(|host| host.sandbox_enabled != sandbox_enabled)
+        {
+            previous_plugins.clear();
+        }
         let previous_configured = previous_plugins
             .iter()
             .map(|(plugin_id, configured)| (plugin_id.clone(), configured.clone()))
@@ -968,6 +975,7 @@ impl PluginHost {
                 .chat_or(std::time::Duration::from_secs(10)),
         )?;
         let host = Arc::new(PluginHost {
+            sandbox_enabled,
             plugins: loaded,
             plugins_by_id: by_id,
             tool_registry: tool_registry_shared,

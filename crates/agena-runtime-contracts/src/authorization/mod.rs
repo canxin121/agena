@@ -23,8 +23,9 @@ use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
 pub use crate::permission::{
-    SandboxFilesystemRestrictions, SandboxPathAccess, SandboxPathPattern, SandboxPathPolicy,
-    SandboxPathRule, SandboxPermissionSnapshot, SandboxPersistedRule, SandboxPolicyError,
+    SandboxFilesystemPolicy, SandboxFilesystemRestrictions, SandboxPathAccess, SandboxPathPattern,
+    SandboxPathPolicy, SandboxPathRule, SandboxPermissionSnapshot, SandboxPersistedRule,
+    SandboxPolicyError,
 };
 
 pub fn apply_to_permission_policy(

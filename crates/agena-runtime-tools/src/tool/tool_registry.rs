@@ -625,6 +625,9 @@ pub struct ToolExecutor {
     pub(super) session_id: Option<i64>,
     pub(super) principal: ExecutionPrincipal,
     pub(super) sandbox_enabled: bool,
+    pub(super) configured_sandbox_enabled: bool,
+    pub(super) configured_resource_checks: bool,
+    pub(super) configured_command_hints: bool,
     /// Persisted rules visible to this invocation's owning session. The
     /// static principal is projected afresh when constructing a sandbox.
     pub(super) sandbox_persisted_rules:

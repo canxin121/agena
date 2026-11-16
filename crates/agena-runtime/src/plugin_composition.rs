@@ -27,18 +27,21 @@ pub async fn compose_plugin_host(
         .as_ref()
         .map(PluginHostBuildConfig::previous_plugins)
         .unwrap_or_default();
-    PluginHost::new_with_callback_dispatcher(
-        PluginHostBuildConfig {
-            static_plugins,
-            config: inputs.plugin_config,
-            workspace_root: inputs.workspace_root.to_path_buf(),
-            agena_version: agena_version.into(),
-            callback_base_url: Some(inputs.callback_base_url),
-            host_client: Some(inputs.host_client),
-            previous: inputs.previous_host,
-            previous_plugins,
-        },
-        inputs.callback_dispatcher,
+    agena_process::sandbox::scope_enabled(
+        inputs.sandbox_enabled,
+        PluginHost::new_with_callback_dispatcher(
+            PluginHostBuildConfig {
+                static_plugins,
+                config: inputs.plugin_config,
+                workspace_root: inputs.workspace_root.to_path_buf(),
+                agena_version: agena_version.into(),
+                callback_base_url: Some(inputs.callback_base_url),
+                host_client: Some(inputs.host_client),
+                previous: inputs.previous_host,
+                previous_plugins,
+            },
+            inputs.callback_dispatcher,
+        ),
     )
     .await
 }

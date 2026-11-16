@@ -149,6 +149,7 @@ pub(super) fn start_prepared(
             input.command.max_output_bytes,
             input.include_screen,
             cancel,
+            Some(executor.execution_policy_identity()?),
         )
         .map_err(error)?;
     let mut execution = render("open", read, input.include_screen);
@@ -193,6 +194,7 @@ pub(super) fn execute(
                 ));
             }
             super::shell_tools::validate_declared_filesystem_effects(
+                executor,
                 "shell.write",
                 &input.chars,
                 &FilesystemEffects {
@@ -215,6 +217,7 @@ pub(super) fn execute(
                     },
                     input.include_screen,
                     cancel,
+                    &executor.execution_policy_identity()?,
                 ),
                 input.include_screen,
             )

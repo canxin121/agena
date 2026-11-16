@@ -31,7 +31,7 @@ pub(super) async fn execute_async(
         ));
     }
     let effects = input.filesystem_effects();
-    validate_declared_filesystem_effects("powershell", input.command.as_str(), &effects)?;
+    validate_declared_filesystem_effects(executor, "powershell", input.command.as_str(), &effects)?;
     let cwd =
         resolve_workdir_in_folder(executor, input.workdir.as_deref(), input.folder.as_deref())?;
     let mut env = inherited_environment();

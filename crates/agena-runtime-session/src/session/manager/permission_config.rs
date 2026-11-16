@@ -28,6 +28,7 @@ impl SessionManager {
             &state.config.permission,
             configuration,
             workspace.as_deref(),
+            state.config.sandbox_enabled,
         )
         .map_err(AppError::Config)
     }
@@ -57,13 +58,15 @@ impl SessionManager {
         workspace_id: i64,
     ) -> Result<SessionImportValidator, AppError> {
         let workspace = self.workspace_root_by_id(workspace_id).await?;
-        let base = self.state.load_full().config.permission.clone();
+        let state = self.state.load_full();
+        let base = state.config.permission.clone();
+        let sandbox_enabled = state.config.sandbox_enabled;
         Ok(Arc::new(move |configuration| {
             let root = configuration
                 .effective_workspace_root
                 .as_deref()
                 .unwrap_or(&workspace);
-            validate_configuration_permissions(&base, configuration, Some(root))
+            validate_configuration_permissions(&base, configuration, Some(root), sandbox_enabled)
         }))
     }
 }
@@ -72,6 +75,7 @@ fn validate_configuration_permissions(
     base: &PermissionConfig,
     configuration: &SessionConfiguration,
     workspace: Option<&std::path::Path>,
+    sandbox_enabled: bool,
 ) -> Result<(), String> {
     let effective = base.merged_with(&configuration.permission);
     for (field, permission) in [
@@ -90,6 +94,27 @@ fn validate_configuration_permissions(
             &configuration.permission_ceiling,
         )
         .map_err(|reason| format!("session.permission: {reason}"))?;
+    }
+    if sandbox_enabled {
+        use agena_runtime_contracts::{
+            authorization::ExecutionPrincipal,
+            permission::{PermissionPolicy, ToolPermissionPolicy},
+        };
+        // Compile the same full policy used for shell/process execution. The
+        // ceiling remains an independent intersection, including on imports.
+        let principal = ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&effective)
+        .and_then(|principal| {
+            principal.try_apply_permission_ceiling(&configuration.permission_ceiling)
+        })
+        .map_err(|error| format!("session sandbox permission: {error}"))?;
+        principal
+            .sandbox_permission_snapshot(workspace.unwrap_or_else(|| std::path::Path::new("")))
+            .filesystem_policy()
+            .map_err(|error| format!("session sandbox permission: {error}"))?;
     }
     Ok(())
 }
@@ -158,4 +183,68 @@ fn validate_global_scope_overrides(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod sandbox_mode_tests {
+    use super::*;
+
+    fn workspace() -> std::path::PathBuf {
+        // Saving validates prospective roots without creating them.
+        std::fs::canonicalize(std::env::temp_dir())
+            .unwrap()
+            .join(format!("agena-session-mode-test-{}", std::process::id()))
+    }
+
+    fn configuration(permission: serde_json::Value) -> SessionConfiguration {
+        SessionConfiguration {
+            permission: serde_json::from_value(permission).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn full_filesystem_validation_follows_configured_sandbox_mode() {
+        let workspace = workspace();
+        let base = PermissionConfig::global_default();
+        let external = configuration(serde_json::json!({
+            "path": {"external": "readonly"}
+        }));
+        let error = validate_configuration_permissions(&base, &external, Some(&workspace), true)
+            .unwrap_err();
+        assert!(error.contains("permission.path.external"), "{error}");
+        validate_configuration_permissions(&base, &external, Some(&workspace), false).unwrap();
+
+        let nested = configuration(serde_json::json!({
+            "path": {"rules": {"<workspace>/output": "readwrite"}}
+        }));
+        let error =
+            validate_configuration_permissions(&base, &nested, Some(&workspace), true).unwrap_err();
+        assert!(
+            error.contains("separate readonly/readwrite roots"),
+            "{error}"
+        );
+        validate_configuration_permissions(&base, &nested, Some(&workspace), false).unwrap();
+    }
+
+    #[test]
+    fn separate_roots_compile_with_an_independent_session_ceiling() {
+        let workspace = workspace();
+        let base = PermissionConfig::global_default();
+        let mut configuration = configuration(serde_json::json!({
+            "path": {
+                "workspace": "deny",
+                "external": "deny",
+                "rules": {
+                    "<workspace>/input": "readonly",
+                    "<workspace>/output": "readwrite"
+                }
+            }
+        }));
+        configuration.permission_ceiling = serde_json::from_value(serde_json::json!({
+            "path": {"rules": {"<workspace>/output": "deny"}}
+        }))
+        .unwrap();
+        validate_configuration_permissions(&base, &configuration, Some(&workspace), true).unwrap();
+    }
 }

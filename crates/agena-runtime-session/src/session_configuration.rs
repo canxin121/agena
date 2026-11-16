@@ -10,6 +10,9 @@ pub struct RuntimeSessionManagerConfig {
     pub prompts: agena_runtime_config::PromptLayersConfig,
     pub auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub permission: PermissionConfig,
+    /// Resolved settings flag used for configuration validation, independent
+    /// of trusted invocation bypasses and task-local execution scopes.
+    pub sandbox_enabled: bool,
     pub auto_compaction: SessionAutoCompactionConfig,
     pub max_concurrent_tools: usize,
     /// Cap on model turns within one stable run. `None` falls back to
@@ -25,6 +28,7 @@ impl Default for RuntimeSessionManagerConfig {
             prompts: Default::default(),
             auto_title: Default::default(),
             permission: Default::default(),
+            sandbox_enabled: true,
             auto_compaction: Default::default(),
             max_concurrent_tools: 32,
             // Same default as `DEFAULT_MAX_MODEL_TURNS` in

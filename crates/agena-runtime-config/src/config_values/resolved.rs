@@ -229,6 +229,7 @@ pub struct ResolvedConfig {
     pub tracing: RuntimeTracingConfiguration,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
+    pub sandbox: super::SandboxConfig,
     pub session: SessionConfig,
     /// Both configuration prompt layers plus their fragment directories.
     #[serde(default, skip_serializing_if = "PromptLayersConfig::is_empty")]

@@ -237,6 +237,7 @@ impl RuntimeSnapshot {
         );
         let plugins = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
+                sandbox_enabled: resolution.config.sandbox.enabled,
                 plugin_config: resolution.config.plugins.clone(),
                 workspace_root: resolution
                     .meta
@@ -275,6 +276,7 @@ impl RuntimeSnapshot {
         };
         let global_plugins = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
+                sandbox_enabled: global_resolution.config.sandbox.enabled,
                 plugin_config: global_resolution.config.plugins.clone(),
                 workspace_root: &global_internal_root,
                 previous_host: previous
@@ -495,6 +497,10 @@ impl RuntimeSnapshot {
 
     pub(crate) fn resolved_config_value(&self) -> Result<serde_json::Value, serde_json::Error> {
         agena_runtime::resolved_config_json_value(self.state.resolution().as_ref())
+    }
+
+    pub(crate) fn sandbox_config(&self) -> &agena_runtime::SandboxConfig {
+        &self.state.resolution().sandbox
     }
 
     pub(crate) fn tracing_config(&self) -> &agena_runtime::RuntimeTracingConfiguration {
@@ -869,6 +875,7 @@ mod global_plugin_tests {
             .unwrap();
         let global_host = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
+                sandbox_enabled: true,
                 plugin_config: global.config.plugins,
                 workspace_root: &root,
                 previous_host: None,
@@ -884,6 +891,7 @@ mod global_plugin_tests {
         .unwrap();
         let project_host = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
+                sandbox_enabled: true,
                 plugin_config: merged.config.plugins,
                 workspace_root: &project,
                 previous_host: None,

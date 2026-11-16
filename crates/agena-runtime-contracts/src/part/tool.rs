@@ -49,29 +49,24 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub folder: Option<String>,
-    /// Files and directories the command may read. Declare only the actual
-    /// files/directories affected - never the executables, interpreters, or
-    /// tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or
-    /// their installation directories. Pass an empty array `[]` when the
-    /// command reads nothing beyond its executables.
+    /// Optional fallback declaration of files/directories read by this command.
+    /// Omit when MXC is enabled: the sandbox uses configured path permissions.
+    /// Checked only when the sandbox is off and resource_checks is enabled.
+    /// Declare actual data paths, not executable installations.
     #[serde(default)]
     #[schemars(example = example_reads())]
     pub reads: Vec<String>,
-    /// Files and directories the command may create, modify, or delete.
-    /// Declare only the actual files/directories affected - never the
-    /// executables, interpreters, or tools being invoked (e.g. `node`,
-    /// `python`, `uv`, `git`, `cargo`) or their installation directories.
-    /// Pass an empty array `[]` when the command writes nothing.
+    /// Optional fallback declaration of files/directories created, modified or
+    /// deleted. Omit when MXC is enabled: configured path permissions apply.
+    /// Checked only when the sandbox is off and resource_checks is enabled.
     #[serde(default)]
     #[schemars(example = example_writes())]
     pub writes: Vec<String>,
-    /// Requested network scope, intersected with the configured native MXC policy.
-    /// `[]` starts offline. `["*"]`, used alone, requests the full configured scope.
-    /// `host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;
-    /// `icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.
-    /// A bare host/IP requests only that target's configured protocols and ports.
-    /// Hosts resolve to IPs before startup; this does not isolate domains or URL
-    /// paths. DNS dependencies must also be allowed by the configured policy.
+    /// Optional fallback declaration of outbound targets (IP/host, host:port,
+    /// or URL). Omit when MXC is enabled: the sandbox uses the full configured
+    /// network policy, including independent ceilings and persisted denials.
+    /// Checked only when the sandbox is off and resource_checks is enabled;
+    /// an empty declaration does not isolate a directly executed process.
     #[serde(default)]
     #[schemars(example = example_network())]
     pub network: Vec<String>,
@@ -292,19 +287,17 @@ pub struct ShellWriteInput {
     pub wait_ms: u64,
     #[serde(default)]
     pub include_screen: bool,
-    /// Paths the entered operation may read, relative to the Agena workspace.
+    /// Optional fallback read paths, relative to the Agena workspace. Checked
+    /// only when the sandbox is off and resource_checks is enabled; omit for MXC.
     #[serde(default)]
     pub reads: Vec<String>,
-    /// Paths the entered operation may modify, relative to the Agena workspace.
+    /// Optional fallback write paths, relative to the Agena workspace. Checked
+    /// only when the sandbox is off and resource_checks is enabled; omit for MXC.
     #[serde(default)]
     pub writes: Vec<String>,
-    /// Network effects of the entered operation, bounded by the process's existing
-    /// sandbox and current policy. `[]` declares no network use; `["*"]`, alone,
-    /// requests the configured scope. `host:port`/`tcp://host:port` means TCP,
-    /// `udp://host:port` means UDP, and `icmp://host` means ICMP. Bare host/IP means
-    /// that target's configured protocols and ports; HTTP(S) URLs mean TCP.
-    /// Hostnames resolve to IPs; they do not provide domain isolation. This field
-    /// cannot expand or replace the sandbox established when the process started.
+    /// Optional fallback outbound targets for this input. Checked only when the
+    /// sandbox is off and resource_checks is enabled; omit for MXC. A sandboxed
+    /// terminal keeps the configured network policy captured when it started.
     #[serde(default)]
     pub network: Vec<String>,
 }

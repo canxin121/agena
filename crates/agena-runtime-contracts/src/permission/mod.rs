@@ -9,8 +9,9 @@ pub(crate) mod path_identity;
 mod sandbox;
 pub use network::NetworkPermissionPolicy;
 pub use sandbox::{
-    SandboxFilesystemRestrictions, SandboxPathAccess, SandboxPathPattern, SandboxPathPolicy,
-    SandboxPathRule, SandboxPermissionSnapshot, SandboxPersistedRule, SandboxPolicyError,
+    SandboxFilesystemPolicy, SandboxFilesystemRestrictions, SandboxPathAccess, SandboxPathPattern,
+    SandboxPathPolicy, SandboxPathRule, SandboxPermissionSnapshot, SandboxPersistedRule,
+    SandboxPolicyError,
 };
 
 use agena_domain::{

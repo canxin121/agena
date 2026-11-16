@@ -141,9 +141,10 @@ impl TerminalRegistry {
         wait_ms: u64,
         cancel: CancellationToken,
     ) -> Result<TerminalRead, MonitorError> {
-        self.start_cancellable_with_output(params, wait_ms, None, true, cancel)
+        self.start_cancellable_with_output(params, wait_ms, None, true, cancel, None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_cancellable_with_output(
         &self,
         params: TerminalStartParams,
@@ -151,6 +152,7 @@ impl TerminalRegistry {
         max_output_bytes: Option<u32>,
         include_screen: bool,
         cancel: CancellationToken,
+        execution_policy: Option<String>,
     ) -> Result<TerminalRead, MonitorError> {
         call::check(&cancel)?;
         validate_size(params.rows, params.cols)?;
@@ -185,6 +187,7 @@ impl TerminalRegistry {
             if let Some(existing) = sessions.get(&id) {
                 if existing.owner != params.owner
                     || existing.command != params.display_command
+                    || existing.execution_policy != execution_policy
                     || existing.workdir != params.workdir
                     || !existing.output_matches(&params.output)
                 {
@@ -231,7 +234,13 @@ impl TerminalRegistry {
                     .register_external_launch()
                     .map_err(|error| invalid(error.to_string()))?;
             }
-            state = Arc::new(State::new(id.clone(), &params, tx, self.listener.clone()));
+            state = Arc::new(State::new(
+                id.clone(),
+                &params,
+                tx,
+                self.listener.clone(),
+                execution_policy,
+            ));
             sessions.insert(id, Arc::clone(&state));
         }
         let worker_state = Arc::clone(&state);
@@ -358,9 +367,11 @@ impl TerminalRegistry {
             true,
             cancel,
             crate::process_output::OutputSelection::WholeEvents,
+            None,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn write_with_output(
         &self,
         id: &str,
@@ -369,6 +380,7 @@ impl TerminalRegistry {
         options: crate::ProcessReadOptions,
         include_screen: bool,
         cancel: &CancellationToken,
+        execution_policy: &str,
     ) -> Result<TerminalRead, MonitorError> {
         self.write_selected_output(
             id,
@@ -378,6 +390,7 @@ impl TerminalRegistry {
             include_screen,
             cancel,
             crate::process_output::OutputSelection::Resumable,
+            Some(execution_policy),
         )
     }
 
@@ -391,6 +404,7 @@ impl TerminalRegistry {
         include_screen: bool,
         cancel: &CancellationToken,
         selection: crate::process_output::OutputSelection,
+        execution_policy: Option<&str>,
     ) -> Result<TerminalRead, MonitorError> {
         call::check(cancel)?;
         let wait_ms = options.wait_ms;
@@ -402,6 +416,11 @@ impl TerminalRegistry {
         }
         let state = self.lookup(id, Some(owner))?;
         let _interaction = call::interaction(&state.interaction, cancel)?;
+        if state.execution_policy.as_deref() != execution_policy {
+            return Err(invalid(
+                "terminal execution settings or permissions changed; stop this terminal and open a new one before sending input",
+            ));
+        }
         // Validate the output cursor before delivering any input. A malformed
         // read request must never report failure after executing a command.
         state.validate_options_cursor(&options)?;
@@ -533,4 +552,68 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod execution_policy_tests {
+    use super::*;
+
+    #[test]
+    fn changed_policy_rejects_terminal_input_before_sending_and_preserves_cleanup_ownership() {
+        let registry = TerminalRegistry::default();
+        let owner = TerminalOwner {
+            workspace: std::env::temp_dir(),
+            session_id: Some(42),
+        };
+        let params = TerminalStartParams {
+            output: None,
+            process_id: Some("policy-test".into()),
+            owner: owner.clone(),
+            command: vec!["shell".into()],
+            display_command: "shell".into(),
+            description: String::new(),
+            workdir: std::env::temp_dir(),
+            env: HashMap::new(),
+            rows: 24,
+            cols: 80,
+            timeout_ms: None,
+        };
+        let (sender, receiver) = mpsc::sync_channel(8);
+        let state = Arc::new(State::new(
+            "policy-test".into(),
+            &params,
+            sender,
+            None,
+            Some("old-policy".into()),
+        ));
+        lock(&registry.sessions).insert("policy-test".into(), state);
+        let error = registry
+            .write_with_output(
+                "policy-test",
+                &owner,
+                "touch should-not-run\r",
+                Default::default(),
+                false,
+                &CancellationToken::new(),
+                "new-policy",
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("permissions changed"));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(registry.authorize("policy-test", &owner).is_ok());
+        let replay = registry
+            .start_cancellable_with_output(
+                params,
+                0,
+                None,
+                false,
+                CancellationToken::new(),
+                Some("new-policy".into()),
+            )
+            .unwrap_err();
+        assert!(replay.to_string().contains("launch identity"));
+    }
 }

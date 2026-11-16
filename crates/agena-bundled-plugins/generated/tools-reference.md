@@ -23085,7 +23085,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Run a command to completion. Declare actual reads/writes paths; use empty arrays when none. An empty network array starts offline; a lone * requests the configured native MXC network scope. Specific targets request an IP/protocol/port subset of that policy; hostname declarations do not provide domain isolation. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_resource refers to the same cursor-based content resource used by all Parts. Capture status and retained ranges are independent of process exit and preview limits. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
+> Run a command to completion. With MXC enabled, omit reads/writes/network: configured path and network permissions define the sandbox. With MXC off, declare actual resources only when sandbox.resource_checks is enabled; sandbox.command_hints controls prompts for missing declarations. timeout_ms limits lifetime (default 120000); timeout/cancellation cleans up the owned process tree. max_output_bytes sets the output budget (1024–16384, default 16384), accounting for escaping and reserving lifecycle metadata; previews keep beginning/end and at most 200 lines. Capture is independent of preview: output_resource refers to the same cursor-based content resource used by all Parts. Capture status and retained ranges are independent of process exit and preview limits. Use shell.spawn for background work, shell.watch for readiness/selected notifications, and shell.open for interactive input.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -23094,12 +23094,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `description` | `string` | — | `` |  |
 | `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
-| `network` | `array<string>` | — | `[]` | Requested network scope, intersected with the configured native MXC policy.<br>`[]` starts offline. `["*"]`, used alone, requests the full configured scope.<br>`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;<br>`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.<br>A bare host/IP requests only that target's configured protocols and ports.<br>Hosts resolve to IPs before startup; this does not isolate domains or URL<br>paths. DNS dependencies must also be allowed by the configured policy. |
-| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `network` | `array<string>` | — | `[]` | Optional fallback declaration of outbound targets (IP/host, host:port,<br>or URL). Omit when MXC is enabled: the sandbox uses the full configured<br>network policy, including independent ceilings and persisted denials.<br>Checked only when the sandbox is off and resource_checks is enabled;<br>an empty declaration does not isolate a directly executed process. |
+| `reads` | `array<string>` | — | `[]` | Optional fallback declaration of files/directories read by this command.<br>Omit when MXC is enabled: the sandbox uses configured path permissions.<br>Checked only when the sandbox is off and resource_checks is enabled.<br>Declare actual data paths, not executable installations. |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 | `workdir` | `string / null` | — | — |  |
-| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+| `writes` | `array<string>` | — | `[]` | Optional fallback declaration of files/directories created, modified or<br>deleted. Omit when MXC is enabled: configured path permissions apply.<br>Checked only when the sandbox is off and resource_checks is enabled. |
 
 **Input schema**:
 ```json
@@ -23189,7 +23189,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       }
     },
     "reads": {
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "description": "Optional fallback declaration of files/directories read by this command.\nOmit when MXC is enabled: the sandbox uses configured path permissions.\nChecked only when the sandbox is off and resource_checks is enabled.\nDeclare actual data paths, not executable installations.",
       "type": "array",
       "items": {
         "type": "string"
@@ -23203,7 +23203,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000001.000006"
     },
     "writes": {
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "description": "Optional fallback declaration of files/directories created, modified or\ndeleted. Omit when MXC is enabled: configured path permissions apply.\nChecked only when the sandbox is off and resource_checks is enabled.",
       "type": "array",
       "items": {
         "type": "string"
@@ -23217,7 +23217,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000001.000007"
     },
     "network": {
-      "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+      "description": "Optional fallback declaration of outbound targets (IP/host, host:port,\nor URL). Omit when MXC is enabled: the sandbox uses the full configured\nnetwork policy, including independent ceilings and persisted denials.\nChecked only when the sandbox is off and resource_checks is enabled;\nan empty declaration does not isolate a directly executed process.",
       "type": "array",
       "items": {
         "type": "string"
@@ -23434,7 +23434,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Return process_id, output, last_seq, next_event_offset and state after confirmed startup. yield_time_ms (default 1000, max 30000) limits only the initial wait, never lifetime; timeout_ms is an optional lifetime deadline. Interactive exit does not send background completion notifications or wake the AI. max_output_bytes (1024–16384, default 16384) controls preview, not capture. With include_screen the available content budget is split between raw output and a bounded screen. Silence/prompt/yield is not exit. Continue with shell.read or exact-input shell.write; shell.signal interrupts/terminates/kills, shell.resize changes dimensions and shell.stop cleans up. Declare initial effects and subsequent write effects.
+> Return process_id, output, last_seq, next_event_offset and state after confirmed startup. yield_time_ms (default 1000, max 30000) limits only the initial wait, never lifetime; timeout_ms is an optional lifetime deadline. Interactive exit does not send background completion notifications or wake the AI. max_output_bytes (1024–16384, default 16384) controls preview, not capture. With include_screen the available content budget is split between raw output and a bounded screen. Silence/prompt/yield is not exit. Continue with shell.read or exact-input shell.write; shell.signal interrupts/terminates/kills, shell.resize changes dimensions and shell.stop cleans up. With MXC enabled, omit resource declarations for both launch and later input; configured permissions are captured at startup. Reopen the terminal after its sandbox mode or permissions change. With MXC off, resource declarations follow sandbox.resource_checks and missing-declaration prompts follow sandbox.command_hints.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -23445,13 +23445,13 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `include_screen` | `boolean` | — | `false` | Return the current rendered screen in addition to incremental output.<br>Enable for full-screen interfaces; ordinary prompts need only output. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
-| `network` | `array<string>` | — | `[]` | Requested network scope, intersected with the configured native MXC policy.<br>`[]` starts offline. `["*"]`, used alone, requests the full configured scope.<br>`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;<br>`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.<br>A bare host/IP requests only that target's configured protocols and ports.<br>Hosts resolve to IPs before startup; this does not isolate domains or URL<br>paths. DNS dependencies must also be allowed by the configured policy. |
-| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `network` | `array<string>` | — | `[]` | Optional fallback declaration of outbound targets (IP/host, host:port,<br>or URL). Omit when MXC is enabled: the sandbox uses the full configured<br>network policy, including independent ceilings and persisted denials.<br>Checked only when the sandbox is off and resource_checks is enabled;<br>an empty declaration does not isolate a directly executed process. |
+| `reads` | `array<string>` | — | `[]` | Optional fallback declaration of files/directories read by this command.<br>Omit when MXC is enabled: the sandbox uses configured path permissions.<br>Checked only when the sandbox is off and resource_checks is enabled.<br>Declare actual data paths, not executable installations. |
 | `rows` | `integer` | — | `24` |  |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 | `workdir` | `string / null` | — | — |  |
-| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+| `writes` | `array<string>` | — | `[]` | Optional fallback declaration of files/directories created, modified or<br>deleted. Omit when MXC is enabled: configured path permissions apply.<br>Checked only when the sandbox is off and resource_checks is enabled. |
 | `yield_time_ms` | `integer` | — | `1000` | Maximum initial output wait, in milliseconds. This is not a timeout. |
 
 **Input schema**:
@@ -23542,7 +23542,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       }
     },
     "reads": {
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "description": "Optional fallback declaration of files/directories read by this command.\nOmit when MXC is enabled: the sandbox uses configured path permissions.\nChecked only when the sandbox is off and resource_checks is enabled.\nDeclare actual data paths, not executable installations.",
       "type": "array",
       "items": {
         "type": "string"
@@ -23556,7 +23556,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000001.000006"
     },
     "writes": {
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "description": "Optional fallback declaration of files/directories created, modified or\ndeleted. Omit when MXC is enabled: configured path permissions apply.\nChecked only when the sandbox is off and resource_checks is enabled.",
       "type": "array",
       "items": {
         "type": "string"
@@ -23570,7 +23570,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000001.000007"
     },
     "network": {
-      "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+      "description": "Optional fallback declaration of outbound targets (IP/host, host:port,\nor URL). Omit when MXC is enabled: the sandbox uses the full configured\nnetwork policy, including independent ceilings and persisted denials.\nChecked only when the sandbox is off and resource_checks is enabled;\nan empty declaration does not isolate a directly executed process.",
       "type": "array",
       "items": {
         "type": "string"
@@ -24006,7 +24006,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Launch with closed stdin; return process_id only after actual startup and registration. Continue useful work immediately. Completion, failure, timeout or stop is delivered once as system_notification; do not poll merely to wait. Use shell.read for bounded diagnostic output, shell.list for state and shell.stop for cleanup. Omitted timeout_ms permits running until exit/stop; a supplied timeout is enforced. Declare reads/writes/network effects. Attach or replace a watch on this same process with shell.watch(process_id, policy); omit/null policy to remove it. A process-targeted watch never spawns a second command or a second background operation. Use shell.open when later interactive input is required.
+> Launch with closed stdin; return process_id only after actual startup and registration. Continue useful work immediately. Completion, failure, timeout or stop is delivered once as system_notification; do not poll merely to wait. Use shell.read for bounded diagnostic output, shell.list for state and shell.stop for cleanup. Omitted timeout_ms permits running until exit/stop; a supplied timeout is enforced. With MXC enabled, omit reads/writes/network; configured permissions apply. Resource declarations are checked only when MXC is off and sandbox.resource_checks is enabled. Attach or replace a watch on this same process with shell.watch(process_id, policy); omit/null policy to remove it. A process-targeted watch never spawns a second command or a second background operation. Use shell.open when later interactive input is required.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -24015,12 +24015,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `description` | `string` | — | `` |  |
 | `folder` | `string / null` | — | — | Base folder for this command when no `workdir` is given. Only global<br>(Bot) sessions use it; a project session keeps its project root. |
 | `max_output_bytes` | `integer / null` | — | — | Model output budget, including JSON escaping. Default/max 16384 bytes;<br>minimum 1024. Capture and process lifetime are independent of this budget. |
-| `network` | `array<string>` | — | `[]` | Requested network scope, intersected with the configured native MXC policy.<br>`[]` starts offline. `["*"]`, used alone, requests the full configured scope.<br>`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;<br>`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.<br>A bare host/IP requests only that target's configured protocols and ports.<br>Hosts resolve to IPs before startup; this does not isolate domains or URL<br>paths. DNS dependencies must also be allowed by the configured policy. |
-| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
+| `network` | `array<string>` | — | `[]` | Optional fallback declaration of outbound targets (IP/host, host:port,<br>or URL). Omit when MXC is enabled: the sandbox uses the full configured<br>network policy, including independent ceilings and persisted denials.<br>Checked only when the sandbox is off and resource_checks is enabled;<br>an empty declaration does not isolate a directly executed process. |
+| `reads` | `array<string>` | — | `[]` | Optional fallback declaration of files/directories read by this command.<br>Omit when MXC is enabled: the sandbox uses configured path permissions.<br>Checked only when the sandbox is off and resource_checks is enabled.<br>Declare actual data paths, not executable installations. |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 | `workdir` | `string / null` | — | — |  |
-| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
+| `writes` | `array<string>` | — | `[]` | Optional fallback declaration of files/directories created, modified or<br>deleted. Omit when MXC is enabled: configured path permissions apply.<br>Checked only when the sandbox is off and resource_checks is enabled. |
 
 **Input schema**:
 ```json
@@ -24110,7 +24110,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       }
     },
     "reads": {
-      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "description": "Optional fallback declaration of files/directories read by this command.\nOmit when MXC is enabled: the sandbox uses configured path permissions.\nChecked only when the sandbox is off and resource_checks is enabled.\nDeclare actual data paths, not executable installations.",
       "type": "array",
       "items": {
         "type": "string"
@@ -24124,7 +24124,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000001.000006"
     },
     "writes": {
-      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "description": "Optional fallback declaration of files/directories created, modified or\ndeleted. Omit when MXC is enabled: configured path permissions apply.\nChecked only when the sandbox is off and resource_checks is enabled.",
       "type": "array",
       "items": {
         "type": "string"
@@ -24138,7 +24138,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000001.000007"
     },
     "network": {
-      "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+      "description": "Optional fallback declaration of outbound targets (IP/host, host:port,\nor URL). Omit when MXC is enabled: the sandbox uses the full configured\nnetwork policy, including independent ceilings and persisted denials.\nChecked only when the sandbox is off and resource_checks is enabled;\nan empty declaration does not isolate a directly executed process.",
       "type": "array",
       "items": {
         "type": "string"
@@ -24465,7 +24465,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
           }
         },
         "reads": {
-          "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+          "description": "Optional fallback declaration of files/directories read by this command.\nOmit when MXC is enabled: the sandbox uses configured path permissions.\nChecked only when the sandbox is off and resource_checks is enabled.\nDeclare actual data paths, not executable installations.",
           "type": "array",
           "items": {
             "type": "string"
@@ -24479,7 +24479,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
           "x-agena-order": "000001.000006"
         },
         "writes": {
-          "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+          "description": "Optional fallback declaration of files/directories created, modified or\ndeleted. Omit when MXC is enabled: configured path permissions apply.\nChecked only when the sandbox is off and resource_checks is enabled.",
           "type": "array",
           "items": {
             "type": "string"
@@ -24493,7 +24493,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
           "x-agena-order": "000001.000007"
         },
         "network": {
-          "description": "Requested network scope, intersected with the configured native MXC policy.\n`[]` starts offline. `[\"*\"]`, used alone, requests the full configured scope.\n`host:port` or `tcp://host:port` requests TCP; `udp://host:port` requests UDP;\n`icmp://host` requests ICMP. HTTP(S) URLs request TCP to their host and port.\nA bare host/IP requests only that target's configured protocols and ports.\nHosts resolve to IPs before startup; this does not isolate domains or URL\npaths. DNS dependencies must also be allowed by the configured policy.",
+          "description": "Optional fallback declaration of outbound targets (IP/host, host:port,\nor URL). Omit when MXC is enabled: the sandbox uses the full configured\nnetwork policy, including independent ceilings and persisted denials.\nChecked only when the sandbox is off and resource_checks is enabled;\nan empty declaration does not isolate a directly executed process.",
           "type": "array",
           "items": {
             "type": "string"
@@ -24815,7 +24815,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 **Runtime**: streaming `buffered`
 
 **Help**:
-> chars is exact terminal input: never trim or append a newline. Send \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D, \t for Tab, or terminal escape sequences. Use shell.read without input. Omit since_seq/event_offset for unread output; explicit cursors replay without changing automatic consumption. Continue a partial result with last_seq and next_event_offset as since_seq/event_offset. wait_ms defaults to 250 (max 30000), independent of lifetime. max_output_bytes is 1024–16384 (default 16384); include_screen splits that content budget. Cursor/effect validation occurs before sending input. Declare reads/writes/network effects of the entered operation. Requires the owning session/workspace. A partial-write error requests termination; never blindly resend the full input. Use shell.signal for out-of-band interruption and shell.stop for cleanup.
+> chars is exact terminal input: never trim or append a newline. Send \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D, \t for Tab, or terminal escape sequences. Use shell.read without input. Omit since_seq/event_offset for unread output; explicit cursors replay without changing automatic consumption. Continue a partial result with last_seq and next_event_offset as since_seq/event_offset. wait_ms defaults to 250 (max 30000), independent of lifetime. max_output_bytes is 1024–16384 (default 16384); include_screen splits that content budget. Cursor validation occurs before sending input. Omit reads/writes/network for MXC; the terminal retains its startup sandbox policy. With MXC off and sandbox.resource_checks enabled, declare resources used by the entered operation. Requires the owning session/workspace. A partial-write error requests termination; never blindly resend the full input. Use shell.signal for out-of-band interruption and shell.stop for cleanup.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -24824,12 +24824,12 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
 | `event_offset` | `integer` | — | `0` |  |
 | `include_screen` | `boolean` | — | `false` |  |
 | `max_output_bytes` | `integer / null` | — | — |  |
-| `network` | `array<string>` | — | `[]` | Network effects of the entered operation, bounded by the process's existing<br>sandbox and current policy. `[]` declares no network use; `["*"]`, alone,<br>requests the configured scope. `host:port`/`tcp://host:port` means TCP,<br>`udp://host:port` means UDP, and `icmp://host` means ICMP. Bare host/IP means<br>that target's configured protocols and ports; HTTP(S) URLs mean TCP.<br>Hostnames resolve to IPs; they do not provide domain isolation. This field<br>cannot expand or replace the sandbox established when the process started. |
+| `network` | `array<string>` | — | `[]` | Optional fallback outbound targets for this input. Checked only when the<br>sandbox is off and resource_checks is enabled; omit for MXC. A sandboxed<br>terminal keeps the configured network policy captured when it started. |
 | `process_id` | `string` | ✓ | — |  |
-| `reads` | `array<string>` | — | `[]` | Paths the entered operation may read, relative to the Agena workspace. |
+| `reads` | `array<string>` | — | `[]` | Optional fallback read paths, relative to the Agena workspace. Checked<br>only when the sandbox is off and resource_checks is enabled; omit for MXC. |
 | `since_seq` | `integer / null` | — | — | Output cursor from a previous result. Omit to consume the session's<br>unread output; explicit cursors permit replay without changing it. |
 | `wait_ms` | `integer` | — | `250` |  |
-| `writes` | `array<string>` | — | `[]` | Paths the entered operation may modify, relative to the Agena workspace. |
+| `writes` | `array<string>` | — | `[]` | Optional fallback write paths, relative to the Agena workspace. Checked<br>only when the sandbox is off and resource_checks is enabled; omit for MXC. |
 
 **Input schema**:
 ```json
@@ -24900,7 +24900,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000006"
     },
     "reads": {
-      "description": "Paths the entered operation may read, relative to the Agena workspace.",
+      "description": "Optional fallback read paths, relative to the Agena workspace. Checked\nonly when the sandbox is off and resource_checks is enabled; omit for MXC.",
       "type": "array",
       "items": {
         "type": "string"
@@ -24909,7 +24909,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000007"
     },
     "writes": {
-      "description": "Paths the entered operation may modify, relative to the Agena workspace.",
+      "description": "Optional fallback write paths, relative to the Agena workspace. Checked\nonly when the sandbox is off and resource_checks is enabled; omit for MXC.",
       "type": "array",
       "items": {
         "type": "string"
@@ -24918,7 +24918,7 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
       "x-agena-order": "000008"
     },
     "network": {
-      "description": "Network effects of the entered operation, bounded by the process's existing\nsandbox and current policy. `[]` declares no network use; `[\"*\"]`, alone,\nrequests the configured scope. `host:port`/`tcp://host:port` means TCP,\n`udp://host:port` means UDP, and `icmp://host` means ICMP. Bare host/IP means\nthat target's configured protocols and ports; HTTP(S) URLs mean TCP.\nHostnames resolve to IPs; they do not provide domain isolation. This field\ncannot expand or replace the sandbox established when the process started.",
+      "description": "Optional fallback outbound targets for this input. Checked only when the\nsandbox is off and resource_checks is enabled; omit for MXC. A sandboxed\nterminal keeps the configured network policy captured when it started.",
       "type": "array",
       "items": {
         "type": "string"

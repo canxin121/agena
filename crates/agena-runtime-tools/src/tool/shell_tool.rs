@@ -339,7 +339,7 @@ async fn execute_managed_launch_async(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let effects = command.filesystem_effects();
     let tool_name = mode.tool_name();
-    validate_declared_filesystem_effects(tool_name, command.command.as_str(), &effects)?;
+    validate_declared_filesystem_effects(executor, tool_name, command.command.as_str(), &effects)?;
     let cwd = resolve_workdir_in_folder(
         executor,
         command.workdir.as_deref(),

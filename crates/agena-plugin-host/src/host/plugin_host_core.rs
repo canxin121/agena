@@ -173,6 +173,7 @@ impl PluginHost {
         ));
         let command_registry = host_handle.command_registry();
         Arc::new(Self {
+            sandbox_enabled: agena_process::sandbox::enabled(),
             plugins: Vec::new(),
             plugins_by_id: HashMap::new(),
             tool_registry,

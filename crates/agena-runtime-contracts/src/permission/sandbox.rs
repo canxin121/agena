@@ -102,6 +102,16 @@ pub struct SandboxFilesystemRestrictions {
     pub denied_paths: Vec<PathBuf>,
 }
 
+/// Complete statically granted filesystem scope for a native subprocess.
+/// It contains no resource claims supplied by the model.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxFilesystemPolicy {
+    pub readonly_paths: Vec<PathBuf>,
+    pub readwrite_paths: Vec<PathBuf>,
+    pub denied_paths: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SandboxPolicyError {
     #[error("sandbox execution principal is blocked")]
@@ -854,3 +864,5 @@ fn intersect(left: PermissionDecision, right: PermissionDecision) -> PermissionD
 
 #[cfg(test)]
 mod tests;
+
+mod configured;

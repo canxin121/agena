@@ -276,6 +276,7 @@ impl StdioTransport {
             .ok_or_else(|| TransportError::Io("stdio cwd is unavailable".into()))?;
         let cwd = std::fs::canonicalize(cwd)?;
         let sandbox = SandboxPolicy {
+            disabled: !agena_process::sandbox::enabled(),
             readonly_paths: vec![cwd.clone()],
             ..Default::default()
         };

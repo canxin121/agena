@@ -124,6 +124,7 @@ impl ScopedStdioTransport {
             })??;
         let cwd = directory.path().to_owned();
         let policy = SandboxPolicy {
+            disabled: !agena_process::sandbox::enabled(),
             readonly_paths: vec![cwd.clone()],
             runtime_paths: recipe.runtime_paths.clone(),
             ..Default::default()

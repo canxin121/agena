@@ -1,6 +1,6 @@
-//! MXC isolation for model-owned native processes. The existing permission
-//! service approves effects; this module projects that exact scoped authority
-//! into kernel-enforced filesystem and network boundaries.
+//! MXC isolation for model-owned native processes. Shell processes receive the
+//! complete configured resource policy; host-owned workers can use narrower
+//! concrete scopes derived from the actual operation.
 mod dns;
 
 use crate::{
@@ -71,30 +71,8 @@ pub(crate) fn protect(
     if !executor.sandbox_enabled() {
         return Ok(command);
     }
-    let mut reads = input
-        .reads
-        .iter()
-        .map(|path| executor.resolve_filesystem_effect_path(path, cwd))
-        .collect::<Vec<_>>();
-    let writes = input
-        .writes
-        .iter()
-        .map(|path| executor.resolve_filesystem_effect_path(path, cwd))
-        .collect::<Vec<_>>();
-    // The shell's working directory is explicitly included in preflight.
-    // Its descendants still retain all finer settings and ceiling rules.
-    reads.push(crate::canonicalize_mutation_path(cwd));
-    reads.extend(writes.iter().cloned());
-    executor.authorize_sandbox_paths(&reads, &writes)?;
-    let mut policy = policy_for_paths(executor, &reads, &writes, &input.network)?;
-    for path in &writes {
-        if !path.exists() {
-            return Err(ToolError::invalid_input(format!(
-                "MXC requires an existing writable mount: {}. Declare an existing output directory, or create the exact file with fs.write before launching the command.",
-                path.display(),
-            )));
-        }
-    }
+    executor.validate_sandbox_workdir(cwd)?;
+    let mut policy = policy_from_settings(executor)?;
     executor.ensure_not_cancelled()?;
     policy.timeout_ms = input.timeout_ms.map(|timeout| {
         timeout.saturating_sub(u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX))
@@ -106,6 +84,130 @@ pub(crate) fn protect(
     }
     agena_process::sandbox::wrap_argv(&command, cwd, env, &policy)
         .map_err(|error| ToolError::invalid_input(format!("start MXC sandbox: {error}")))
+}
+
+/// Compile the full configured scope for shell and auxiliary processes. No
+/// model-supplied declaration can add, remove, or narrow a configured grant.
+pub(crate) fn policy_from_settings(executor: &ToolExecutor) -> Result<SandboxPolicy, ToolError> {
+    if !executor.sandbox_enabled() {
+        return Ok(SandboxPolicy {
+            disabled: true,
+            ..Default::default()
+        });
+    }
+    let snapshot = executor.sandbox_permission_snapshot();
+    let scope = snapshot
+        .filesystem_policy()
+        .map_err(|error| ToolError::invalid_input(format!("sandbox permission policy: {error}")))?;
+    prepare_managed_state_root(
+        executor.workspace_root(),
+        &scope,
+        &agena_storage_layout::StorageLayout::current(),
+    )?;
+    let resolve = |paths: Vec<PathBuf>, access| -> Result<Vec<PathBuf>, ToolError> {
+        let mut resolved = Vec::new();
+        for original in paths {
+            let path = crate::canonicalize_mutation_path(&original);
+            if !matches!(
+                snapshot.authorize_path_access(access, &path),
+                PermissionDecision::Allow
+            ) || !matches!(
+                snapshot.authorize_path_access(agena_domain::AccessKind::Read, &path),
+                PermissionDecision::Allow
+            ) {
+                return Err(ToolError::invalid_input(format!(
+                    "configured sandbox path {} resolves outside its allowed policy to {}",
+                    original.display(),
+                    path.display()
+                )));
+            }
+            resolved.push(path);
+        }
+        resolved.sort();
+        resolved.dedup();
+        agena_process::sandbox::validate_resource_paths(&resolved)
+            .map_err(|error| ToolError::invalid_input(format!("sandbox resource path: {error}")))?;
+        Ok(resolved)
+    };
+    let mut readonly_paths = resolve(scope.readonly_paths, agena_domain::AccessKind::Read)?;
+    let readwrite_paths = resolve(scope.readwrite_paths, agena_domain::AccessKind::Write)?;
+    for path in &readwrite_paths {
+        if !path.exists() {
+            return Err(ToolError::invalid_input(format!(
+                "configured MXC writable path must already exist: {}. Create that exact file or directory with a filesystem tool before launching the command; its parent is never granted implicitly.",
+                path.display()
+            )));
+        }
+    }
+    let restrictions = snapshot
+        .filesystem_restrictions(&readonly_paths, &readwrite_paths)
+        .map_err(|error| ToolError::invalid_input(format!("sandbox permission policy: {error}")))?;
+    readonly_paths.extend(restrictions.readonly_paths);
+    readonly_paths.sort();
+    readonly_paths.dedup();
+    let mut denied_paths = scope.denied_paths;
+    denied_paths.extend(restrictions.denied_paths);
+    denied_paths = denied_paths
+        .into_iter()
+        .map(|path| crate::canonicalize_mutation_path(&path))
+        .collect();
+    denied_paths.sort();
+    denied_paths.dedup();
+    let network = snapshot
+        .native_network_policy(None)
+        .map_err(|error| ToolError::invalid_input(format!("sandbox network policy: {error}")))?;
+    network
+        .validate_for_platform(std::env::consts::OS)
+        .map_err(|error| ToolError::invalid_input(format!("sandbox network policy: {error}")))?;
+    Ok(SandboxPolicy {
+        readonly_paths,
+        readwrite_paths,
+        denied_paths,
+        network: SandboxNetwork::Native { policy: network },
+        ..Default::default()
+    })
+}
+
+/// Initialize the application-owned workspace state only when the compiled
+/// policy grants that exact root. User-configured write targets stay untouched.
+fn prepare_managed_state_root(
+    workspace_root: &Path,
+    scope: &crate::authorization::SandboxFilesystemPolicy,
+    layout: &agena_storage_layout::StorageLayout,
+) -> Result<(), ToolError> {
+    if workspace_root.as_os_str().is_empty() {
+        return Ok(());
+    }
+    let managed_root = layout.workspace_dir(workspace_root);
+    let identity = crate::canonicalize_mutation_path(&managed_root);
+    let granted = scope.readwrite_paths.iter().any(|path| {
+        let path = crate::canonicalize_mutation_path(path);
+        #[cfg(windows)]
+        {
+            path.to_string_lossy()
+                .replace('\\', "/")
+                .trim_start_matches("//?/")
+                .eq_ignore_ascii_case(
+                    identity
+                        .to_string_lossy()
+                        .replace('\\', "/")
+                        .trim_start_matches("//?/"),
+                )
+        }
+        #[cfg(not(windows))]
+        {
+            path == identity
+        }
+    });
+    if granted {
+        agena_storage_layout::secure_directory(&managed_root).map_err(|error| {
+            ToolError::invalid_input(format!(
+                "failed to prepare managed sandbox state directory {}: {error}",
+                managed_root.display()
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 /// Paths are canonical, absolute effects already authorized by the caller.
@@ -415,6 +517,212 @@ fn native_network(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires a built Agena launcher in AGENA_TEST_SANDBOX_LAUNCHER and native MXC prerequisites"]
+    fn native_shell_without_declarations_enforces_settings_and_switches_to_direct_mode() {
+        let launcher = std::env::var_os("AGENA_TEST_SANDBOX_LAUNCHER")
+            .expect("set AGENA_TEST_SANDBOX_LAUNCHER to an existing Agena executable");
+        agena_process::sandbox::configure_launcher(PathBuf::from(launcher)).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        for name in ["input", "output", "secrets"] {
+            std::fs::create_dir(root.join(name)).unwrap();
+        }
+        std::fs::write(root.join("input/source.txt"), b"authorized input\n").unwrap();
+        std::fs::write(root.join("secrets/secret.txt"), b"fixture secret\n").unwrap();
+        let executor = ToolExecutor::new(
+            &root,
+            crate::authorization::ExecutionPrincipal::new(
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        )
+        .with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path": {"workspace":"deny", "external":"deny", "rules": {
+                    "<workspace>/input":"readonly", "<workspace>/output":"readwrite",
+                    "<workspace>/secrets":"deny"
+                }},
+                "network": {"default":"deny"}
+            }))
+            .unwrap(),
+        );
+        assert!(
+            executor.sandbox_enabled(),
+            "enable AGENA_SANDBOX for this native regression"
+        );
+        let cwd = root.join("input");
+        let command = "set -eu\ncat source.txt > ../output/copied.txt\nif cat ../secrets/secret.txt >/dev/null 2>&1; then printf 'secret:visible\\n'; else printf 'secret:denied\\n'; fi\nif (printf changed > source.txt) 2>/dev/null; then printf 'input:writable\\n'; else printf 'input:readonly\\n'; fi";
+        let input: ShellCommandInput = serde_json::from_value(serde_json::json!({
+            "command": command, "workdir": cwd, "timeout_ms": 15_000
+        }))
+        .unwrap();
+        assert!(input.reads.is_empty() && input.writes.is_empty() && input.network.is_empty());
+        let run = |executor: &ToolExecutor| {
+            let mut environment = HashMap::new();
+            if let Ok(path) = std::env::var("PATH") {
+                environment.insert("PATH".into(), path);
+            }
+            let argv = protect(
+                executor,
+                vec!["/bin/sh".into(), "-c".into(), input.command.clone()],
+                &cwd,
+                &input,
+                &mut environment,
+            )
+            .unwrap();
+            let output = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .current_dir(&cwd)
+                .env_clear()
+                .envs(environment)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "native shell failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8(output.stdout).unwrap()
+        };
+        let isolated = run(&executor);
+        assert!(isolated.contains("secret:denied"), "{isolated}");
+        assert!(isolated.contains("input:readonly"), "{isolated}");
+        assert_eq!(
+            std::fs::read(root.join("output/copied.txt")).unwrap(),
+            b"authorized input\n"
+        );
+        assert_eq!(
+            std::fs::read(root.join("input/source.txt")).unwrap(),
+            b"authorized input\n"
+        );
+        let direct = run(&executor.with_sandbox_settings(false, false, false));
+        assert!(direct.contains("secret:visible"), "{direct}");
+        assert!(direct.contains("input:writable"), "{direct}");
+        assert_eq!(
+            std::fs::read(root.join("input/source.txt")).unwrap(),
+            b"changed"
+        );
+    }
+
+    #[test]
+    fn settings_policy_keeps_allowed_network_without_a_model_declaration() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let executor = ToolExecutor::new(
+            root,
+            crate::authorization::ExecutionPrincipal::new(
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        )
+        .with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path":{"workspace":"deny", "external":"deny"},
+                "network":{"default":"allow"}
+            }))
+            .unwrap(),
+        );
+        let policy = policy_from_settings(&executor).unwrap();
+        let SandboxNetwork::Native { policy } = policy.network else {
+            panic!("the configured network policy must be used without a declaration");
+        };
+        assert_eq!(policy.egress.unwrap().default, Some(NetworkAction::Allow));
+    }
+
+    #[test]
+    fn granted_managed_state_is_created_without_creating_user_write_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("project");
+        let layout = agena_storage_layout::StorageLayout::new(directory.path().join("instance"));
+        let state = layout.workspace_dir(&workspace);
+        let user_target = workspace.join("missing-output");
+        let scope = crate::authorization::SandboxFilesystemPolicy {
+            readwrite_paths: vec![state.clone(), user_target.clone()],
+            ..Default::default()
+        };
+        assert!(!state.exists());
+        prepare_managed_state_root(&workspace, &scope, &layout).unwrap();
+        assert!(state.is_dir());
+        assert!(!user_target.exists());
+        assert!(!workspace.exists());
+        // Repeated preparation preserves the existing per-workspace directory.
+        prepare_managed_state_root(&workspace, &scope, &layout).unwrap();
+        assert!(state.is_dir());
+    }
+
+    #[test]
+    fn managed_state_is_not_created_without_an_exact_readwrite_grant() {
+        let directory = tempfile::tempdir().unwrap();
+        let workspace = directory.path().join("project");
+        let layout = agena_storage_layout::StorageLayout::new(directory.path().join("instance"));
+        let state = layout.workspace_dir(&workspace);
+        for scope in [
+            crate::authorization::SandboxFilesystemPolicy::default(),
+            crate::authorization::SandboxFilesystemPolicy {
+                readonly_paths: vec![state.clone()],
+                ..Default::default()
+            },
+            crate::authorization::SandboxFilesystemPolicy {
+                denied_paths: vec![state.clone()],
+                ..Default::default()
+            },
+            crate::authorization::SandboxFilesystemPolicy {
+                readwrite_paths: vec![state.join("child")],
+                ..Default::default()
+            },
+            crate::authorization::SandboxFilesystemPolicy {
+                readwrite_paths: vec![layout.root().to_owned()],
+                ..Default::default()
+            },
+        ] {
+            prepare_managed_state_root(&workspace, &scope, &layout).unwrap();
+            assert!(!state.exists());
+            assert!(!layout.root().exists());
+        }
+        let global_state = layout.workspace_dir(Path::new(""));
+        let scope = crate::authorization::SandboxFilesystemPolicy {
+            readwrite_paths: vec![global_state.clone()],
+            ..Default::default()
+        };
+        prepare_managed_state_root(Path::new(""), &scope, &layout).unwrap();
+        assert!(!global_state.exists());
+    }
+
+    #[test]
+    fn missing_configured_write_target_never_grants_its_parent() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(directory.path()).unwrap();
+        let executor = ToolExecutor::new(
+            &root,
+            crate::authorization::ExecutionPrincipal::new(
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        )
+        .with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path":{"workspace":"deny", "external":"deny", "rules": {
+                    "<workspace>/missing.txt":"readwrite"
+                }}, "network":{"default":"deny"}
+            }))
+            .unwrap(),
+        );
+        let error = policy_from_settings(&executor).unwrap_err().to_string();
+        assert!(error.contains("must already exist"), "{error}");
+        assert!(!root.join("missing.txt").exists());
+    }
 
     #[tokio::test]
     async fn direct_shell_skips_mount_and_dns_requirements_without_changing_other_executors() {

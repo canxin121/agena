@@ -1,36 +1,74 @@
 # 工具沙盒：配置、执行与部署
 
-Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作。作为 MCP 服务提供工具时，调用默认关闭 MXC，直接在宿主执行。路径权限放在 `permission.path`，网络权限使用 `permission.network` 的扁平规则，工具审批放在 `permission.tools`；启用沙盒时，调用把获准资源直接转换为 MXC 策略。
+Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作。作为 MCP 服务提供工具时，调用默认关闭 MXC，直接在宿主执行。路径权限放在 `permission.path`，网络权限使用 `permission.network` 的扁平规则，工具审批放在 `permission.tools`；启用沙盒时，Shell 和托管子进程直接把当前生效的路径、网络配置转换为 MXC 策略。
 
 路径规则的值只接受 `readonly`、`readwrite`、`deny`。它们分别对应 MXC 的只读、读写和拒绝路径。`ask`、`auto` 属于 Agena 的工具审批流程；路径与网络资源权限必须是能够执行的具体模式。
 
-## 关闭沙盒
+## 沙盒与回退检查开关
 
-在启动拥有 Runtime 的服务进程时设置环境变量，即可关闭该进程的 MXC 隔离：
+Web 的“权限与安全 → 沙盒与检查”和 TUI 的“设置 → 权限”都可以编辑以下配置，支持全局默认与工作区覆盖。每个字段独立继承；删除当前层字段恢复上层值。
+
+```json
+{
+  "sandbox": {
+    "enabled": true,
+    "resource_checks": true,
+    "command_hints": true
+  }
+}
+```
+
+三个字段均默认为 `true`，只接受 JSON 布尔值：
+
+| 字段 | 生效条件与行为 |
+| --- | --- |
+| `enabled` | 启用 MXC；Shell、PTY 和托管子进程使用当前生效的资源策略 |
+| `resource_checks` | 仅在 MXC 实际关闭时，检查工具额外声明的 `reads`、`writes`、`network` |
+| `command_hints` | 仅在 MXC 关闭且 `resource_checks` 开启时，按命令分析结果提示补充遗漏的资源声明 |
+
+启用 MXC 时，模型可以省略上述三个资源声明字段；即使传入，也不会用于缩小或扩大沙盒权限。网络是否可用由 `permission.network` 决定，省略 `network` 不再意味着离线。工具定义会标明当前执行模式及资源声明是否生效。
+
+完全关闭沙盒和这两项回退机制：
+
+```json
+{
+  "sandbox": {
+    "enabled": false,
+    "resource_checks": false,
+    "command_hints": false
+  }
+}
+```
+
+只设置 `enabled: false` 会保留默认开启的声明检查和命令提示。关闭 `command_hints` 后，已提供的声明仍可检查，但不会因命令关键词而要求补填。关闭 `resource_checks` 后，声明与补填提示都不执行，`command_hints` 保存的值保留，方便以后重新启用。
+
+工具名称、命令审批，以及文件发布、宿主 HTTP 等操作对真实资源的授权继续生效。关闭 MXC 后，子进程按宿主用户权限访问文件和网络；声明检查发生在调用入口，不能约束进程随后实际进行的 I/O。
+
+### 环境变量与 MCP 调用
+
+启动服务时可以用环境变量强制关闭 MXC：
 
 ```sh
 AGENA_SANDBOX=disabled agena server --workspace /path/to/project
-# 后台启动同样继承该设置
 AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 ```
 
-`false`、`0`、`off` 也表示关闭。未设置时默认启用；`AGENA_SANDBOX=enabled` 明确启用。兼容旧的 `AGENA_SHELL_SANDBOX=disabled`，但 `AGENA_SANDBOX` 的优先级更高。设置在进程启动时捕获，修改后需要重启服务；在工具的 `env` 中填写这些值不会改变宿主的运行模式。
+`false`、`0`、`off` 也表示关闭。未设置或设置为 `enabled` 时遵循配置的 `sandbox.enabled`，不会重新开启已在设置中关闭的沙盒。兼容旧的 `AGENA_SHELL_SANDBOX=disabled`；存在 `AGENA_SANDBOX` 时以它为准。环境在进程启动时捕获，修改后需要重启服务；工具 `env` 中的同名值不能改变运行模式。
 
-`agena mcp-server` 是常驻服务的 stdio 桥接客户端，工具实际在服务端执行。桥接调用与 HTTP `/mcp` 调用都会在服务端为本次执行关闭沙盒，无须额外设置环境变量。这个标记跟随调用的执行器与宿主回调，不改变同一服务中普通会话的默认沙盒模式，也不会复用另一模式下的 LSP、MCP 子连接或插件进程。
+`agena mcp-server` 是常驻服务的 stdio 桥接客户端，工具实际在服务端执行。桥接调用与 HTTP `/mcp` 调用在服务端为本次执行关闭沙盒，无须额外环境变量；这类调用按配置决定是否启用回退声明检查和提示。这个受信任标记跟随调用执行器与宿主回调，不改变普通会话的模式，也不会复用另一模式下的 LSP、MCP 子连接或插件进程。
 
-关闭后，shell、PTY、文件工具和辅助子进程直接执行，不要求 MXC 后端或沙盒挂载；命令保留宿主环境及调用方的显式环境设置。浏览器入口也不再因缺少 MXC 浏览器隔离而拒绝启动。工具入口、声明资源和 MCP 工具暴露仍按原授权检查；命令启动后按宿主用户权限访问文件和网络，实际 I/O 不再由 MXC 约束。
+关闭后，Shell、PTY、文件工具和辅助子进程直接执行，不要求 MXC 后端或沙盒挂载。命令保留宿主环境及调用方的显式环境设置；浏览器入口也不再因缺少 MXC 浏览器隔离而拒绝启动。
 
 ## 启用沙盒时的执行流程
 
-1. 保存全局、项目或会话设置时，解析并校验规则。无法表示为受支持资源边界的路径、模式和条件返回具体错误，不写入配置。
-2. 工具参数和 hook 转换完成后，执行器按当前项目、会话和来源身份解析实际路径、网络目标以及工具权限。
-3. 工具审批处理 `allow`、`deny`、`auto`、`ask`；路径资源使用三种确定模式，网络资源只使用 `allow` / `deny`。审批不能扩大资源策略的允许范围。
-4. `SandboxPermissionSnapshot` 捕获当前 principal 的路径和网络策略、独立权限上限及当前调用可见的持久规则。
-5. 宿主将本次获准的资源声明转换成具体只读路径、读写路径、拒绝路径和网络策略。没有网络声明的调用采用离线策略。
-6. 统一 launcher 启动 MXC，再启动命令或工具 worker。实际后端和主机依赖无法落实策略时返回启动错误，不转成普通宿主进程。
-7. 文件修改类 worker 在私有暂存区生成结果，宿主验证修订和目标身份后发布到固定目标。
+1. 保存全局、项目或会话设置时，校验语法和合并后的策略；启用沙盒时同时编译完整路径边界。无法表示的配置返回具体错误，不写入设置。
+2. 工具参数和 hook 转换完成后，按当前项目、会话和来源身份处理工具及命令审批。
+3. `SandboxPermissionSnapshot` 捕获生效的路径、网络策略，独立权限上限，以及本次调用可见的持久规则。
+4. Shell、PTY 和托管子进程直接从快照生成只读、读写、拒绝路径和完整网络策略，不要求模型重复声明资源。宿主控制的文件 worker 和固定辅助工具继续使用任务实际需要的最小资源范围。
+5. 统一 launcher 启动 MXC，再启动命令或 worker。后端和主机依赖无法落实策略时返回启动错误。
+6. 文件修改 worker 在私有暂存区生成结果，宿主验证修订和目标身份后发布到固定目标。
 
-工具参数不能退出沙盒。隔离模式只由启动服务的受信任环境或 MCP 宿主调用入口选择，模型不能通过工具参数切换它。
+工具参数不能切换沙盒。模式由已保存的配置、服务启动环境与受信任 MCP 宿主入口共同决定。
 
 ## 路径权限
 
@@ -71,7 +109,7 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 
 `workspace: "deny"` 是没有具体规则时的默认拒绝，不会把整个工作区加入 MXC 的 `deniedPaths`。因此它可以与 `input: "readonly"` 同时使用。支持显式路径拒绝的后端还可以增加 `"<workspace>/secrets": "deny"`，用于封锁已有授权根下面的秘密子树；在它下面重新开放子路径会报错。
 
-将需要不同权限的数据放在并列的授权目录中。`readonly` 目录下面再设 `readwrite` 子目录，或 `readwrite` 目录下面再设 `readonly` 子目录，当前都会拒绝保存；不同后端的嵌套挂载和授权合并方式不能提供一致边界。允许在已授权根内设置后端支持的明确 `deny`。
+将需要不同权限的数据放在并列的授权目录中。`readonly` 目录下面再设 `readwrite` 子目录，或 `readwrite` 目录下面再设 `readonly` 子目录，当前都会拒绝保存；启用沙盒时，`workspace: "readonly"` 加可写子目录，或 `workspace: "readwrite"` 加只读子目录也会报错；改用 `workspace: "deny"` 并列出分离的授权目录。Agena 当前统一使用分离的只读、读写授权根，避免依赖各后端的嵌套优先级。允许在已授权根内设置后端支持的明确 `deny`。
 
 路径的项目覆盖仍与全局设置合并，空的路径 `rules` 不会清空已经继承的路径规则。保存时必须验证合并后的生效配置，不能用项目中的宽松项绕过独立的权限上限。
 
@@ -87,9 +125,11 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 
 MXC 和工具 worker 所需的任务私有临时目录由宿主通过受信任的 `private_paths` 提供。需要处理宿主临时文件时，显式授权自己的具体任务目录，例如 `"<tmp>/my-task": "readwrite"`。
 
-路径规则保留 `<workspace>`、`<cwd>`、`<home>`、`<tmp>`、`<state>` 别名。路径设置中的 `<cwd>` 规范为所属工作区；工具的相对资源声明仍按本次调用实际工作目录解析。`<state>` 只指当前实例、当前工作区的受管状态目录。
+首次执行时，Agena 会初始化已获准读写的 `<state>` 托管目录；用户自定义的授权文件和目录仍需预先创建。
 
-全局或 Bot 会话没有隐含项目根，需要使用绝对路径或工具支持的显式绝对 `folder`。未列出的用户数据不会因为运行程序而被整体加入本次沙盒，实际资源集合仍来自调用声明、运行时依赖和私有临时目录。
+路径规则保留 `<workspace>`、`<cwd>`、`<home>`、`<tmp>`、`<state>` 别名。路径设置中的 `<cwd>` 规范为所属工作区；回退声明检查中的相对路径按本次调用实际工作目录解析。`<state>` 只指当前实例、当前工作区的受管状态目录。
+
+全局或 Bot 会话没有隐含项目根，需要使用绝对路径或工具支持的显式绝对 `folder`。未列出的用户数据不会因为运行程序而被整体加入本次沙盒，Shell 的资源集合来自当前配置、运行时依赖和私有临时目录。
 
 ### 保存校验与旧配置迁移
 
@@ -104,28 +144,25 @@ MXC 和工具 worker 所需的任务私有临时目录由宿主通过受信任�
 
 路径和主机状态可能在保存后改变；启动前仍需核对真实路径、符号链接、当前权限及后端能力。保存成功表示规则通过当前配置与已知能力校验，不代替在目标系统上启动沙盒。
 
-### 单文件、输出目录与资源声明
+### 单文件与输出目录
 
 已有文件可以单独授予 `readwrite`，不会因此自动开放父目录。创建多个产物时，使用单独的输出目录。
 
-已有 `input`、`output` 目录时，Linux/macOS 的 shell 调用可以这样声明：
+使用前述配置并已创建 `input`、`output` 目录时，Linux/macOS 的 Shell 调用可以直接写为：
 
 ```json
 {
   "command": "cat ../input/data.txt > result.txt",
-  "workdir": "/path/to/project/output",
-  "reads": ["../input"],
-  "writes": ["."],
-  "network": []
+  "workdir": "/path/to/project/output"
 }
 ```
 
-Windows 使用对应 shell 命令和实际路径，资源声明字段保持相同结构。`workdir` 需要读取授权；不要为了启动单文件任务把未授权的整个项目根作为工作目录。
+Windows 使用对应 Shell 命令和实际路径。`workdir` 本身需要读取授权；未授权的项目根不能作为工作目录。
 
-- `reads`、`writes` 是工具本次申请的资源，与配置中已合并为字符串的权限模式不同。
-- shell 的写入挂载目标必须已存在。新文件可以放在已授权且已存在的输出目录中，或先通过 `fs.write` 创建准确目标。执行器不会自动把新文件的父目录扩大为读写授权。
-- 文件的原子替换可能需要同目录临时文件和父目录操作；精确单文件授权不承诺这些操作都可在普通 shell 内完成。Agena 文件修改工具通过私有暂存区和固定目标提交处理。
-- 共享临时目录根，例如 `/tmp`、`/var/tmp` 及其祖先，不能通过允许规则开放为只读或读写；保存时会报错。其他任务的 `agena-sandbox-*`、`agena-tool-worker-*`、`agena-media-worker-*` 保留目录同样不能通过路径或符号链接获得授权。
+- 配置中的挂载目标必须存在。新文件可以放在已授权且已存在的输出目录中，或先通过 `fs.write` 创建准确目标；执行器不会自动把父目录扩大为读写授权。
+- 文件的原子替换可能需要同目录临时文件和父目录操作。Agena 文件修改工具通过私有暂存区和固定目标提交处理。
+- 共享临时根（例如 `/tmp`、`/var/tmp`）及其祖先不能被整体开放。其他任务的 `agena-sandbox-*`、`agena-tool-worker-*`、`agena-media-worker-*` 保留目录同样受保护。
+- 启用 MXC 时，`external` 必须为 `deny`，再用具体外部文件或目录规则授权。`external: "readonly"` 或 `"readwrite"` 会开放整个宿主文件系统，与上述受保护路径冲突，保存时会报错；关闭沙盒后可使用这种外部默认模式。
 
 ### 运行时依赖
 
@@ -147,11 +184,11 @@ launcher 另行加入程序和系统库所需的只读路径，以及任务私�
 
 会话、子代理父级限制和 channel 权限围栏按原作用域组合，独立权限上限取交集。后加入的宽松配置不能抹掉上限中的拒绝。
 
-持久规则按调用所属的 `global → workspace → session` 作用域解析，每个作用域与动作键采用最新且未撤销的记录。明确拒绝不能被记住的批准升级。资源批准之后，本次具体清单仍需通过 MXC 转换。
+持久规则按调用所属的 `global → workspace → session` 作用域解析，每个作用域与动作键采用最新且未撤销的记录。明确拒绝不能被记住的批准升级。这些决定会进入本次配置快照，编译为 MXC 策略。
 
 持久 `NetworkAccess` 只接受 `allow`、`deny` 和数值 IP 目标，例如 `192.0.2.10:443`、`[2001:db8::10]:443`、`udp://192.0.2.10:53` 或 `icmp://192.0.2.10`。裸 IP 匹配该地址的全部协议/端口，允许决定仍受配置范围限制；CIDR 范围放在 `permission.network` 中设置。域名、`ask`/`auto`、含路径或凭据的 URL 无法保存。macOS 的后端不支持这种精确 IP 决定，保存时会明确报错。历史记录继续展示并可撤销或删除；编辑后保存同样执行新校验。
 
-快照按调用所属会话绑定工作区和来源身份。长期进程的权限在创建时固定；改变设置不会给已运行的进程追加挂载或网络权限。
+快照按调用所属会话绑定工作区和来源身份。长期进程的权限在创建时固定；改变设置后，新进程使用新策略。已有交互终端的模式或策略不再匹配时，继续输入会返回错误，需关闭并重新打开；输出读取和清理仍可使用。
 
 ## 网络设置与执行
 
@@ -296,28 +333,15 @@ TUI 使用 `Tab` 切换面板，`Ctrl+N` 新增规则，`Enter` 编辑字段，`
 
 公开保存接口只接收新的扁平结构。更早的 `internet`、`private`、`loopback`、`rules` 和域名权限没有直接对应的原生规则，需要改为明确的 IP/CIDR 策略。
 
-### 工具网络资源声明
+### 配置网络与回退声明
 
-工具的 `network` 声明申请本次调用需要的网络范围，最终策略始终与当前设置及每一层独立权限上限取交集：
+启用 MXC 时，Shell 和托管子进程直接使用 `permission.network` 的完整生效策略，并与每一层独立权限上限取交集。无需填写工具的 `network` 参数，也无需使用 `["*"]` 申请已配置的范围。配置为 `{"default":"deny"}` 时离线，配置具体允许规则时可直接访问这些目标。
 
-| 声明 | 本次申请的范围 |
-| --- | --- |
-| `[]` | 离线，拒绝外部 IP 网络与宿主回环访问 |
-| `["*"]` | 当前配置已经允许的完整原生网络范围；`*` 必须单独使用 |
-| `["192.0.2.10:443"]` | 目标 IP 的 TCP 443 |
-| `["api.example.com:8443"]` | 启动前解析出的目标 IP 的 TCP 8443 |
-| `["https://api.example.com/resource"]` | 目标 IP 的 TCP 443；URL 路径不构成网络隔离条件 |
-| `["udp://192.0.2.53:53"]` | 目标 IP 的 UDP 53 |
-| `["icmp://192.0.2.10"]` | 目标 IP 的 ICMP |
-| `["api.example.com"]` 或 `["192.0.2.10"]` | 该目标内当前策略已经允许的协议和端口，不隐含开放 80、443 |
+使用域名的命令需要策略允许实际 DNS 解析器及目标 IP。MXC 执行的是数值 IP、协议和端口边界；同一获准 IP 上的服务仍按这些边界处理。Linux 的私有网络命名空间可以保有沙盒内部回环，它与宿主机 `127.0.0.1` 是不同对象。
 
-主机名在父进程中解析并转换为具体 IP，再生成原生 MXC 规则。域名声明不提供 HTTP Host、TLS SNI 或 URL 级隔离；同一获准 IP 上的其他服务仍按协议和端口边界处理。
+已保存的网络批准不能扩大静态策略，保存的拒绝会编译为原生拒绝规则。不能转换成数值 IP/CIDR 的旧域名拒绝会返回具体错误，要求修改或移除该决定。
 
-父进程在解析域名前先检查 DNS 权限：当前发现的所有解析器都必须获准使用 UDP/TCP 53，并通过当前设置和全部权限上限检查，不能借域名声明自动开放 DNS。无法证明解析器已获准时，使用具体 IP 声明，或明确申请已经配置的完整范围。使用 `["*"]` 时同样需要在策略中允许实际解析器，或明确允许所需出站范围。Linux 的隔离网络可能使用 MXC 提供的解析器入口，最终地址在编译和启动阶段核对。
-
-已保存的网络批准不能扩大静态策略，保存的拒绝必须落实为原生拒绝规则。无法转换为数值 IP/CIDR 的旧域名拒绝会在联网策略编译时返回错误，要求改为原生规则。
-
-Linux 的私有网络命名空间可以保有沙盒内部回环；这与宿主机 `127.0.0.1` 是不同对象。
+只有关闭 MXC 且开启 `sandbox.resource_checks` 时，工具 `network` 数组才作为调用前的资源声明检查，例如 `["192.0.2.10:443"]` 或 `["https://api.example.com"]`。空数组表示没有声明网络操作，不能使宿主直接执行的命令自动离线。
 
 ### 宿主 HTTP 请求与 DNS 地址校验
 
@@ -350,7 +374,7 @@ Linux 的私有网络命名空间可以保有沙盒内部回环；这与宿主�
 | --- | --- |
 | Linux / Bubblewrap | 支持上述 CIDR、排除子网、协议与端口规则；`inbound` 和 `hostLoopback` 必须为 `deny` |
 | Windows / ProcessContainer | 使用原生数值 IP、协议和端口规则；运行时检查当前 Windows 版本与 ProcessContainer/PSEC 能力 |
-| macOS / Seatbelt | 支持出站默认动作；非空的 `allow` / `deny` 规则不能保存。允许出站默认动作时，可用 `network: ["*"]` 申请该原生范围；具体目标限制因需要细粒度规则而不能执行 |
+| macOS / Seatbelt | 支持出站默认动作；非空的 `allow` / `deny` 规则不能保存。允许出站默认动作时，进程直接使用该配置范围；具体目标限制因需要细粒度规则而不能执行 |
 
 Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒限制的进程。
 
@@ -360,8 +384,8 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 
 | 工具或执行入口 | 隔离方式与资源边界 |
 | --- | --- |
-| `shell.exec`、`shell.spawn`、`shell.watch` | 同一 MXC launcher；沿用声明的读取、写入、网络目标、工作目录和超时，保留原有前台/后台输出和进程归属 |
-| `shell.open` 与 PTY 后续输入 | 初始终端在同一隔离边界内创建；后续输入继续接受原权限检查，不能扩大已经运行的进程权限 |
+| `shell.exec`、`shell.spawn`、`shell.watch` | 同一 MXC launcher；使用配置中的完整路径与网络策略，保留工作目录、超时、前台/后台输出和进程归属 |
+| `shell.open` 与 PTY 后续输入 | 初始终端使用配置策略；后续输入检查进程归属及策略是否仍匹配，模式或权限改变后需重新打开 |
 | `fs.read`、`fs.glob`、`fs.grep`、`fs.read_many` | 独立 worker；目录遍历和文件读取同时受获准根、细粒度路径规则与 OS 文件系统策略约束 |
 | `fs.stat` | 普通文件在独立 worker 中查询；符号链接通过宿主已授权目标的元数据 broker 保留 `lstat` 语义，不读取链接目标内容 |
 | `fs.write`、`fs.replace`、`fs.apply_patch` | worker 在私有暂存区运行；宿主只向固定、已授权的目标发布验证后的结果 |
@@ -376,7 +400,7 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 | Web HTTP 抓取与 HTML 搜索 | 宿主逐目标授权，使用当前调用权限检查 DNS 返回 IP，并将允许地址固定到实际客户端；外部代理重新解析目标的路由返回错误 |
 | 浏览器渲染和交互 | 当前入口在执行前拒绝；Chrome 尚未接入完整 MXC 边界，辅助进程自身的隔离不足以开放浏览器功能 |
 
-PTY 和其他常驻子进程的内核权限在创建时固定。后续 `shell.write` 即使获准发送新的命令，也只能在这个边界内执行；需要新增目录或网络目标时，应带着新的资源声明创建终端或进程。修改设置不会给已经运行的进程追加挂载或网络权限。
+PTY 和其他常驻子进程的内核权限在创建时固定。需要新增目录或网络目标时，先修改 `permission.path`、`permission.network`，再创建新的终端或进程。已有终端的执行模式或资源策略改变后，`shell.write` 会拒绝输入，仍可读取输出或停止进程；修改设置不会给运行中的进程追加挂载或网络权限。
 
 启用沙盒时，缺失目标程序、必要运行时文件、沙盒后端或联网依赖会返回具体启动错误。执行器不会自动转为宿主直跑，也不会通过放宽目录或网络策略重试；直接执行必须在调用前明确选择。
 
@@ -406,9 +430,9 @@ LSP 缓存键包含会话身份、服务器名称、实际根目录和完整 `Sa
 
 ### MCP stdio 服务
 
-MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<name>.process` 沿用 `command`、`args`、`env`、`cwd`，增加 `reads`、`writes`、`network` 资源声明。省略三组声明时，服务仅获得工作目录的读取权限，网络关闭。资源范围由路径、原生网络、项目设置、全部 ceiling 和当前持久拒绝共同限制；需要确认的启动操作由工具审批处理。
+MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<name>.process` 使用 `command`、`args`、`env`、`cwd` 描述启动方式。启用 MXC 时，服务使用当前生效的 `permission.path`、`permission.network`，并与全部 ceiling 和持久拒绝共同约束；`reads`、`writes`、`network` 声明不会改变此范围，省略声明也不会强制离线。需要确认的启动操作仍由工具审批处理。
 
-Linux/Windows 在原生后端能力可用且设置允许目标 IP 时，可以这样声明输入、输出和网络目标；macOS 可选择离线或已获准的完整原生出站范围：
+以下 stdio 定义使用当前配置授予的路径和网络范围：
 
 ```json
 {
@@ -416,25 +440,24 @@ Linux/Windows 在原生后端能力可用且设置允许目标 IP 时，可以�
   "process": {
     "command": "node",
     "args": ["server.mjs"],
-    "cwd": "/path/to/project",
-    "reads": ["input"],
-    "writes": ["output"],
-    "network": ["api.example.com:443"]
+    "cwd": "/path/to/project"
   }
 }
 ```
 
-相对资源路径基于服务的实际 `cwd`；`<workspace>` 指向当前会话项目。显式相对 `cwd` 延续原有服务配置所在工作区的解析规则。写入目录须已存在，并同时经过读取授权。
+服务的 `cwd` 必须是现有目录；显式相对 `cwd` 按服务配置所在工作区解析。启用 MXC 时，`cwd` 需要读取权限，配置中的可写挂载目标须已存在，并同时具有读取权限。
 
-加载配置只登记 stdio 定义，管理列表以 `scoped` 表示需要执行作用域。实际使用时，宿主验证当前会话、调用或 operator 能力，完成资源审批并生成策略。实例按服务器、配置版本、宿主 scope、工作区、实际工作目录和完整策略隔离；不同会话或更窄策略不会借用已有宽权限进程。实例退出后，下一次合法调用会重新检查当前权限再连接；显式重连也走相同流程，后台不会脱离授权以旧策略创建进程。
+只有关闭 MXC 且开启 `sandbox.resource_checks` 时，`process.reads`、`process.writes`、`process.network` 才用于调用前的回退声明检查。此时相对资源路径基于服务实际 `cwd`，`<workspace>` 指向当前会话项目；声明检查不会给直接运行的服务建立内核隔离。
 
-当所有资源已由现有策略明确允许时，同一会话可以复用相同策略实例；一次性批准的资源和 operator 调用绑定本次宿主调用的完成信号，调用结束即移除并关闭对应实例。`connections.test` 总是建立独立受限连接并关闭它。缺少可信调用 scope 或后端能力时直接返回错误。
+加载配置只登记 stdio 定义，管理列表以 `scoped` 表示需要执行作用域。实际使用时，宿主验证当前会话、调用或 operator 能力，选取当前执行模式并生成策略。实例按服务器、配置版本、宿主 scope、工作区、实际工作目录和完整策略隔离；不同会话或更窄策略不会借用已有宽权限进程。实例退出后，下一次合法调用会重新检查当前权限再连接；显式重连也走相同流程，后台不会脱离授权以旧策略创建进程。
+
+当所有资源已由现有策略明确允许时，同一会话可以复用相同策略实例；一次性批准的资源和 operator 调用绑定本次宿主调用的完成信号，调用结束即移除并关闭对应实例。`connections.test` 总是建立独立连接，并在完成后关闭它。缺少可信调用 scope 或所选模式需要的后端能力时直接返回错误。
 
 工具访问 HTTP MCP 时，每次宿主调用创建独立连接管理器，保留该服务器的认证存储、工具过滤、roots 和超时配置。连接、重连、OAuth discovery/registration/refresh 及 token exchange 都使用当前调用的授权上下文和逐请求固定地址。清理在建立连接前注册，调用成功、失败或取消后关闭该独立管理器；连接测试也在取消时回收。结束的 OAuth 授权作用域不能退回可信管理客户端。
 
 ### 外部 stdio 插件
 
-`plugins.list["<plugin-id>"].package` 在 `kind: "stdio"` 时支持 `reads`、`writes`、`network` 声明，默认均为空，授权仍复用现有设置。bootstrap 使用独立空工作目录，只读开放已配置插件包、明确解释器入口及必要运行时，网络关闭；它负责 manifest、初始化和关闭等基础生命周期。
+`plugins.list["<plugin-id>"].package` 在 `kind: "stdio"` 时保留 `reads`、`writes`、`network` 声明，仅在 MXC 关闭且 `sandbox.resource_checks` 开启时用于回退检查。启用 MXC 时，bootstrap 使用独立空工作目录，只读开放已配置插件包、明确解释器入口及必要运行时，网络关闭；它负责 manifest、初始化和关闭等基础生命周期。会话工具和其他操作使用当前完整配置策略，不通过这些声明缩小或扩大权限。
 
 其他工具、流式工具、hooks 和 services 必须取得当前有效的宿主授权作用域。实例按 scope、工作区、工作目录及完整策略隔离，初始化继承当前会话上下文；动态工具注册进入对应会话 overlay，并随进程 effect scope 清理。子进程回调只能使用该进程当前活跃请求收到的 token，同时匹配其会话、工作区和适用的调用边界。
 
@@ -583,7 +606,7 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | Linux 创建 user namespace 返回 `EPERM` | 检查 doctor 的实际 bwrap 路径、AppArmor 限制和发行版专用 profile；修复后重新运行 doctor |
 | 找不到 `slirp4netns` | 先安装当前发行版支持的联网依赖；离线策略与联网策略分开验证 |
 | 原生网络规则提示后端不支持 | macOS 只使用出站默认动作或离线；Windows 检查宿主 ProcessContainer/PSEC 能力；不能静默改用代理或无沙盒执行 |
-| `existing writable mount` | 声明现有输出目录，或先用 `fs.write` 创建准确文件；不自动扩大到父目录 |
+| `configured MXC writable path must already exist` | 在 `permission.path` 配置现有输出目录，或先通过文件工具创建已授权的准确目标；执行器不会自动扩大到父目录 |
 | 路径规则 `Unsupported` | 检查负向文件名通配、字面量目录与子树默认值、拒绝父目录中的子授权；使用可表达的明确目录边界 |
 | `ReadApprovalRequired` | 读写挂载会包含读取能力，需要补足该写入目标的读取授权 |
 | 域名没有可用的获准 IP | 检查实际 DNS 结果是否命中原生允许规则，以及是否被配置或权限上限拒绝；主机名本身不授予访问权限 |
@@ -595,11 +618,11 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | --- | --- |
 | `agena-runtime-contracts/src/permission/sandbox.rs` | 可序列化策略、完整权限上限、路径边界和 DNS 地址二次检查 |
 | `agena-runtime-tools/src/tool/executor/executor_sandbox.rs` | 当前 scoped principal 与已保存规则绑定 |
-| `agena-runtime-tools/src/shell_sandbox.rs` | shell 和工具路径/网络声明到执行策略的投影 |
+| `agena-runtime-tools/src/shell_sandbox.rs` | Shell 完整配置策略及宿主工具实际资源范围到 MXC 策略的投影 |
 | `agena-runtime-tools/src/sandbox_worker.rs` | 受限工具 worker、暂存和宿主发布 |
 | `agena-runtime-tools/src/tool/apply_patch.rs` | 补丁解析、计划与 worker 内文本修改 |
 | `agena-runtime-tools/src/fs_broker.rs` | 固定目录能力、发布前修订校验、原子提交和回滚 |
-| `agena-runtime-session/src/session/manager/host/process_sandbox.rs` | native 进程声明的现有审批与当前 scope 策略 |
+| `agena-runtime-session/src/session/manager/host/process_sandbox.rs` | 托管子进程的当前作用域策略及关闭沙盒时的回退声明审批 |
 | `agena-mcp-client/src/manager/scoped.rs` | MCP 定义版本、完整策略与作用域实例生命周期 |
 | `agena-plugin-host/src/transport/stdio/scoped.rs` | 外部 stdio 插件的 bootstrap 与作用域进程路由 |
 | `agena-runtime-tools/src/media_input.rs` | 媒体准备与私有 IPC 传输校验 |

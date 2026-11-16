@@ -83,6 +83,7 @@ pub(super) fn build_or_prepare_session_manager(
         prompts: build_config.prompts.clone(),
         auto_title: build_config.auto_title.clone(),
         permission: build_config.permission.clone(),
+        sandbox_enabled: build_config.sandbox.enabled,
         auto_compaction: build_config.auto_compaction,
         max_concurrent_tools: build_config.max_concurrent_tools,
         max_turns: build_config.max_turns,
@@ -93,6 +94,7 @@ pub(super) fn build_or_prepare_session_manager(
         prompts: global_build_config.prompts.clone(),
         auto_title: global_build_config.auto_title.clone(),
         permission: global_build_config.permission.clone(),
+        sandbox_enabled: global_build_config.sandbox.enabled,
         auto_compaction: global_build_config.auto_compaction,
         max_concurrent_tools: global_build_config.max_concurrent_tools,
         max_turns: global_build_config.max_turns,
@@ -101,6 +103,7 @@ pub(super) fn build_or_prepare_session_manager(
     if let Some(manager) = existing {
         let executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
+                sandbox: build_config.sandbox,
                 plugins,
                 lsp_registry: lsp_registry.clone(),
                 workspace_root,
@@ -112,6 +115,7 @@ pub(super) fn build_or_prepare_session_manager(
         );
         let global_executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
+                sandbox: global_build_config.sandbox,
                 plugins: global_plugins,
                 lsp_registry: global_lsp_registry,
                 workspace_root: global_internal_root,
@@ -140,6 +144,7 @@ pub(super) fn build_or_prepare_session_manager(
 
     let bootstrap_executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
+            sandbox: build_config.sandbox,
             plugins: Arc::clone(&plugins),
             lsp_registry: lsp_registry.clone(),
             workspace_root,
@@ -159,6 +164,7 @@ pub(super) fn build_or_prepare_session_manager(
     ));
     let executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
+            sandbox: build_config.sandbox,
             plugins,
             lsp_registry: lsp_registry.clone(),
             workspace_root,
@@ -177,6 +183,7 @@ pub(super) fn build_or_prepare_session_manager(
     );
     let global_executor = build_tool_executor(
         agena_runtime::ToolCompositionInputs {
+            sandbox: global_build_config.sandbox,
             plugins: global_plugins,
             lsp_registry: global_lsp_registry,
             workspace_root: global_internal_root,
@@ -277,6 +284,7 @@ pub(super) fn build_tool_executor(
     permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
 ) -> ToolExecutor {
     let agena_runtime::ToolCompositionInputs {
+        sandbox,
         plugins,
         lsp_registry,
         workspace_root,
@@ -300,6 +308,11 @@ pub(super) fn build_tool_executor(
         plugins,
         scheduler,
         lsp_registry,
+    )
+    .with_sandbox_settings(
+        sandbox.enabled,
+        sandbox.resource_checks,
+        sandbox.command_hints,
     )
     .with_permission_inspector(permission_inspector);
     if let Some(registry) = monitor_registry {

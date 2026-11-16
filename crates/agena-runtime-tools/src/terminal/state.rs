@@ -26,6 +26,7 @@ pub(super) struct Request {
 pub(super) struct State {
     pub id: String,
     pub owner: TerminalOwner,
+    pub execution_policy: Option<String>,
     pub command: String,
     pub description: String,
     pub workdir: PathBuf,
@@ -93,11 +94,13 @@ impl State {
         params: &TerminalStartParams,
         controls: mpsc::SyncSender<Request>,
         listener: Option<Arc<dyn MonitorListener>>,
+        execution_policy: Option<String>,
     ) -> Self {
         Self {
             output: params.output.clone(),
             id,
             owner: params.owner.clone(),
+            execution_policy,
             command: params.display_command.clone(),
             description: params.description.clone(),
             workdir: params.workdir.clone(),

@@ -17,6 +17,9 @@ impl ToolExecutor {
             session_id: None,
             principal,
             sandbox_enabled: true,
+            configured_sandbox_enabled: true,
+            configured_resource_checks: true,
+            configured_command_hints: true,
             sandbox_persisted_rules: Arc::new(Vec::new()),
             allowed_tool_names: None,
             model_id: None,
@@ -67,7 +70,29 @@ impl ToolExecutor {
     }
 
     pub fn sandbox_enabled(&self) -> bool {
-        self.sandbox_enabled && agena_process::sandbox::enabled()
+        self.sandbox_enabled && self.configured_sandbox_enabled && agena_process::sandbox::enabled()
+    }
+
+    /// Configuration is independent of the trusted invocation override used
+    /// by inbound MCP requests. A settings refresh cannot undo that override.
+    pub fn with_sandbox_settings(
+        mut self,
+        enabled: bool,
+        resource_checks: bool,
+        command_hints: bool,
+    ) -> Self {
+        self.configured_sandbox_enabled = enabled;
+        self.configured_resource_checks = resource_checks;
+        self.configured_command_hints = command_hints;
+        self
+    }
+
+    pub fn resource_checks_enabled(&self) -> bool {
+        !self.sandbox_enabled() && self.configured_resource_checks
+    }
+
+    pub fn command_hints_enabled(&self) -> bool {
+        self.resource_checks_enabled() && self.configured_command_hints
     }
 
     pub fn lsp_registry(&self) -> Option<&Arc<agena_lsp::LspRegistry>> {
@@ -330,7 +355,7 @@ impl ToolExecutor {
 
     pub(crate) fn registered_tools_with_definition_overrides(&self) -> Vec<RegisteredTool> {
         if let Some(catalog) = self.definition_catalog.as_ref() {
-            return catalog.as_ref().clone();
+            return self.with_resource_mode_help(catalog.as_ref().clone());
         }
         let mut tools = self
             .plugins
@@ -348,7 +373,7 @@ impl ToolExecutor {
         // running `tool.definition` hooks. A bare executor has no async
         // context and therefore exposes the immutable manifest snapshot here;
         // it must never enter a runtime through a synchronous hook bridge.
-        tools
+        self.with_resource_mode_help(tools)
     }
 
     /// Build the definition-patched catalog without crossing the sync/async
@@ -357,7 +382,7 @@ impl ToolExecutor {
         &self,
     ) -> Vec<RegisteredTool> {
         if let Some(catalog) = self.definition_catalog.as_ref() {
-            return catalog.as_ref().clone();
+            return self.with_resource_mode_help(catalog.as_ref().clone());
         }
         let mut tools = self.registered_tools_with_definition_overrides();
 
@@ -383,7 +408,7 @@ impl ToolExecutor {
             tools = apply_definition_overrides(tools, patched);
         }
 
-        tools
+        self.with_resource_mode_help(tools)
     }
 
     pub(crate) fn available_registered_tools(&self) -> Vec<RegisteredTool> {

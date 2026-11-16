@@ -1,6 +1,23 @@
-use super::queue_tests::fixture_with_config;
+use super::queue_tests::fixture_with_config as queue_fixture_with_config;
 use super::*;
 use agena_domain::{PathAccessModes, PathPermissionConfig, PathPermissionMode, PermissionConfig};
+
+// Give permission persistence tests an expressible native baseline while each
+// test retains its own selected policy and independent permission ceiling.
+async fn fixture_with_config(
+    mut config: RuntimeSessionManagerConfig,
+) -> (SessionManager, SessionId) {
+    let baseline = PermissionConfig {
+        path: Some(PathPermissionConfig {
+            workspace: Some(PathAccessModes::from_mode(PathPermissionMode::Deny)),
+            external: Some(PathAccessModes::from_mode(PathPermissionMode::Deny)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    config.permission = baseline.merged_with(&config.permission);
+    queue_fixture_with_config(config).await
+}
 
 fn paths(rules: &[(&str, PathPermissionMode)]) -> PermissionConfig {
     PermissionConfig {

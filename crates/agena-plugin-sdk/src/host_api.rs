@@ -37,21 +37,19 @@ pub use session::{
 };
 pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse};
 
-/// Resource effects requested by a native, host-managed child process.
-/// These declarations grant nothing until the current host scope approves them.
+/// Resources reported by a native, host-managed child process.
+/// With MXC enabled, the host compiles configured permissions directly. These
+/// declarations are fallback checks when MXC is off and resource_checks is on;
+/// they never grant authority beyond the current host scope.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct HostProcessResources {
     pub cwd: Option<String>,
     pub reads: Vec<String>,
     pub writes: Vec<String>,
-    /// Native MXC network scope: [] is offline; ["*"] alone requests the full
-    /// configured scope. host:port/tcp://host:port selects TCP, udp://host:port
-    /// selects UDP, and icmp://host selects ICMP. Bare host/IP keeps that target's
-    /// configured protocol/port subset. HTTP(S) URLs select TCP host/port.
-    /// Hostnames are resolved before startup; permissions constrain IPs rather
-    /// than domains. All targets and DNS dependencies remain subject to policy
-    /// and every permission ceiling.
+    /// Optional fallback outbound targets, checked only for direct execution
+    /// with resource_checks enabled. MXC uses the full configured native network
+    /// policy, including every independent ceiling and persisted denial.
     pub network: Vec<String>,
 }
 

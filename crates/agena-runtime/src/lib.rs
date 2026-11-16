@@ -125,7 +125,7 @@ pub use agena_runtime_config::{
     OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderClientVersionSettings, ProviderGitlabAuthConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig,
-    SessionCompactionConfig, SessionConfig, SimpleHttpProviderOptions, UiConfig,
+    SandboxConfig, SessionCompactionConfig, SessionConfig, SimpleHttpProviderOptions, UiConfig,
     config_resolution_json_value, resolved_config_json_value,
 };
 pub use agena_runtime_config::{ConfigEnvironment, ProcessEnvironment};

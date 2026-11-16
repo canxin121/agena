@@ -604,6 +604,8 @@ impl std::error::Error for PluginShutdownReport {}
 
 /// Result-bearing asynchronous facade for plugin hooks and tool calls.
 pub struct PluginHost {
+    /// Captured host isolation mode; transport reuse cannot cross this boundary.
+    sandbox_enabled: bool,
     plugins: Vec<Arc<LoadedPlugin>>,
     plugins_by_id: HashMap<PluginKey, Arc<LoadedPlugin>>,
     tool_registry: Arc<RwLock<PluginToolRegistry>>,

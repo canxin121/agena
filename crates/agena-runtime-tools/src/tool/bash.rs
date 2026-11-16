@@ -126,7 +126,7 @@ pub(super) async fn execute_async(
     }
     let analysis = analyze_command(input.command.as_str());
     let effects = input.filesystem_effects();
-    validate_declared_filesystem_effects("bash", input.command.as_str(), &effects)?;
+    validate_declared_filesystem_effects(executor, "bash", input.command.as_str(), &effects)?;
     let cwd =
         resolve_workdir_in_folder(executor, input.workdir.as_deref(), input.folder.as_deref())?;
     let prepared = match context.prepared_shell_command {

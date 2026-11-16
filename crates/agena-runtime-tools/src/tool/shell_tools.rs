@@ -132,10 +132,14 @@ pub(crate) fn resolve_workdir_in_folder(
 }
 
 pub(crate) fn validate_declared_filesystem_effects(
+    executor: &ToolExecutor,
     tool_name: &str,
     command: &str,
     effects: &FilesystemEffects,
 ) -> Result<(), ToolError> {
+    if !executor.command_hints_enabled() {
+        return Ok(());
+    }
     // Only require declarations when the command provably mutates or reads
     // explicit files (write/redirect, input redirect, curl file ops).
     // Interpreters and build tools (node, python, uv, cargo, ...) may run with

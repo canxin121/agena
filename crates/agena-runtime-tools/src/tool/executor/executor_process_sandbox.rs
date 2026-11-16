@@ -4,13 +4,15 @@ use agena_plugin_host::sdk::host_api::HostProcessResources;
 use std::path::{Path, PathBuf};
 
 impl ToolExecutor {
-    /// Resolve declarations before approval. The resulting absolute paths are
-    /// retained for compilation; relative resource paths use the child's cwd.
+    /// Resolve the actual cwd and normalize resource declarations only when
+    /// direct execution uses fallback checks. MXC ignores declared scopes.
     pub fn resolve_process_sandbox_resources(
         &self,
         input: HostProcessResources,
     ) -> Result<HostProcessResources, ToolError> {
-        if input.reads.len() + input.writes.len() > 512 || input.network.len() > 128 {
+        if self.resource_checks_enabled()
+            && (input.reads.len() + input.writes.len() > 512 || input.network.len() > 128)
+        {
             return Err(ToolError::invalid_input(
                 "too many process resource declarations",
             ));
@@ -29,16 +31,17 @@ impl ToolExecutor {
                 "process working directory must be an existing absolute directory",
             ));
         }
+        if !self.resource_checks_enabled() {
+            return Ok(HostProcessResources {
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                ..Default::default()
+            });
+        }
         let writes = input
             .writes
             .iter()
             .map(|path| self.process_resource_path(path, &cwd))
             .collect::<Result<Vec<_>, _>>()?;
-        if self.sandbox_enabled() && writes.iter().any(|path| !path.exists()) {
-            return Err(ToolError::invalid_input(
-                "process writable mounts must already exist; declare an existing output directory",
-            ));
-        }
         let mut reads = input
             .reads
             .iter()
@@ -98,6 +101,9 @@ impl ToolExecutor {
         &self,
         resources: &HostProcessResources,
     ) -> Result<Vec<agena_tool::ToolPermissionCheck>, ToolError> {
+        if !self.resource_checks_enabled() {
+            return Ok(Vec::new());
+        }
         let mut checks = Vec::new();
         for path in &resources.reads {
             checks.push(self.path_permission_check(AccessKind::Read, path));
@@ -122,13 +128,24 @@ impl ToolExecutor {
         .await
     }
 
-    /// Compile only after the host authorized `resources` and loaded current
-    /// persisted decisions. The boolean marks approvals limited to this call.
+    /// Compile with current persisted decisions. Native processes receive the
+    /// configured scope; direct fallback approvals retain their call lifetime.
     pub async fn prepare_process_sandbox_policy(
         &self,
         resources: HostProcessResources,
     ) -> Result<(serde_json::Value, bool), ToolError> {
         self.run_permission_preflight(move |executor| {
+            if executor.sandbox_enabled() || !executor.resource_checks_enabled() {
+                let cwd = resources.cwd.as_deref().ok_or_else(|| {
+                    ToolError::invalid_input("process working directory is missing")
+                })?;
+                executor.validate_sandbox_workdir(Path::new(cwd))?;
+                return Ok((
+                    serde_json::to_value(crate::shell_sandbox::policy_from_settings(&executor)?)
+                        .map_err(|error| ToolError::invalid_input_error(&error))?,
+                    false,
+                ));
+            }
             let snapshot = executor.sandbox_permission_snapshot();
             let reads = resources
                 .reads
@@ -202,7 +219,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         std::fs::create_dir(root.join("output")).unwrap();
-        let executor = executor(&root);
+        let executor = executor(&root).with_sandbox_enabled(false);
         let resources = executor
             .resolve_process_sandbox_resources(HostProcessResources {
                 writes: vec!["output".into()],
@@ -221,16 +238,13 @@ mod tests {
                 .reads
                 .contains(&root.join("output").to_string_lossy().into_owned())
         );
-        assert_eq!(
-            resources.network,
-            ["example.com", "example.com:443", "example.com:80"]
-        );
+        assert_eq!(resources.network, ["example.com"]);
         assert_eq!(
             executor
                 .process_sandbox_permission_checks(&resources)
                 .unwrap()
                 .len(),
-            6
+            4
         );
         assert!(
             executor
@@ -238,12 +252,12 @@ mod tests {
                     writes: vec!["missing".into()],
                     ..Default::default()
                 })
-                .is_err()
+                .is_ok()
         );
     }
 
     #[tokio::test]
-    async fn one_call_grants_are_marked_and_secret_descendants_stay_denied() {
+    async fn direct_process_approvals_keep_one_call_lifetimes() {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
         std::fs::create_dir(root.join("secret")).unwrap();
@@ -269,7 +283,8 @@ mod tests {
             agena_plugin_host::PluginHost::new_empty(),
             None,
             None,
-        );
+        )
+        .with_sandbox_enabled(false);
         let resources = executor
             .resolve_process_sandbox_resources(Default::default())
             .unwrap();
@@ -279,7 +294,7 @@ mod tests {
             .unwrap();
         assert!(call_bound);
         let policy: agena_process::sandbox::SandboxPolicy = serde_json::from_value(policy).unwrap();
-        assert!(policy.denied_paths.contains(&root.join("secret")));
+        assert!(policy.disabled);
         assert!(matches!(
             policy.network,
             agena_process::sandbox::SandboxNetwork::Disabled
@@ -300,5 +315,55 @@ mod tests {
                 .unwrap()
                 .1
         );
+    }
+
+    #[tokio::test]
+    async fn sandbox_process_uses_configured_roots_and_network_without_declarations() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir(root.join("input")).unwrap();
+        std::fs::create_dir(root.join("output")).unwrap();
+        let executor = executor(&root).with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path": {"workspace":"deny", "external":"deny", "rules": {
+                    "<workspace>/input":"readonly", "<workspace>/output":"readwrite"
+                }},
+                "network": {"default":"deny"}
+            }))
+            .unwrap(),
+        );
+        let resources = executor
+            .resolve_process_sandbox_resources(HostProcessResources {
+                cwd: Some(root.join("input").to_string_lossy().into_owned()),
+                reads: vec!["/not-authorized".into()],
+                writes: vec!["missing-and-not-configured".into()],
+                network: vec!["not a valid target".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            resources.reads.is_empty()
+                && resources.writes.is_empty()
+                && resources.network.is_empty()
+        );
+        assert!(
+            executor
+                .process_sandbox_permission_checks(&resources)
+                .unwrap()
+                .is_empty()
+        );
+        let (value, call_bound) = executor
+            .prepare_process_sandbox_policy(resources)
+            .await
+            .unwrap();
+        let policy: agena_process::sandbox::SandboxPolicy = serde_json::from_value(value).unwrap();
+        assert!(!call_bound);
+        assert!(!policy.disabled);
+        assert_eq!(policy.readonly_paths, [root.join("input")]);
+        assert_eq!(policy.readwrite_paths, [root.join("output")]);
+        assert!(matches!(
+            policy.network,
+            agena_process::sandbox::SandboxNetwork::Native { .. }
+        ));
     }
 }

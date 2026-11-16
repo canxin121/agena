@@ -114,6 +114,7 @@ where
             super::raw::validate_permission_config_in_workspace(
                 &config.permission,
                 &workspace_root,
+                config.sandbox.enabled,
             )?;
         }
         config.prompts = PromptLayersConfig {

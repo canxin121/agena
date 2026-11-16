@@ -360,6 +360,11 @@ impl ToolExecutor {
         checks: &mut Vec<ToolPermissionCheck>,
         input: &crate::part::ShellToolInput,
     ) -> Result<(), ToolError> {
+        // MXC receives the configured resource policy. Model declarations are
+        // an optional fallback for commands running without native isolation.
+        if !self.resource_checks_enabled() {
+            return Ok(());
+        }
         let (command, effects, network, workdir) =
             if let Some((_, command)) = input.launch_command() {
                 (
@@ -389,7 +394,7 @@ impl ToolExecutor {
             .and_then(|(_, command)| command.folder.as_deref());
         if !command.is_empty() {
             crate::tool::shell_tools::validate_declared_filesystem_effects(
-                "shell", command, &effects,
+                self, "shell", command, &effects,
             )?;
             self.push_declared_network_checks(checks, command, network)?;
         }
@@ -429,16 +434,18 @@ impl ToolExecutor {
         Ok(())
     }
 
-    /// Declared outbound targets for a shell command. The declaration is still
-    /// required of the model — a command that provably uses the network must
-    /// name its targets — and each named target is then checked.
+    /// Optional resource checks for commands running without native isolation.
     fn push_declared_network_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
         command: &str,
         targets: &[String],
     ) -> Result<(), ToolError> {
-        if targets.is_empty()
+        if !self.resource_checks_enabled() {
+            return Ok(());
+        }
+        if self.command_hints_enabled()
+            && targets.is_empty()
             && let Some(reason) = agena_tool::shell_analysis::network_command_reason(command)
         {
             return Err(ToolError::invalid_input(format!(
@@ -474,7 +481,7 @@ mod sandbox_network_tests {
     use crate::permission::{PermissionPolicy, ToolPermissionPolicy};
 
     #[test]
-    fn native_network_deny_is_checked_before_a_shell_launch() {
+    fn direct_resource_checks_reject_denied_network_before_a_shell_launch() {
         let principal = ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
@@ -494,7 +501,8 @@ mod sandbox_network_tests {
             agena_plugin_host::PluginHost::new_empty(),
             None,
             None,
-        );
+        )
+        .with_sandbox_enabled(false);
         let mut checks = Vec::new();
         executor
             .push_declared_network_checks(
@@ -524,6 +532,58 @@ mod sandbox_network_tests {
                 .iter()
                 .any(|target| target.ends_with(":80") || target.ends_with(":443"))
         );
+    }
+
+    #[test]
+    fn fallback_switches_gate_resource_validation_and_command_hints_together() {
+        let base = ToolExecutor::new(
+            std::env::temp_dir().join("agena-fallback-switches"),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        );
+        for (sandbox, resources, hints) in [
+            (true, true, true),
+            (false, true, true),
+            (false, true, false),
+            (false, false, true),
+            (false, false, false),
+        ] {
+            let executor = base
+                .clone()
+                .with_sandbox_settings(sandbox, resources, hints);
+            let active_sandbox = sandbox && agena_process::sandbox::enabled();
+            assert_eq!(executor.sandbox_enabled(), active_sandbox);
+            assert_eq!(
+                executor.resource_checks_enabled(),
+                !active_sandbox && resources
+            );
+            assert_eq!(
+                executor.command_hints_enabled(),
+                !active_sandbox && resources && hints
+            );
+            let filesystem = crate::tool::shell_tools::validate_declared_filesystem_effects(
+                &executor,
+                "shell",
+                "printf secret > output.txt",
+                &Default::default(),
+            );
+            assert_eq!(filesystem.is_err(), executor.command_hints_enabled());
+            let mut checks = Vec::new();
+            let network =
+                executor.push_declared_network_checks(&mut checks, "curl https://192.0.2.1", &[]);
+            assert_eq!(network.is_err(), executor.command_hints_enabled());
+            assert!(checks.is_empty());
+        }
+        let trusted = base
+            .with_sandbox_enabled(false)
+            .with_sandbox_settings(true, true, true);
+        assert!(!trusted.sandbox_enabled());
+        assert!(trusted.resource_checks_enabled());
     }
 
     #[test]

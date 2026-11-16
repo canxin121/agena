@@ -138,7 +138,11 @@ pub fn validate_layered_config_text(
         } else {
             parent
         };
-        validate_permission_config_in_workspace(&resolved.permission, workspace_root)?;
+        validate_permission_config_in_workspace(
+            &resolved.permission,
+            workspace_root,
+            resolved.sandbox.enabled,
+        )?;
     }
     Ok(())
 }
@@ -148,12 +152,38 @@ pub fn validate_layered_config_text(
 pub(super) fn validate_permission_config_in_workspace(
     permission: &agena_domain::PermissionConfig,
     workspace_root: &Path,
+    sandbox_enabled: bool,
 ) -> Result<(), ConfigError> {
     agena_runtime_contracts::authorization::validate_permission_config_for_workspace(
         permission,
         workspace_root,
     )
-    .map_err(|error| ConfigError::Validation(error.to_string()))
+    .map_err(|error| ConfigError::Validation(error.to_string()))?;
+    if sandbox_enabled {
+        validate_native_sandbox_permission_config(permission, workspace_root)?;
+    }
+    Ok(())
+}
+
+fn validate_native_sandbox_permission_config(
+    permission: &agena_domain::PermissionConfig,
+    workspace_root: &Path,
+) -> Result<(), ConfigError> {
+    use agena_runtime_contracts::{
+        authorization::ExecutionPrincipal,
+        permission::{PermissionPolicy, ToolPermissionPolicy},
+    };
+
+    ExecutionPrincipal::new(
+        PermissionPolicy::allow_all(),
+        ToolPermissionPolicy::allow_all(),
+    )
+    .try_apply_permission_config(permission)
+    .map_err(|error| ConfigError::Validation(error.to_string()))?
+    .sandbox_permission_snapshot(workspace_root)
+    .filesystem_policy()
+    .map_err(|error| ConfigError::Validation(error.to_string()))?;
+    Ok(())
 }
 
 fn parse_raw_config_text(
@@ -213,6 +243,8 @@ pub struct RawConfig {
     pub tracing: Option<RawTracingConfig>,
     pub ui: Option<RawUiConfig>,
     pub runtime: Option<RawRuntimeConfig>,
+    #[serde(deserialize_with = "deserialize_optional_sandbox")]
+    pub sandbox: Option<RawSandboxConfig>,
     pub session: Option<RawSessionConfig>,
     /// This file's prompt layer: global in the global file, workspace in the
     /// project file. The loader keeps both layers separate.
@@ -227,6 +259,7 @@ impl RawConfig {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_option_struct(&mut self.sandbox, overlay.sandbox);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_option_struct(&mut self.plugins, overlay.plugins);
@@ -244,6 +277,7 @@ impl RawConfig {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
+        merge_option_struct(&mut self.sandbox, overlay.sandbox);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
@@ -254,6 +288,7 @@ impl RawConfig {
         self.tracing.is_none()
             && self.ui.is_none()
             && self.runtime.is_none()
+            && self.sandbox.is_none()
             && self.session.is_none()
             && self.permission.is_none()
             && self.plugins.is_none()
@@ -298,6 +333,22 @@ impl RawConfig {
             ..Default::default()
         });
 
+        // The process environment can force isolation off, but cannot re-enable
+        // a setting disabled by the user. Keep the historical alias precedence.
+        let sandbox = env
+            .var("AGENA_SANDBOX")
+            .or_else(|| env.var("AGENA_SHELL_SANDBOX"))
+            .filter(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "disabled" | "false" | "0" | "off"
+                )
+            })
+            .map(|_| RawSandboxConfig {
+                enabled: Some(false),
+                ..Default::default()
+            });
+
         let compaction_auto = env
             .var("AGENA_SESSION_COMPACTION_AUTO")
             .map(|value| crate::parse_config_bool("AGENA_SESSION_COMPACTION_AUTO", value.as_str()))
@@ -326,6 +377,7 @@ impl RawConfig {
             tracing,
             ui,
             runtime,
+            sandbox,
             session,
             prompts: None,
             permission: None,
@@ -360,6 +412,7 @@ impl RawConfig {
             preferences: raw_ui.preferences,
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
+        let sandbox = crate::SandboxConfig::from_raw(self.sandbox.unwrap_or_default());
         if let Some(prompts) = &self.prompts {
             prompts.validate().map_err(ConfigError::Validation)?;
         }
@@ -394,12 +447,18 @@ impl RawConfig {
             &providers,
         )?;
         validate_permission_config("permission", &permission)?;
+        if sandbox.enabled {
+            // Global resolution has no workspace identity. Validate its external
+            // policy now; loaders and layered edits bind workspace aliases below.
+            validate_native_sandbox_permission_config(&permission, Path::new(""))?;
+        }
 
         Ok(ResolvedConfig {
             default_selection,
             tracing,
             ui,
             runtime,
+            sandbox,
             session,
             prompts: crate::PromptLayersConfig::default(),
             permission,
@@ -640,6 +699,68 @@ fn preference_map_merge(
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Optional fields preserve inheritance between global and workspace settings.
+pub struct RawSandboxConfig {
+    #[merge(strategy = option_override)]
+    #[serde(
+        deserialize_with = "deserialize_present_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub enabled: Option<bool>,
+    #[merge(strategy = option_override)]
+    #[serde(
+        deserialize_with = "deserialize_present_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resource_checks: Option<bool>,
+    #[merge(strategy = option_override)]
+    #[serde(
+        deserialize_with = "deserialize_present_bool",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub command_hints: Option<bool>,
+}
+
+/// Optional sections use null as absence throughout RawConfig. A present
+/// sandbox value must otherwise be an object, never a struct-like sequence.
+fn deserialize_optional_sandbox<'de, D>(
+    deserializer: D,
+) -> Result<Option<RawSandboxConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    if !value.is_object() {
+        return Err(serde::de::Error::custom("sandbox must be an object"));
+    }
+    serde_path_to_error::deserialize(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+/// Missing fields inherit; a present value must be a JSON boolean.
+fn deserialize_present_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    bool::deserialize(deserializer).map(Some)
+}
+
+impl crate::SandboxConfig {
+    fn from_raw(raw: RawSandboxConfig) -> Self {
+        Self {
+            enabled: raw.enabled.unwrap_or(true),
+            resource_checks: raw.resource_checks.unwrap_or(true),
+            command_hints: raw.command_hints.unwrap_or(true),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
 /// Raw runtime configuration.
 pub struct RawRuntimeConfig {
     #[merge(strategy = option_struct_merge)]
@@ -857,6 +978,7 @@ impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
     RawRuntimeConfig,
+    RawSandboxConfig,
     RawRuntimeProvidersConfig,
     RawProviderClientVersionSettings,
     RawSessionConfig,

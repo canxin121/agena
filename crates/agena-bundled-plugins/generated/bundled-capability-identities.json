@@ -2262,8 +2262,8 @@
             "shell",
             "mutate"
           ],
-          "definition_identity": "cff180b6f78e44f04b6d6912a81e814ce2c4cb0829ff8d9fd5ec495e26f5568f",
-          "input_schema_sha256": "b68b75b86a925f254dbf974ce05e38693f4e2c11ae65bc395a2b99e3cb08c69d",
+          "definition_identity": "964b67758376e106e2f90ece0b4ce8741596222d7b24deb1073ab0ef55c34697",
+          "input_schema_sha256": "2f8a05eb8a249df91c3fc275c57ee06e80e2eb601bea03babf22b4b1e299308e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -2304,8 +2304,8 @@
             "pty",
             "mutate"
           ],
-          "definition_identity": "4091bbda38e27edecce24bb078e7c14e0b0157648ae9aa5f71ecd8fe94e7ed01",
-          "input_schema_sha256": "bb34720bea62997b8113d84134ff280385c63c85fbf727a5982152c953b10525",
+          "definition_identity": "3b5d680fd51ee5b7e28132ecf55c961176a62eac036d456eaee3fbd19372b91a",
+          "input_schema_sha256": "954c7f2318362dbdedfc4a39ebb874eaaaf91009d7fea70f3a74d8d7c9757499",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -2363,8 +2363,8 @@
             "background",
             "mutate"
           ],
-          "definition_identity": "e4b77b166b62ffc5a3ab96152c1e6023367bc3f13ef465973a0dad22a7422cbd",
-          "input_schema_sha256": "b68b75b86a925f254dbf974ce05e38693f4e2c11ae65bc395a2b99e3cb08c69d",
+          "definition_identity": "84b8e375da5a0553fafc7089bef55d6717954549b7127ed22cedd46f75cb5aa2",
+          "input_schema_sha256": "2f8a05eb8a249df91c3fc275c57ee06e80e2eb601bea03babf22b4b1e299308e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -2390,8 +2390,8 @@
             "watch",
             "mutate"
           ],
-          "definition_identity": "031ce44d3b66bb47e698db049d445928b4a54e2a889f9455bc2f34aebfc30f9f",
-          "input_schema_sha256": "bf09016687f875ca22ec148e3de93dd1030d50db4c50f1b1fdde9884f170a990",
+          "definition_identity": "019402aa885ef7851a55fe1d8ff64f533a5979cd8acc5c99b38564222cd660e6",
+          "input_schema_sha256": "5d0be195952443d583e389573f4eabf6ccf5c313a5b4da6e92e35fdc1afd68cd",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -2406,8 +2406,8 @@
             "tty",
             "pty"
           ],
-          "definition_identity": "b8856b32f1031c1de6b4e16570b666949ffbbfbac534f70898ea12979c148bf0",
-          "input_schema_sha256": "700461ede20917fb817372b2218b64b994b7800328e90f411932bf8d6a473450",
+          "definition_identity": "0ceec2befc9af7c5b00d1a5687c783fa5ce6b687b3332659b65ac1c5c0cfbeaa",
+          "input_schema_sha256": "11a3991496cfba7ab1467b4ef27eafb459e430cb66771f448f2c61790107628b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],

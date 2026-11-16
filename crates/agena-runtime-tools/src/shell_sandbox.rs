@@ -557,12 +557,11 @@ mod tests {
     #[test]
     fn native_network_scopes_keep_configured_denials_and_other_destinations_closed() {
         let snapshot = network_snapshot(serde_json::json!({
-            "egress":{"default":"deny","allow":[{
-                "to":[{"cidr":"192.0.2.0/24"}],
-                "ports":[{"protocol":"tcp","port":8000,"endPort":8099}]
+            "default":"deny","allow":[{
+                "to":"192.0.2.0/24","protocol":"tcp","ports":["8000-8099"]
             }],"deny":[{
-                "ports":[{"protocol":"tcp","port":8080,"endPort":8089}]
-            }]}
+                "to":"*","protocol":"tcp","ports":["8080-8089"]
+            }]
         }));
         let SandboxNetwork::Native { policy } =
             native_network(&snapshot, &["192.0.2.10".into()]).unwrap()
@@ -592,7 +591,7 @@ mod tests {
 
     #[test]
     fn explicit_full_network_scope_uses_configured_native_defaults() {
-        let snapshot = network_snapshot(serde_json::json!({"egress":{"default":"allow"}}));
+        let snapshot = network_snapshot(serde_json::json!({"default":"allow"}));
         let SandboxNetwork::Native { policy } = native_network(&snapshot, &["*".into()]).unwrap()
         else {
             panic!("expected native MXC policy");
@@ -615,8 +614,8 @@ mod tests {
         ];
         for (inbound, host_loopback) in cases {
             let snapshot = network_snapshot(serde_json::json!({
-                "egress":{"default":"deny","allow":[],"deny":[]},
-                "ingress":{"default":inbound,"hostLoopback":host_loopback}
+                "default":"deny","allow":[],"deny":[],
+                "inbound":inbound,"hostLoopback":host_loopback
             }));
             assert!(matches!(
                 snapshot.authorize_network_connect(&"*".parse().unwrap()),
@@ -659,9 +658,9 @@ mod tests {
     #[test]
     fn native_udp_scope_preserves_transport_protocol() {
         let snapshot = network_snapshot(serde_json::json!({
-            "egress":{"default":"deny","allow":[{
-                "to":[{"cidr":"192.0.2.53/32"}],"ports":[{"protocol":"udp","port":53}]
-            }]}
+            "default":"deny","allow":[{
+                "to":"192.0.2.53","protocol":"udp","ports":[53]
+            }]
         }));
         let SandboxNetwork::Native { policy } =
             native_network(&snapshot, &["udp://192.0.2.53:53".into()]).unwrap()

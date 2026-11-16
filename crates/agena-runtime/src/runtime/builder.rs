@@ -102,13 +102,19 @@ impl AgenaRuntime {
             workspace_root: _,
         } = config;
         let loader = ConfigLoader::new(ProcessEnvironment);
-        let database =
-            agena_runtime::connect_runtime_database(agena_runtime::DatabaseCompositionInputs {
+        let migration_config_path = load_request
+            .config_path
+            .clone()
+            .unwrap_or_else(|| agena_runtime::default_config_path(&ProcessEnvironment));
+        let database = agena_runtime::connect_runtime_database(
+            agena_runtime::DatabaseCompositionInputs {
                 database_url,
                 database_path,
-            })
-            .await
-            .map_err(runtime_database_error)?;
+            },
+            migration_config_path,
+        )
+        .await
+        .map_err(runtime_database_error)?;
 
         // Every durable service shares the owned instance database.
         let scheduler_database = database.as_ref().map(|kernel| kernel.database.clone());
@@ -1686,8 +1692,11 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsGetInput,
     ) -> Result<agena_runtime::ConfigSettingsReadResponse, agena_runtime::RuntimeConfigSettingsError>
     {
-        agena_runtime::read_runtime_file_setting(
-            self.current_snapshot().config_path().to_path_buf(),
+        let snapshot = self.current_snapshot();
+        agena_runtime_config::read_runtime_layer_setting(
+            snapshot.config_path(),
+            snapshot.project_config_path(),
+            agena_runtime::ConfigSettingsLayer::Global,
             input,
         )
     }
@@ -1697,8 +1706,11 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         input: agena_runtime::ConfigSettingsGetInput,
     ) -> Result<agena_runtime::ConfigSettingsReadResponse, agena_runtime::RuntimeConfigSettingsError>
     {
-        agena_runtime::read_runtime_file_setting(
-            self.current_snapshot().project_config_path().to_path_buf(),
+        let snapshot = self.current_snapshot();
+        agena_runtime_config::read_runtime_layer_setting(
+            snapshot.config_path(),
+            snapshot.project_config_path(),
+            agena_runtime::ConfigSettingsLayer::Workspace,
             input,
         )
     }

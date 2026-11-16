@@ -1,6 +1,9 @@
 //! Process tracing and database-connection settings shared by entry points.
 
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use agena_storage::{StorageConfig, StorageConfigError};
 use sea_orm::DbErr;
@@ -49,6 +52,7 @@ pub(crate) enum RuntimeDatabaseCompositionError {
 /// and schema initialization ordering.
 pub(crate) async fn connect_runtime_database(
     inputs: DatabaseCompositionInputs,
+    config_path: PathBuf,
 ) -> Result<Option<Arc<agena_storage_sqlite::SqliteKernel>>, RuntimeDatabaseCompositionError> {
     let DatabaseCompositionInputs {
         database_url,
@@ -59,7 +63,19 @@ pub(crate) async fn connect_runtime_database(
         database_path,
     }
     .resolve_url()?;
-    let kernel = agena_storage_sqlite::open_kernel_runtime(&url)
+    let resolver: Arc<agena_storage_sqlite::NetworkMigrationResolver> =
+        Arc::new(move |workspace| {
+            let workspace_path = workspace
+                .map(|path| agena_runtime_config::project_config_path(Path::new(path)))
+                .unwrap_or_else(|| config_path.clone());
+            agena_runtime_config::network_config_migration::migrate_network_config_files(
+                &config_path,
+                &workspace_path,
+            )
+            .map(|migration| migration.effective)
+            .map_err(|error| error.to_string())
+        });
+    let kernel = agena_storage_sqlite::open_kernel_runtime_with_network_migration(&url, resolver)
         .await
         .map_err(|error| {
             RuntimeDatabaseCompositionError::Database(DbErr::Custom(error.to_string()))

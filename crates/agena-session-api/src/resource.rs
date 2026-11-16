@@ -588,6 +588,9 @@ pub struct SessionExecutionContextResource {
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub selected_permission: PermissionConfigResource,
+    /// Complete policy inherited before applying this session's override.
+    #[serde(default)]
+    pub inherited_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub effective_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
@@ -671,7 +674,11 @@ pub struct WorkspaceSessionStats {
 pub struct PermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathPermissionConfigResource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_network_resource"
+    )]
     pub network: Option<NetworkPermissionConfigResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolPermissionConfigResource>,
@@ -726,8 +733,17 @@ pub struct ApprovalModelSelectionResource {
     pub verbosity: Option<String>,
 }
 
-/// Native MXC network permission configuration of a session.
+/// Flat network settings compiled to native MXC permissions.
 pub type NetworkPermissionConfigResource = agena_domain::NetworkPermissionConfig;
+
+fn deserialize_network_resource<'de, D>(
+    deserializer: D,
+) -> Result<Option<NetworkPermissionConfigResource>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    NetworkPermissionConfigResource::deserialize(deserializer).map(Some)
+}
 
 /// Path permission configuration of a session.
 ///
@@ -937,10 +953,7 @@ impl PermissionConfigResource {
         self.path
             .as_ref()
             .is_none_or(PathPermissionConfigResource::is_empty)
-            && self
-                .network
-                .as_ref()
-                .is_none_or(NetworkPermissionConfigResource::is_empty)
+            && self.network.is_none()
             && self
                 .tools
                 .as_ref()
@@ -1469,12 +1482,8 @@ mod permission_path_wire_tests {
     fn session_api_preserves_native_network_and_ordered_command_rules() {
         let input = r#"{
             "network": {
-                "egress": {
-                    "default": "deny",
-                    "allow": [{"to":[{"cidr":"192.0.2.0/24","except":["192.0.2.128/25"]}],"ports":[{"protocol":"tcp","port":443,"endPort":444}]}],
-                    "deny": []
-                },
-                "ingress": {"default":"deny","hostLoopback":"deny"}
+                "default": "deny",
+                "allow": [{"to":"192.0.2.0/24","except":["192.0.2.128/25"],"protocol":"tcp","ports":["443-444"]}]
             },
             "tools": {"rules": {
                 "agena.shell.exec": {"git push *": "deny", "git *": "ask"}
@@ -1505,13 +1514,28 @@ mod permission_path_wire_tests {
         for network in [
             json!({"internet":"allow"}),
             json!({"rules":{"example.com":"allow"}}),
-            json!({"egress":{"default":"ask"}}),
+            json!({"egress":{"default":"allow"}}),
+            json!({"default":"ask"}),
+            json!(null),
         ] {
             assert!(
                 serde_json::from_value::<PermissionConfigResource>(json!({"network":network}))
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn session_api_keeps_explicit_offline_network_as_a_selected_permission() {
+        let resource: PermissionConfigResource =
+            serde_json::from_value(json!({"network":{}})).unwrap();
+        assert!(!resource.is_empty());
+        let domain: agena_domain::PermissionConfig = resource.into();
+        assert!(!domain.is_empty());
+        assert_eq!(
+            serde_json::to_value(PermissionConfigResource::from(&domain)).unwrap(),
+            json!({"network":{"default":"deny"}})
+        );
     }
 
     #[test]

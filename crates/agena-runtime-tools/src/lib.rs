@@ -21,8 +21,8 @@ mod monitor;
 mod process_output;
 mod project_instructions;
 mod project_paths;
-pub mod shell_sandbox;
 pub mod sandbox_worker;
+pub mod shell_sandbox;
 mod terminal;
 pub mod tool;
 

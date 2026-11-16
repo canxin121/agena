@@ -45,8 +45,15 @@ fn principal(mut value: serde_json::Value) -> ExecutionPrincipal {
             }
         }
     }
+    let network = value
+        .as_object_mut()
+        .unwrap()
+        .remove("network")
+        .map(|value| NetworkPermissionConfig::from_legacy_value(value).unwrap());
+    let mut config: PermissionConfig = serde_json::from_value(value).unwrap();
+    config.network = network;
     ExecutionPrincipal::new(policy, ToolPermissionPolicy::allow_all())
-        .try_apply_permission_config(&serde_json::from_value(value).unwrap())
+        .try_apply_permission_config(&config)
         .unwrap()
 }
 
@@ -104,7 +111,7 @@ fn final_native_network_policy_rejects_unsupported_seatbelt_rules_before_host_io
         .sandbox_permission_snapshot(&root());
     snapshot.network_layers.push(
         serde_json::from_value(serde_json::json!({
-            "egress":{"default":"deny","allow":[{"to":[{"cidr":"192.0.2.0/24"}]}]}
+            "default":"deny","allow":[{"to":"192.0.2.0/24"}]
         }))
         .unwrap(),
     );
@@ -129,12 +136,12 @@ fn serialization_preserves_all_ceiling_layers_and_network_rules() {
     }));
     let ceiling: PermissionConfig = serde_json::from_value(serde_json::json!({
         "path":{"rules":{"<workspace>/locked":"readonly"}},
-        "network":{"egress":{"default":"allow","deny":[{"to":[{"cidr":"192.0.2.13/32"}]}]}}
+        "network":{"default":"allow","deny":[{"to":"192.0.2.13"}]}
     }))
     .unwrap();
     let later: PermissionConfig = serde_json::from_value(serde_json::json!({
         "path":{"workspace":{"read":"allow","write":"allow"}},
-        "network":{"egress":{"default":"allow"}}
+        "network":{"default":"allow"}
     }))
     .unwrap();
     let principal = parent
@@ -440,14 +447,14 @@ fn resolved_native_denials_from_each_ceiling_survive_later_broad_allow() {
     for cidr in ["192.0.2.7/32", "192.0.2.0/24", "192.0.0.0/16"] {
         let base = principal(serde_json::json!({"network":{"egress":{"default":"allow"}}}));
         let ceiling: PermissionConfig = serde_json::from_value(serde_json::json!({
-            "network":{"egress":{
+            "network":{
                 "default":"allow",
-                "deny":[{"to":[{"cidr":cidr}],"ports":[{"protocol":"tcp","port":443}]}]
-            }}
+                "deny":[{"to":cidr,"protocol":"tcp","ports":[443]}]
+            }
         }))
         .unwrap();
         let later: PermissionConfig = serde_json::from_value(serde_json::json!({
-            "network":{"egress":{"default":"allow"}}
+            "network":{"default":"allow"}
         }))
         .unwrap();
         let snapshot = base

@@ -1243,8 +1243,8 @@ async fn channel_mcp_gateway_allows_only_the_authorized_server_and_remote_tool()
         let source=case.user().new_session().await?;let model=case.model();let mut p=policy(ConversationKind::Group);
         let url=reqwest::Url::parse(&tokio::fs::read_to_string(case.workspace().join("channel-mcp-url")).await?)?;
         source.client().set_session_permission(source.id(),serde_json::from_value(json!({"network":{
-            "egress":{"default":"deny","allow":[{"to":[{"cidr":format!("{}/32",url.host_str().unwrap())}],"ports":[{"protocol":"tcp","port":url.port().unwrap()}]}],"deny":[]},
-            "ingress":{"default":"deny","hostLoopback":"deny"}
+            "default":"deny",
+            "allow":[{"to":url.host_str().unwrap(),"protocol":"tcp","ports":[url.port().unwrap()]}]
         }}))?).await?;
         p.grant=ChannelGrant{mcp_tools:BTreeMap::from([("authorized-server".into(),BTreeSet::from(["echo".into()]))]),network_hosts:BTreeSet::from([format!("{}:{}",url.host_str().unwrap(),url.port().unwrap())]),..Default::default()};
         bind(&source,"mcp-pair-authority",p.clone()).await?;

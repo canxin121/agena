@@ -366,6 +366,9 @@ impl ApplicationService {
                 selected_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.selected_permission,
                 ),
+                inherited_permission: agena_api::resource::PermissionConfigResource::from(
+                    &context.inherited_permission,
+                ),
                 effective_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.effective_permission,
                 ),

@@ -593,6 +593,7 @@ impl SettingsPlugin {
                     config_found,
                     source,
                     path: input.path,
+                    inherited_value: None,
                 }
             }
         };

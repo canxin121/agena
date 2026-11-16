@@ -201,7 +201,38 @@ pub fn read_runtime_file_setting(
         source: ConfigSettingsSource::File,
         path: input.target.path,
         value,
+        inherited_value: None,
     })
+}
+
+/// Read a file layer and expose its complete inherited permission for editors.
+pub fn read_runtime_layer_setting(
+    global_path: &Path,
+    workspace_path: &Path,
+    layer: ConfigSettingsLayer,
+    input: ConfigSettingsGetInput,
+) -> Result<ConfigSettingsReadResponse, RuntimeConfigSettingsError> {
+    let path = config_settings_layer_path(layer, global_path, workspace_path);
+    let mut response = read_runtime_file_setting(path, input)?;
+    if response
+        .path
+        .as_deref()
+        .is_some_and(|path| path != "permission" && !path.starts_with("permission."))
+    {
+        return Ok(response);
+    }
+    let mut inherited = agena_domain::PermissionConfig::global_default();
+    if layer == ConfigSettingsLayer::Workspace {
+        let (_, document) = read_runtime_settings_document(global_path)?;
+        if let Some(value) = document.get("permission").filter(|value| !value.is_null()) {
+            let overlay = serde_json::from_value(value.clone())
+                .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+            inherited.merge_from(overlay);
+        }
+    }
+    let document = serde_json::json!({"permission": inherited});
+    response.inherited_value = Some(get_json_path(&document, response.path.as_deref())?);
+    Ok(response)
 }
 
 /// List values from a configuration document using Runtime's stable path
@@ -566,7 +597,7 @@ fn merge_runtime_json_object(
 }
 
 fn read_runtime_settings_document(
-    config_path: &PathBuf,
+    config_path: &Path,
 ) -> Result<(bool, JsonValue), RuntimeConfigSettingsError> {
     match fs::read_to_string(config_path) {
         Ok(text) => {

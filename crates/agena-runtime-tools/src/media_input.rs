@@ -116,7 +116,9 @@ impl PreparedMediaTransfer {
             }
             (_, None, None) => {}
             _ => {
-                return Err("sandbox non-image input unexpectedly contains image dimensions".into());
+                return Err(
+                    "sandbox non-image input unexpectedly contains image dimensions".into(),
+                );
             }
         }
         let bytes = STANDARD

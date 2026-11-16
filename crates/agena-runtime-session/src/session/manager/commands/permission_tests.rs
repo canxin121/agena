@@ -15,6 +15,56 @@ fn paths(rules: &[(&str, PathPermissionMode)]) -> PermissionConfig {
     }
 }
 
+fn invalid_network(cidr: &str) -> PermissionConfig {
+    let mut network = agena_domain::NetworkPermissionConfig::offline();
+    network.egress.as_mut().unwrap().allow = Some(vec![agena_domain::NetworkRuleConfig {
+        to: Some(vec![agena_domain::NetworkPeerConfig {
+            cidr: cidr.into(),
+            except: vec![],
+        }]),
+        ports: None,
+    }]);
+    PermissionConfig {
+        network: Some(network),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn network_editor_context_keeps_parent_distinct_from_selected_offline_policy() {
+    let parent: PermissionConfig =
+        serde_json::from_value(serde_json::json!({"network":{"default":"allow"}})).unwrap();
+    let (manager, session) = fixture_with_config(RuntimeSessionManagerConfig {
+        permission: parent.clone(),
+        ..Default::default()
+    })
+    .await;
+    let offline: PermissionConfig =
+        serde_json::from_value(serde_json::json!({"network":{}})).unwrap();
+    manager
+        .set_session_permission(session.get(), offline.clone())
+        .await
+        .unwrap();
+    let snapshot = manager
+        .kernel()
+        .reader
+        .control_snapshot(session, 1)
+        .await
+        .unwrap();
+    let context = crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    assert_eq!(context.inherited_permission.network, parent.network);
+    assert_eq!(context.selected_permission.network, offline.network);
+    assert_eq!(context.effective_permission.network, offline.network);
+    assert!(!context.selected_permission.is_empty());
+    manager
+        .kernel_runtime
+        .ports
+        .clone()
+        .shutdown()
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn invalid_session_permission_does_not_change_saved_configuration_or_version() {
     let (manager, session) = fixture_with_config(Default::default()).await;
@@ -37,10 +87,7 @@ async fn invalid_session_permission_does_not_change_saved_configuration_or_versi
         .unwrap()
         .metadata_version;
 
-    let invalid_network: PermissionConfig = serde_json::from_value(serde_json::json!({
-        "network": { "egress": { "allow": [{ "to": [{ "cidr": "*.example.com/32" }] }] } }
-    }))
-    .unwrap();
+    let invalid_network = invalid_network("*.example.com/32");
     let invalid_tool: PermissionConfig = serde_json::from_value(serde_json::json!({
         "tools": { "rules": { "agena.fs.read": { "*.txt": "allow" } } }
     }))
@@ -473,8 +520,8 @@ async fn reordered_session_rules_are_persisted_and_advance_the_metadata_version(
         ),
         #[cfg(not(target_os = "macos"))]
         (
-            r#"{"network":{"egress":{"default":"deny","allow":[{"to":[{"cidr":"192.0.2.0/24"}]},{"to":[{"cidr":"198.51.100.0/24"}]}]}}}"#,
-            r#"{"network":{"egress":{"default":"deny","allow":[{"to":[{"cidr":"198.51.100.0/24"}]},{"to":[{"cidr":"192.0.2.0/24"}]}]}}}"#,
+            r#"{"network":{"default":"deny","allow":[{"to":"192.0.2.0/24"},{"to":"198.51.100.0/24"}]}}"#,
+            r#"{"network":{"default":"deny","allow":[{"to":"198.51.100.0/24"},{"to":"192.0.2.0/24"}]}}"#,
         ),
     ];
     for (first, reordered) in cases {
@@ -612,10 +659,7 @@ async fn inherited_permission_ceiling_cannot_be_changed_by_reordering_rules() {
 #[tokio::test]
 async fn session_creation_rejects_invalid_effective_rules_before_inserting() {
     let config = RuntimeSessionManagerConfig {
-        permission: serde_json::from_value(serde_json::json!({
-            "network": { "egress": { "allow": [{ "to": [{ "cidr": "https://example.com/private" }] }] } }
-        }))
-        .unwrap(),
+        permission: invalid_network("https://example.com/private"),
         ..Default::default()
     };
     let (manager, existing) = fixture_with_config(config).await;
@@ -662,6 +706,8 @@ async fn session_creation_rejects_invalid_effective_rules_before_inserting() {
 
 #[tokio::test]
 async fn session_archive_rejects_invalid_network_rules_before_publication() {
+    use sha2::{Digest, Sha256};
+
     let (manager, existing) = fixture_with_config(Default::default()).await;
     let workspace = manager
         .kernel()
@@ -672,27 +718,6 @@ async fn session_archive_rejects_invalid_network_rules_before_publication() {
         .workspace_id
         .unwrap();
     manager.workspace.set(workspace).unwrap();
-    // Model an archive from an older host whose storage allowed this format.
-    // Runtime policy must be applied to its exact parsed configuration.
-    let source = manager
-        .kernel()
-        .sessions
-        .create_configured(
-            RequestId::new(),
-            workspace,
-            "Older archive".into(),
-            SessionConfiguration {
-                permission: serde_json::from_value(serde_json::json!({
-                    "network": { "egress": { "allow": [{ "to": [{ "cidr": "*.example.com/32" }] }] } }
-                }))
-                .unwrap(),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap()
-        .value
-        .id;
     let path = std::env::temp_dir().join(format!(
         "agena-permission-import-{}.jsonl",
         uuid::Uuid::new_v4()
@@ -701,7 +726,7 @@ async fn session_archive_rejects_invalid_network_rules_before_publication() {
     manager
         .kernel()
         .reader
-        .export_jsonl(source, &mut file)
+        .export_jsonl(existing, &mut file)
         .await
         .unwrap();
     file.sync_all().await.unwrap();
@@ -714,12 +739,52 @@ async fn session_archive_rejects_invalid_network_rules_before_publication() {
         .unwrap()
         .sessions
         .len();
+    // A malformed policy in an archive header must fail before publication.
+    let archive = tokio::fs::read_to_string(&path).await.unwrap();
+    let mut records: Vec<serde_json::Value> = archive
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut footer = records.pop().unwrap();
+    assert_eq!(footer["kind"], "footer");
+    let header = &mut records[0];
+    assert_eq!(header["kind"], "header");
+    header["data"]["configuration"]["permission"]["network"] =
+        serde_json::json!({"allow":[{"to":"*.example.com"}]});
+    let parse_error =
+        serde_json::from_value::<SessionConfiguration>(header["data"]["configuration"].clone())
+            .unwrap_err()
+            .to_string();
+    assert!(
+        parse_error.starts_with("permission.network:"),
+        "{parse_error}"
+    );
+    assert!(
+        parse_error.contains("permission.network.allow[0].to"),
+        "{parse_error}"
+    );
+    // Keep the archive structurally complete so this exercises policy rejection,
+    // independent of when the importer verifies the footer.
+    let mut replacement = String::new();
+    for record in &records {
+        replacement.push_str(&serde_json::to_string(record).unwrap());
+        replacement.push('\n');
+    }
+    footer["data"]["records"] = serde_json::json!(records.len());
+    footer["data"]["bytes"] = serde_json::json!(replacement.len());
+    footer["data"]["sha256"] = serde_json::json!(Sha256::digest(replacement.as_bytes()).to_vec());
+    replacement.push_str(&serde_json::to_string(&footer).unwrap());
+    replacement.push('\n');
+    tokio::fs::write(&path, replacement).await.unwrap();
     let error =
         SessionExecutionCommandService::import_session_file(&manager, RequestId::new(), &path)
             .await
             .unwrap_err();
     tokio::fs::remove_file(path).await.unwrap();
-    assert!(error.to_string().contains("network"), "{error}");
+    assert!(
+        error.to_string().contains("permission.network.allow[0].to"),
+        "{error}"
+    );
     let after = manager
         .kernel()
         .reader

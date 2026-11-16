@@ -44,15 +44,16 @@ fn invalid_permission_never_replaces_the_file_even_when_validation_is_disabled()
         json!({"path":{"rules":{"<workspace>/data":"readwrite","<workspace>/data/reference":"readonly"}}}),
         json!({"network":{"rules":{"https://example.com/private":"allow"}}}),
         json!({"network":{"internet":"allow"}}),
-        json!({"network":{"egress":{"default":"ask"}}}),
-        json!({"network":{"egress":{"allow":[{"to":[{"cidr":"example.com"}]}]}}}),
-        json!({"network":{"egress":{"allow":[{"to":[{"cidr":"192.0.2.1"}]}]}}}),
-        json!({"network":{"egress":{"allow":[{"to":[]}]}}}),
-        json!({"network":{"egress":{"allow":[{"ports":[]}]}}}),
-        json!({"network":{"egress":{"allow":[{"ports":[{"protocol":"tcp","port":0}]}]}}}),
-        json!({"network":{"egress":{"allow":[{"ports":[{"protocol":"tcp","port":443,"endPort":80}]}]}}}),
-        json!({"network":{"egress":{"allow":[{"ports":[{"protocol":"icmp","port":53}]}]}}}),
-        json!({"network":{"egress":{"deny":[{"to":[{"cidr":"192.0.2.0/24","except":["198.51.100.0/24"]}]}]}}}),
+        json!({"network":{"egress":{"default":"allow"}}}),
+        json!({"network":{"default":"ask"}}),
+        json!({"network":{"allow":[{"to":"example.com"}]}}),
+        json!({"network":{"allow":[{"protocol":"tcp"}]}}),
+        json!({"network":{"allow":[{"to":[]}]}}),
+        json!({"network":{"allow":[{"to":"*","ports":[]}]}}),
+        json!({"network":{"allow":[{"to":"*","protocol":"tcp","ports":[0]}]}}),
+        json!({"network":{"allow":[{"to":"*","protocol":"tcp","ports":["443-80"]}]}}),
+        json!({"network":{"allow":[{"to":"*","protocol":"icmp","ports":[53]}]}}),
+        json!({"network":{"deny":[{"to":"192.0.2.0/24","except":["198.51.100.0/24"]}]}}),
         json!({"tools":{"rules":{"agena.fs.read":{"**/secret/**":"deny"}}}}),
         json!({"tools":{"names":{"shell.exec":"allow","agena.shell.exec":"deny"}}}),
     ] {
@@ -78,33 +79,30 @@ fn native_network_nulls_and_noncanonical_cidrs_never_replace_saved_settings() {
     let root = tempfile::tempdir().unwrap();
     let global = root.path().join("global.json");
     let workspace = root.path().join("workspace/.agena/agena.json");
-    let before = br#"{"permission":{"network":{"egress":{"default":"allow"}}}}"#;
+    let before = br#"{"permission":{"network":{"default":"allow"}}}"#;
     fs::write(&global, before).unwrap();
     fs::create_dir_all(workspace.parent().unwrap()).unwrap();
     fs::write(&workspace, before).unwrap();
 
     for (network, field) in [
         (json!(null), "permission.network"),
-        (json!({"egress":null}), "permission.network.egress"),
+        (json!({"default":null}), "permission.network.default"),
+        (json!({"allow":null}), "permission.network.allow"),
         (
-            json!({"egress":{"allow":null}}),
-            "permission.network.egress.allow",
+            json!({"allow":[{"to":null}]}),
+            "permission.network.allow[0].to",
         ),
         (
-            json!({"egress":{"allow":[{"to":null}]}}),
-            "permission.network.egress.allow[0].to",
+            json!({"allow":[{"to":"*","ports":[null]}]}),
+            "permission.network.allow[0].ports[0]",
         ),
         (
-            json!({"egress":{"allow":[{"ports":[{"port":null}]}]}}),
-            "permission.network.egress.allow[0].ports[0].port",
+            json!({"allow":[{"to":"192.0.2.7/24"}]}),
+            "permission.network.allow[0].to",
         ),
         (
-            json!({"egress":{"allow":[{"to":[{"cidr":"192.0.2.7/24"}]}]}}),
-            "permission.network.egress.allow[0].to[0].cidr",
-        ),
-        (
-            json!({"egress":{"deny":[{"to":[{"cidr":"2001:db8::/32","except":["2001:db8::1/64"]}]}]}}),
-            "permission.network.egress.deny[0].to[0].except[0]",
+            json!({"deny":[{"to":"2001:db8::/32","except":["2001:db8::1/64"]}]}),
+            "permission.network.deny[0].except[0]",
         ),
     ] {
         for path in ["permission", "permission.network"] {
@@ -134,17 +132,17 @@ fn native_network_nulls_and_noncanonical_cidrs_never_replace_saved_settings() {
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn explicit_empty_native_arrays_are_saved_and_clear_inherited_rules() {
+fn explicit_empty_network_is_saved_and_replaces_the_complete_parent_policy() {
     let root = tempfile::tempdir().unwrap();
     let global = root.path().join("global.json");
     let workspace = root.path().join("workspace/.agena/agena.json");
     set_runtime_file_setting(
         &global,
-        input(json!({"network":{"egress":{
-            "default":"deny",
-            "allow":[{"to":[{"cidr":"192.0.2.0/24"}]}],
-            "deny":[{"to":[{"cidr":"192.0.2.128/25"}]}]
-        }}})),
+        input(json!({"network":{
+            "default":"allow",
+            "allow":[{"to":"192.0.2.0/24"}],
+            "deny":[{"to":"192.0.2.128/25"}]
+        }})),
         None,
     )
     .unwrap();
@@ -152,14 +150,11 @@ fn explicit_empty_native_arrays_are_saved_and_clear_inherited_rules() {
         &global,
         &workspace,
         ConfigSettingsLayer::Workspace,
-        input(json!({"network":{"egress":{"allow":[],"deny":[]}}})),
+        input(json!({"network":{}})),
     )
     .unwrap();
     let saved: Value = serde_json::from_slice(&fs::read(&workspace).unwrap()).unwrap();
-    assert_eq!(
-        saved["permission"]["network"]["egress"],
-        json!({"allow":[],"deny":[]})
-    );
+    assert_eq!(saved["permission"]["network"], json!({"default":"deny"}));
     let global_value: Value = serde_json::from_slice(&fs::read(&global).unwrap()).unwrap();
     let mut merged: agena_domain::PermissionConfig =
         serde_json::from_value(global_value["permission"].clone()).unwrap();
@@ -170,6 +165,79 @@ fn explicit_empty_native_arrays_are_saved_and_clear_inherited_rules() {
     assert_eq!(egress.deny, Some(vec![]));
 }
 
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn network_editor_reads_the_complete_parent_before_the_selected_layer() {
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global.json");
+    let workspace = root.path().join("workspace.json");
+    let parent = json!({"default":"allow","deny":[{"to":"192.0.2.0/24"}]});
+    let selected =
+        json!({"default":"deny","allow":[{"to":"198.51.100.10","protocol":"tcp","ports":[443]}]});
+    fs::write(
+        &global,
+        json!({"permission":{"network":parent}}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        &workspace,
+        json!({"permission":{"network":selected}}).to_string(),
+    )
+    .unwrap();
+    let mut query = agena_runtime_config::ConfigSettingsGetInput::default();
+    query.target.path = Some("permission".into());
+    let response = agena_runtime_config::read_runtime_layer_setting(
+        &global,
+        &workspace,
+        ConfigSettingsLayer::Workspace,
+        query.clone(),
+    )
+    .unwrap();
+    assert_eq!(response.value["network"], selected);
+    assert_eq!(response.inherited_value.unwrap()["network"], parent);
+
+    query.target.path = Some("permission.network".into());
+    let response = agena_runtime_config::read_runtime_layer_setting(
+        &global,
+        &workspace,
+        ConfigSettingsLayer::Workspace,
+        query.clone(),
+    )
+    .unwrap();
+    assert_eq!(response.inherited_value, Some(parent.clone()));
+    assert_eq!(response.value, selected);
+    let response = agena_runtime_config::read_runtime_layer_setting(
+        &global,
+        &workspace,
+        ConfigSettingsLayer::Global,
+        query,
+    )
+    .unwrap();
+    assert_eq!(response.value, parent);
+    assert_eq!(response.inherited_value, Some(json!({"default":"deny"})));
+}
+
+#[test]
+fn missing_network_layer_exposes_defaults_without_creating_files() {
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global.json");
+    let workspace = root.path().join("workspace.json");
+    let mut query = agena_runtime_config::ConfigSettingsGetInput::default();
+    query.target.path = Some("permission.network".into());
+    let response = agena_runtime_config::read_runtime_layer_setting(
+        &global,
+        &workspace,
+        ConfigSettingsLayer::Workspace,
+        query,
+    )
+    .unwrap();
+    assert!(!response.config_found);
+    assert!(response.value.is_null());
+    assert_eq!(response.inherited_value, Some(json!({"default":"deny"})));
+    assert!(!global.exists());
+    assert!(!workspace.exists());
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn unsupported_native_backend_policy_cannot_be_saved() {
@@ -178,9 +246,9 @@ fn unsupported_native_backend_policy_cannot_be_saved() {
     let before = b"{}\n";
     fs::write(&path, before).unwrap();
     let invalid = if cfg!(target_os = "linux") {
-        json!({"network":{"ingress":{"default":"allow"}}})
+        json!({"network":{"inbound":"allow"}})
     } else {
-        json!({"network":{"egress":{"allow":[{"to":[{"cidr":"192.0.2.1/32"}]}]}}})
+        json!({"network":{"allow":[{"to":"192.0.2.1"}]}})
     };
     let error = set_runtime_file_setting(&path, input(invalid), None).unwrap_err();
     assert!(error.diagnostic().contains("permission.network"), "{error}");

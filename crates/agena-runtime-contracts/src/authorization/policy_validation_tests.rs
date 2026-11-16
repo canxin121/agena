@@ -116,12 +116,12 @@ fn conflicting_tool_aliases_cannot_be_lost_during_deserialization() {
 }
 
 #[test]
-fn native_network_overlays_replace_rule_arrays_and_clear_explicit_denials() {
-    let base = config(json!({"network":{"egress":{
+fn complete_network_overrides_replace_defaults_and_both_rule_lists() {
+    let base = config(json!({"network":{
         "default":"deny",
-        "allow":[{"to":[{"cidr":"192.0.2.0/24"}]}],
-        "deny":[{"to":[{"cidr":"192.0.2.13/32"}]}]
-    }}}));
+        "allow":[{"to":"192.0.2.0/24"}],
+        "deny":[{"to":"192.0.2.13"}]
+    }}));
     let original =
         apply_to_network_permission_policy(&base, NetworkPermissionPolicy::allow_all()).unwrap();
     assert!(matches!(
@@ -132,10 +132,7 @@ fn native_network_overlays_replace_rule_arrays_and_clear_explicit_denials() {
         original.check_connect(&"192.0.2.13:443".parse().unwrap()),
         PermissionDecision::Deny { .. }
     ));
-    let overlay = config(json!({"network":{"egress":{
-        "allow":[{"to":[{"cidr":"198.51.100.0/24"}]}],
-        "deny":[]
-    }}}));
+    let overlay = config(json!({"network":{"allow":[{"to":"198.51.100.0/24"}]}}));
     let effective = base.merged_with(&overlay);
     let policy =
         apply_to_network_permission_policy(&effective, NetworkPermissionPolicy::allow_all())
@@ -152,42 +149,49 @@ fn native_network_overlays_replace_rule_arrays_and_clear_explicit_denials() {
         effective.network.unwrap().egress.unwrap().deny,
         Some(vec![])
     );
+
+    let offline = base.merged_with(&config(json!({"network":{}})));
+    let policy =
+        apply_to_network_permission_policy(&offline, NetworkPermissionPolicy::allow_all()).unwrap();
+    assert!(matches!(
+        policy.check_connect(&"192.0.2.14:443".parse().unwrap()),
+        PermissionDecision::Deny { .. }
+    ));
 }
 
 #[test]
-fn native_network_rules_accept_cidrs_exclusions_and_transport_selectors() {
+fn flat_network_rules_accept_addresses_exclusions_and_transport_selectors() {
     for rule in [
-        json!({}),
-        json!({"to":[{"cidr":"192.0.2.7/32"}]}),
-        json!({"to":[{"cidr":"192.0.2.0/24","except":["192.0.2.128/25"]}]}),
-        json!({"to":[{"cidr":"2001:db8::/32"}]}),
-        json!({"ports":[{"protocol":"tcp","port":443}]}),
-        json!({"ports":[{"protocol":"udp","port":50000,"endPort":50010}]}),
-        json!({"ports":[{"protocol":"icmp"}]}),
-        json!({"ports":[{"protocol":"any","port":53}]}),
+        json!({"to":"*"}),
+        json!({"to":"192.0.2.7"}),
+        json!({"to":"192.0.2.0/24","except":["192.0.2.128/25"]}),
+        json!({"to":"2001:db8::/32"}),
+        json!({"to":"*","protocol":"tcp","ports":[443]}),
+        json!({"to":"*","protocol":"udp","ports":["50000-50010"]}),
+        json!({"to":"*","protocol":"icmp"}),
+        json!({"to":"*","protocol":"any","ports":[53]}),
     ] {
-        let cfg = config(json!({"network":{"egress":{"allow":[rule.clone()]}}}));
+        let cfg = config(json!({"network":{"allow":[rule.clone()]}}));
         apply_to_network_permission_policy(&cfg, NetworkPermissionPolicy::allow_all())
             .unwrap_or_else(|error| panic!("{rule}: {error}"));
     }
     for rule in [
+        json!({}),
         json!({"to":[]}),
-        json!({"ports":[]}),
-        json!({"to":[{"cidr":"example.com"}]}),
-        json!({"to":[{"cidr":"https://example.com/path"}]}),
-        json!({"to":[{"cidr":"192.0.2.1"}]}),
-        json!({"to":[{"cidr":"192.0.2.0/24:443"}]}),
-        json!({"to":[{"cidr":"192.0.2.0/33"}]}),
-        json!({"to":[{"cidr":"192.0.2.0/24","except":["198.51.100.0/24"]}]}),
-        json!({"ports":[{"protocol":"tcp","port":0}]}),
-        json!({"ports":[{"protocol":"udp","endPort":53}]}),
-        json!({"ports":[{"protocol":"tcp","port":443,"endPort":80}]}),
-        json!({"ports":[{"protocol":"icmp","port":53}]}),
+        json!({"to":"*","ports":[]}),
+        json!({"to":"example.com"}),
+        json!({"to":"https://example.com/path"}),
+        json!({"to":"192.0.2.0/24:443"}),
+        json!({"to":"192.0.2.0/33"}),
+        json!({"to":"192.0.2.0/24","except":["198.51.100.0/24"]}),
+        json!({"to":"*","protocol":"tcp","ports":[0]}),
+        json!({"to":"*","protocol":"tcp","ports":["443-80"]}),
+        json!({"to":"*","protocol":"icmp","ports":[53]}),
     ] {
-        let cfg = config(json!({"network":{"egress":{"allow":[rule.clone()]}}}));
         assert!(
-            apply_to_network_permission_policy(&cfg, NetworkPermissionPolicy::allow_all()).is_err(),
-            "unsupported native rule accepted: {rule}"
+            serde_json::from_value::<PermissionConfig>(json!({"network":{"allow":[rule.clone()]}}))
+                .is_err(),
+            "unsupported flat rule accepted: {rule}"
         );
     }
 }

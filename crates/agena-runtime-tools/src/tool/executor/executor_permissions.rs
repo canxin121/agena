@@ -481,10 +481,9 @@ mod sandbox_network_tests {
         )
         .try_apply_permission_config(
             &serde_json::from_value(serde_json::json!({
-                "network": {"egress": {"default": "allow", "deny": [{
-                    "to": [{"cidr":"192.0.2.10/32"}],
-                    "ports": [{"protocol":"tcp","port":443}]
-                }]}}
+                "network": {"default": "allow", "deny": [{
+                    "to": "192.0.2.10", "protocol":"tcp", "ports":[443]
+                }]}
             }))
             .unwrap(),
         )
@@ -557,7 +556,7 @@ mod native_offline_network_tests {
         )
         .try_apply_permission_config(
             &serde_json::from_value(serde_json::json!({
-                "network": {"egress": {"default":"deny"}}
+                "network": {"default":"deny"}
             }))
             .unwrap(),
         )

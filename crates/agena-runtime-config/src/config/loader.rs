@@ -60,6 +60,10 @@ where
             crate::project_config_path(workspace_root.as_path())
         };
 
+        crate::network_config_migration::migrate_network_config_files(
+            &config_path,
+            &project_config_path,
+        )?;
         let file_state = RawConfigFile::read(&config_path)?;
         let project_file_state = if global {
             RawConfigFile {

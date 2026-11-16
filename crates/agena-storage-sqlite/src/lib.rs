@@ -32,7 +32,8 @@ pub use bot_repository::SqliteBotRepository;
 pub use companion_repository::SqliteCompanionRepository;
 pub use connection::{KernelDatabase, is_memory_database};
 pub use kernel::{
-    KernelDiagnostics, KernelMetricsSnapshot, ReadCacheSnapshot, SqliteKernel, open_kernel_runtime,
+    KernelDiagnostics, KernelMetricsSnapshot, NetworkMigrationResolver, ReadCacheSnapshot,
+    SqliteKernel, open_kernel_runtime, open_kernel_runtime_with_network_migration,
 };
 pub use model_catalog_repository::SeaModelCatalogRepository;
 pub use permission_rule_repository::{

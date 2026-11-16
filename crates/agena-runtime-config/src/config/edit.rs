@@ -59,6 +59,7 @@ pub fn read_file_setting(
         source: ConfigSettingsSource::File,
         path: input.target.path,
         value,
+        inherited_value: None,
     })
 }
 

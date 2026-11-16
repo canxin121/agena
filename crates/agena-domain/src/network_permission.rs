@@ -1,4 +1,6 @@
-//! Native MXC network permission configuration.
+//! Flat network settings compiled to the native MXC network model.
+
+mod flat;
 
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
@@ -22,22 +24,66 @@ pub enum NetworkProtocol {
     Any,
 }
 
-/// The native network policy. Missing defaults resolve to deny.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+/// Native composition model with a flat, human-editable serialized format.
+/// A present network section is a complete policy; missing defaults deny.
+#[derive(Debug, Clone, Default)]
 pub struct NetworkPermissionConfig {
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_present"
-    )]
     pub egress: Option<NetworkEgressConfig>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "deserialize_present"
-    )]
     pub ingress: Option<NetworkIngressConfig>,
+}
+
+impl Serialize for NetworkPermissionConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        flat::NetworkDocument::from_native(self)
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NetworkPermissionConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        flat::NetworkDocument::deserialize(deserializer)?
+            .into_native()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+// Native composition can group several peers/protocols into one rule. Its flat
+// transport expands those groups, so policy identity must survive that expansion.
+impl PartialEq for NetworkPermissionConfig {
+    fn eq(&self, other: &Self) -> bool {
+        match (
+            flat::NetworkDocument::from_native(self),
+            flat::NetworkDocument::from_native(other),
+        ) {
+            (Ok(left), Ok(right)) => left == right,
+            _ => self.egress == other.egress && self.ingress == other.ingress,
+        }
+    }
+}
+
+impl Eq for NetworkPermissionConfig {}
+
+impl std::hash::Hash for NetworkPermissionConfig {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match flat::NetworkDocument::from_native(self) {
+            Ok(document) => {
+                0u8.hash(state);
+                document.hash(state);
+            }
+            Err(_) => {
+                1u8.hash(state);
+                self.egress.hash(state);
+                self.ingress.hash(state);
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
@@ -49,7 +95,7 @@ pub struct NetworkEgressConfig {
         deserialize_with = "deserialize_present"
     )]
     pub default: Option<NetworkAction>,
-    /// Explicit arrays replace inherited arrays; [] clears inherited rules.
+    /// Explicit native grants. Public settings replace the complete network block.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -163,17 +209,7 @@ where
 }
 
 impl NetworkPermissionConfig {
-    pub fn is_empty(&self) -> bool {
-        self.egress
-            .as_ref()
-            .is_none_or(NetworkEgressConfig::is_empty)
-            && self
-                .ingress
-                .as_ref()
-                .is_none_or(NetworkIngressConfig::is_empty)
-    }
-
-    /// An explicit offline policy also clears any inherited rule arrays.
+    /// An explicit offline policy replaces any inherited network policy.
     pub fn offline() -> Self {
         Self::default().resolved()
     }
@@ -202,7 +238,21 @@ impl NetworkPermissionConfig {
         }
     }
 
+    /// A present network block replaces the complete configuration.
     pub fn merge_from(&mut self, overlay: Self) {
+        *self = overlay;
+    }
+
+    /// Decode the retired nested shape at an explicit file-migration boundary.
+    /// Ordinary settings/API deserialization accepts only the flat format.
+    pub fn from_legacy_value(value: serde_json::Value) -> Result<Self, String> {
+        serde_path_to_error::deserialize::<_, flat::LegacyNetworkDocument>(value)
+            .map(flat::LegacyNetworkDocument::into_native)
+            .map_err(|error| format!("permission.network.{}: {}", error.path(), error.inner()))
+    }
+
+    /// Resolve old partial layers before converting them to complete flat blocks.
+    pub fn merge_legacy_from(&mut self, overlay: Self) {
         if let Some(overlay) = overlay.egress {
             let current = self.egress.get_or_insert_with(Default::default);
             if overlay.default.is_some() {
@@ -232,7 +282,7 @@ impl NetworkPermissionConfig {
             for (kind, rules) in [("allow", &egress.allow), ("deny", &egress.deny)] {
                 if let Some(rules) = rules {
                     for (index, rule) in rules.iter().enumerate() {
-                        rule.validate(&format!("permission.network.egress.{kind}[{index}]"))?;
+                        rule.validate(&format!("permission.network.{kind}[{index}]"))?;
                     }
                 }
             }
@@ -257,7 +307,7 @@ impl NetworkPermissionConfig {
                         for (rule_index, rule) in rules.iter().flatten().enumerate() {
                             for (peer_index, peer) in rule.to.iter().flatten().enumerate() {
                                 let field = format!(
-                                    "permission.network.egress.{kind}[{rule_index}].to[{peer_index}]"
+                                    "permission.network.{kind}[{rule_index}].to[{peer_index}]"
                                 );
                                 validate_bubblewrap_cidr(&peer.cidr, &format!("{field}.cidr"))?;
                                 for (index, except) in peer.except.iter().enumerate() {
@@ -271,10 +321,16 @@ impl NetworkPermissionConfig {
                     }
                 }
                 if inbound == NetworkAction::Allow {
-                    return Err("permission.network.ingress.default: Linux Bubblewrap does not support allow".into());
+                    return Err(
+                        "permission.network.inbound: Linux Bubblewrap does not support allow"
+                            .into(),
+                    );
                 }
                 if loopback == NetworkAction::Allow {
-                    return Err("permission.network.ingress.hostLoopback: Linux Bubblewrap does not support allow".into());
+                    return Err(
+                        "permission.network.hostLoopback: Linux Bubblewrap does not support allow"
+                            .into(),
+                    );
                 }
                 if let Some(egress) = &self.egress {
                     validate_bubblewrap_budget(egress)?;
@@ -285,13 +341,13 @@ impl NetworkPermissionConfig {
                     for (field, rules) in [("allow", &egress.allow), ("deny", &egress.deny)] {
                         if rules.as_ref().is_some_and(|rules| !rules.is_empty()) {
                             return Err(format!(
-                                "permission.network.egress.{field}: macOS Seatbelt does not support CIDR, protocol, or port rules"
+                                "permission.network.{field}: macOS Seatbelt does not support CIDR, protocol, or port rules"
                             ));
                         }
                     }
                 }
                 if loopback == NetworkAction::Allow && inbound != NetworkAction::Allow {
-                    return Err("permission.network.ingress.hostLoopback: macOS Seatbelt requires ingress.default=allow when hostLoopback=allow".into());
+                    return Err("permission.network.hostLoopback: macOS Seatbelt requires inbound=allow when hostLoopback=allow".into());
                 }
             }
             "windows" => {}
@@ -377,7 +433,7 @@ fn validate_bubblewrap_budget(egress: &NetworkEgressConfig) -> Result<(), String
     let mut total = 1usize;
     for (kind, rules) in [("deny", &egress.deny), ("allow", &egress.allow)] {
         for (index, rule) in rules.iter().flatten().enumerate() {
-            let field = format!("permission.network.egress.{kind}[{index}]");
+            let field = format!("permission.network.{kind}[{index}]");
             let mut addresses = 0usize;
             if let Some(peers) = &rule.to {
                 for (index, peer) in peers.iter().enumerate() {
@@ -436,14 +492,13 @@ fn bubblewrap_peer_blocks(peer: &NetworkPeerConfig, field: &str) -> Result<usize
 
 fn bubblewrap_network(value: &str, field: &str) -> Result<IpNet, String> {
     let network = parse_cidr(value, field)?;
-    if let IpNet::V6(network) = network {
-        if let Some(address) = network.addr().to_ipv4_mapped()
-            && network.prefix_len() >= 96
-        {
-            return Ok(IpNet::new(address.into(), network.prefix_len() - 96)
-                .expect("mapped prefix fits IPv4")
-                .trunc());
-        }
+    if let IpNet::V6(network) = network
+        && let Some(address) = network.addr().to_ipv4_mapped()
+        && network.prefix_len() >= 96
+    {
+        return Ok(IpNet::new(address.into(), network.prefix_len() - 96)
+            .expect("mapped prefix fits IPv4")
+            .trunc());
     }
     Ok(network.trunc())
 }
@@ -480,7 +535,7 @@ fn validate_bubblewrap_cidr(value: &str, field: &str) -> Result<(), String> {
         let mapped_base = std::net::Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0, 0);
         if network.prefix_len() < 96 && network.contains(&mapped_base) {
             return Err(format!(
-                "{field}: Linux Bubblewrap cannot enforce IPv6 CIDR {value} spanning IPv4-mapped addresses; use explicit IPv4 and native IPv6 subnets, or omit to to match both families"
+                "{field}: Linux Bubblewrap cannot enforce IPv6 CIDR {value} spanning IPv4-mapped addresses; use explicit IPv4 and native IPv6 subnets, or use to=\"*\" to match both families"
             ));
         }
     }
@@ -511,182 +566,218 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn complex_native_policy_round_trips() {
+    fn flat_network_round_trips_with_ports_ranges_and_exclusions() {
         let value = json!({
-            "egress": {
-                "default": "deny",
-                "allow": [{
-                    "to": [
-                        {"cidr":"10.20.0.0/16","except":["10.20.10.0/24"]},
-                        {"cidr":"fd20:20::/48","except":["fd20:20:0:10::/64"]}
-                    ],
-                    "ports": [
-                        {"protocol":"tcp","port":443},
-                        {"protocol":"udp","port":50000,"endPort":50010}
-                    ]
-                }],
-                "deny": [{"to":[{"cidr":"10.20.66.0/24"}]}]
-            },
-            "ingress": {"default":"deny","hostLoopback":"deny"}
+            "default":"deny",
+            "allow":[
+                {"to":"192.0.2.10","protocol":"tcp","ports":[443,"8000-8099"]},
+                {"to":"10.20.0.0/16","except":["10.20.10.0/24"],"protocol":"udp","ports":[53]},
+                {"to":"2001:db8::10","protocol":"icmp"}
+            ],
+            "deny":[{"to":"10.20.66.0/24"},{"to":"*","protocol":"tcp","ports":[25]}]
         });
         let policy: NetworkPermissionConfig = serde_json::from_value(value.clone()).unwrap();
         policy.validate().unwrap();
         assert_eq!(serde_json::to_value(&policy).unwrap(), value);
+        let allow = policy.egress.unwrap().allow.unwrap();
+        assert_eq!(allow[0].to.as_ref().unwrap()[0].cidr, "192.0.2.10/32");
+        assert_eq!(allow[0].ports.as_ref().unwrap()[1].end_port, Some(8099));
+        assert_eq!(allow[2].to.as_ref().unwrap()[0].cidr, "2001:db8::10/128");
     }
 
     #[test]
-    fn native_network_rejects_explicit_null_with_field_paths() {
+    fn native_product_keeps_identity_after_flat_transport() {
+        use std::hash::{Hash, Hasher};
+        let policy = NetworkPermissionConfig::from_legacy_value(json!({
+            "egress":{"default":"deny","allow":[{
+                "to":[
+                    {"cidr":"10.20.0.0/16","except":["10.20.10.0/24"]},
+                    {"cidr":"2001:db8::10/128"}
+                ],
+                "ports":[
+                    {"protocol":"tcp","port":443},
+                    {"protocol":"tcp","port":8000,"endPort":8099},
+                    {"protocol":"udp","port":53}
+                ]
+            }]}
+        }))
+        .unwrap();
+        let flat = serde_json::to_value(&policy).unwrap();
+        assert_eq!(flat["allow"].as_array().unwrap().len(), 4);
+        assert_eq!(flat["allow"][0]["ports"], json!([443, "8000-8099"]));
+        assert_eq!(flat["allow"][1]["protocol"], "udp");
+        assert_eq!(flat["allow"][2]["to"], "2001:db8::10");
+        let transported: NetworkPermissionConfig = serde_json::from_value(flat.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&transported).unwrap(), flat);
+        assert_eq!(transported, policy);
+        let hash = |value: &NetworkPermissionConfig| {
+            let mut state = std::collections::hash_map::DefaultHasher::new();
+            value.hash(&mut state);
+            state.finish()
+        };
+        assert_eq!(hash(&transported), hash(&policy));
+    }
+
+    #[test]
+    fn flat_network_rejects_null_with_editable_field_paths() {
         for (network, field) in [
             (json!(null), "permission.network"),
-            (json!({"egress":null}), "permission.network.egress"),
-            (json!({"ingress":null}), "permission.network.ingress"),
+            (json!({"default":null}), "permission.network.default"),
+            (json!({"allow":null}), "permission.network.allow"),
+            (json!({"deny":null}), "permission.network.deny"),
+            (json!({"inbound":null}), "permission.network.inbound"),
             (
-                json!({"egress":{"default":null}}),
-                "permission.network.egress.default",
+                json!({"hostLoopback":null}),
+                "permission.network.hostLoopback",
             ),
             (
-                json!({"egress":{"allow":null}}),
-                "permission.network.egress.allow",
+                json!({"allow":[{"to":null}]}),
+                "permission.network.allow[0].to",
             ),
             (
-                json!({"egress":{"deny":null}}),
-                "permission.network.egress.deny",
+                json!({"deny":[{"to":"*","ports":null}]}),
+                "permission.network.deny[0].ports",
             ),
             (
-                json!({"ingress":{"default":null}}),
-                "permission.network.ingress.default",
+                json!({"allow":[{"to":"*","protocol":null}]}),
+                "permission.network.allow[0].protocol",
             ),
             (
-                json!({"ingress":{"hostLoopback":null}}),
-                "permission.network.ingress.hostLoopback",
-            ),
-            (
-                json!({"egress":{"allow":[{"to":null}]}}),
-                "permission.network.egress.allow[0].to",
-            ),
-            (
-                json!({"egress":{"deny":[{"ports":null}]}}),
-                "permission.network.egress.deny[0].ports",
-            ),
-            (
-                json!({"egress":{"allow":[{"ports":[{"protocol":null}]}]}}),
-                "permission.network.egress.allow[0].ports[0].protocol",
-            ),
-            (
-                json!({"egress":{"allow":[{"ports":[{"port":null}]}]}}),
-                "permission.network.egress.allow[0].ports[0].port",
-            ),
-            (
-                json!({"egress":{"allow":[{"ports":[{"endPort":null}]}]}}),
-                "permission.network.egress.allow[0].ports[0].endPort",
+                json!({"allow":[{"to":"10.0.0.0/8","except":null}]}),
+                "permission.network.allow[0].except",
             ),
         ] {
-            let error = serde_json::from_value::<crate::PermissionConfig>(json!({
-                "network":network
-            }))
-            .unwrap_err()
-            .to_string();
+            let error =
+                serde_json::from_value::<crate::PermissionConfig>(json!({"network":network}))
+                    .unwrap_err()
+                    .to_string();
             assert!(error.contains(&format!("{field}:")), "{error}");
             assert!(error.contains("null"), "{error}");
         }
     }
 
     #[test]
-    fn omitted_native_fields_keep_inheritance_and_wildcards() {
+    fn omitted_network_inherits_but_present_blocks_replace_fully() {
         let original: crate::PermissionConfig = serde_json::from_value(json!({
             "network":{
-                "egress":{
-                    "default":"deny",
-                    "allow":[{"to":[{"cidr":"192.0.2.0/24"}]}],
-                    "deny":[{"to":[{"cidr":"192.0.2.128/25"}]}]
-                },
-                "ingress":{"default":"deny","hostLoopback":"deny"}
+                "default":"allow",
+                "allow":[{"to":"192.0.2.0/24"}],
+                "deny":[{"to":"192.0.2.128/25"}]
             }
         }))
         .unwrap();
-        for overlay in [
-            json!({}),
-            json!({"network":{}}),
-            json!({"network":{"egress":{},"ingress":{}}}),
-        ] {
+        let mut inherited = original.clone();
+        inherited.merge_from(serde_json::from_value(json!({})).unwrap());
+        assert_eq!(inherited, original);
+        for network in [json!({}), json!({"default":"deny"}), json!({"allow":[]})] {
+            let overlay: crate::PermissionConfig =
+                serde_json::from_value(json!({"network":network})).unwrap();
+            assert!(!overlay.is_empty());
             let mut merged = original.clone();
-            merged.merge_from(serde_json::from_value(overlay).unwrap());
-            assert_eq!(merged, original);
+            merged.merge_from(overlay);
+            assert_eq!(merged.network.unwrap(), NetworkPermissionConfig::offline());
         }
-
-        let value = json!({"egress":{"allow":[{}, {"ports":[{}]}]}});
-        let policy: NetworkPermissionConfig = serde_json::from_value(value.clone()).unwrap();
-        policy.validate().unwrap();
-        assert_eq!(serde_json::to_value(&policy).unwrap(), value);
-        let resolved = policy.resolved();
-        let rules = resolved.egress.unwrap().allow.unwrap();
-        assert!(rules[0].to.is_none());
-        assert!(rules[0].ports.is_none());
-        assert!(rules[1].to.is_none());
+        let mut replaced = original;
+        replaced.merge_from(
+            serde_json::from_value(json!({"network":{"allow":[{"to":"198.51.100.7"}]}})).unwrap(),
+        );
         assert_eq!(
-            rules[1].ports.as_ref().unwrap(),
-            &[NetworkPortConfig::default()]
+            serde_json::to_value(replaced).unwrap(),
+            json!({
+                "network":{"default":"deny","allow":[{"to":"198.51.100.7"}]}
+            })
         );
     }
 
     #[test]
-    fn native_network_rejects_non_network_cidrs_with_canonical_suggestions() {
+    fn explicit_wildcard_and_omitted_selectors_match_native_any() {
+        let config: NetworkPermissionConfig =
+            serde_json::from_value(json!({"allow":[{"to":"*"}]})).unwrap();
+        let rules = config.egress.unwrap().allow.unwrap();
+        assert!(rules[0].to.is_none());
+        assert!(rules[0].ports.is_none());
+        let empty_except: NetworkPermissionConfig = serde_json::from_value(json!({
+            "allow":[{"to":"*","except":[]}]
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(empty_except).unwrap(),
+            json!({
+                "default":"deny","allow":[{"to":"*"}]
+            })
+        );
+        assert!(serde_json::from_value::<NetworkPermissionConfig>(json!({"allow":[{}]})).is_err());
+    }
+
+    #[test]
+    fn flat_network_rejects_invalid_rules_with_canonical_cidr_suggestions() {
         for (rule, field, canonical) in [
             (
-                json!({"to":[{"cidr":"192.0.2.7/24"}]}),
-                "permission.network.egress.allow[0].to[0].cidr",
+                json!({"to":"192.0.2.7/24"}),
+                "permission.network.allow[0].to",
                 "192.0.2.0/24",
             ),
             (
-                json!({"to":[{"cidr":"2001:db8::7/64"}]}),
-                "permission.network.egress.allow[0].to[0].cidr",
+                json!({"to":"2001:db8::7/64"}),
+                "permission.network.allow[0].to",
                 "2001:db8::/64",
             ),
             (
-                json!({"to":[{"cidr":"192.0.2.0/24","except":["192.0.2.129/25"]}]}),
-                "permission.network.egress.allow[0].to[0].except[0]",
+                json!({"to":"192.0.2.0/24","except":["192.0.2.129/25"]}),
+                "permission.network.allow[0].except[0]",
                 "192.0.2.128/25",
             ),
-            (
-                json!({"to":[{"cidr":"2001:db8::/32","except":["2001:db8:1::7/48"]}]}),
-                "permission.network.egress.allow[0].to[0].except[0]",
-                "2001:db8:1::/48",
-            ),
         ] {
-            let policy: NetworkPermissionConfig = serde_json::from_value(json!({
-                "egress":{"allow":[rule]}
-            }))
-            .unwrap();
-            let error = policy.validate().unwrap_err();
+            let error = serde_json::from_value::<NetworkPermissionConfig>(json!({"allow":[rule]}))
+                .unwrap_err()
+                .to_string();
             assert!(error.contains(field), "{error}");
             assert!(
                 error.contains(&format!("use {canonical} instead")),
                 "{error}"
             );
         }
+        for rule in [
+            json!({"to":"example.com"}),
+            json!({"to":"https://192.0.2.1"}),
+            json!({"to":"*","except":["192.0.2.0/24"]}),
+            json!({"to":"10.0.0.0/8","except":["192.0.2.0/24"]}),
+            json!({"to":"*","ports":[]}),
+            json!({"to":"*","ports":[0]}),
+            json!({"to":"*","ports":[65536]}),
+            json!({"to":"*","ports":[443.5]}),
+            json!({"to":"*","ports":["443"]}),
+            json!({"to":"*","ports":["0-80"]}),
+            json!({"to":"*","ports":["8000-7000"]}),
+            json!({"to":"*","ports":["+80-90"]}),
+            json!({"to":"*","ports":["080-90"]}),
+            json!({"to":"*","protocol":"icmp","ports":[53]}),
+        ] {
+            assert!(
+                serde_json::from_value::<NetworkPermissionConfig>(json!({"allow":[rule.clone()]}))
+                    .is_err(),
+                "{rule}"
+            );
+        }
     }
 
     #[test]
-    fn overlays_replace_arrays_and_explicit_empty_arrays_clear_them() {
-        let mut policy: NetworkPermissionConfig = serde_json::from_value(json!({
-            "egress":{
-                "default":"deny",
-                "allow":[{"to":[{"cidr":"192.0.2.0/24"}]}],
-                "deny":[{"to":[{"cidr":"192.0.2.128/25"}]}]
-            }
+    fn legacy_layers_are_resolved_explicitly_before_flat_migration() {
+        let mut policy = NetworkPermissionConfig::from_legacy_value(json!({
+            "egress":{"default":"allow","deny":[{"to":[{"cidr":"10.0.0.0/8"}]}]}
         }))
         .unwrap();
-        let overlay: NetworkPermissionConfig = serde_json::from_value(json!({
-            "egress":{"allow":[]},
-            "ingress":{"hostLoopback":"deny"}
+        let overlay = NetworkPermissionConfig::from_legacy_value(json!({
+            "egress":{"allow":[{"to":[{"cidr":"192.0.2.10/32"}]}]}
         }))
         .unwrap();
-        assert!(!overlay.is_empty());
-        policy.merge_from(overlay);
-        let egress = policy.egress.unwrap();
-        assert_eq!(egress.default, Some(NetworkAction::Deny));
-        assert_eq!(egress.allow, Some(vec![]));
-        assert_eq!(egress.deny.unwrap().len(), 1);
+        policy.merge_legacy_from(overlay);
+        assert_eq!(
+            serde_json::to_value(&policy).unwrap(),
+            json!({
+                "default":"allow","allow":[{"to":"192.0.2.10"}],"deny":[{"to":"10.0.0.0/8"}]
+            })
+        );
     }
 
     #[test]
@@ -696,10 +787,12 @@ mod tests {
             json!({"private":"deny"}),
             json!({"loopback":"deny"}),
             json!({"rules":{}}),
-            json!({"egress":{"default":"ask"}}),
-            json!({"egress":{"default":"auto"}}),
-            json!({"egress":{"allow":[{"domain":"example.com"}]}}),
-            json!({"ingress":{"host_loopback":"deny"}}),
+            json!({"egress":{}}),
+            json!({"ingress":{}}),
+            json!({"default":"ask"}),
+            json!({"default":"auto"}),
+            json!({"allow":[{"to":"*","domain":"example.com"}]}),
+            json!({"host_loopback":"deny"}),
         ] {
             assert!(
                 serde_json::from_value::<NetworkPermissionConfig>(value.clone()).is_err(),
@@ -723,10 +816,11 @@ mod tests {
             json!({"ports":[{"protocol":"udp","port":9000,"endPort":8000}]}),
             json!({"ports":[{"protocol":"icmp","port":53}]}),
         ] {
-            let policy: NetworkPermissionConfig = serde_json::from_value(json!({
-                "egress":{"allow":[rule.clone()]}
-            }))
-            .unwrap();
+            let policy: NetworkPermissionConfig =
+                NetworkPermissionConfig::from_legacy_value(json!({
+                    "egress":{"allow":[rule.clone()]}
+                }))
+                .unwrap();
             assert!(policy.validate().is_err(), "{rule}");
         }
     }
@@ -752,7 +846,7 @@ mod tests {
                 .step_by(2)
                 .map(|offset| format!("{}/32", std::net::Ipv4Addr::from(base + offset)))
                 .collect::<Vec<_>>();
-            let policy: NetworkPermissionConfig = serde_json::from_value(json!({
+            let policy: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
                 "egress":{"allow":[{"to":[{"cidr":format!("10.0.0.0/{prefix}"),"except":except}]}]}
             }))
             .unwrap();
@@ -830,10 +924,11 @@ mod tests {
     #[test]
     fn linux_rejects_ipv6_ranges_straddling_mapped_addresses() {
         for cidr in ["::/0", "::/80", "::fffe:0:0/95"] {
-            let policy: NetworkPermissionConfig = serde_json::from_value(json!({
-                "egress":{"allow":[{"to":[{"cidr":cidr}]}]}
-            }))
-            .unwrap();
+            let policy: NetworkPermissionConfig =
+                NetworkPermissionConfig::from_legacy_value(json!({
+                    "egress":{"allow":[{"to":[{"cidr":cidr}]}]}
+                }))
+                .unwrap();
             assert!(policy.validate().is_ok());
             assert!(
                 policy
@@ -844,13 +939,14 @@ mod tests {
             );
         }
         for cidr in ["2001:db8::/32", "fd00::/8", "::ffff:192.0.2.0/120"] {
-            let policy: NetworkPermissionConfig = serde_json::from_value(json!({
-                "egress":{"allow":[{"to":[{"cidr":cidr}]}]}
-            }))
-            .unwrap();
+            let policy: NetworkPermissionConfig =
+                NetworkPermissionConfig::from_legacy_value(json!({
+                    "egress":{"allow":[{"to":[{"cidr":cidr}]}]}
+                }))
+                .unwrap();
             policy.validate_for_platform("linux").unwrap();
         }
-        let all: NetworkPermissionConfig = serde_json::from_value(json!({
+        let all: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
             "egress":{"allow":[{}]}
         }))
         .unwrap();
@@ -859,35 +955,38 @@ mod tests {
 
     #[test]
     fn platform_validation_matches_native_backend_capabilities() {
-        let fine_grained: NetworkPermissionConfig = serde_json::from_value(json!({
-            "egress":{"allow":[{"to":[{"cidr":"192.0.2.1/32"}]}]}
-        }))
-        .unwrap();
+        let fine_grained: NetworkPermissionConfig =
+            NetworkPermissionConfig::from_legacy_value(json!({
+                "egress":{"allow":[{"to":[{"cidr":"192.0.2.1/32"}]}]}
+            }))
+            .unwrap();
         assert!(fine_grained.validate_for_platform("linux").is_ok());
         assert!(fine_grained.validate_for_platform("windows").is_ok());
         assert!(
             fine_grained
                 .validate_for_platform("macos")
                 .unwrap_err()
-                .contains("egress.allow")
+                .contains("network.allow")
         );
         for value in [
             json!({"ingress":{"default":"allow"}}),
             json!({"ingress":{"hostLoopback":"allow"}}),
         ] {
-            let policy: NetworkPermissionConfig = serde_json::from_value(value).unwrap();
+            let policy: NetworkPermissionConfig =
+                NetworkPermissionConfig::from_legacy_value(value).unwrap();
             assert!(policy.validate_for_platform("linux").is_err());
             assert!(policy.validate_for_platform("windows").is_ok());
         }
-        let loopback: NetworkPermissionConfig = serde_json::from_value(json!({
+        let loopback: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
             "ingress":{"hostLoopback":"allow"}
         }))
         .unwrap();
         assert!(loopback.validate_for_platform("macos").is_err());
-        let bidirectional: NetworkPermissionConfig = serde_json::from_value(json!({
-            "ingress":{"default":"allow","hostLoopback":"allow"}
-        }))
-        .unwrap();
+        let bidirectional: NetworkPermissionConfig =
+            NetworkPermissionConfig::from_legacy_value(json!({
+                "ingress":{"default":"allow","hostLoopback":"allow"}
+            }))
+            .unwrap();
         assert!(bidirectional.validate_for_platform("macos").is_ok());
         for platform in ["linux", "macos", "windows"] {
             NetworkPermissionConfig::offline()

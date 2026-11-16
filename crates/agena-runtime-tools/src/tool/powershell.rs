@@ -46,8 +46,14 @@ pub(super) async fn execute_async(
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    (request.command, request.env) =
-        crate::shell_sandbox::protect_async(executor, request.command, &request.cwd, input, request.env).await?;
+    (request.command, request.env) = crate::shell_sandbox::protect_async(
+        executor,
+        request.command,
+        &request.cwd,
+        input,
+        request.env,
+    )
+    .await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
     let execution = executor
         .execute_shell_command_with_live(&request, context.output.clone())

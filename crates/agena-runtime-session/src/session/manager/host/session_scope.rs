@@ -60,8 +60,7 @@ impl SessionManager {
             if cancel_for_reads.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
-            let check = authorizer
-                .path_permission_check(access, &path.to_string_lossy());
+            let check = authorizer.path_permission_check(access, &path.to_string_lossy());
             runtime
                 .block_on(manager.authorize_session_scoped_checks(
                     session,
@@ -97,8 +96,10 @@ impl SessionManager {
         if cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
-        let executor = self.sandbox_executor_for_session(&executor, session)
-            .await.map_err(tool_error)?;
+        let executor = self
+            .sandbox_executor_for_session(&executor, session)
+            .await
+            .map_err(tool_error)?;
 
         let _permit = tokio::select! {
             biased;

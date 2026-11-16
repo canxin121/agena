@@ -110,6 +110,9 @@ pub struct ConfigSettingsReadResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub value: JsonValue,
+    /// Parent value for permission editing, before this file layer is applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inherited_value: Option<JsonValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

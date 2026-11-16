@@ -40,6 +40,7 @@ impl Application {
                             source: ConfigSettingsSource::Effective,
                             path,
                             value,
+                            inherited_value: None,
                         }
                     }
                 };
@@ -102,6 +103,7 @@ impl Application {
                     source: ConfigSettingsSource::Effective,
                     path: None,
                     value: configuration.effective,
+                    inherited_value: None,
                 };
                 let input = ConfigSettingsGetInput {
                     source: ConfigSettingsSource::File,
@@ -207,6 +209,18 @@ fn settings_leaf(
         value: agena_domain::get_json_path(&root.value, Some(path)).map_err(|error| {
             ApplicationError::bad_request_with_diagnostic("The settings path is invalid.", error)
         })?,
+        inherited_value: root
+            .inherited_value
+            .as_ref()
+            .filter(|_| path == "permission" || path.starts_with("permission."))
+            .map(|value| agena_domain::get_json_path(value, Some(path)))
+            .transpose()
+            .map_err(|error| {
+                ApplicationError::bad_request_with_diagnostic(
+                    "The settings path is invalid.",
+                    error,
+                )
+            })?,
     })
 }
 

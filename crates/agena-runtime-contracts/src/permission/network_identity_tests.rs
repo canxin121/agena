@@ -29,13 +29,8 @@ fn ipv6_urls_and_mapped_loopback_targets_cannot_skip_native_host_loopback_denial
 #[test]
 fn ipv4_cidr_denials_cover_mapped_ipv6_target_spellings() {
     let policy = native_policy(json!({
-        "egress": {
-            "default":"allow",
-            "deny":[{
-                "to":[{"cidr":"192.0.2.0/24"}],
-                "ports":[{"protocol":"tcp","port":443}]
-            }]
-        }
+        "default":"allow",
+        "deny":[{"to":"192.0.2.0/24","protocol":"tcp","ports":[443]}]
     }));
     for target in [
         "192.0.2.7:443",
@@ -58,9 +53,9 @@ fn ipv4_cidr_denials_cover_mapped_ipv6_target_spellings() {
 #[test]
 fn mapped_ipv6_cidr_denials_have_the_same_ipv4_native_meaning() {
     let policy = native_policy(json!({
-        "egress":{"default":"allow","deny":[{
-            "to":[{"cidr":"::ffff:192.0.2.0/120","except":["::ffff:192.0.2.128/121"]}]
-        }]}
+        "default":"allow","deny":[{
+            "to":"::ffff:192.0.2.0/120","except":["::ffff:192.0.2.128/121"]
+        }]
     }));
     for target in ["192.0.2.7:443", "[::ffff:192.0.2.7]:443"] {
         assert!(
@@ -77,7 +72,7 @@ fn mapped_ipv6_cidr_denials_have_the_same_ipv4_native_meaning() {
 #[test]
 fn ordinary_ipv6_cidrs_keep_their_native_address_family() {
     let policy = native_policy(json!({
-        "egress":{"default":"deny","allow":[{"to":[{"cidr":"2001:db8::/32"}]}]}
+        "default":"deny","allow":[{"to":"2001:db8::/32"}]
     }));
     assert!(matches!(
         policy.check_connect(&"[2001:db8::1]:443".parse().unwrap()),
@@ -94,7 +89,7 @@ fn ordinary_ipv6_cidrs_keep_their_native_address_family() {
 #[test]
 fn hostnames_require_resolution_and_resolved_addresses_keep_native_denials() {
     let network = native_policy(json!({
-        "egress":{"default":"allow","deny":[{"to":[{"cidr":"192.0.2.0/24"}]}]}
+        "default":"allow","deny":[{"to":"192.0.2.0/24"}]
     }));
     assert!(denied(
         network.check_connect(&"example.com:443".parse().unwrap())

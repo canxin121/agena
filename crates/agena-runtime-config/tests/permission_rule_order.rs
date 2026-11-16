@@ -75,8 +75,8 @@ fn both_save_services_preserve_command_order_and_persist_order_only_updates() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn saved_native_network_denies_override_allows_regardless_of_json_key_order() {
-    let deny_last = r#"{"network":{"egress":{"default":"deny","allow":[{"to":[{"cidr":"192.0.2.0/24"}],"ports":[{"protocol":"tcp","port":443}]}],"deny":[{"to":[{"cidr":"192.0.2.42/32"}]}]}}}"#;
-    let allow_last = r#"{"network":{"egress":{"default":"deny","deny":[{"to":[{"cidr":"192.0.2.42/32"}]}],"allow":[{"to":[{"cidr":"192.0.2.0/24"}],"ports":[{"protocol":"tcp","port":443}]}]}}}"#;
+    let deny_last = r#"{"network":{"default":"deny","allow":[{"to":"192.0.2.0/24","protocol":"tcp","ports":[443]}],"deny":[{"to":"192.0.2.42"}]}}"#;
+    let allow_last = r#"{"network":{"default":"deny","deny":[{"to":"192.0.2.42"}],"allow":[{"to":"192.0.2.0/24","protocol":"tcp","ports":[443]}]}}"#;
     for layered in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("global.json");

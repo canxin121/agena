@@ -1025,6 +1025,7 @@ impl SessionQueryService for SessionManager {
             workflow_state: workflow_from_snapshot(snapshot),
             agent_id: crate::identity::AGENA_AGENT_ID.into(),
             selected_permission: configuration.permission.clone(),
+            inherited_permission: state.config.permission.clone(),
             effective_permission: state
                 .config
                 .permission

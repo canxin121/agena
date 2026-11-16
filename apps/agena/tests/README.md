@@ -110,7 +110,7 @@ async fn file_read() -> TestResult {
 的工具结果并回复结束标记。它等待精确执行代次完成，并通过正式 HTTP API 获取
 该次调用的持久化结果。它保留会话原有权限；需要允许写入、进程或网络操作时，
 用例显式设置权限。`bundled/mod.rs::allow_permissions` 是这批本地 fixture 使用的
-明确策略，网络只允许 loopback。
+明确策略：Linux/Windows 只允许本地 fixture 使用的非回环网卡地址，macOS 使用出站默认允许。
 
 需要处理交互时使用 `start_tool`：
 

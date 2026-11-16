@@ -8,6 +8,84 @@ use serde_json::{Value, json};
 use std::{ffi::OsString, time::Duration};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn flat_network_editor_reads_parent_and_keeps_explicit_offline_until_deleted() -> TestResult {
+    fixture()
+        .configure_global(|config| {
+            config["permission"]["network"] = json!({"default":"allow"});
+        })
+        .workspace_config(json!({"permission":{"network":{}}}))
+        .run(|case| async move {
+            let settings = case.settings();
+            let before: Value = settings
+                .layer(SettingsLayer::Workspace, Some("permission"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(before["value"]["network"] == json!({}), "{before}");
+            ensure!(
+                before["inherited_value"]["network"] == json!({"default":"allow"}),
+                "{before}"
+            );
+            let global: Value = settings
+                .layer(SettingsLayer::Global, Some("permission.network"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                global["inherited_value"] == json!({"default":"deny"}),
+                "{global}"
+            );
+            let snapshot = case.config_snapshot().await?;
+            ensure!(
+                snapshot
+                    .loaded
+                    .pointer("/config/permission/network/default")
+                    == Some(&json!("deny"))
+            );
+
+            let invalid = settings
+                .set(
+                    SettingsLayer::Workspace,
+                    "permission.network",
+                    json!({"allow":[{"to":"example.com"}]}),
+                    EditOptions {
+                        validate: false,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            ensure!(
+                invalid.status.is_client_error(),
+                "invalid network policy was accepted: {invalid:?}"
+            );
+            let after: Value = settings
+                .layer(SettingsLayer::Workspace, Some("permission"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(before["value"] == after["value"] && before["revision"] == after["revision"]);
+
+            settings
+                .delete(
+                    SettingsLayer::Workspace,
+                    "permission.network",
+                    EditOptions::default(),
+                )
+                .await?
+                .require_success()?;
+            let snapshot = case.config_snapshot().await?;
+            ensure!(
+                snapshot
+                    .loaded
+                    .pointer("/config/permission/network/default")
+                    == Some(&json!("allow"))
+            );
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn settings_sources_are_resolved_by_product_and_environment_can_be_removed_on_restart()
 -> TestResult {
     fixture()

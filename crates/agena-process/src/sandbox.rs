@@ -1781,26 +1781,25 @@ mod tests {
     #[test]
     fn native_network_rejects_domains_and_invalid_port_ranges() {
         for value in [
-            serde_json::json!({"egress":{"allow":[{"to":[{"cidr":"example.com"}]}]}}),
-            serde_json::json!({"egress":{"allow":[{"to":[{"cidr":"192.0.2.1/32"}],"ports":[{"protocol":"tcp","port":443,"endPort":80}]}]}}),
-            serde_json::json!({"egress":{"allow":[{"to":[{"cidr":"192.0.2.0/24","except":["198.51.100.0/24"]}]}]}}),
+            serde_json::json!({"allow":[{"to":"example.com"}]}),
+            serde_json::json!({"allow":[{"to":"192.0.2.1","protocol":"tcp","ports":["443-80"]}]}),
+            serde_json::json!({"allow":[{"to":"192.0.2.0/24","except":["198.51.100.0/24"]}]}),
         ] {
-            let config = serde_json::from_value(value).unwrap();
-            assert!(validate_network_config_for_platform(&config, "linux").is_err());
+            assert!(serde_json::from_value::<NetworkPermissionConfig>(value).is_err());
         }
     }
 
     #[test]
     fn native_network_enforces_backend_capabilities_before_launch() {
         let selective = serde_json::from_value(serde_json::json!({
-            "egress": {"default": "deny", "allow": [{"to": [{"cidr": "192.0.2.1/32"}]}]}
+            "default": "deny", "allow": [{"to": "192.0.2.1"}]
         }))
         .unwrap();
         assert!(validate_network_config_for_platform(&selective, "linux").is_ok());
         assert!(validate_network_config_for_platform(&selective, "windows").is_ok());
         assert!(validate_network_config_for_platform(&selective, "macos").is_err());
         let loopback = serde_json::from_value(serde_json::json!({
-            "ingress": {"default": "deny", "hostLoopback": "allow"}
+            "inbound": "deny", "hostLoopback": "allow"
         }))
         .unwrap();
         assert!(validate_network_config_for_platform(&loopback, "linux").is_err());
@@ -1816,42 +1815,38 @@ mod tests {
     #[test]
     fn native_network_preserves_cidr_exceptions_protocols_ranges_and_denies() {
         let config = serde_json::from_value(serde_json::json!({
-            "egress": {
-                "default": "allow",
-                "allow": [{
-                    "to": [
-                        {"cidr": "10.20.0.0/16", "except": ["10.20.10.0/24"]},
-                        {"cidr": "fd20:20::/48", "except": ["fd20:20:0:10::/64"]}
-                    ],
-                    "ports": [
-                        {"protocol": "tcp", "port": 8000, "endPort": 8099},
-                        {"protocol": "udp", "port": 53},
-                        {"protocol": "icmp"}
-                    ]
-                }],
-                "deny": [{"to": [{"cidr": "10.20.66.0/24"}]}]
-            },
-            "ingress": {"default": "deny", "hostLoopback": "deny"}
-        }))
-        .unwrap();
+            "default": "allow",
+            "allow": [
+                {"to":"10.20.0.0/16","except":["10.20.10.0/24"],"protocol":"tcp","ports":["8000-8099"]},
+                {"to":"fd20:20::/48","except":["fd20:20:0:10::/64"],"protocol":"icmp"},
+                {"to":"*","protocol":"udp","ports":[53]},
+                {"to":"192.0.2.53","protocol":"udp","ports":[53]}
+            ],
+            "deny": [{"to":"10.20.66.0/24"}]
+        })).unwrap();
         let policy = network_policy(&SandboxNetwork::Native { policy: config }).unwrap();
         assert!(policy.runtime_config.is_none());
         let egress = policy.egress.unwrap();
         assert!(matches!(egress.default, Some(NetworkAction::Allow)));
         let allow = egress.allow.unwrap();
-        let peers = allow[0].to.as_ref().unwrap();
-        assert_eq!(peers[0].except.as_ref().unwrap(), &["10.20.10.0/24"]);
-        assert_eq!(peers[1].cidr, "fd20:20::/48");
-        let ports = allow[0].ports.as_ref().unwrap();
-        assert_eq!(ports[0].end_port, Some(8099));
+        assert_eq!(allow.len(), 4);
+        assert_eq!(
+            allow[0].to.as_ref().unwrap()[0].except.as_ref().unwrap(),
+            &["10.20.10.0/24"]
+        );
+        assert_eq!(allow[0].ports.as_ref().unwrap()[0].end_port, Some(8099));
+        assert_eq!(allow[1].to.as_ref().unwrap()[0].cidr, "fd20:20::/48");
         assert!(matches!(
-            ports[1].protocol,
-            Some(mxc_sdk::v1::NetworkProtocol::Udp)
-        ));
-        assert!(matches!(
-            ports[2].protocol,
+            allow[1].ports.as_ref().unwrap()[0].protocol,
             Some(mxc_sdk::v1::NetworkProtocol::Icmp)
         ));
+        assert!(allow[1].ports.as_ref().unwrap()[0].port.is_none());
+        assert!(allow[2].to.is_none());
+        assert!(matches!(
+            allow[2].ports.as_ref().unwrap()[0].protocol,
+            Some(mxc_sdk::v1::NetworkProtocol::Udp)
+        ));
+        assert_eq!(allow[3].to.as_ref().unwrap()[0].cidr, "192.0.2.53/32");
         let deny = egress.deny.unwrap();
         assert!(deny[0].ports.is_none());
         assert_eq!(deny[0].to.as_ref().unwrap()[0].cidr, "10.20.66.0/24");

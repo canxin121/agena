@@ -577,6 +577,8 @@ fn archive_failure(error: KernelError) -> agena_failure::Failure {
                 "session.permission:",
                 "session.permission_ceiling:",
                 "effective session.permission:",
+                "permission.network.",
+                "permission.network:",
             ]
             .iter()
             .any(|prefix| detail.starts_with(prefix)) =>

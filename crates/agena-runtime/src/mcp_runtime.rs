@@ -126,7 +126,9 @@ pub fn mcp_server_spec(
                 exclude: tools.exclude.clone(),
             },
             resources: agena_mcp_client::StdioResourceDeclarations {
-                reads: process.reads.clone(), writes: process.writes.clone(), network: process.network.clone(),
+                reads: process.reads.clone(),
+                writes: process.writes.clone(),
+                network: process.network.clone(),
             },
             sandbox: None,
         },

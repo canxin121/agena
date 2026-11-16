@@ -98,6 +98,20 @@ fn split_host_port(target: &str) -> Result<(&str, Option<u16>), NetworkTargetPar
     }
     Ok((target, None))
 }
+
+fn parse_port(target: &str, port: &str) -> Result<Option<u16>, NetworkTargetParseError> {
+    let port = port.trim();
+    if port.is_empty() || port == "*" {
+        return Ok(None);
+    }
+    port.parse()
+        .map(Some)
+        .map_err(|_| NetworkTargetParseError::InvalidPort {
+            target: target.into(),
+            port: port.into(),
+        })
+}
+
 #[cfg(test)]
 mod identity_tests {
     use super::*;
@@ -118,17 +132,4 @@ mod identity_tests {
             assert_eq!(target.port(), port, "{input}");
         }
     }
-}
-
-fn parse_port(target: &str, port: &str) -> Result<Option<u16>, NetworkTargetParseError> {
-    let port = port.trim();
-    if port.is_empty() || port == "*" {
-        return Ok(None);
-    }
-    port.parse()
-        .map(Some)
-        .map_err(|_| NetworkTargetParseError::InvalidPort {
-            target: target.into(),
-            port: port.into(),
-        })
 }

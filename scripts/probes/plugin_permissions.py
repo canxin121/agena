@@ -121,8 +121,7 @@ def tool_parts(api: fixture.Api, sid: int) -> list[dict[str, Any]]:
 
 def native_network(egress: str = 'deny') -> dict[str, Any]:
     fixture.require(egress in ('allow', 'deny'), 'native network actions must be allow or deny')
-    return {'egress': {'default': egress, 'allow': [], 'deny': []},
-            'ingress': {'default': 'deny', 'hostLoopback': 'deny'}}
+    return {'default': egress}
 
 
 def local_interface_ipv4() -> str:

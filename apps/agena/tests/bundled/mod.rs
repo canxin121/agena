@@ -44,20 +44,16 @@ fn native_fixture_address() -> anyhow::Result<std::net::IpAddr> {
 }
 
 fn native_fixture_network() -> anyhow::Result<Value> {
-    let egress = if cfg!(target_os = "macos") {
-        json!({"default":"allow","allow":[],"deny":[]})
+    let network = if cfg!(target_os = "macos") {
+        json!({"default":"allow"})
     } else {
         let address = native_fixture_address()?;
         json!({
             "default":"deny",
-            "allow":[{"to":[{"cidr":format!("{address}/32")}]}],
-            "deny":[]
+            "allow":[{"to":address.to_string()}]
         })
     };
-    Ok(json!({
-        "egress":egress,
-        "ingress":{"default":"deny","hostLoopback":"deny"}
-    }))
+    Ok(network)
 }
 
 /// Explicit policy for these local, case-owned behavioral fixtures. It is not

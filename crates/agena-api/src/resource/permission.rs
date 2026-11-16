@@ -10,15 +10,14 @@ mod tests {
         let wire = json!({
             "path": {"workspace":"readonly","rules":{"/tmp":"deny"}},
             "network":{
-                "egress":{
-                    "default":"deny",
-                    "allow":[{
-                        "to":[{"cidr":"192.0.2.0/24","except":["192.0.2.128/25"]}],
-                        "ports":[{"protocol":"tcp","port":8000,"endPort":8099}]
-                    }],
-                    "deny":[{"to":[{"cidr":"192.0.2.64/26"}]}]
-                },
-                "ingress":{"default":"deny","hostLoopback":"deny"}
+                "default":"deny",
+                "allow":[{
+                    "to":"192.0.2.0/24",
+                    "except":["192.0.2.128/25"],
+                    "protocol":"tcp",
+                    "ports":["8000-8099"]
+                }],
+                "deny":[{"to":"192.0.2.64/26"}]
             },
             "tools":{"default":"ask","names":{"agena.shell.exec":"deny"},
                 "rules":{"agena.shell.exec":{"routine":"allow","dangerous":"deny"},"fixture.tool":"auto"}},
@@ -45,7 +44,7 @@ mod tests {
             "tools": {"default": "ask", "names": {"fixture.tool": "deny"},
                 "rules": {"fixture.tool": {"routine": "ask"}}},
             "path": {"workspace": "readonly"},
-            "network": {"egress": {"default": "deny", "allow": [], "deny": []}},
+            "network": {"default": "deny"},
             "approval_model": {"provider": "fixture", "model": "approval"}
         }))
         .unwrap();

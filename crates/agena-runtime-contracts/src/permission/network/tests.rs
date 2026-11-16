@@ -1,8 +1,9 @@
 use super::*;
 use serde_json::{Value, json};
 
+// Grouped native fixtures exercise the authority-intersection algorithm.
 fn policy(egress: Value) -> NetworkPermissionConfig {
-    let config: NetworkPermissionConfig = serde_json::from_value(json!({
+    let config: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
         "egress": egress,
         "ingress": {"default": "deny", "hostLoopback": "deny"}
     }))
@@ -23,7 +24,7 @@ fn full_native_request_includes_ingress_and_host_loopback_capabilities() {
         ("allow", "allow", true),
         ("deny", "allow", false),
     ] {
-        let config: NetworkPermissionConfig = serde_json::from_value(json!({
+        let config: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
             "egress": {"default": "deny", "allow": [], "deny": []},
             "ingress": {"default": inbound, "hostLoopback": host_loopback}
         }))
@@ -60,7 +61,7 @@ fn full_native_request_includes_ingress_and_host_loopback_capabilities() {
 
 #[test]
 fn full_native_request_preserves_ingress_authority_ceilings() {
-    let inbound: NetworkPermissionConfig = serde_json::from_value(json!({
+    let inbound: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
         "egress": {"default": "deny"},
         "ingress": {"default": "allow", "hostLoopback": "allow"}
     }))
@@ -77,7 +78,7 @@ fn full_native_request_preserves_ingress_authority_ceilings() {
         ));
         combined.validate_for_platform("linux").unwrap();
     }
-    let ingress_only: NetworkPermissionConfig = serde_json::from_value(json!({
+    let ingress_only: NetworkPermissionConfig = NetworkPermissionConfig::from_legacy_value(json!({
         "egress": {"default": "deny"},
         "ingress": {"default": "allow", "hostLoopback": "deny"}
     }))
@@ -466,12 +467,12 @@ fn any_with_ports_matches_tcp_and_udp_but_not_icmp() {
 
 #[test]
 fn intersected_ingress_actions_require_every_authority_to_allow() {
-    let left = serde_json::from_value(json!({
+    let left = NetworkPermissionConfig::from_legacy_value(json!({
         "egress": {"default": "allow"},
         "ingress": {"default": "allow", "hostLoopback": "allow"}
     }))
     .unwrap();
-    let right = serde_json::from_value(json!({
+    let right = NetworkPermissionConfig::from_legacy_value(json!({
         "egress": {"default": "allow"},
         "ingress": {"default": "deny", "hostLoopback": "allow"}
     }))

@@ -317,21 +317,17 @@ fn native_network_check() -> io::Result<&'static str> {
         private_paths: vec![root.path().to_path_buf()],
         network: SandboxNetwork::Native {
             policy: serde_json::from_value(serde_json::json!({
-                "egress": {
-                    "default": "deny",
-                    "allow": [{
-                        "to": [{"cidr": format!("{address}/32")}],
-                        "ports": [
-                            {"protocol": "tcp", "port": allowed.port},
-                            {"protocol": "tcp", "port": denied.port}
-                        ]
-                    }],
-                    "deny": [{
-                        "to": [{"cidr": format!("{address}/32")}],
-                        "ports": [{"protocol": "tcp", "port": denied.port}]
-                    }]
-                },
-                "ingress": {"default": "deny", "hostLoopback": "deny"}
+                "default": "deny",
+                "allow": [{
+                    "to": address.to_string(),
+                    "protocol": "tcp",
+                    "ports": [allowed.port, denied.port]
+                }],
+                "deny": [{
+                    "to": address.to_string(),
+                    "protocol": "tcp",
+                    "ports": [denied.port]
+                }]
             }))
             .map_err(io::Error::other)?,
         },

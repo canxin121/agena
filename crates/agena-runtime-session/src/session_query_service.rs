@@ -38,6 +38,7 @@ pub struct SessionExecutionContext {
     pub workflow_state: WorkflowState,
     pub agent_id: String,
     pub selected_permission: PermissionConfig,
+    pub inherited_permission: PermissionConfig,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
     pub model_provider_id: Option<String>,

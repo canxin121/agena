@@ -205,10 +205,7 @@ impl PermissionConfig {
         self.path
             .as_ref()
             .is_none_or(PathPermissionConfig::is_empty)
-            && self
-                .network
-                .as_ref()
-                .is_none_or(NetworkPermissionConfig::is_empty)
+            && self.network.is_none()
             && self
                 .tools
                 .as_ref()
@@ -247,10 +244,8 @@ fn merge_network_section(
     current: &mut Option<NetworkPermissionConfig>,
     overlay: Option<NetworkPermissionConfig>,
 ) {
-    match (current.as_mut(), overlay) {
-        (Some(current), Some(overlay)) => current.merge_from(overlay),
-        (None, Some(overlay)) => *current = Some(overlay),
-        (_, None) => {}
+    if let Some(overlay) = overlay {
+        *current = Some(overlay);
     }
 }
 

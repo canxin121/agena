@@ -12,6 +12,19 @@ use caseless::Caseless;
 use uuid::Uuid;
 
 const MAX_BOTS: u64 = 256;
+static BOT_AVATAR_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+
+async fn prepare_avatar(avatar: &str) -> Result<String, AppError> {
+    if avatar.len() > MAX_BOT_AVATAR_DATA_URL_BYTES {
+        return Err(invalid("Bot avatar data URL must be at most 256 KiB"));
+    }
+    let avatar = avatar.to_owned();
+    BOT_AVATAR_WORKERS
+        .run(move || normalize_bot_avatar(&avatar))
+        .await
+        .map_err(|error| AppError::Internal(error.to_string()))?
+        .map_err(|error| invalid(&error.to_string()))
+}
 
 fn conflict(message: &'static str) -> AppError {
     AppError::BotConflict(message)
@@ -69,6 +82,7 @@ fn profile(record: BotRecord) -> BotProfile {
         persona: BotPersona {
             instructions: record.instructions,
         },
+        avatar: record.avatar,
         revision: record.revision,
         archived: record.archived,
         local_session_id: None,
@@ -83,6 +97,7 @@ fn record(profile: &BotProfile) -> BotRecord {
         name: profile.name.clone(),
         name_folded: folded_name(&profile.name),
         instructions: profile.persona.instructions.clone(),
+        avatar: profile.avatar.clone(),
         revision: profile.revision,
         archived: profile.archived,
         created_at_ms: profile.created_at_ms,
@@ -278,11 +293,16 @@ impl SessionManager {
             return Err(repository_error(BotRepositoryError::Capacity));
         }
         let name = validate_name(&create.name, &persona)?;
+        let avatar = match create.avatar.as_deref() {
+            Some(avatar) => Some(prepare_avatar(avatar).await?),
+            None => None,
+        };
         let now = chrono::Utc::now().timestamp_millis();
         let candidate = BotProfile {
             id: Uuid::new_v4(),
             name,
             persona,
+            avatar,
             revision: 1,
             archived: false,
             local_session_id: None,
@@ -325,9 +345,15 @@ impl SessionManager {
         }
         let name = validate_name(&update.name, &update.persona)?;
         let persona = update.persona.clone();
+        let avatar = match update.avatar.as_ref() {
+            None => current.avatar.clone(),
+            Some(None) => None,
+            Some(Some(avatar)) => Some(prepare_avatar(avatar).await?),
+        };
         let next = BotProfile {
             name,
             persona,
+            avatar,
             revision: update.expected_revision + 1,
             updated_at_ms: chrono::Utc::now().timestamp_millis(),
             ..current
@@ -476,6 +502,7 @@ impl SessionManager {
             id: Uuid::new_v4(),
             name,
             persona: BotPersona::default(),
+            avatar: None,
             revision: 1,
             archived: false,
             local_session_id: None,

@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // Bot roots share the project tree's disclosure and anchored menu primitives.
 import { computed, type ComponentPublicInstance } from 'vue'
-import { RiArrowDownSLine, RiArrowRightSLine, RiRobot2Line } from '@remixicon/vue'
+import { RiArrowDownSLine, RiArrowRightSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
+import BotAvatar from '@/features/bots/BotAvatar.vue'
 import { formatTime } from '@/features/sessions/model/labels'
 import type { BotProfile } from '@/lib/bots'
 import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
@@ -48,7 +49,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
-const initials = computed(() => Array.from(props.profile.name.trim()).slice(0, 2).join('').toLocaleUpperCase())
 const subtitle = computed(() => {
   const instructions = String(props.profile.persona.instructions || '')
     .trim()
@@ -103,13 +103,7 @@ function handleClick() {
         >
           <component :is="collapsed ? RiArrowRightSLine : RiArrowDownSLine" class="h-3 w-3" />
         </button>
-        <span
-          v-if="initials"
-          aria-hidden="true"
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[10px] font-semibold text-primary"
-          >{{ initials }}</span
-        >
-        <RiRobot2Line v-else class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <BotAvatar :name="profile.name" :avatar="profile.avatar" size="sm" />
       </template>
 
       <div class="flex w-full min-w-0 items-center gap-2">

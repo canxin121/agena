@@ -42,7 +42,7 @@ export default {
       choose: 'Choose a Bot',
       identity: 'Named Bot · instructions & conversation',
       scope:
-        'Only this Bot uses its name and additional system instructions. Conversation history and model choice are separate; memory, reminders and quotas are instance settings.',
+        'Only this Bot uses its name, avatar and additional system instructions. Conversation history and model choice are separate; memory, reminders and quotas are instance settings.',
       empty: 'No active Bots. Create one to start a conversation.',
       create: 'Create Bot',
       edit: 'Edit Bot',
@@ -51,6 +51,18 @@ export default {
       archived: 'This Bot is archived. Choose another Bot or create one.',
       name: 'Bot name',
       nameHint: 'e.g. Atlas or Writing partner',
+      avatar: 'Avatar',
+      avatarUpload: 'Upload image',
+      avatarReplace: 'Change image',
+      avatarRemove: 'Remove',
+      avatarHint: 'PNG, JPEG or WebP, up to 5 MiB. Center-cropped to 128 × 128.',
+      avatarProcessing: 'Preparing image…',
+      avatarErrors: {
+        unsupported: 'Choose a PNG, JPEG or WebP image.',
+        tooLarge: 'Choose an image no larger than 5 MiB.',
+        dimensions: 'Images can be at most {dimension} pixels per side and {pixels} pixels overall.',
+        read: 'This image could not be read. Choose a valid PNG, JPEG or WebP file.',
+      },
       instructions: 'Additional system instructions (optional)',
       instructionsNotSet: 'No additional system instructions set',
       instructionsCount:

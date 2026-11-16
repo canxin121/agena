@@ -31,6 +31,23 @@ afterEach(() => {
   setActivePinia(undefined)
 })
 describe('shared Bot catalog races', () => {
+  test('avatar replacements and removals survive older in-flight catalog results', async () => {
+    const store = useBotsStore()
+    const original = { ...bot(1), avatar: 'data:image/png;base64,AA==' }
+    store.apply(original)
+    for (const avatar of ['data:image/png;base64,AQ==', null]) {
+      const response = deferred<Response>()
+      globalThis.fetch = (() => response.promise) as typeof fetch
+      const pending = store.refresh()
+      const updated = { ...bot(avatar ? 2 : 3), avatar }
+      store.apply(updated)
+      expect(store.profiles[0]?.avatar).toBe(avatar)
+      response.resolve(Response.json({ items: [original] }))
+      await pending
+      expect(store.profiles[0]?.avatar).toBe(avatar)
+      expect(store.profiles[0]?.revision).toBe(updated.revision)
+    }
+  })
   test('a post-rename authoritative absence removes the row and stale applies cannot bring it back', async () => {
     const store = useBotsStore()
     store.apply(bot(2))

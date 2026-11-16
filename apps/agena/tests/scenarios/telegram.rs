@@ -200,6 +200,7 @@ async fn managed_local_bot(case: &TestCase) -> Result<BotSession> {
             request_key: "telegram-ai-bot".into(),
             name: "Telegram AI".into(),
             persona: None,
+            avatar: None,
         })
         .await?;
     let session = client.ensure_named_bot_session(bot.id).await?;

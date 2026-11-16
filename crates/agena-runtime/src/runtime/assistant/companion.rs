@@ -75,6 +75,7 @@ fn bot_profile_update(
         persona: BotPersona {
             instructions: preferences.instructions,
         },
+        avatar: None,
     })
 }
 
@@ -787,6 +788,7 @@ mod persona_tests {
             persona: BotPersona {
                 instructions: format!("Instructions for {name} only"),
             },
+            avatar: None,
             revision: 3,
             archived: false,
             local_session_id: Some(_session),

@@ -1,10 +1,13 @@
 use super::*;
 use agena_tui_components::truncate_display_text_with_suffix;
+use agena_tui_media::{
+    image_halfblock_lines_shared, image_rendering_enabled, render_markdown_image,
+};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect, Size},
     style::{Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
@@ -15,6 +18,68 @@ fn short(text: &str, width: u16) -> String {
         "…",
     )
 }
+
+fn avatar_lines(source: Option<&str>, name: &str, width: u16) -> [Line<'static>; 2] {
+    if image_rendering_enabled()
+        && let Some(source) = source.filter(|s| s.starts_with("data:image/png;base64,"))
+        && let Ok(artifact) = render_markdown_image(source)
+    {
+        let mut lines =
+            image_halfblock_lines_shared(&artifact, Size::new(width, width.div_ceil(2)))
+                .into_iter();
+        return std::array::from_fn(|_| {
+            lines
+                .next()
+                .unwrap_or_else(|| Line::from(" ".repeat(usize::from(width))))
+        });
+    }
+    let initial = agena_tui::sanitize_picker_text(name)
+        .chars()
+        .find(|ch| !ch.is_whitespace())
+        .unwrap_or('◉')
+        .to_string();
+    let initial = short(&initial, width);
+    let padding = usize::from(width).saturating_sub(UnicodeWidthStr::width(initial.as_str()));
+    [
+        Line::from(format!("{initial}{}", " ".repeat(padding))),
+        Line::from(" ".repeat(usize::from(width))),
+    ]
+}
+
+fn with_avatar(
+    source: Option<&str>,
+    name: &str,
+    width: u16,
+    lines: [Line<'static>; 2],
+    selected: bool,
+) -> Vec<Line<'static>> {
+    avatar_lines(source, name, width)
+        .into_iter()
+        .zip(lines)
+        .map(|(mut avatar, line)| {
+            avatar.spans.push(Span::raw(" "));
+            // List applies its highlight style after rendering every span.
+            // Highlight text here so selection cannot swap image pixels.
+            avatar.spans.extend(line.spans.into_iter().map(|mut span| {
+                span.style = line
+                    .style
+                    .patch(span.style)
+                    .patch(selection_style(selected));
+                span
+            }));
+            avatar
+        })
+        .collect()
+}
+
+fn selection_style(selected: bool) -> Style {
+    if selected {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default()
+    }
+}
+
 impl App {
     pub(crate) fn render_bot_entry(&self, frame: &mut Frame<'_>, area: Rect) {
         let title = self.i18n.text(match self.bot.view {
@@ -36,7 +101,26 @@ impl App {
             BotView::List => "bot-list-keys",
             BotView::Opening => "bot-entry-keys",
             BotView::Archive | BotView::Reload | BotView::DeleteConversation => "bot-confirm-keys",
+            BotView::Form
+                if self.bot.accepts_text()
+                    && self
+                        .bot
+                        .form
+                        .as_ref()
+                        .is_some_and(|f| f.index == BOT_AVATAR_FIELD) =>
+            {
+                "bot-avatar-editor-keys"
+            }
             BotView::Form if self.bot.accepts_text() => "bot-editor-keys",
+            BotView::Form
+                if self
+                    .bot
+                    .form
+                    .as_ref()
+                    .is_some_and(|f| f.index == BOT_AVATAR_FIELD) =>
+            {
+                "bot-avatar-form-keys"
+            }
             _ => "bot-form-keys",
         };
         let help = text(help_key);
@@ -53,7 +137,19 @@ impl App {
         });
         let status = error.unwrap_or_else(|| {
             if self.bot.task.is_some() {
-                text("bot-opening")
+                text(
+                    if self.bot.view == BotView::Form && self.bot.form.is_some() {
+                        if self.bot.form.as_ref().is_some_and(|form| {
+                            matches!(form.avatar, BotAvatarDraft::File { data: None, .. })
+                        }) {
+                            "bot-avatar-loading"
+                        } else {
+                            "bot-saving"
+                        }
+                    } else {
+                        "bot-opening"
+                    },
+                )
             } else {
                 String::new()
             }
@@ -90,6 +186,11 @@ impl App {
                 // both halves, so the view is a flat List with section rows.
                 let palette = agena_tui_components::theme::active_palette();
                 let mut items: Vec<ListItem> = Vec::new();
+                let selected = if self.bot.focus_conversations {
+                    self.bot.flat_conversation_offset() + self.bot.conversation_index
+                } else {
+                    self.bot.index
+                };
                 // Flat index -> whether the item is selectable (a Bot row or a
                 // conversation row); headings are not.
                 let mut selectable = Vec::new();
@@ -108,27 +209,38 @@ impl App {
                     } else {
                         p.persona.instructions.clone()
                     };
-                    items.push(ListItem::new(vec![
-                        Line::from(format!(
-                            "{} {marker}",
-                            short(
-                                &p.name,
-                                body.width.saturating_sub(
-                                    3 + UnicodeWidthStr::width(marker.as_str()) as u16
+                    let avatar_width = if body.width >= 48 { 4 } else { 2 };
+                    let content_width = body.width.saturating_sub(avatar_width + 3);
+                    items.push(ListItem::new(with_avatar(
+                        p.avatar.as_deref(),
+                        &p.name,
+                        avatar_width,
+                        [
+                            Line::from(format!(
+                                "{} {marker}",
+                                short(
+                                    &p.name,
+                                    content_width.saturating_sub(
+                                        1 + UnicodeWidthStr::width(marker.as_str()) as u16
+                                    )
                                 )
-                            )
-                        )),
-                        Line::from(short(&preview, body.width.saturating_sub(2))),
-                    ]));
+                            )),
+                            Line::from(short(&preview, content_width)),
+                        ],
+                        index == selected,
+                    )));
                     selectable.push(Some(index));
                 }
                 if !self.bot.conversations.is_empty() {
                     let row_total = self.bot.conversation_rows().len();
                     if row_total == 0 {
-                        items.push(ListItem::new(Line::from(short(
-                            &text("bot-conversations-empty"),
-                            body.width.saturating_sub(2),
-                        ))));
+                        items.push(
+                            ListItem::new(Line::from(short(
+                                &text("bot-conversations-empty"),
+                                body.width.saturating_sub(2),
+                            )))
+                            .style(selection_style(items.len() == selected)),
+                        );
                         selectable.push(None);
                     }
                     let focused = if self.bot.focus_conversations {
@@ -149,7 +261,7 @@ impl App {
                         );
                         items.push(
                             ListItem::new(Line::from(short(&label, body.width.saturating_sub(2))))
-                                .style(heading),
+                                .style(heading.patch(selection_style(items.len() == selected))),
                         );
                         selectable.push(None);
                         for row in &group.rows {
@@ -164,17 +276,20 @@ impl App {
                             if row.favorite {
                                 meta.push_str(" · ★");
                             }
-                            items.push(ListItem::new(vec![
-                                Line::from(format!(
-                                    "  {}",
-                                    short(&row.title, body.width.saturating_sub(4))
-                                )),
-                                Line::from(short(
-                                    &format!("  {meta}"),
-                                    body.width.saturating_sub(2),
-                                ))
-                                .style(muted),
-                            ]));
+                            items.push(
+                                ListItem::new(vec![
+                                    Line::from(format!(
+                                        "  {}",
+                                        short(&row.title, body.width.saturating_sub(4))
+                                    )),
+                                    Line::from(short(
+                                        &format!("  {meta}"),
+                                        body.width.saturating_sub(2),
+                                    ))
+                                    .style(muted),
+                                ])
+                                .style(selection_style(items.len() == selected)),
+                            );
                             selectable.push(None);
                         }
                     }
@@ -185,19 +300,11 @@ impl App {
                         body,
                     );
                 } else {
-                    // Selecting a conversation row: its flat position is the
-                    // Bot rows plus every heading and row before it.
-                    let mut selected = self.bot.index;
-                    if self.bot.focus_conversations {
-                        let before = self.bot.flat_conversation_offset();
-                        selected = before + self.bot.conversation_index;
-                    }
                     let mut state = ListState::default().with_selected(Some(selected));
                     let _ = selectable;
                     frame.render_stateful_widget(
                         List::new(items)
-                            .highlight_symbol("› ")
-                            .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
+                            .highlight_symbol(Line::styled("› ", selection_style(true))),
                         body,
                         &mut state,
                     );
@@ -206,7 +313,11 @@ impl App {
             BotView::Form => {
                 if let Some(form) = &self.bot.form {
                     if let Some(editor) = &form.edit {
-                        let label = text(["assistant-name", "bot-instructions"][form.index]);
+                        let label = text(if form.index == BOT_AVATAR_FIELD {
+                            "bot-avatar-path"
+                        } else {
+                            BOT_FORM_FIELDS[form.index]
+                        });
                         let output = agena_tui_components::render_wrapped_editor_panel(
                             frame,
                             body,
@@ -220,21 +331,54 @@ impl App {
                             frame.set_cursor_position(output.cursor);
                         }
                     } else {
-                        let rows: Vec<_> = ["assistant-name", "bot-instructions"]
+                        let rows: Vec<_> = BOT_FORM_FIELDS
                             .iter()
                             .enumerate()
                             .map(|(index, key)| {
+                                if index == BOT_AVATAR_FIELD {
+                                    let status = text(match &form.avatar {
+                                        BotAvatarDraft::Keep if form.avatar_preview().is_some() => {
+                                            "bot-avatar-set"
+                                        }
+                                        BotAvatarDraft::Keep => "bot-avatar-empty",
+                                        BotAvatarDraft::Clear => "bot-avatar-clear-pending",
+                                        BotAvatarDraft::File { data: Some(_), .. } => {
+                                            "bot-avatar-ready"
+                                        }
+                                        BotAvatarDraft::File { data: None, .. } => {
+                                            "bot-avatar-unready"
+                                        }
+                                    });
+                                    let detail = match &form.avatar {
+                                        BotAvatarDraft::File { path, .. } => path.clone(),
+                                        _ => text("bot-avatar-formats"),
+                                    };
+                                    let width = body.width.saturating_sub(7);
+                                    return ListItem::new(with_avatar(
+                                        form.avatar_preview(),
+                                        &form.name,
+                                        4,
+                                        [
+                                            Line::from(short(
+                                                &format!("{}: {status}", text(key)),
+                                                width,
+                                            )),
+                                            Line::from(short(&detail, width)),
+                                        ],
+                                        index == form.index,
+                                    ));
+                                }
                                 ListItem::new(short(
                                     &format!("{}: {}", text(key), form.value(index)),
                                     body.width.saturating_sub(2),
                                 ))
+                                .style(selection_style(index == form.index))
                             })
                             .collect();
                         let mut state = ListState::default().with_selected(Some(form.index));
                         frame.render_stateful_widget(
                             List::new(rows)
-                                .highlight_symbol("› ")
-                                .highlight_style(Style::default().add_modifier(Modifier::REVERSED)),
+                                .highlight_symbol(Line::styled("› ", selection_style(true))),
                             body,
                             &mut state,
                         );

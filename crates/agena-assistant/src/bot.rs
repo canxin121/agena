@@ -3,6 +3,9 @@ use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod avatar;
+pub use avatar::*;
+
 /// Hard storage/wire ceiling for one Bot's additional system instructions.
 ///
 /// Persona prompts are written in prose, and 4 KiB is far too small for the
@@ -42,6 +45,9 @@ pub struct BotProfile {
     pub id: Uuid,
     pub name: String,
     pub persona: BotPersona,
+    /// Instance-owned PNG thumbnail, encoded as a data URL.
+    #[serde(default)]
+    pub avatar: Option<String>,
     pub revision: i64,
     pub archived: bool,
     /// The one current local conversation. Other local roots are preserved
@@ -63,6 +69,8 @@ pub struct BotCreate {
     pub request_key: String,
     pub name: String,
     pub persona: Option<BotPersona>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -71,7 +79,25 @@ pub struct BotUpdate {
     pub expected_revision: i64,
     pub name: String,
     pub persona: BotPersona,
+    /// Missing preserves the current avatar; null removes it; a string replaces it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_avatar",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<String>")]
+    pub avatar: Option<Option<String>>,
 }
+
+fn deserialize_present_avatar<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BotArchive {
@@ -99,6 +125,43 @@ impl BotSession {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn avatar_update_distinguishes_keep_remove_and_replace_on_the_wire() {
+        let legacy = json!({"request_key":"update", "expected_revision":1, "name":"Bot", "persona":{"instructions":"Hello"}});
+        let keep: BotUpdate = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(keep.avatar, None);
+        assert_eq!(serde_json::to_value(keep).unwrap(), legacy);
+
+        for (wire, expected) in [
+            (serde_json::Value::Null, None),
+            (
+                json!("data:image/png;base64,aGVsbG8="),
+                Some("data:image/png;base64,aGVsbG8=".to_owned()),
+            ),
+        ] {
+            let mut input = legacy.clone();
+            input["avatar"] = wire;
+            let update: BotUpdate = serde_json::from_value(input.clone()).unwrap();
+            assert_eq!(update.avatar, Some(expected));
+            assert_eq!(serde_json::to_value(update).unwrap(), input);
+        }
+    }
+
+    #[test]
+    fn legacy_profiles_and_create_receipts_remain_compatible() {
+        let legacy = r#"{"request_key":"create","name":"Bot","persona":{"instructions":"Hello"}}"#;
+        let create: BotCreate = serde_json::from_str(legacy).unwrap();
+        assert_eq!(create.avatar, None);
+        assert_eq!(serde_json::to_string(&create).unwrap(), legacy);
+
+        let profile: BotProfile = serde_json::from_value(json!({
+            "id": Uuid::new_v4(), "name": "Bot", "persona": {"instructions": ""},
+            "revision": 1, "archived": false, "created_at_ms": 1, "updated_at_ms": 1
+        }))
+        .unwrap();
+        assert_eq!(profile.avatar, None);
+    }
 
     #[test]
     fn create_and_update_round_trip_only_instructions_and_reject_old_fields() {

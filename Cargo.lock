@@ -317,8 +317,10 @@ version = "0.1.0"
 dependencies = [
  "agena-domain",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "chrono-tz",
+ "image",
  "schemars",
  "serde",
  "serde_json",

@@ -8,6 +8,9 @@ import Input from '@/components/ui/Input.vue'
 import Button from '@/components/ui/Button.vue'
 import { archiveBot, createBot, emptyBotPersona, getBot, updateBot, type BotPersona, type BotProfile } from '@/lib/bots'
 import { botDraftFields, instructionsBytes, MAX_INSTRUCTIONS_BYTES } from '@/features/bots/draft'
+import BotAvatar from '@/features/bots/BotAvatar.vue'
+import { BOT_AVATAR_ACCEPT, MAX_BOT_AVATAR_DIMENSION, MAX_BOT_AVATAR_PIXELS } from '@/features/bots/avatar'
+import { useBotAvatarDraft } from '@/features/bots/avatarDraft'
 import { SaveOwnership } from '@/features/bots/saveOwnership'
 import { useBotsStore } from '@/stores/bots'
 import { useToastsStore } from '@/stores/toasts'
@@ -33,14 +36,19 @@ const error = ref('')
 const editing = ref<BotProfile | null>(null)
 const draftName = ref('')
 const persona = ref<BotPersona>(emptyBotPersona())
+const avatarInput = ref<HTMLInputElement | null>(null)
+const avatarDraft = useBotAvatarDraft()
+const { avatar: draftAvatar, change: avatarChange, loading: avatarLoading, error: avatarError } = avatarDraft
 const byteCount = computed(() => instructionsBytes(persona.value.instructions))
 let saveOwnership: SaveOwnership | null = null
 let sequence = 0
 let navigationVersion = 0
+let profileRequest: AbortController | null = null
 watch(
   [() => route.fullPath, () => ui.activeWorkspaceWindowId],
   () => {
     navigationVersion++
+    cancelProfileRead()
   },
   { flush: 'sync' },
 )
@@ -50,9 +58,32 @@ function requestKey(operation: string, body: object) {
   if (receipt?.signature !== signature) receipt = { signature, key: crypto.randomUUID() }
   return receipt.key
 }
+function cancelProfileRead() {
+  if (!profileRequest) return
+  sequence++
+  profileRequest.abort()
+  profileRequest = null
+  busy.value = false
+}
+function setManagerOpen(value: boolean) {
+  managerOpen.value = value
+  if (!value) cancelProfileRead()
+}
 function cancelEditor() {
+  cancelProfileRead()
   if (busy.value) saveOwnership?.cancel()
+  avatarDraft.cancel()
   editorOpen.value = false
+}
+function setEditorOpen(value: boolean) {
+  if (value) editorOpen.value = true
+  else cancelEditor()
+}
+function uploadAvatar(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.item(0)
+  input.value = ''
+  if (file && editorOpen.value && !busy.value) void avatarDraft.upload(file)
 }
 function refresh() {
   return bots.refresh(true)
@@ -68,6 +99,7 @@ function create() {
   editing.value = null
   draftName.value = ''
   persona.value = emptyBotPersona()
+  avatarDraft.reset()
   error.value = ''
   receipt = null
   managerOpen.value = false
@@ -76,15 +108,19 @@ function create() {
 async function edit(id?: string | null, rename = false) {
   if (!id || busy.value) return
   const current = ++sequence
+  const abort = new AbortController()
+  profileRequest = abort
+  avatarDraft.cancel()
   error.value = ''
   busy.value = true
   try {
-    const profile = await getBot(id)
-    if (current !== sequence) return
+    const profile = await getBot(id, abort.signal)
+    if (current !== sequence || abort.signal.aborted) return
     if (profile.archived) throw new Error(t('bot.profiles.archived'))
     editing.value = profile
     draftName.value = profile.name
     persona.value = { instructions: profile.persona.instructions }
+    avatarDraft.reset(profile.avatar)
     receipt = null
     managerOpen.value = false
     editorOpen.value = true
@@ -95,17 +131,18 @@ async function edit(id?: string | null, rename = false) {
       managerOpen.value = true
     }
   } finally {
+    if (profileRequest === abort) profileRequest = null
     if (current === sequence) busy.value = false
   }
 }
 async function save() {
-  if (busy.value || !draftName.value.trim() || byteCount.value > MAX_INSTRUCTIONS_BYTES) return
+  if (busy.value || avatarLoading.value || !draftName.value.trim() || byteCount.value > MAX_INSTRUCTIONS_BYTES) return
   busy.value = true
   error.value = ''
   saveOwnership = new SaveOwnership(navigationVersion, route.fullPath, ui.activeWorkspaceWindowId)
   const current = editing.value
   const generation = sequence
-  const fields = botDraftFields(draftName.value, persona.value.instructions)
+  const fields = botDraftFields(draftName.value, persona.value.instructions, avatarChange.value)
   try {
     const profile = current
       ? await updateBot(current.id, {
@@ -186,6 +223,7 @@ watch(
 watch(
   () => bots.version,
   () => {
+    cancelProfileRead()
     sequence++
     saveOwnership = null
     receipt = null
@@ -197,6 +235,7 @@ watch(
     editing.value = null
     draftName.value = ''
     persona.value = emptyBotPersona()
+    avatarDraft.reset()
   },
   { flush: 'sync' },
 )
@@ -205,7 +244,9 @@ onMounted(() => {
   stop = bots.start()
 })
 onBeforeUnmount(() => {
+  cancelProfileRead()
   sequence++
+  avatarDraft.cancel()
   stop()
 })
 </script>
@@ -215,7 +256,7 @@ onBeforeUnmount(() => {
     :open="managerOpen"
     :title="t('bot.profiles.choose')"
     :description="t('bot.profiles.scope')"
-    @update:open="managerOpen = $event"
+    @update:open="setManagerOpen"
   >
     <div class="space-y-3" data-testid="bot-manager">
       <p v-if="loading" role="status" class="text-sm text-muted-foreground">{{ t('common.loading') }}</p>
@@ -239,11 +280,7 @@ onBeforeUnmount(() => {
           :data-bot-select="profile.id"
           @click="choose(profile.id)"
         >
-          <span
-            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-xs font-semibold text-primary"
-            aria-hidden="true"
-            >{{ Array.from(profile.name).slice(0, 2).join('').toLocaleUpperCase() }}</span
-          >
+          <BotAvatar :name="profile.name" :avatar="profile.avatar" />
           <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ profile.name }}</span
           ><RiCheckLine v-if="profile.id === selectedId" class="h-4 w-4 shrink-0 text-primary" />
         </button>
@@ -281,14 +318,64 @@ onBeforeUnmount(() => {
     :open="editorOpen"
     :title="editing ? t('bot.profiles.editNamed', { name: editing.name }) : t('bot.profiles.create')"
     :description="t('bot.profiles.scope')"
-    @update:open="
-      (value) => {
-        if (!value && busy) saveOwnership?.cancel()
-        editorOpen = value
-      }
-    "
+    @update:open="setEditorOpen"
   >
     <form :id="`${uid}-form`" class="space-y-4" data-testid="bot-persona-form" @submit.prevent="save">
+      <div class="space-y-2">
+        <label :for="`${uid}-avatar`" class="text-sm font-medium">{{ t('bot.profiles.avatar') }}</label>
+        <div class="flex min-w-0 items-center gap-3">
+          <BotAvatar :name="draftName" :avatar="draftAvatar" size="xl" data-testid="bot-avatar-preview" />
+          <div class="min-w-0 flex-1 space-y-2">
+            <input
+              :id="`${uid}-avatar`"
+              ref="avatarInput"
+              type="file"
+              class="sr-only"
+              tabindex="-1"
+              :accept="BOT_AVATAR_ACCEPT"
+              :disabled="busy"
+              :aria-describedby="`${uid}-avatar-hint`"
+              data-testid="bot-avatar-file"
+              @change="uploadAvatar"
+            />
+            <div class="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                :disabled="busy"
+                data-testid="bot-avatar-upload"
+                @click="avatarInput?.click()"
+              >
+                {{ draftAvatar ? t('bot.profiles.avatarReplace') : t('bot.profiles.avatarUpload') }}
+              </Button>
+              <Button
+                v-if="draftAvatar || avatarLoading"
+                type="button"
+                variant="ghost"
+                :disabled="busy"
+                data-testid="bot-avatar-remove"
+                @click="avatarDraft.remove"
+              >
+                {{ t('bot.profiles.avatarRemove') }}
+              </Button>
+            </div>
+            <p :id="`${uid}-avatar-hint`" class="text-xs leading-relaxed text-muted-foreground">
+              {{ t('bot.profiles.avatarHint') }}
+            </p>
+          </div>
+        </div>
+        <p v-if="avatarLoading" role="status" class="text-xs text-muted-foreground">
+          {{ t('bot.profiles.avatarProcessing') }}
+        </p>
+        <p v-if="avatarError" role="alert" class="text-sm text-destructive" data-testid="bot-avatar-error">
+          {{
+            t(`bot.profiles.avatarErrors.${avatarError}`, {
+              dimension: MAX_BOT_AVATAR_DIMENSION,
+              pixels: MAX_BOT_AVATAR_PIXELS.toLocaleString(),
+            })
+          }}
+        </p>
+      </div>
       <div class="space-y-1.5">
         <label :for="`${uid}-name`" class="text-sm font-medium">{{ t('bot.profiles.name') }}</label
         ><Input
@@ -314,7 +401,13 @@ onBeforeUnmount(() => {
           :aria-invalid="byteCount > MAX_INSTRUCTIONS_BYTES"
           :disabled="busy"
         />
-        <p :id="`${uid}-instructions-count`" class="text-xs" :class="byteCount > MAX_INSTRUCTIONS_BYTES ? 'text-destructive' : 'text-muted-foreground'" aria-live="polite" data-testid="bot-instructions-count">
+        <p
+          :id="`${uid}-instructions-count`"
+          class="text-xs"
+          :class="byteCount > MAX_INSTRUCTIONS_BYTES ? 'text-destructive' : 'text-muted-foreground'"
+          aria-live="polite"
+          data-testid="bot-instructions-count"
+        >
           {{ t('bot.profiles.instructionsCount', { count: byteCount, max: MAX_INSTRUCTIONS_BYTES }) }}
         </p>
       </div>
@@ -335,7 +428,7 @@ onBeforeUnmount(() => {
         type="submit"
         :form="`${uid}-form`"
         class="ms-auto"
-        :disabled="busy || !draftName.trim() || byteCount > MAX_INSTRUCTIONS_BYTES"
+        :disabled="busy || avatarLoading || !draftName.trim() || byteCount > MAX_INSTRUCTIONS_BYTES"
         data-testid="bot-save"
         >{{ busy ? t('common.saving') : t('common.save') }}</Button
       ></template

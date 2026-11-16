@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line, RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
+import { RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
 import { computed, defineAsyncComponent, isRef, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -22,6 +22,7 @@ import {
 } from '@remixicon/vue'
 
 import BotWelcome from './BotWelcome.vue'
+import BotAvatar from '@/features/bots/BotAvatar.vue'
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import QueuedMessages from '@/components/chat/QueuedMessages.vue'
@@ -104,6 +105,7 @@ const {
   revertBusyMessageId,
   isBot,
   botName,
+  botAvatar,
   openBotEditor,
   openBotProjects,
   fillBotSuggestion,
@@ -413,7 +415,13 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
             <div class="chat-message-column flex min-h-10 items-center gap-3 py-1">
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 truncate text-sm font-semibold">
-                  <RiRobot2Line v-if="isBot" class="h-4 w-4 shrink-0 text-primary" />
+                  <BotAvatar
+                    v-if="isBot"
+                    :name="botName"
+                    :avatar="botAvatar"
+                    size="xs"
+                    data-testid="bot-header-avatar"
+                  />
                   <span v-if="isBot" data-testid="bot-name" class="truncate">{{ botName }}</span>
                   <span v-else class="truncate">{{
                     sessionTitle || (chat.selectedSessionId ? `Session ${chat.selectedSessionId}` : t('nav.chat'))
@@ -541,6 +549,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                 <div class="chat-message-column">
                   <BotWelcome
                     :name="botName"
+                    :avatar="botAvatar"
                     v-if="
                       isBot &&
                       !chat.messages.length &&

@@ -3276,6 +3276,25 @@ bot-edit-title = Bot 편집
 bot-instructions = 추가 시스템 지침
 bot-instructions-empty = 추가 시스템 지침이 없습니다
 
+bot-avatar = 아바타
+bot-avatar-path = 아바타 이미지 경로
+bot-avatar-set = 저장된 이미지
+bot-avatar-empty = 기본값
+bot-avatar-clear-pending = 저장 시 삭제
+bot-avatar-ready = 새 이미지 준비됨
+bot-avatar-unready = 유효한 이미지 선택
+bot-avatar-formats = PNG/JPEG/WebP · 최대 5 MiB
+bot-avatar-loading = 아바타 준비 중…
+bot-saving = Bot 저장 중…
+bot-avatar-read-error = 아바타 이미지를 읽을 수 없습니다
+bot-avatar-size-error = 아바타 이미지는 5 MiB 이하여야 합니다
+bot-avatar-format-error = 유효한 PNG, JPEG 또는 WebP 이미지를 선택하세요
+bot-avatar-form-keys = ↑↓ 필드 · Enter 편집 · s 저장
+    d 이미지 삭제 · r 새로고침 · Esc 뒤로
+bot-avatar-editor-keys = Ctrl+Enter/Alt+Enter 적용 · Esc 취소
+    로컬 PNG/JPEG/WebP · 최대 5 MiB
+    비워 두면 저장된 아바타를 유지합니다.
+
 # Concrete filesystem permissions
 permission-studio-path-workspace = 작업 공간 기본 권한
 permission-studio-path-external = 외부 경로 기본 권한

@@ -13,6 +13,7 @@ fn create(key: &str, name: &str) -> BotCreate {
         request_key: key.into(),
         name: name.into(),
         persona: None,
+        avatar: None,
     }
 }
 
@@ -20,6 +21,19 @@ fn archive(key: &str, profile: &BotProfile) -> BotArchive {
     BotArchive {
         request_key: key.into(),
         expected_revision: profile.revision,
+    }
+}
+
+const RED_AVATAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+const BLUE_AVATAR: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC";
+
+fn edit_avatar(key: &str, profile: &BotProfile, avatar: Option<Option<&str>>) -> BotUpdate {
+    BotUpdate {
+        request_key: key.into(),
+        expected_revision: profile.revision,
+        name: profile.name.clone(),
+        persona: profile.persona.clone(),
+        avatar: avatar.map(|value| value.map(str::to_owned)),
     }
 }
 
@@ -37,6 +51,214 @@ fn restart(manager: &SessionManager) -> SessionManager {
         restarted.install_memory_preferences(repository.clone());
     }
     restarted
+}
+
+#[tokio::test]
+async fn avatars_follow_identity_across_edit_replay_conversation_replacement_and_archive() {
+    let (manager, _ordinary) = fixture().await;
+    let input = BotCreate {
+        avatar: Some(RED_AVATAR.into()),
+        ..create("avatar-create", "Avatar")
+    };
+    let created = manager.create_bot_profile(input.clone()).await.unwrap();
+    let red = normalize_bot_avatar(RED_AVATAR).unwrap();
+    assert_eq!(created.avatar.as_deref(), Some(red.as_str()));
+    assert_eq!(manager.create_bot_profile(input).await.unwrap(), created);
+    assert_eq!(
+        manager.list_bot_profiles(false).await.unwrap().items,
+        [created.clone()]
+    );
+
+    // Older clients submit no avatar field while editing name/persona.
+    let mut rename = edit_avatar("legacy-edit", &created, None);
+    rename.name = "Renamed".into();
+    let kept = manager
+        .update_bot_profile(created.id, rename)
+        .await
+        .unwrap();
+    assert_eq!(kept.avatar, created.avatar);
+    let replacement = edit_avatar("replace-avatar", &kept, Some(Some(BLUE_AVATAR)));
+    let replaced = manager
+        .update_bot_profile(created.id, replacement.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        replaced.avatar,
+        Some(normalize_bot_avatar(BLUE_AVATAR).unwrap())
+    );
+    assert_ne!(replaced.avatar, kept.avatar);
+    assert_eq!(
+        manager
+            .update_bot_profile(created.id, replacement.clone())
+            .await
+            .unwrap(),
+        replaced
+    );
+    let changed_replay = BotUpdate {
+        avatar: Some(Some(RED_AVATAR.into())),
+        ..replacement
+    };
+    assert!(
+        manager
+            .update_bot_profile(created.id, changed_replay)
+            .await
+            .is_err()
+    );
+    assert!(
+        manager
+            .update_bot_profile(created.id, edit_avatar("stale-avatar", &kept, Some(None)))
+            .await
+            .is_err()
+    );
+    assert_eq!(manager.get_bot_profile(created.id).await.unwrap(), replaced);
+
+    let old_session = created.local_session_id.unwrap();
+    manager.delete_session(old_session).await.unwrap();
+    let replacement_session = manager.ensure_named_bot_session(created.id).await.unwrap();
+    assert_ne!(replacement_session.session_id, old_session);
+    let restarted = restart(&manager);
+    assert_eq!(
+        restarted.get_bot_profile(created.id).await.unwrap().avatar,
+        replaced.avatar
+    );
+
+    let clear = edit_avatar("clear-avatar", &replaced, Some(None));
+    let wire = serde_json::to_value(&clear).unwrap();
+    assert!(wire.get("avatar").unwrap().is_null());
+    let cleared = restarted
+        .update_bot_profile(created.id, serde_json::from_value(wire).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(cleared.avatar, None);
+    assert_eq!(
+        restart(&restarted)
+            .get_bot_profile(created.id)
+            .await
+            .unwrap()
+            .avatar,
+        None
+    );
+
+    let restored = restarted
+        .update_bot_profile(
+            created.id,
+            edit_avatar("restore-avatar", &cleared, Some(Some(RED_AVATAR))),
+        )
+        .await
+        .unwrap();
+    let archived = restarted
+        .archive_bot_profile(created.id, archive("archive-avatar", &restored))
+        .await
+        .unwrap();
+    assert_eq!(archived.avatar.as_deref(), Some(red.as_str()));
+    assert!(
+        restarted
+            .update_bot_profile(
+                created.id,
+                edit_avatar("edit-archived-avatar", &archived, Some(None))
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn invalid_avatars_leave_identity_revision_and_receipts_unchanged() {
+    let (manager, _ordinary) = fixture().await;
+    let invalid_create = BotCreate {
+        avatar: Some("data:image/png;base64,bm90LWFuLWltYWdl".into()),
+        ..create("invalid-avatar-create", "Invalid")
+    };
+    assert!(manager.create_bot_profile(invalid_create).await.is_err());
+    assert!(
+        manager
+            .list_bot_profiles(false)
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    assert!(
+        manager
+            .bots()
+            .receipt("create:invalid-avatar-create")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let profile = manager
+        .create_bot_profile(create("valid", "Valid"))
+        .await
+        .unwrap();
+    for (index, avatar) in [
+        "data:image/svg+xml;base64,PHN2Zy8+".to_owned(),
+        "data:image/png;base64,bm90LWFuLWltYWdl".to_owned(),
+        "x".repeat(MAX_BOT_AVATAR_DATA_URL_BYTES + 1),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let key = format!("invalid-avatar-{index}");
+        let mut update = edit_avatar(&key, &profile, Some(Some(&avatar)));
+        update.name = "Must not change".into();
+        assert!(
+            manager
+                .update_bot_profile(profile.id, update)
+                .await
+                .is_err()
+        );
+        assert_eq!(manager.get_bot_profile(profile.id).await.unwrap(), profile);
+        assert!(
+            manager
+                .bots()
+                .receipt(&format!("update:{}:{key}", profile.id))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn receipts_written_before_avatar_support_still_replay_exactly() {
+    let (manager, _ordinary) = fixture().await;
+    let profile = manager
+        .create_bot_profile(create("seed", "Legacy"))
+        .await
+        .unwrap();
+    let mut legacy_result = serde_json::to_value(record(&profile)).unwrap();
+    legacy_result.as_object_mut().unwrap().remove("avatar");
+    let result = serde_json::to_string(&legacy_result).unwrap();
+    let create_input = r#"{"request_key":"legacy-create","name":"Legacy","persona":null}"#;
+    manager
+        .bots()
+        .save_receipt("create:legacy-create", create_input, &result)
+        .await
+        .unwrap();
+    let create: BotCreate = serde_json::from_str(create_input).unwrap();
+    assert_eq!(serde_json::to_string(&create).unwrap(), create_input);
+    assert_eq!(manager.create_bot_profile(create).await.unwrap(), profile);
+
+    let update_input = r#"{"request_key":"legacy-update","expected_revision":1,"name":"Legacy","persona":{"instructions":""}}"#;
+    manager
+        .bots()
+        .save_receipt(
+            &format!("update:{}:legacy-update", profile.id),
+            update_input,
+            &result,
+        )
+        .await
+        .unwrap();
+    let update: BotUpdate = serde_json::from_str(update_input).unwrap();
+    assert_eq!(serde_json::to_string(&update).unwrap(), update_input);
+    assert_eq!(
+        manager
+            .update_bot_profile(profile.id, update)
+            .await
+            .unwrap(),
+        profile
+    );
 }
 
 #[tokio::test]
@@ -133,6 +355,7 @@ async fn names_are_unique_per_active_bot_and_revision_guards_edits() {
                 persona: BotPersona {
                     instructions: "短句优先".into(),
                 },
+                avatar: None,
             },
         )
         .await
@@ -147,6 +370,7 @@ async fn names_are_unique_per_active_bot_and_revision_guards_edits() {
                     expected_revision: first.revision,
                     name: "Lotus III".into(),
                     persona: BotPersona::default(),
+                    avatar: None,
                 },
             )
             .await

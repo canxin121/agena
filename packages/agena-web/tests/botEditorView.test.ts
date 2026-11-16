@@ -15,6 +15,21 @@ describe('Bot editor and sidebar copy', () => {
       expect(profiles.instructionsNotSet).toBeTruthy()
       expect(profiles.instructionsCount).toContain('{count}')
       expect(profiles.instructionsCount).toContain('{max}')
+      for (const key of [
+        'avatar',
+        'avatarUpload',
+        'avatarReplace',
+        'avatarRemove',
+        'avatarHint',
+        'avatarProcessing',
+      ] as const) {
+        expect(profiles[key]).toBeTruthy()
+      }
+      for (const key of ['unsupported', 'tooLarge', 'dimensions', 'read'] as const) {
+        expect(profiles.avatarErrors[key]).toBeTruthy()
+      }
+      expect(profiles.avatarErrors.dimensions).toContain('{dimension}')
+      expect(profiles.avatarErrors.dimensions).toContain('{pixels}')
       expect('tones' in profiles).toBe(false)
     }
     expect(zh.bot.profiles.instructionsNotSet).toBe('未设置附加系统指令')

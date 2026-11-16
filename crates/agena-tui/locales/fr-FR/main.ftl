@@ -3279,6 +3279,25 @@ bot-edit-title = Modifier le Bot
 bot-instructions = Instructions système supplémentaires
 bot-instructions-empty = Aucune instruction système supplémentaire
 
+bot-avatar = Avatar
+bot-avatar-path = Chemin de l’image d’avatar
+bot-avatar-set = Image enregistrée
+bot-avatar-empty = Par défaut
+bot-avatar-clear-pending = Suppression à l’enregistrement
+bot-avatar-ready = Nouvelle image prête
+bot-avatar-unready = Choisir une image valide
+bot-avatar-formats = PNG/JPEG/WebP · 5 MiB maximum
+bot-avatar-loading = Préparation de l’avatar…
+bot-saving = Enregistrement du Bot…
+bot-avatar-read-error = Impossible de lire l’image d’avatar
+bot-avatar-size-error = L’image d’avatar ne doit pas dépasser 5 MiB
+bot-avatar-format-error = Choisir une image PNG, JPEG ou WebP valide
+bot-avatar-form-keys = ↑↓ champ · Enter modifier · s enregistrer
+    d supprimer l’avatar · r recharger · Esc retour
+bot-avatar-editor-keys = Ctrl+Enter/Alt+Enter appliquer · Esc annuler
+    PNG/JPEG/WebP local · 5 MiB maximum
+    Vide conserve l’avatar enregistré.
+
 # Concrete filesystem permissions
 permission-studio-path-workspace = Accès par défaut à l’espace de travail
 permission-studio-path-external = Accès par défaut aux chemins externes

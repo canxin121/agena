@@ -27,6 +27,7 @@ async fn review_restores_existing_private_history_and_local_replies_without_repl
                 request_key: "review-private-bot".into(),
                 name: "Private review fixture".into(),
                 persona: None,
+                avatar: None,
             }).await?;
             let source = client.ensure_named_bot_session(bot.id).await?;
             let config: Value = serde_json::from_slice(&tokio::fs::read(&case.paths().global_config).await?)?;

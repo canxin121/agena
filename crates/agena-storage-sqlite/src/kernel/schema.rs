@@ -228,6 +228,7 @@ fn declarations() -> impl Iterator<Item = String> {
         .chain(summary_triggers())
         .chain(GLOBAL_TABLES.iter().map(|s| (*s).to_owned()))
         .chain(BOT_LOCAL_SESSION_EXTENSION.iter().map(|s| (*s).to_owned()))
+        .chain(BOT_AVATAR_EXTENSION.iter().map(|s| (*s).to_owned()))
 }
 
 /// Compatible additive migration 2026-11-14. The mapping is deliberately
@@ -235,6 +236,12 @@ fn declarations() -> impl Iterator<Item = String> {
 /// so opening a Bot creates a fresh root instead of reviving legacy history.
 const BOT_LOCAL_SESSION_EXTENSION: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_bot_local_sessions (bot_id TEXT PRIMARY KEY REFERENCES agena_bots(id), session_id INTEGER UNIQUE REFERENCES agena_sessions(id) ON DELETE SET NULL) WITHOUT ROWID",
+];
+
+/// Bot-owned thumbnails survive replacement or deletion of any conversation.
+/// Keeping this additive preserves the exact preceding baseline declarations.
+const BOT_AVATAR_EXTENSION: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS agena_bot_avatars (bot_id TEXT PRIMARY KEY REFERENCES agena_bots(id) ON DELETE CASCADE, avatar TEXT NOT NULL CHECK(length(CAST(avatar AS BLOB)) BETWEEN 23 AND 262144 AND substr(avatar,1,22)='data:image/png;base64,')) WITHOUT ROWID",
 ];
 
 const ADOPT_LOCAL_BOT_SESSIONS: &str = "INSERT INTO agena_bot_local_sessions (bot_id,session_id) SELECT b.id,(SELECT s.id FROM agena_sessions s WHERE s.owner_bot_id=b.id AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT 1) FROM agena_bots b WHERE EXISTS(SELECT 1 FROM agena_sessions s WHERE s.owner_bot_id=b.id AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL)";
@@ -276,26 +283,37 @@ fn incompatible_database(reason: &str) -> DbErr {
     ))
 }
 
+struct MissingExtensions {
+    local_sessions: bool,
+    avatars: bool,
+}
+
 async fn validate_objects(
     database: &DatabaseConnection,
     actual: std::collections::BTreeMap<(String, String), String>,
-) -> Result<bool, DbErr> {
+) -> Result<MissingExtensions, DbErr> {
     let mut actual = actual;
     normalize_renamed(&mut actual);
-    let expected = object_map(declarations())?;
+    let mut expected = object_map(declarations())?;
+    let local_sessions = ("table".into(), "agena_bot_local_sessions".into());
+    let avatars = ("table".into(), "agena_bot_avatars".into());
+    let missing = MissingExtensions {
+        local_sessions: !actual.contains_key(&local_sessions),
+        avatars: !actual.contains_key(&avatars),
+    };
+    if missing.local_sessions {
+        expected.remove(&local_sessions);
+    }
+    if missing.avatars {
+        expected.remove(&avatars);
+    }
     if expected != actual {
-        let mut predecessor = expected;
-        predecessor.remove(&("table".into(), "agena_bot_local_sessions".into()));
-        if predecessor != actual {
-            return Err(incompatible_database(
-                "database schema does not match the current Agena baseline",
-            ));
-        }
-        instance_id(database).await?;
-        return Ok(false);
+        return Err(incompatible_database(
+            "database schema does not match the current Agena baseline",
+        ));
     }
     instance_id(database).await?;
-    Ok(true)
+    Ok(missing)
 }
 
 /// A read-only probe must reject even a nonempty file with no user tables.
@@ -311,19 +329,31 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     // Repositories never initialize their own tables after composition.
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
-        if !validate_objects(database, actual).await? {
-            // Only the exact preceding schema reaches this path. Install and
-            // seed the additive mapping atomically before runtime recovery;
-            // no session, message, attachment or Bot profile row is changed.
+        let missing = validate_objects(database, actual).await?;
+        if missing.local_sessions || missing.avatars {
+            // Only exact known predecessors reach this path. Install missing
+            // extensions atomically, and adopt history only for a new mapping.
             let transaction = database.begin().await?;
-            for sql in BOT_LOCAL_SESSION_EXTENSION
-                .iter()
-                .copied()
-                .chain([ADOPT_LOCAL_BOT_SESSIONS])
-            {
-                transaction
-                    .execute(Statement::from_string(database.get_database_backend(), sql))
-                    .await?;
+            if missing.local_sessions {
+                for sql in BOT_LOCAL_SESSION_EXTENSION
+                    .iter()
+                    .copied()
+                    .chain([ADOPT_LOCAL_BOT_SESSIONS])
+                {
+                    transaction
+                        .execute(Statement::from_string(database.get_database_backend(), sql))
+                        .await?;
+                }
+            }
+            if missing.avatars {
+                for sql in BOT_AVATAR_EXTENSION {
+                    transaction
+                        .execute(Statement::from_string(
+                            database.get_database_backend(),
+                            *sql,
+                        ))
+                        .await?;
+                }
             }
             transaction.commit().await?;
             validate_objects(database, schema_objects(database).await?).await?;
@@ -412,6 +442,7 @@ mod nullable_tests {
     async fn foreign_schema_is_rejected_without_modifying_database() {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         initialize(&db).await.unwrap();
+        exec(&db, "DROP TABLE agena_bot_avatars").await;
         exec(&db, "CREATE TABLE unexpected_object(id INTEGER)").await;
         let before = schema_objects(&db).await.unwrap();
         let error = initialize(&db).await.unwrap_err().to_string();
@@ -496,6 +527,118 @@ mod nullable_tests {
             2
         );
         database.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn avatar_upgrade_preserves_existing_mapping_or_adopts_history_once() {
+        for keep_mapping in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let url = format!(
+                "sqlite://{}?mode=rwc",
+                directory.path().join("instance.sqlite").display()
+            );
+            let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+            let bot = uuid::Uuid::new_v4();
+            let configuration =
+                serde_json::json!({"owner":{"bot":bot,"surface":"local"}}).to_string();
+            exec(&*database.writer, &format!("INSERT INTO agena_bots(id,name,name_folded,revision,created_at_ms,updated_at_ms) VALUES('{bot}','Legacy','legacy',1,1,1)")).await;
+            for id in [1, 2] {
+                exec(&*database.writer, &format!("INSERT INTO agena_sessions(id,title,configuration_json,created_at_ms,updated_at_ms) VALUES({id},'history-{id}','{configuration}',1,{id})")).await;
+            }
+            exec(
+                &*database.writer,
+                &format!(
+                    "INSERT INTO agena_bot_local_sessions(bot_id,session_id) VALUES('{bot}',1)"
+                ),
+            )
+            .await;
+            exec(&*database.writer, "DROP TABLE agena_bot_avatars").await;
+            if !keep_mapping {
+                exec(&*database.writer, "DROP TABLE agena_bot_local_sessions").await;
+            }
+            let identity = instance_id(&database.writer).await.unwrap();
+            let before = schema_objects(&*database.writer).await.unwrap();
+            validate_existing(&database.writer).await.unwrap();
+            assert_eq!(schema_objects(&*database.writer).await.unwrap(), before);
+            database.close().await.unwrap();
+
+            let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+            assert_eq!(instance_id(&database.writer).await.unwrap(), identity);
+            let pinned = if keep_mapping { 1 } else { 2 };
+            assert_eq!(
+                scalar(
+                    &*database.writer,
+                    "SELECT session_id AS n FROM agena_bot_local_sessions"
+                )
+                .await,
+                pinned
+            );
+            assert_eq!(
+                scalar(
+                    &*database.writer,
+                    "SELECT count(*) AS n FROM agena_bot_avatars"
+                )
+                .await,
+                0
+            );
+            assert_eq!(
+                scalar(
+                    &*database.writer,
+                    "SELECT count(*) AS n FROM agena_sessions"
+                )
+                .await,
+                2
+            );
+            assert_eq!(
+                scalar(&*database.writer, "SELECT revision AS n FROM agena_bots").await,
+                1
+            );
+            let stored: String = database
+                .writer
+                .query_one(Statement::from_string(
+                    database.writer.get_database_backend(),
+                    "SELECT configuration_json FROM agena_sessions WHERE id=1",
+                ))
+                .await
+                .unwrap()
+                .unwrap()
+                .try_get("", "configuration_json")
+                .unwrap();
+            assert_eq!(stored, configuration);
+            // An existing explicit selection remains authoritative on every open.
+            exec(
+                &*database.writer,
+                "UPDATE agena_sessions SET updated_at_ms=100 WHERE id=1",
+            )
+            .await;
+            database.close().await.unwrap();
+            let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+            assert_eq!(
+                scalar(
+                    &*database.writer,
+                    "SELECT session_id AS n FROM agena_bot_local_sessions"
+                )
+                .await,
+                pinned
+            );
+            database.close().await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_avatar_schema_is_rejected_without_installing_extensions() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        initialize(&db).await.unwrap();
+        exec(&db, "DROP TABLE agena_bot_avatars").await;
+        exec(&db, "DROP TABLE agena_bot_local_sessions").await;
+        exec(
+            &db,
+            "CREATE TABLE agena_bot_avatars(bot_id TEXT, avatar TEXT)",
+        )
+        .await;
+        let before = schema_objects(&db).await.unwrap();
+        assert!(initialize(&db).await.is_err());
+        assert_eq!(schema_objects(&db).await.unwrap(), before);
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ import {
   botSessionIdQuery,
   createBot,
   emptyBotPersona,
+  getBot,
   listBots,
   resolveBotSession,
   resolveBotConversation,
@@ -31,6 +32,24 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 describe('named Bot contracts', () => {
+  test('avatar is a top-level profile value, with omitted rename and explicit removal payloads', async () => {
+    const avatar = 'data:image/png;base64,AA=='
+    const saved = { ...profile(A, 42, 'Atlas'), avatar }
+    const calls: Array<{ method: string; body: Record<string, unknown> | undefined }> = []
+    globalThis.fetch = (async (_url, init) => {
+      calls.push({ method: init?.method || 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      return Response.json(saved)
+    }) as typeof fetch
+    expect((await createBot({ name: 'Atlas', avatar, request_key: 'with-avatar' })).avatar).toBe(avatar)
+    expect((await getBot(A)).avatar).toBe(avatar)
+    const rename = { name: 'Renamed', persona: emptyBotPersona(), expected_revision: 1, request_key: 'rename' }
+    await updateBot(A, rename)
+    await updateBot(A, { ...rename, avatar: null, request_key: 'remove-avatar' })
+    expect(calls[0]?.body?.avatar).toBe(avatar)
+    expect(calls[0]?.body).not.toHaveProperty('persona.avatar')
+    expect(calls[2]?.body).not.toHaveProperty('avatar')
+    expect(calls[3]?.body?.avatar).toBeNull()
+  })
   test('an explicit remote session performs only reads and never ensures a local conversation', async () => {
     const calls: Array<{ path: string; method: string }> = []
     globalThis.fetch = (async (url, init) => {

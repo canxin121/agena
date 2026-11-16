@@ -249,6 +249,8 @@ pub struct BotRecord {
     /// Trimmed and case-folded name used for active-name uniqueness.
     pub name_folded: String,
     pub instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
     pub revision: i64,
     pub archived: bool,
     pub created_at_ms: i64,
@@ -278,16 +280,16 @@ pub enum BotRepositoryError {
 ///
 /// A Bot has no single bound conversation: its local conversations and its chat
 /// conversations are ordinary sessions carrying `owner.bot`, resolved by the
-/// session manager. Every mutation here is a single compare-and-set statement,
-/// so two clients editing the same Bot cannot overwrite each other and a
-/// replayed request key cannot repeat an effect.
+/// session manager. Profile metadata and avatar changes commit atomically under
+/// the same revision compare-and-set, so two clients editing the same Bot cannot
+/// overwrite each other. Request receipts preserve idempotent command results.
 #[async_trait]
 pub trait BotRepository: Send + Sync {
     /// Insert a Bot identity. Returns `NameTaken` when an active Bot already
     /// uses the folded name.
     async fn create(&self, record: &BotRecord) -> Result<BotRecord, BotRepositoryError>;
 
-    /// Replace name, folded name, instructions and revision when `revision`
+    /// Replace name, folded name, instructions, avatar and revision when `revision`
     /// still matches and the Bot is active.
     async fn update(
         &self,

@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { RiRobot2Line, RiArrowRightUpLine, RiFolderAddLine, RiChatHistoryLine, RiCompass3Line } from '@remixicon/vue'
+import { RiArrowRightUpLine, RiFolderAddLine, RiChatHistoryLine, RiCompass3Line } from '@remixicon/vue'
+import BotAvatar from '@/features/bots/BotAvatar.vue'
 const { t } = useI18n()
-defineProps<{ name: string }>()
+defineProps<{ name: string; avatar?: string | null }>()
 defineEmits<{ suggestion: [text: string] }>()
 const suggestions = [
   { key: 'explore', icon: RiCompass3Line },
@@ -13,11 +14,7 @@ const suggestions = [
 
 <template>
   <div class="mx-auto max-w-2xl px-2 py-6 sm:py-10" data-testid="bot-welcome">
-    <div
-      class="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/15 to-primary/5 text-primary shadow-sm"
-    >
-      <RiRobot2Line class="h-6 w-6" />
-    </div>
+    <BotAvatar :name="name" :avatar="avatar" size="lg" class="mb-4 border border-primary/20 shadow-sm" />
     <h1 class="text-xl font-semibold tracking-tight sm:text-2xl">{{ t('bot.profiles.welcome', { name }) }}</h1>
     <p class="mt-2 max-w-lg text-sm leading-relaxed text-muted-foreground">{{ t('bot.description') }}</p>
     <div class="mt-5 grid gap-2 sm:grid-cols-3">

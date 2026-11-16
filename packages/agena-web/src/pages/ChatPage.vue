@@ -2478,6 +2478,7 @@ const viewCtx = {
   // Header.
   isBot: bot.isBot,
   botName: bot.name,
+  botAvatar: bot.avatar,
   openBotEditor,
   openBotProjects,
   fillBotSuggestion: (text: string) => {

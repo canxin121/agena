@@ -6,7 +6,9 @@
 //! conversation is checked against.
 use agena_storage::{BotRecord, BotRepository, BotRepositoryError};
 use async_trait::async_trait;
-use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, Value};
+use sea_orm::{
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait, Value,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -28,7 +30,7 @@ fn statement(sql: &str, values: Vec<Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values)
 }
 
-const SELECT: &str = "SELECT id,name,name_folded,instructions,revision,archived,created_at_ms,updated_at_ms FROM agena_bots";
+const SELECT: &str = "SELECT b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar FROM agena_bots b LEFT JOIN agena_bot_avatars a ON a.bot_id=b.id";
 
 fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
     Ok(BotRecord {
@@ -40,6 +42,7 @@ fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
         name: row.try_get("", "name").map_err(backend)?,
         name_folded: row.try_get("", "name_folded").map_err(backend)?,
         instructions: row.try_get("", "instructions").map_err(backend)?,
+        avatar: row.try_get("", "avatar").map_err(backend)?,
         revision: row.try_get("", "revision").map_err(backend)?,
         archived: row.try_get::<i64>("", "archived").map_err(backend)? != 0,
         created_at_ms: row.try_get("", "created_at_ms").map_err(backend)?,
@@ -52,13 +55,38 @@ async fn read(
     id: Uuid,
 ) -> Result<Option<BotRecord>, BotRepositoryError> {
     db.query_one(statement(
-        &format!("{SELECT} WHERE id=?"),
+        &format!("{SELECT} WHERE b.id=?"),
         vec![id.to_string().into()],
     ))
     .await
     .map_err(backend)?
     .map(record)
     .transpose()
+}
+
+async fn write_avatar(
+    db: &impl ConnectionTrait,
+    value: &BotRecord,
+) -> Result<(), BotRepositoryError> {
+    match &value.avatar {
+        Some(avatar) => {
+            db.execute(statement(
+                "INSERT INTO agena_bot_avatars(bot_id,avatar) VALUES(?,?) ON CONFLICT(bot_id) DO UPDATE SET avatar=excluded.avatar",
+                vec![value.id.to_string().into(), avatar.clone().into()],
+            ))
+            .await
+            .map_err(backend)?;
+        }
+        None => {
+            db.execute(statement(
+                "DELETE FROM agena_bot_avatars WHERE bot_id=?",
+                vec![value.id.to_string().into()],
+            ))
+            .await
+            .map_err(backend)?;
+        }
+    }
+    Ok(())
 }
 
 fn classify_write(error: sea_orm::DbErr) -> BotRepositoryError {
@@ -73,7 +101,8 @@ fn classify_write(error: sea_orm::DbErr) -> BotRepositoryError {
 #[async_trait]
 impl BotRepository for SqliteBotRepository {
     async fn create(&self, value: &BotRecord) -> Result<BotRecord, BotRepositoryError> {
-        self.database
+        let transaction = self.database.begin().await.map_err(backend)?;
+        transaction
             .execute(statement(
                 "INSERT INTO agena_bots(id,name,name_folded,instructions,revision,archived,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?)",
                 vec![
@@ -89,9 +118,12 @@ impl BotRepository for SqliteBotRepository {
             ))
             .await
             .map_err(classify_write)?;
-        read(self.database.as_ref(), value.id)
+        write_avatar(&transaction, value).await?;
+        let created = read(&transaction, value.id)
             .await?
-            .ok_or_else(|| BotRepositoryError::Backend("created Bot row is missing".into()))
+            .ok_or_else(|| BotRepositoryError::Backend("created Bot row is missing".into()))?;
+        transaction.commit().await.map_err(backend)?;
+        Ok(created)
     }
 
     async fn update(
@@ -99,8 +131,8 @@ impl BotRepository for SqliteBotRepository {
         value: &BotRecord,
         expected_revision: i64,
     ) -> Result<BotRecord, BotRepositoryError> {
-        let changed = self
-            .database
+        let transaction = self.database.begin().await.map_err(backend)?;
+        let changed = transaction
             .execute(statement(
                 "UPDATE agena_bots SET name=?,name_folded=?,instructions=?,revision=?,updated_at_ms=? WHERE id=? AND revision=? AND archived=0",
                 vec![
@@ -118,9 +150,12 @@ impl BotRepository for SqliteBotRepository {
         if changed.rows_affected() != 1 {
             return Err(BotRepositoryError::Conflict);
         }
-        read(self.database.as_ref(), value.id)
+        write_avatar(&transaction, value).await?;
+        let updated = read(&transaction, value.id)
             .await?
-            .ok_or(BotRepositoryError::NotFound)
+            .ok_or(BotRepositoryError::NotFound)?;
+        transaction.commit().await.map_err(backend)?;
+        Ok(updated)
     }
 
     async fn archive(
@@ -153,9 +188,9 @@ impl BotRepository for SqliteBotRepository {
 
     async fn list(&self, include_archived: bool) -> Result<Vec<BotRecord>, BotRepositoryError> {
         let sql = if include_archived {
-            format!("{SELECT} ORDER BY created_at_ms,id")
+            format!("{SELECT} ORDER BY b.created_at_ms,b.id")
         } else {
-            format!("{SELECT} WHERE archived=0 ORDER BY created_at_ms,id")
+            format!("{SELECT} WHERE b.archived=0 ORDER BY b.created_at_ms,b.id")
         };
         self.database
             .query_all(statement(&sql, vec![]))
@@ -211,3 +246,6 @@ impl BotRepository for SqliteBotRepository {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

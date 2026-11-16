@@ -12,7 +12,8 @@ Names and persona fields never grant filesystem, network, or approval authority.
 `GET /api/v1/bots?include_archived=false` lists up to 256 registry records in
 creation order, with `default_bot_id`. The authenticated registry API also offers:
 
-- `POST /api/v1/bots`: create with `request_key`, `name`, optional `persona`.
+- `POST /api/v1/bots`: create with `request_key`, `name`, optional `persona` and
+  `avatar`.
 - `GET /api/v1/bots/{id}`: inspect the exact profile, including archived records.
 - `PUT /api/v1/bots/{id}`: update explicit `name`/`persona`, guarded by
   `expected_revision` and `request_key`.
@@ -25,8 +26,24 @@ A persona carries exactly one field, `instructions` (up to 256 KiB). Active
 names are trimmed and Unicode case-folded for uniqueness against other active
 Bots, and reject empty/control/overlong input.
 
-Bots live in their own `agena_bots` table. Every conversation that belongs to a
-Bot is an ordinary `agena_sessions` row whose configuration carries
+Avatars are part of the Bot profile. In Web, choose an image in the Bot creation
+or edit dialog; the preview can be replaced or removed before saving. In TUI,
+enter a local image path in the avatar field and confirm it to load a preview,
+then save the profile. Both clients accept PNG, JPEG and WebP files up to 5 MiB,
+with a maximum edge of 8192 pixels and 16,777,216 total pixels. They center-crop
+the image into a 128×128 PNG thumbnail. The Web sidebar and conversation header,
+along with the TUI Bot list, display the saved avatar and fall back to initials
+when none is set.
+
+The API's top-level `avatar` is an inline base64 PNG, JPEG or WebP data URL, up
+to 256 KiB. The server decodes and normalizes it before persistence. On update,
+omitting `avatar` preserves the current image, `null` removes it, and a string
+replaces it. An avatar has the same lifetime as the Bot identity, including
+archive and restart, and does not depend on a conversation or working directory.
+
+Bots live in their own `agena_bots` table, with thumbnails in `agena_bot_avatars`.
+Every conversation that belongs to a Bot is an ordinary `agena_sessions` row
+whose configuration carries
 `owner.bot` and `owner.surface`, projected into indexed `owner_bot_id` /
 `owner_surface` / `owner_scope_key` columns. A Bot therefore has no single bound
 conversation: `POST /api/v1/bots/{id}/session` returns its most recently used
@@ -34,9 +51,10 @@ local root and creates a fresh one when that conversation was deleted.
 Ownership is immutable after creation, so an archived conversation stays
 read-only because its row still names the Bot.
 
-All writes are single compare-and-set statements: `PUT` and archive carry
-`expected_revision`, and each `request_key` has a stored receipt, so a stale
-edit cannot overwrite a newer one and a retried request cannot repeat an effect.
+Profile updates commit identity, revision and avatar in one transaction. `PUT`
+and archive carry `expected_revision`, and each `request_key` has a stored receipt,
+so a stale edit cannot overwrite a newer one and a retried request cannot repeat
+an effect.
 Repeated opens preserve human-edited conversation
 titles and model settings. Deleting a conversation through ordinary session
 management recovers a fresh conversation for the same Bot UUID and persona;

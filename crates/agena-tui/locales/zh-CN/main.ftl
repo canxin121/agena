@@ -2967,6 +2967,25 @@ bot-edit-title = 编辑 Bot
 bot-instructions = 附加系统指令
 bot-instructions-empty = 未设置附加系统指令
 
+bot-avatar = 头像
+bot-avatar-path = 头像图片路径
+bot-avatar-set = 已设置
+bot-avatar-empty = 默认头像
+bot-avatar-clear-pending = 保存后移除
+bot-avatar-ready = 新头像已就绪
+bot-avatar-unready = 请选择有效图片
+bot-avatar-formats = PNG/JPEG/WebP · 最大 5 MiB
+bot-avatar-loading = 正在准备头像…
+bot-saving = 正在保存 Bot…
+bot-avatar-read-error = 无法读取头像图片
+bot-avatar-size-error = 头像图片不能超过 5 MiB
+bot-avatar-format-error = 请选择有效的 PNG、JPEG 或 WebP 图片
+bot-avatar-form-keys = ↑↓ 字段 · Enter 编辑 · s 保存
+    d 移除头像 · r 重载 · Esc 返回
+bot-avatar-editor-keys = Ctrl+Enter/Alt+Enter 应用 · Esc 取消
+    本地 PNG/JPEG/WebP · 最大 5 MiB
+    留空保留已保存的头像。
+
 # Concrete filesystem permissions
 permission-studio-path-workspace = 工作区默认权限
 permission-studio-path-external = 外部路径默认权限

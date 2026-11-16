@@ -1,4 +1,5 @@
 use super::*;
+use tokio::io::AsyncReadExt;
 
 impl App {
     pub(super) fn request_bot(&mut self, operation: BotOperation) {
@@ -9,6 +10,9 @@ impl App {
         let client = self.application.client().clone();
         let backend = self.application.clone();
         let tx = self.tx.clone();
+        let avatar_read_error = self.i18n.text("bot-avatar-read-error");
+        let avatar_size_error = self.i18n.text("bot-avatar-size-error");
+        let avatar_format_error = self.i18n.text("bot-avatar-format-error");
         let task = tokio::spawn(async move {
             let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
                 match operation {
@@ -53,7 +57,50 @@ impl App {
                             session,
                         })
                     }
-                    BotOperation::Save(create, base) => {
+                    BotOperation::LoadAvatar(path) => {
+                        // Reject special paths before opening: opening a FIFO
+                        // can wait indefinitely for a writer. Recheck the open
+                        // handle below in case the file changed meanwhile.
+                        let metadata = tokio::fs::metadata(&path).await.map_err(|error| {
+                            UiFailure::invalid_with_diagnostic(avatar_read_error.clone(), error)
+                        })?;
+                        if !metadata.is_file() {
+                            return Err(UiFailure::message(avatar_read_error).into());
+                        }
+                        if metadata.len() > MAX_BOT_AVATAR_FILE_BYTES as u64 {
+                            return Err(UiFailure::message(avatar_size_error).into());
+                        }
+                        let file = tokio::fs::File::open(&path).await.map_err(|error| {
+                            UiFailure::invalid_with_diagnostic(avatar_read_error.clone(), error)
+                        })?;
+                        let metadata = file.metadata().await.map_err(|error| {
+                            UiFailure::invalid_with_diagnostic(avatar_read_error.clone(), error)
+                        })?;
+                        if !metadata.is_file() {
+                            return Err(UiFailure::message(avatar_read_error).into());
+                        }
+                        if metadata.len() > MAX_BOT_AVATAR_FILE_BYTES as u64 {
+                            return Err(UiFailure::message(avatar_size_error).into());
+                        }
+                        let mut bytes = Vec::new();
+                        file.take(MAX_BOT_AVATAR_FILE_BYTES as u64 + 1)
+                            .read_to_end(&mut bytes)
+                            .await
+                            .map_err(|error| {
+                                UiFailure::invalid_with_diagnostic(avatar_read_error, error)
+                            })?;
+                        if bytes.len() > MAX_BOT_AVATAR_FILE_BYTES {
+                            return Err(UiFailure::message(avatar_size_error).into());
+                        }
+                        let data =
+                            tokio::task::spawn_blocking(move || bot_avatar_from_bytes(&bytes))
+                                .await?
+                                .map_err(|error| {
+                                    UiFailure::invalid_with_diagnostic(avatar_format_error, error)
+                                })?;
+                        Ok(BotReply::AvatarLoaded { path, data })
+                    }
+                    BotOperation::Save(create, base, avatar) => {
                         let profile = if let Some((id, revision)) = base {
                             client
                                 .update_bot(
@@ -63,6 +110,7 @@ impl App {
                                         expected_revision: revision,
                                         name: create.name,
                                         persona: create.persona.unwrap_or_default(),
+                                        avatar,
                                     },
                                 )
                                 .await?

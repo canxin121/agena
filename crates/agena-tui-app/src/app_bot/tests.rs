@@ -1,5 +1,6 @@
 use super::*;
 use agena_tui::i18n::I18n;
+use base64::Engine;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use std::sync::{Arc, Mutex};
 use tokio::{
@@ -231,6 +232,7 @@ fn mock_response(
         let create: BotCreate = serde_json::from_value(body).unwrap();
         let mut p = profile(profiles.len() as u128 + 1, &create.name);
         p.persona = create.persona.unwrap_or_default();
+        p.avatar = create.avatar;
         profiles.push(p.clone());
         return ok(to_value(p).unwrap());
     }
@@ -262,6 +264,9 @@ fn mock_response(
                     }
                     p.name = update.name;
                     p.persona = update.persona;
+                    if let Some(avatar) = update.avatar {
+                        p.avatar = avatar;
+                    }
                     p.revision += 1;
                     return ok(to_value(p).unwrap());
                 }
@@ -619,6 +624,7 @@ fn profile(id: u128, name: &str) -> BotProfile {
         id: Uuid::from_u128(id),
         name: name.into(),
         persona: BotPersona::default(),
+        avatar: None,
         revision: 1,
         archived: false,
         local_session_id: Some(900 + id as i64),
@@ -651,6 +657,14 @@ fn form_field(app: &mut App, index: usize, value: &str) {
     editor.set_text(value.into());
     form.edit = Some(editor);
     app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+}
+fn avatar_png() -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFElEQVR4nGP4z8DAAMIM////ZwAAHu8E/KPItPcAAAAASUVORK5CYII=")
+        .unwrap()
+}
+fn test_avatar() -> String {
+    bot_avatar_from_bytes(&avatar_png()).unwrap()
 }
 async fn wait_main(app: &mut App) {
     timeout(Duration::from_secs(10), async {
@@ -722,7 +736,7 @@ async fn two_profiles_switch_independent_sessions_drafts_and_reenter_selected_uu
 #[tokio::test]
 async fn create_edit_rename_instructions_use_typed_profile_and_keep_native_title() {
     let server = Server::start().await;
-    let (_temp, mut app) = app(Some(&server.endpoint));
+    let (temp, mut app) = app(Some(&server.endpoint));
     let command = crate::commands::find_client_command(
         Some(&crate::commands::bot_tests::bot_catalog()),
         "bot",
@@ -737,12 +751,24 @@ async fn create_edit_rename_instructions_use_typed_profile_and_keep_native_title
     );
     form_field(&mut app, 0, "Planner");
     form_field(&mut app, 1, "先听完\n再提出具体建议");
+    let avatar_path = temp.path().join("planner.png");
+    std::fs::write(&avatar_path, avatar_png()).unwrap();
+    form_field(&mut app, BOT_AVATAR_FIELD, avatar_path.to_str().unwrap());
+    resolve(&mut app).await;
+    let avatar = test_avatar();
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(avatar.as_str())
+    );
+    // Saving uses the prepared bytes, even if the source file is moved later.
+    std::fs::remove_file(&avatar_path).unwrap();
     app.handle_key_event(key(KeyCode::Char('s')));
     wait_main(&mut app).await;
     assert_eq!(app.bot.selected, Some(Uuid::from_u128(2)));
     assert_eq!(app.transcript.session_id, Some(902));
     let created = server.profiles.lock().unwrap()[1].clone();
     assert_eq!(created.persona.instructions, "先听完\n再提出具体建议");
+    assert_eq!(created.avatar.as_deref(), Some(avatar.as_str()));
     assert_eq!(
         server.profiles.lock().unwrap()[0].persona,
         BotPersona::default()
@@ -758,11 +784,22 @@ async fn create_edit_rename_instructions_use_typed_profile_and_keep_native_title
     assert_eq!(app.transcript.session_title, "My custom conversation title");
     assert!(app.transcript_surface_title().contains("Renamed Planner"));
     let mutations = server.bodies.lock().unwrap();
+    let (_, create) = mutations
+        .iter()
+        .find(|(s, _)| s.starts_with("POST /api/v1/bots "))
+        .unwrap();
+    assert_eq!(create["avatar"], avatar);
+    assert!(!create.to_string().contains(avatar_path.to_str().unwrap()));
     let (_, update) = mutations
         .iter()
         .find(|(s, _)| s.starts_with("PUT /api/v1/bots/"))
         .unwrap();
     assert_eq!(update["expected_revision"], 1);
+    assert!(update.get("avatar").is_none());
+    assert_eq!(
+        server.profiles.lock().unwrap()[1].avatar.as_deref(),
+        Some(avatar.as_str())
+    );
     assert_eq!(
         update["persona"],
         serde_json::json!({"instructions": "New\nindependent persona"})
@@ -784,14 +821,274 @@ async fn create_edit_rename_instructions_use_typed_profile_and_keep_native_title
 }
 
 #[tokio::test]
+async fn avatar_replace_keep_and_clear_are_distinct_revisioned_updates() {
+    let server = Server::start().await;
+    let original = test_avatar();
+    server.profiles.lock().unwrap()[0].avatar = Some(original.clone());
+    let (temp, mut app) = app(Some(&server.endpoint));
+    let id = Uuid::from_u128(1);
+    app.open_bot_persona_id(id);
+    resolve(&mut app).await;
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(original.as_str())
+    );
+
+    let replacement = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC")
+        .unwrap();
+    let avatar_path = temp.path().join("replacement.png");
+    std::fs::write(&avatar_path, &replacement).unwrap();
+    let expected = bot_avatar_from_bytes(&replacement).unwrap();
+    assert_ne!(expected, original);
+    form_field(&mut app, BOT_AVATAR_FIELD, avatar_path.to_str().unwrap());
+    resolve(&mut app).await;
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(expected.as_str())
+    );
+    app.handle_key_event(key(KeyCode::Char('s')));
+    resolve(&mut app).await;
+    resolve(&mut app).await;
+    assert_eq!(
+        server.profiles.lock().unwrap()[0].avatar.as_deref(),
+        Some(expected.as_str())
+    );
+
+    app.open_bot_persona_id(id);
+    resolve(&mut app).await;
+    form_field(&mut app, BOT_AVATAR_FIELD, "");
+    assert!(app.bot.task.is_none());
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(expected.as_str())
+    );
+    form_field(&mut app, 0, "Keep my avatar");
+    app.handle_key_event(key(KeyCode::Char('s')));
+    resolve(&mut app).await;
+    resolve(&mut app).await;
+    assert_eq!(
+        server.profiles.lock().unwrap()[0].avatar.as_deref(),
+        Some(expected.as_str())
+    );
+
+    app.open_bot_persona_id(id);
+    resolve(&mut app).await;
+    app.bot.form.as_mut().unwrap().index = BOT_AVATAR_FIELD;
+    app.handle_key_event(key(KeyCode::Char('d')));
+    assert!(app.bot.form.as_ref().unwrap().avatar_preview().is_none());
+    // Empty input also cancels a pending removal without touching the server.
+    form_field(&mut app, BOT_AVATAR_FIELD, "");
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(expected.as_str())
+    );
+    app.handle_key_event(key(KeyCode::Delete));
+    assert!(matches!(
+        app.bot.form.as_ref().unwrap().avatar,
+        BotAvatarDraft::Clear
+    ));
+    assert!(screen(&mut app, 64, 20).contains("Remove on save"));
+    app.handle_key_event(key(KeyCode::Char('s')));
+    resolve(&mut app).await;
+    resolve(&mut app).await;
+    let saved = server.profiles.lock().unwrap()[0].clone();
+    assert!(saved.avatar.is_none());
+    assert_eq!(saved.revision, 4);
+    assert_eq!(saved.local_session_id, Some(901));
+    let updates: Vec<_> = server
+        .bodies
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(line, _)| line.starts_with("PUT /api/v1/bots/"))
+        .map(|(_, body)| body.clone())
+        .collect();
+    assert_eq!(updates.len(), 3);
+    assert_eq!(updates[0]["avatar"], expected);
+    assert!(updates[1].get("avatar").is_none());
+    assert_eq!(updates[2].get("avatar"), Some(&serde_json::Value::Null));
+    for (index, update) in updates.iter().enumerate() {
+        assert_eq!(update["expected_revision"], index + 1);
+    }
+}
+
+#[tokio::test]
+async fn invalid_avatar_files_keep_the_draft_and_never_mutate_the_profile() {
+    let server = Server::start().await;
+    let original = test_avatar();
+    server.profiles.lock().unwrap()[0].avatar = Some(original.clone());
+    let (temp, mut app) = app(Some(&server.endpoint));
+    app.open_bot_persona_id(Uuid::from_u128(1));
+    resolve(&mut app).await;
+    form_field(&mut app, 0, "Unsaved name");
+    form_field(&mut app, 1, "Unsaved instructions");
+    let invalid = temp.path().join("invalid.png");
+    std::fs::write(&invalid, b"not an image").unwrap();
+    let oversized = temp.path().join("oversized.png");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(MAX_BOT_AVATAR_FILE_BYTES as u64 + 1)
+        .unwrap();
+    let requests = server.requests.lock().unwrap().len();
+    for (path, error_key) in [
+        (temp.path().join("missing.png"), "bot-avatar-read-error"),
+        (temp.path().to_path_buf(), "bot-avatar-read-error"),
+        (invalid, "bot-avatar-format-error"),
+        (oversized, "bot-avatar-size-error"),
+    ] {
+        form_field(&mut app, BOT_AVATAR_FIELD, path.to_str().unwrap());
+        assert!(app.bot.task.is_some());
+        assert!(screen(&mut app, 64, 20).contains("Preparing avatar"));
+        resolve(&mut app).await;
+        let error = app.bot.error.as_ref().unwrap();
+        assert!(error.contains(&app.i18n.text(error_key)), "{error}");
+        let form = app.bot.form.as_ref().unwrap();
+        assert_eq!(form.value(BOT_AVATAR_FIELD), path.to_str().unwrap());
+        assert_eq!(form.name, "Unsaved name");
+        assert_eq!(form.persona.instructions, "Unsaved instructions");
+        app.handle_key_event(key(KeyCode::Char('s')));
+        assert!(app.bot.task.is_none());
+        assert_eq!(server.requests.lock().unwrap().len(), requests);
+        assert_eq!(
+            server.profiles.lock().unwrap()[0].avatar.as_deref(),
+            Some(original.as_str())
+        );
+    }
+    // A corrected path retries preparation; leaving it empty restores the
+    // saved image, so a failed local selection never forces avatar removal.
+    let corrected = temp.path().join("corrected.png");
+    std::fs::write(&corrected, avatar_png()).unwrap();
+    form_field(&mut app, BOT_AVATAR_FIELD, corrected.to_str().unwrap());
+    resolve(&mut app).await;
+    assert!(app.bot.error.is_none());
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(original.as_str())
+    );
+    form_field(&mut app, BOT_AVATAR_FIELD, "");
+    assert!(app.bot.error.is_none());
+    assert!(matches!(
+        app.bot.form.as_ref().unwrap().avatar,
+        BotAvatarDraft::Keep
+    ));
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(original.as_str())
+    );
+}
+
+#[tokio::test]
+async fn avatar_preparation_cannot_overwrite_a_newer_form_or_selection() {
+    let (_temp, mut app) = app(None);
+    app.execute_bot_command("create");
+    let old = app.bot.request_id;
+    app.bot.cancel();
+    let current = app.bot.request_id;
+    app.current_route = Route::BotEntry(current);
+    app.bot.form.as_mut().unwrap().avatar = BotAvatarDraft::File {
+        path: "new.png".into(),
+        data: None,
+    };
+    for (request_id, path) in [(old, "new.png"), (current, "old.png")] {
+        app.handle_bot_session_ready(
+            request_id,
+            Ok(BotReply::AvatarLoaded {
+                path: path.into(),
+                data: test_avatar(),
+            }),
+        );
+        assert!(app.bot.form.as_ref().unwrap().avatar_preview().is_none());
+    }
+    let avatar = test_avatar();
+    app.handle_bot_session_ready(
+        current,
+        Ok(BotReply::AvatarLoaded {
+            path: "new.png".into(),
+            data: avatar.clone(),
+        }),
+    );
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(avatar.as_str())
+    );
+}
+
+#[tokio::test]
+async fn avatar_list_and_editor_previews_use_bounded_terminal_cells() {
+    let (temp, mut app) = app(None);
+    let mut bot = profile(1, "Research");
+    bot.avatar = Some(test_avatar());
+    app.open_bot_picker();
+    app.handle_bot_session_ready(
+        app.bot.request_id,
+        Ok(list_reply(vec![bot.clone(), profile(2, "Other")])),
+    );
+    let context = agena_tui_media::MathRenderContext::new(None, temp.path());
+    let avatar_cells = |app: &mut App| {
+        let mut terminal = Terminal::new(TestBackend::new(64, 24)).unwrap();
+        agena_tui_media::with_math_render_context(&context, || {
+            terminal.draw(|frame| app.draw(frame)).unwrap();
+        });
+        let buffer = terminal.backend().buffer();
+        let mut pixels = Vec::new();
+        for y in 0..24 {
+            for x in 0..64 {
+                let cell = &buffer[(x, y)];
+                if cell.symbol() == "▀" {
+                    assert!(!cell.modifier.contains(ratatui::style::Modifier::REVERSED));
+                    pixels.push((x, y, cell.fg, cell.bg));
+                }
+            }
+        }
+        pixels
+    };
+    for (width, height) in [(42, 18), (64, 24)] {
+        let rendered =
+            agena_tui_media::with_math_render_context(&context, || screen(&mut app, width, height));
+        assert!(rendered.contains('▀'), "{rendered}");
+        assert!(rendered.contains("Research"), "{rendered}");
+        assert!(rendered.lines().filter(|line| line.contains('▀')).count() <= 2);
+        assert!(!rendered.contains("base64"));
+    }
+    let selected_pixels = avatar_cells(&mut app);
+    assert!(!selected_pixels.is_empty());
+    app.bot.index = 1;
+    assert_eq!(avatar_cells(&mut app), selected_pixels);
+    app.bot.view = BotView::Form;
+    app.bot.form = Some(BotForm::new(Some(bot)));
+    app.bot.form.as_mut().unwrap().index = BOT_AVATAR_FIELD;
+    let selected_pixels = avatar_cells(&mut app);
+    assert!(!selected_pixels.is_empty());
+    app.bot.form.as_mut().unwrap().index = 0;
+    assert_eq!(avatar_cells(&mut app), selected_pixels);
+    app.bot.form.as_mut().unwrap().index = BOT_AVATAR_FIELD;
+    let rendered = agena_tui_media::with_math_render_context(&context, || screen(&mut app, 64, 24));
+    assert_eq!(
+        rendered.lines().filter(|line| line.contains('▀')).count(),
+        2
+    );
+    assert!(rendered.contains("Saved image"), "{rendered}");
+    app.handle_key_event(key(KeyCode::Delete));
+    let rendered = agena_tui_media::with_math_render_context(&context, || screen(&mut app, 64, 24));
+    assert!(!rendered.contains('▀'), "{rendered}");
+    assert!(rendered.contains("Remove on save"), "{rendered}");
+}
+
+#[tokio::test]
 async fn revision_conflict_preserves_draft_and_requires_explicit_reload_confirmation() {
     let server = Server::start().await;
-    let (_temp, mut app) = app(Some(&server.endpoint));
+    let (temp, mut app) = app(Some(&server.endpoint));
     app.open_bot();
     resolve(&mut app).await;
     app.open_assistant();
     resolve(&mut app).await;
     form_field(&mut app, 0, "My unsaved name");
+    let avatar_path = temp.path().join("unsaved.png");
+    std::fs::write(&avatar_path, avatar_png()).unwrap();
+    form_field(&mut app, BOT_AVATAR_FIELD, avatar_path.to_str().unwrap());
+    resolve(&mut app).await;
+    let avatar = test_avatar();
     {
         let mut registry = server.profiles.lock().unwrap();
         registry[0].revision = 2;
@@ -801,6 +1098,10 @@ async fn revision_conflict_preserves_draft_and_requires_explicit_reload_confirma
     resolve(&mut app).await;
     assert!(app.bot.error.is_some());
     assert_eq!(app.bot.form.as_ref().unwrap().name, "My unsaved name");
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(avatar.as_str())
+    );
     assert_eq!(
         app.bot
             .form
@@ -817,10 +1118,19 @@ async fn revision_conflict_preserves_draft_and_requires_explicit_reload_confirma
     assert!(matches!(app.bot.view, BotView::Reload));
     app.handle_key_event(key(KeyCode::Esc));
     assert_eq!(app.bot.form.as_ref().unwrap().name, "My unsaved name");
+    assert_eq!(
+        app.bot.form.as_ref().unwrap().avatar_preview(),
+        Some(avatar.as_str())
+    );
     app.handle_key_event(key(KeyCode::Char('r')));
     app.handle_key_event(key(KeyCode::Enter));
     resolve(&mut app).await;
     assert_eq!(app.bot.form.as_ref().unwrap().name, "Other client edit");
+    assert!(matches!(
+        app.bot.form.as_ref().unwrap().avatar,
+        BotAvatarDraft::Keep
+    ));
+    assert!(app.bot.form.as_ref().unwrap().avatar_preview().is_none());
     assert_eq!(
         app.bot
             .form
@@ -972,6 +1282,24 @@ async fn list_create_editor_confirm_and_error_layouts_keep_hints_in_all_eight_lo
                 app.bot.form.as_ref().unwrap().persona.instructions,
                 "第一行\nsecond line"
             );
+            app.bot.form.as_mut().unwrap().index = BOT_AVATAR_FIELD;
+            let rendered = screen(&mut app, width, height);
+            let compact = |text: &str| {
+                text.chars()
+                    .filter(|ch| !ch.is_whitespace())
+                    .collect::<String>()
+            };
+            assert!(
+                compact(&rendered).contains(&compact(&app.i18n.text("bot-avatar"))),
+                "{locale} {rendered}"
+            );
+            assert!(rendered.contains("5 MiB"), "{locale} {rendered}");
+            assert!(rendered.contains("Esc"), "{locale} {rendered}");
+            app.handle_key_event(key(KeyCode::Enter));
+            let rendered = screen(&mut app, width, height);
+            assert!(rendered.contains("Ctrl+Enter"), "{locale} {rendered}");
+            assert!(rendered.contains("5 MiB"), "{locale} {rendered}");
+            app.handle_key_event(key(KeyCode::Esc));
             app.bot.view = BotView::Archive;
             assert!(screen(&mut app, width, height).contains("Enter"));
             app.bot.view = BotView::Form;
@@ -1139,7 +1467,7 @@ async fn mismatched_named_session_reply_cannot_bind_another_bot_or_consume_draft
 }
 
 #[tokio::test]
-async fn two_fields_cycle_and_enforce_utf8_byte_limit() {
+async fn three_fields_cycle_and_enforce_utf8_byte_limit() {
     let server = Server::start().await;
     let (_temp, mut app) = app(Some(&server.endpoint));
     app.execute_bot_command("create");
@@ -1147,7 +1475,11 @@ async fn two_fields_cycle_and_enforce_utf8_byte_limit() {
     app.handle_key_event(key(KeyCode::Tab));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 1);
     app.handle_key_event(key(KeyCode::Down));
+    assert_eq!(app.bot.form.as_ref().unwrap().index, 2);
+    app.handle_key_event(key(KeyCode::Tab));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 0);
+    app.handle_key_event(key(KeyCode::Up));
+    assert_eq!(app.bot.form.as_ref().unwrap().index, 2);
     app.handle_key_event(key(KeyCode::Up));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 1);
     let rendered = screen(&mut app, 42, 18);

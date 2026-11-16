@@ -142,9 +142,10 @@ class Cdp {
 async function main() {
   assert(!process.versions.bun, 'Run with Node')
   const web = path.resolve(__dirname, '..')
+  const offline = process.env.BOT_PROBE_OFFLINE === '1'
   const evidence = process.env.BOT_EVIDENCE || '/tmp/agena-multi-bot'
   await fs.mkdir(evidence, { recursive: true })
-  const temporary = await fs.mkdtemp(path.join(web, '.bot-probe-'))
+  const temporary = await fs.mkdtemp(path.join(offline ? os.tmpdir() : web, '.bot-probe-'))
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'agena-bot-chrome-'))
   const requests = [],
     errors = [],
@@ -153,6 +154,7 @@ async function main() {
   let botParts = [],
     createdProject = false
   let server, chrome, cdp, base
+  let fixtureMiddleware, offlineDirectory
   let botDelay = 0,
     botFailures = 0,
     botRequests = 0
@@ -174,6 +176,7 @@ async function main() {
   const profiles = [profileFor(botA, 42, 'Atlas'), profileFor(botB, 43, 'Muse')]
   const profileRequests = [],
     sent = []
+  const avatarReads = { holdFor: null, release: null }
   const histories = new Map()
   if (process.env.BOT_SIDEBAR_PROBE_ONLY === '1') {
     histories.set(41, [
@@ -326,6 +329,7 @@ async function main() {
 import '/src/main.ts'
 import { router } from '/src/router.ts'
 import { useUiStore } from '/src/stores/ui.ts'
+import { useBotsStore } from '/src/stores/bots.ts'
 import { useChatStoreUnscoped } from '/src/stores/chat.ts'
 import { setAppLocale } from '/src/i18n/index.ts'
 import { useWorkspaceNavigation } from '/src/app/navigation/useWorkspaceNavigation.ts'
@@ -338,9 +342,9 @@ window.__botKeyboardTrace=[]
 window.addEventListener('keydown',event=>{ if(['Enter','Escape'].includes(event.key))setTimeout(()=>window.__botKeyboardTrace.push({key:event.key,prevented:event.defaultPrevented,target:event.target?.tagName,dialogs:document.querySelectorAll('[role=dialog]').length,time:performance.now()}),0)},true)
 window.__botProbe = {activeComposerSession: () => {
   let owner = [...document.querySelectorAll('[data-chat-input="true"]')].find(el=>el.getClientRects().length)?.__vueParentComponent;
-  while(owner && !owner.type.__file?.endsWith('/pages/ChatPage.vue')) owner = owner.parent;
+  while(owner && !owner.type.__file?.endsWith('/pages/ChatPage.vue') && owner.type.__name!=='ChatPage') owner = owner.parent;
   return owner?.setupState.chat.selectedSessionId;
-},router,ui:useUiStore(),chat:useChatStoreUnscoped(),navigation:useWorkspaceNavigation(), mountProjectLink: (absolute = false) => {
+},router,setAppLocale,bots:useBotsStore(),ui:useUiStore(),chat:useChatStoreUnscoped(),navigation:useWorkspaceNavigation(), mountProjectLink: (absolute = false) => {
   const host = document.createElement('div'); host.id = 'bot-markdown-link';
   Object.assign(host.style, {position:'fixed',top:'80px',right:'40px',zIndex:'100'}); document.body.append(host);
   const href = (absolute ? location.origin : '') + '/chat?sessionId=7';
@@ -351,16 +355,20 @@ window.__botProbe = {activeComposerSession: () => {
 `,
     )
     const { createServer } = await import('vite')
+    const configFile = offline
+      ? await require('./bot-probe-offline.cjs').prepareOfflineConfig(web, temporary)
+      : path.join(web, 'vite.config.ts')
     server = await createServer({
       root: web,
-      configFile: path.join(web, 'vite.config.ts'),
+      configFile,
+      ...(offline ? { configLoader: 'native', cacheDir: path.join(temporary, 'vite-cache') } : {}),
       logLevel: 'warn',
       server: { host: '127.0.0.1', port: 0, proxy: {}, hmr: false },
       plugins: [
         {
           name: 'bot-fixture',
           configureServer(dev) {
-            dev.middlewares.use(async (req, res, next) => {
+            fixtureMiddleware = async (req, res, next) => {
               const url = new URL(req.url, 'http://fixture'),
                 p = url.pathname
               const json = (value, status = 200) => {
@@ -520,7 +528,16 @@ window.__botProbe = {activeComposerSession: () => {
                 if (p === '/api/v1/bots' || botRoute) {
                   const [, id, action] = botRoute || []
                   const current = profiles.find((bot) => bot.id === id)
-                  if (req.method === 'GET') return current ? json(current) : json({ error: 'Unknown Bot' }, 404)
+                  if (req.method === 'GET') {
+                    if (avatarReads.holdFor === id) {
+                      avatarReads.holdFor = null
+                      await new Promise((resolve) => {
+                        avatarReads.release = resolve
+                      })
+                      avatarReads.release = null
+                    }
+                    return current ? json(current) : json({ error: 'Unknown Bot' }, 404)
+                  }
                   if (action !== 'session') {
                     let raw = ''
                     for await (const chunk of req) raw += chunk
@@ -547,6 +564,7 @@ window.__botProbe = {activeComposerSession: () => {
                           body.name,
                         ),
                         persona: body.persona || persona(),
+                        avatar: body.avatar || null,
                       }
                       profiles.push(created)
                       return json(created)
@@ -562,6 +580,7 @@ window.__botProbe = {activeComposerSession: () => {
                     } else {
                       current.name = body.name
                       current.persona = body.persona
+                      if (Object.hasOwn(body, 'avatar')) current.avatar = body.avatar
                     }
                     current.revision++
                     return json(current)
@@ -667,13 +686,19 @@ window.__botProbe = {activeComposerSession: () => {
                 '"></script></body></html>'
               res.setHeader('Content-Type', 'text/html')
               res.end(await dev.transformIndexHtml(p, html))
-            })
+            }
+            dev.middlewares.use(fixtureMiddleware)
           },
         },
       ],
     })
-    await server.listen()
-    base = `http://127.0.0.1:${server.httpServer.address().port}`
+    if (offline) {
+      offlineDirectory = await require('./bot-probe-offline.cjs').buildOfflineApp(web, temporary)
+      base = 'https://agena-offline.invalid'
+    } else {
+      await server.listen()
+      base = `http://127.0.0.1:${server.httpServer.address().port}`
+    }
     chrome = spawn(
       process.env.CHROME_BIN || '/usr/bin/google-chrome',
       [
@@ -682,23 +707,46 @@ window.__botProbe = {activeComposerSession: () => {
         '--disable-dev-shm-usage',
         '--disable-background-networking',
         '--disable-extensions',
-        '--remote-debugging-port=0',
+        ...(offline
+          ? [
+              '--remote-debugging-pipe',
+              '--disable-component-update',
+              '--disable-sync',
+              '--no-first-run',
+              '--host-resolver-rules=MAP * ~NOTFOUND',
+            ]
+          : ['--remote-debugging-port=0']),
         `--user-data-dir=${profile}`,
         'about:blank',
       ],
-      { stdio: ['ignore', 'ignore', 'ignore'] },
+      { stdio: offline ? ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] : ['ignore', 'ignore', 'ignore'] },
     )
-    const port = await wait(
-      async () => Number((await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]),
-      'Chrome startup',
-    )
-    const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json()
-    const socket = new WebSocket(target.webSocketDebuggerUrl)
-    await new Promise((resolve, reject) => {
-      socket.addEventListener('open', resolve, { once: true })
-      socket.addEventListener('error', reject, { once: true })
-    })
-    cdp = new Cdp(socket)
+    if (offline) {
+      const socket = new (require('./bot-probe-offline.cjs').PipeSocket)(chrome)
+      cdp = new Cdp(socket)
+      const target = await cdp.send('Target.createTarget', { url: 'about:blank' })
+      const attached = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true })
+      socket.sessionId = attached.sessionId
+      await cdp.send('Network.enable')
+      await cdp.send('Network.emulateNetworkConditions', {
+        offline: true,
+        latency: 0,
+        downloadThroughput: 0,
+        uploadThroughput: 0,
+      })
+    } else {
+      const port = await wait(
+        async () => Number((await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]),
+        'Chrome startup',
+      )
+      const target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json()
+      const socket = new WebSocket(target.webSocketDebuggerUrl)
+      await new Promise((resolve, reject) => {
+        socket.addEventListener('open', resolve, { once: true })
+        socket.addEventListener('error', reject, { once: true })
+      })
+      cdp = new Cdp(socket)
+    }
     cdp.events.set('Runtime.exceptionThrown', (v) =>
       errors.push(v.exceptionDetails.exception?.description || JSON.stringify(v)),
     )
@@ -712,6 +760,17 @@ window.__botProbe = {activeComposerSession: () => {
         })
         .catch(() => {})
     })
+    if (offline)
+      cdp.events.set(
+        'Fetch.requestPaused',
+        require('./bot-probe-offline.cjs').offlineRequestHandler({
+          cdp,
+          base,
+          directory: offlineDirectory,
+          middleware: fixtureMiddleware,
+          errors,
+        }),
+      )
     await cdp.send('Runtime.enable')
     await cdp.send('Page.enable')
     await cdp.send('Page.bringToFront')
@@ -722,6 +781,30 @@ window.__botProbe = {activeComposerSession: () => {
       deviceScaleFactor: 1,
       mobile: false,
     })
+    if (process.env.BOT_AVATAR_PROBE_ONLY === '1') {
+      await require('./probe-bot-avatars.cjs')({
+        cdp,
+        base,
+        evidence,
+        temporary,
+        wait,
+        check,
+        visible,
+        profiles,
+        profileRequests,
+        avatarReads,
+        botA,
+        botB,
+        botC,
+      })
+      check(sent.length === 0, 'avatar editing never sends a model message')
+      check(errors.length === 0, `no browser exceptions (${errors.length})`)
+      await fs.writeFile(
+        path.join(evidence, 'web-avatar-browser-report.json'),
+        JSON.stringify({ checks, requests, profileRequests, sent, errors }, null, 2),
+      )
+      return
+    }
     if (process.env.BOT_SIDEBAR_PROBE_ONLY === '1') {
       const row = (id) => `[data-sidebar-bot-id="${id}"]`
       const toggle = (id) => `[data-testid="sidebar-bot-toggle-${id}"]`
@@ -1898,6 +1981,7 @@ window.__botProbe = {activeComposerSession: () => {
     )
     throw error
   } finally {
+    avatarReads.release?.()
     cdp?.close()
     if (chrome && chrome.exitCode === null) {
       chrome.kill('SIGTERM')

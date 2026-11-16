@@ -67,10 +67,26 @@ enum BotView {
     /// Confirm deleting one conversation of the highlighted Bot.
     DeleteConversation,
 }
+const BOT_FORM_FIELDS: [&str; 3] = ["assistant-name", "bot-instructions", "bot-avatar"];
+const BOT_AVATAR_FIELD: usize = 2;
+
+#[derive(Clone, Default)]
+enum BotAvatarDraft {
+    #[default]
+    Keep,
+    Clear,
+    File {
+        path: String,
+        /// A validated thumbnail also fixes the payload for save retries.
+        data: Option<String>,
+    },
+}
+
 struct BotForm {
     base: Option<BotProfile>,
     name: String,
     persona: BotPersona,
+    avatar: BotAvatarDraft,
     index: usize,
     edit: Option<Editor>,
     request_key: String,
@@ -82,6 +98,7 @@ impl BotForm {
             persona: base
                 .as_ref()
                 .map_or_else(BotPersona::default, |p| p.persona.clone()),
+            avatar: BotAvatarDraft::Keep,
             base,
             index: 0,
             edit: None,
@@ -91,19 +108,43 @@ impl BotForm {
     fn value(&self, index: usize) -> String {
         match index {
             0 => self.name.clone(),
-            _ => self.persona.instructions.clone(),
+            1 => self.persona.instructions.clone(),
+            _ => match &self.avatar {
+                BotAvatarDraft::File { path, .. } => path.clone(),
+                _ => String::new(),
+            },
         }
     }
-    fn commit_field(&mut self) {
+    fn avatar_preview(&self) -> Option<&str> {
+        match &self.avatar {
+            BotAvatarDraft::Keep => self.base.as_ref().and_then(|p| p.avatar.as_deref()),
+            BotAvatarDraft::File { data, .. } => data.as_deref(),
+            BotAvatarDraft::Clear => None,
+        }
+    }
+    /// Returns a local path to prepare asynchronously, without sending it to
+    /// the server or blocking the editor on image decoding.
+    fn commit_field(&mut self) -> Option<String> {
+        let mut avatar_path = None;
         if let Some(editor) = self.edit.take() {
             let value = editor.text().to_owned();
             match self.index {
                 0 => self.name = value,
                 1 => self.persona.instructions = value,
+                BOT_AVATAR_FIELD => {
+                    let path = value.trim().to_owned();
+                    self.avatar = if path.is_empty() {
+                        BotAvatarDraft::Keep
+                    } else {
+                        avatar_path = Some(path.clone());
+                        BotAvatarDraft::File { path, data: None }
+                    };
+                }
                 _ => {}
             }
             self.request_key = Uuid::new_v4().to_string();
         }
+        avatar_path
     }
 }
 pub(crate) enum BotReply {
@@ -116,6 +157,10 @@ pub(crate) enum BotReply {
     Saved(BotProfile),
     Archived(BotProfile),
     Edit(BotProfile),
+    AvatarLoaded {
+        path: String,
+        data: String,
+    },
     /// One Bot's conversations, already grouped by entrance shape.
     Conversations {
         bot: Uuid,
@@ -129,7 +174,8 @@ pub(crate) enum BotReply {
 enum BotOperation {
     List,
     Open(Option<Uuid>),
-    Save(BotCreate, Option<(Uuid, i64)>),
+    Save(BotCreate, Option<(Uuid, i64)>, Option<Option<String>>),
+    LoadAvatar(String),
     Archive(Uuid, BotArchive),
     Edit(Uuid),
     Conversations(Uuid),
@@ -431,6 +477,17 @@ impl App {
                 self.bot.form = Some(BotForm::new(Some(profile)));
                 self.bot.view = BotView::Form;
             }
+            Ok(BotReply::AvatarLoaded { path, data }) => {
+                if let Some(form) = &mut self.bot.form
+                    && let BotAvatarDraft::File {
+                        path: current,
+                        data: preview,
+                    } = &mut form.avatar
+                    && *current == path
+                {
+                    *preview = Some(data);
+                }
+            }
             Ok(BotReply::Archived(profile)) => {
                 if self.bot.selected == Some(profile.id) {
                     self.bot.selected = None;
@@ -461,13 +518,28 @@ impl App {
             self.bot.error = Some(self.i18n.text("bot-form-invalid"));
             return;
         }
+        let avatar = match &form.avatar {
+            BotAvatarDraft::Keep => None,
+            BotAvatarDraft::Clear => Some(None),
+            BotAvatarDraft::File {
+                data: Some(data), ..
+            } => Some(Some(data.clone())),
+            BotAvatarDraft::File { data: None, .. } => {
+                if self.bot.error.is_none() {
+                    self.bot.error = Some(self.i18n.text("bot-avatar-unready"));
+                }
+                return;
+            }
+        };
         self.request_bot(BotOperation::Save(
             BotCreate {
                 request_key: form.request_key.clone(),
                 name: form.name.trim().into(),
                 persona: Some(form.persona.clone()),
+                avatar: avatar.clone().flatten(),
             },
             form.base.as_ref().map(|p| (p.id, p.revision)),
+            avatar,
         ));
     }
     pub(crate) fn handle_bot_entry_key(&mut self, key: KeyEvent) -> bool {
@@ -479,7 +551,11 @@ impl App {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             {
-                self.bot.form.as_mut().unwrap().commit_field();
+                let path = self.bot.form.as_mut().unwrap().commit_field();
+                self.bot.error = None;
+                if let Some(path) = path {
+                    self.request_bot(BotOperation::LoadAvatar(path));
+                }
             } else {
                 self.bot
                     .form
@@ -650,12 +726,21 @@ impl App {
             BotView::Form => match key.code {
                 KeyCode::Up => {
                     if let Some(f) = &mut self.bot.form {
-                        f.index = (f.index + 1) % 2;
+                        f.index = (f.index + BOT_FORM_FIELDS.len() - 1) % BOT_FORM_FIELDS.len();
                     }
                 }
                 KeyCode::Down | KeyCode::Tab => {
                     if let Some(f) = &mut self.bot.form {
-                        f.index = (f.index + 1) % 2;
+                        f.index = (f.index + 1) % BOT_FORM_FIELDS.len();
+                    }
+                }
+                KeyCode::Char('d') | KeyCode::Delete => {
+                    if let Some(f) = &mut self.bot.form
+                        && f.index == BOT_AVATAR_FIELD
+                    {
+                        f.avatar = BotAvatarDraft::Clear;
+                        f.request_key = Uuid::new_v4().to_string();
+                        self.bot.error = None;
                     }
                 }
                 KeyCode::Char('s') => self.save_bot_form(),

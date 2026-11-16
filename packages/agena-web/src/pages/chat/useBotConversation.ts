@@ -47,12 +47,19 @@ export function useBotConversation() {
   const sessionId = ref<string | null>(null)
   const botId = ref<string | null>(null)
   const name = ref('')
+  const avatar = ref<string | null>(null)
+  let profileRevision = 0
   const loading = ref(false)
   const error = ref('')
   const surface = ref<SessionOwnerSurface>('local')
   let binding: { initialId: string; initialSessionId: string; id: string; generation: number } | null = null
   let generation = 0
   let request: AbortController | null = null
+  function clearProfile() {
+    name.value = ''
+    avatar.value = null
+    profileRevision = 0
+  }
   function cancel() {
     generation++
     binding = null
@@ -99,7 +106,7 @@ export function useBotConversation() {
     cancel()
     sessionId.value = null
     botId.value = null
-    name.value = ''
+    clearProfile()
     error.value = ''
     loading.value = isBot.value
     if (
@@ -146,9 +153,12 @@ export function useBotConversation() {
       binding = ownBinding
       sessionId.value = id
       botId.value = resolved.bot_id
-      name.value = resolved.name
       surface.value = resolved.surface
       const known = bots.profiles.find((profile) => profile.id === resolved.profile.id)
+      const currentProfile = known && known.revision >= resolved.profile.revision ? known : resolved.profile
+      name.value = currentProfile.name
+      avatar.value = currentProfile.avatar || null
+      profileRevision = currentProfile.revision
       if (
         !known ||
         known.local_session_id !== resolved.profile.local_session_id ||
@@ -230,12 +240,14 @@ export function useBotConversation() {
     )
   }
   function updateProfile(profile: BotProfile) {
-    if (profile.id !== botId.value) return
+    if (profile.id !== botId.value || profile.revision < profileRevision) return
     if (profile.archived) {
       void load(true)
       return
     }
     name.value = profile.name
+    avatar.value = profile.avatar || null
+    profileRevision = profile.revision
     if (surface.value === 'local' && Number(sessionId.value) !== profile.local_session_id) {
       void select(profile.id)
     }
@@ -253,7 +265,7 @@ export function useBotConversation() {
       if (botId.value && !bots.profiles.some((p) => p.id === botId.value)) {
         cancel()
         sessionId.value = null
-        name.value = ''
+        clearProfile()
         error.value = t('bot.profiles.archived')
       }
     },
@@ -264,7 +276,7 @@ export function useBotConversation() {
       cancel()
       sessionId.value = null
       botId.value = null
-      name.value = ''
+      clearProfile()
       if (isBot.value && requestedId.value) void load(true)
       else if (isBot.value) {
         loading.value = false
@@ -278,6 +290,7 @@ export function useBotConversation() {
     cancel()
     sessionId.value = null
     botId.value = null
+    clearProfile()
     loading.value = true
     await router.push({ path: '/bot', query: { botId: id, ...(pane ? { windowId: pane.windowId.value } : {}) } })
     if (requestedId.value === id && targetId.value === id && !request) await load()
@@ -286,6 +299,7 @@ export function useBotConversation() {
     isBot,
     botId,
     name,
+    avatar,
     ready,
     loading,
     error,

@@ -3280,6 +3280,25 @@ bot-edit-title = Bot を編集
 bot-instructions = 追加システム指示
 bot-instructions-empty = 追加システム指示は未設定
 
+bot-avatar = アバター
+bot-avatar-path = アバター画像のパス
+bot-avatar-set = 設定済み
+bot-avatar-empty = 既定
+bot-avatar-clear-pending = 保存時に削除
+bot-avatar-ready = 新しい画像の準備完了
+bot-avatar-unready = 有効な画像を選択
+bot-avatar-formats = PNG/JPEG/WebP · 最大 5 MiB
+bot-avatar-loading = アバターを準備中…
+bot-saving = Bot を保存中…
+bot-avatar-read-error = アバター画像を読み込めません
+bot-avatar-size-error = アバター画像は 5 MiB 以下にしてください
+bot-avatar-format-error = 有効な PNG、JPEG、WebP 画像を選択してください
+bot-avatar-form-keys = ↑↓ 項目 · Enter 編集 · s 保存
+    d 画像削除 · r 再読込 · Esc 戻る
+bot-avatar-editor-keys = Ctrl+Enter/Alt+Enter 適用 · Esc 取消
+    ローカル PNG/JPEG/WebP · 最大 5 MiB
+    空欄で保存済みアバターを維持。
+
 # Concrete filesystem permissions
 permission-studio-path-workspace = ワークスペースの既定権限
 permission-studio-path-external = 外部パスの既定権限

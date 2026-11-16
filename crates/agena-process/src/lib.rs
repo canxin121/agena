@@ -12,9 +12,13 @@ pub mod blocking;
 pub mod pty;
 pub mod sandbox;
 pub mod sandbox_check;
+pub mod sandbox_file;
+pub mod sandbox_http;
 pub mod shell;
 #[cfg(unix)]
 mod unix;
+pub mod worker;
+mod worker_ipc;
 
 #[cfg(windows)]
 use process_wrap::tokio::JobObject;
@@ -110,7 +114,7 @@ pub async fn output(
     deadline: Duration,
     maximum_bytes_per_stream: usize,
 ) -> io::Result<Output> {
-    output_inner(command, None, deadline, maximum_bytes_per_stream).await
+    output_inner(command, None, deadline, maximum_bytes_per_stream, None).await
 }
 
 /// Send structured input over stdin instead of exposing it in argv. Input
@@ -122,7 +126,34 @@ pub async fn output_with_input(
     deadline: Duration,
     maximum_bytes_per_stream: usize,
 ) -> io::Result<Output> {
-    output_inner(command, Some(input), deadline, maximum_bytes_per_stream).await
+    output_inner(
+        command,
+        Some(input),
+        deadline,
+        maximum_bytes_per_stream,
+        None,
+    )
+    .await
+}
+
+/// Cooperatively cancel a process while keeping ownership until termination
+/// and reaping complete. Mutation callers must await this future before releasing
+/// their write lock; cancelling the token must not drop the running future.
+pub async fn output_with_input_cancellable(
+    command: Command,
+    input: &[u8],
+    deadline: Duration,
+    maximum_bytes_per_stream: usize,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+) -> io::Result<Output> {
+    output_inner(
+        command,
+        Some(input),
+        deadline,
+        maximum_bytes_per_stream,
+        cancellation,
+    )
+    .await
 }
 
 async fn output_inner(
@@ -130,7 +161,17 @@ async fn output_inner(
     input: Option<&[u8]>,
     deadline: Duration,
     maximum_bytes_per_stream: usize,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
 ) -> io::Result<Output> {
+    if cancellation
+        .as_ref()
+        .is_some_and(|token| token.is_cancelled())
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "managed process cancelled before start",
+        ));
+    }
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     if input.is_some() {
         command.stdin(Stdio::piped());
@@ -146,43 +187,56 @@ async fn output_inner(
         .take()
         .ok_or_else(|| io::Error::other("managed child stderr is unavailable"))?;
 
-    // Keep all pipe futures scoped to this call. Cancellation drops them and
-    // the managed child together instead of detaching reader tasks.
-    let completion = async {
-        let (wait, write) = tokio::join!(
-            async {
-                let status = child.wait().await?;
-                // A descendant can retain stdin/out/err after its parent exits.
-                // Kill the tree before waiting for the writer or EOF readers.
-                child.start_kill()?;
-                Ok::<_, io::Error>(status)
-            },
-            async {
-                if let Some(input) = input {
-                    let mut stdin = stdin
-                        .ok_or_else(|| io::Error::other("managed child stdin is unavailable"))?;
-                    stdin.write_all(input).await?;
-                    stdin.shutdown().await?;
+    // Dropping pipe futures does not detach reader/writer tasks. Keep the
+    // child outside this scope so cancellation proceeds through terminate/reap.
+    let collected = {
+        let completion = async {
+            let (wait, write) = tokio::join!(
+                async {
+                    let status = child.wait().await?;
+                    // A descendant can retain stdin/out/err after its parent exits.
+                    // Kill the tree before waiting for the writer or EOF readers.
+                    child.start_kill()?;
+                    Ok::<_, io::Error>(status)
+                },
+                async {
+                    if let Some(input) = input {
+                        let mut stdin = stdin.ok_or_else(|| {
+                            io::Error::other("managed child stdin is unavailable")
+                        })?;
+                        stdin.write_all(input).await?;
+                        stdin.shutdown().await?;
+                    }
+                    Ok::<_, io::Error>(())
                 }
-                Ok::<_, io::Error>(())
+            );
+            let status = wait?;
+            // Failed children can close stdin early. Preserve their actual status
+            // and diagnostics; a successful child must have accepted the input.
+            if status.success() {
+                write?;
             }
-        );
-        let status = wait?;
-        // Failed children can close stdin early. Preserve their actual status
-        // and diagnostics; a successful child must have accepted the input.
-        if status.success() {
-            write?;
+            Ok::<_, io::Error>(status)
+        };
+        let operation = tokio::time::timeout(deadline, async {
+            tokio::try_join!(
+                completion,
+                read_bounded(stdout, maximum_bytes_per_stream),
+                read_bounded(stderr, maximum_bytes_per_stream)
+            )
+        });
+        tokio::select! {
+            biased;
+            _ = async {
+                if let Some(token) = &cancellation {
+                    token.cancelled().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => Ok(Err(io::Error::new(io::ErrorKind::Interrupted, "managed process cancelled"))),
+            result = operation => result,
         }
-        Ok::<_, io::Error>(status)
     };
-    let collected = tokio::time::timeout(deadline, async {
-        tokio::try_join!(
-            completion,
-            read_bounded(stdout, maximum_bytes_per_stream),
-            read_bounded(stderr, maximum_bytes_per_stream)
-        )
-    })
-    .await;
     let (status, (stdout, stdout_exceeded), (stderr, stderr_exceeded)) = match collected {
         Ok(Ok(result)) => result,
         result => {
@@ -381,6 +435,99 @@ mod process_contract_tests {
             assert!(result.status.success());
             assert_eq!(result.stdout, input);
             assert!(result.stderr.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_output_does_not_start_a_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("started");
+        let mut command = shell("printf started > \"$1\"");
+        command.arg("cancelled-fixture").arg(&marker);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        cancellation.cancel();
+        let error = output_with_input_cancellable(
+            command,
+            b"{}",
+            Duration::from_secs(5),
+            512,
+            Some(cancellation),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Interrupted);
+        assert!(!marker.exists());
+    }
+
+    #[tokio::test]
+    async fn cooperative_cancellation_reaps_child_tree_before_returning() {
+        let dir = tempfile::tempdir().unwrap();
+        let leader_path = dir.path().join("leader.pid");
+        let descendant_path = dir.path().join("descendant.pid");
+        let cleanup_path = dir.path().join("cleanup.complete");
+        let mut command = shell(
+            r#"
+child=
+trap 'kill -KILL "$child" 2>/dev/null; wait "$child" 2>/dev/null; printf done > "$3"; exit 0' TERM
+sh -c 'trap "" TERM; printf "%s" "$$" > "$1"; while :; do :; done' child "$2" &
+child=$!
+printf '%s' "$$" > "$1"
+wait "$child"
+"#,
+        );
+        command
+            .arg("cancellation-fixture")
+            .arg(&leader_path)
+            .arg(&descendant_path)
+            .arg(&cleanup_path);
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let child_cancellation = cancellation.clone();
+        let task = tokio::spawn(async move {
+            output_with_input_cancellable(
+                command,
+                b"{}",
+                Duration::from_secs(10),
+                512,
+                Some(child_cancellation),
+            )
+            .await
+        });
+        let ready = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let leader = tokio::fs::read_to_string(&leader_path)
+                    .await
+                    .ok()
+                    .and_then(|value| value.parse::<libc::pid_t>().ok());
+                let descendant = tokio::fs::read_to_string(&descendant_path)
+                    .await
+                    .ok()
+                    .and_then(|value| value.parse::<libc::pid_t>().ok());
+                if let (Some(leader), Some(descendant)) = (leader, descendant) {
+                    break (leader, descendant);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        // Always clean up the fixture, including a readiness failure.
+        cancellation.cancel();
+        let error = tokio::time::timeout(Duration::from_secs(4), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        let (leader, descendant) = ready.expect("child process tree did not become ready");
+        assert_eq!(error.kind(), ErrorKind::Interrupted, "{error}");
+        assert_eq!(std::fs::read(&cleanup_path).unwrap(), b"done");
+        for pid in [leader, descendant] {
+            // A zero signal only probes existence. Both were reaped before the
+            // cancellable runner returned, so neither PID may still be live.
+            assert_eq!(
+                unsafe { libc::kill(pid, 0) },
+                -1,
+                "process {pid} survived cancellation"
+            );
+            assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
         }
     }
 

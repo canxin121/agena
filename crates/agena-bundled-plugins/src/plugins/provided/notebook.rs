@@ -254,173 +254,7 @@ impl NotebookPlugin {
             })?;
         tokio::task::spawn_blocking(move || {
             let _worker_permit = worker_permit;
-            let path = resolve_path(workspace_root.as_str(), input.path.as_str());
-            if path.extension().and_then(|value| value.to_str()) != Some("ipynb") {
-                return Err(PluginError::invalid_params(
-                    "notebook.edit_cell requires an .ipynb file",
-                ));
-            }
-            agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
-                let file = agena_tool::file_io::open_regular_file(&path).map_err(io_error)?;
-                let capacity = match file.metadata() {
-                    Ok(metadata) => usize::try_from(metadata.len().min(MAX_NOTEBOOK_BYTES))
-                        .unwrap_or_default(),
-                    Err(error) => {
-                        tracing::warn!(
-                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                "read notebook metadata for bounded preallocation",
-                                &error,
-                            ),
-                            "notebook edit is continuing without a preallocated read buffer"
-                        );
-                        0
-                    }
-                };
-                let mut original = Vec::with_capacity(capacity);
-                file.take(MAX_NOTEBOOK_BYTES.saturating_add(1))
-                    .read_to_end(&mut original)
-                    .map_err(io_error)?;
-                if original.len() as u64 > MAX_NOTEBOOK_BYTES {
-                    return Err(PluginError::invalid_params(format!(
-                        "notebook.edit_cell supports notebooks up to {} MiB",
-                        MAX_NOTEBOOK_BYTES / 1024 / 1024
-                    )));
-                }
-                let before_sha256 = sha256(original.as_slice());
-                if !before_sha256.eq_ignore_ascii_case(input.expected_sha256.trim()) {
-                    return Err(PluginError::invalid_params(format!(
-                        "stale notebook revision: expected {}, actual {before_sha256}",
-                        input.expected_sha256.trim()
-                    )));
-                }
-                let mut notebook: serde_json::Value = serde_json::from_slice(original.as_slice())
-                    .map_err(|error| {
-                        PluginError::invalid_params(
-                            agena_failure::diagnostic::format_error_chain_with_context(
-                                "invalid notebook JSON",
-                                &error,
-                            ),
-                        )
-                    })?;
-                let cells = notebook
-                    .get_mut("cells")
-                    .and_then(serde_json::Value::as_array_mut)
-                    .ok_or_else(|| PluginError::invalid_params("notebook has no cells array"))?;
-
-                let previous_source = cells.get(input.cell_index).map(cell_source_text).unwrap_or_default();
-                let source_before = match input.action {
-                    NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => None,
-                    _ => Some(previous_source.as_str()),
-                };
-                let source_after = if matches!(input.action, NotebookEditAction::Delete) { None } else { Some(input.source.as_str()) };
-                let cell_label = if matches!(input.action, NotebookEditAction::InsertAfter) {
-                    format!("after cell {}", input.cell_index)
-                } else {
-                    format!("cell {}", input.cell_index)
-                };
-                let preview = agena_runtime_tools::file_diff_preview(
-                    &format!("{} ({cell_label})", input.path), source_before, source_after,
-                );
-                let mut outputs_may_be_stale = false;
-
-                match input.action {
-                    NotebookEditAction::Replace => {
-                        let cell_count = cells.len();
-                        let cell = cells.get_mut(input.cell_index).ok_or_else(|| {
-                            PluginError::invalid_params(format!(
-                                "cell_index {} is out of range for {} cells",
-                                input.cell_index, cell_count
-                            ))
-                        })?;
-                        let object = cell.as_object_mut().ok_or_else(|| {
-                            PluginError::invalid_params("target notebook cell is not an object")
-                        })?;
-                        let previous_type = object.get("cell_type").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
-                        let kind = input.cell_type.map(|kind| kind.as_str().to_string()).unwrap_or(previous_type.clone());
-                        if !matches!(kind.as_str(), "code" | "markdown" | "raw") {
-                            return Err(PluginError::invalid_params("editing a future cell type requires an explicit supported cell_type"));
-                        }
-                        object.insert("cell_type".into(), serde_json::Value::String(kind.clone()));
-                        object.insert("source".to_string(), notebook_source(input.source.as_str()));
-                        let preserve_outputs = input.preserve_outputs && previous_type == "code" && kind == "code";
-                        outputs_may_be_stale = preserve_outputs && object.get("outputs").and_then(serde_json::Value::as_array).is_some_and(|outputs| !outputs.is_empty());
-                        validation::normalize_cell(object, &kind, preserve_outputs);
-                    }
-                    NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => {
-                        if input.cell_index > cells.len()
-                            || (matches!(input.action, NotebookEditAction::InsertAfter)
-                                && input.cell_index >= cells.len())
-                        {
-                            return Err(PluginError::invalid_params(format!(
-                                "cell_index {} is out of range for {} cells",
-                                input.cell_index,
-                                cells.len()
-                            )));
-                        }
-                        let cell_type = input.cell_type.unwrap_or(NotebookCellType::Code);
-                        let insert_at = if matches!(input.action, NotebookEditAction::InsertAfter) {
-                            input.cell_index + 1
-                        } else {
-                            input.cell_index
-                        };
-                        cells.insert(insert_at, new_cell(cell_type, input.source.as_str()));
-                    }
-                    NotebookEditAction::Delete => {
-                        if input.cell_index >= cells.len() {
-                            return Err(PluginError::invalid_params(format!(
-                                "cell_index {} is out of range for {} cells",
-                                input.cell_index,
-                                cells.len()
-                            )));
-                        }
-                        cells.remove(input.cell_index);
-                    }
-                }
-
-                let cell_count = cells.len();
-                validation::validate(&mut notebook)?;
-                let updated = validation::serialize(&notebook)?;
-                agena_runtime_tools::atomic_replace_file_with_check(&path, updated.as_slice(), || {
-                    agena_runtime_tools::verify_file_contents(&path, &original)
-                }).map_err(io_error)?;
-                let after_sha256 = sha256(updated.as_slice());
-                Ok(ToolInvokeOutput::from_parts(
-                    format!("edited notebook {}", input.path),
-                    format!(
-                        "{:?} cell {} · {cell_count} cells",
-                        input.action, input.cell_index
-                    ),
-                    format!(
-                        "Applied {:?} at cell {} in '{}' ({} cells, sha256 {} -> {}).",
-                        input.action,
-                        input.cell_index,
-                        input.path,
-                        cell_count,
-                        before_sha256,
-                        after_sha256
-                    ),
-                    Some(serde_json::json!({
-                        "path": input.path,
-                        "action": input.action,
-                        "cell_index": input.cell_index,
-                        "cell_count": cell_count,
-                        "before_sha256": before_sha256,
-                        "after_sha256": after_sha256,
-                        "outputs_may_be_stale": outputs_may_be_stale,
-                        "diff": preview.diff,
-                        "diff_truncated": preview.diff_truncated,
-                        "additions": preview.additions,
-                        "deletions": preview.deletions,
-                    })),
-                    std::collections::BTreeMap::from([
-                        ("agena.effect".to_string(), "file_changes".to_string()),
-                        ("path".to_string(), input.path.clone()),
-                        ("after_sha256".to_string(), after_sha256),
-                    ]),
-                    Vec::new(),
-                ))
-            })
-            .map_err(io_error)?
+            edit_cell_file(&workspace_root, &input)
         })
         .await
         .map_err(|error| {
@@ -430,6 +264,213 @@ impl NotebookPlugin {
             ))
         })?
     }
+}
+
+/// Pure notebook operation used by the isolated filesystem worker. The parent
+/// holds the original-path capability and publishes this private copy only on
+/// successful completion; no plugin host or runtime configuration is needed.
+pub(crate) fn execute_sandbox_tool(
+    input: serde_json::Value,
+    workspace_root: &Path,
+) -> SdkResult<ToolInvokeOutput> {
+    let input: NotebookEditInput =
+        serde_json::from_value(input).map_err(|error| PluginError::invalid_params_error(&error))?;
+    edit_cell_file(&workspace_root.to_string_lossy(), &input)
+}
+
+fn edit_cell_file(workspace_root: &str, input: &NotebookEditInput) -> SdkResult<ToolInvokeOutput> {
+    if input.source.len() > 16 * 1024 * 1024 {
+        return Err(PluginError::invalid_params(
+            "notebook source exceeds the 16 MiB byte limit",
+        ));
+    }
+    let path = resolve_path(workspace_root, input.path.as_str());
+    if path.extension().and_then(|value| value.to_str()) != Some("ipynb") {
+        return Err(PluginError::invalid_params(
+            "notebook.edit_cell requires an .ipynb file",
+        ));
+    }
+    agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+        let file = agena_tool::file_io::open_regular_file(&path).map_err(io_error)?;
+        let capacity = match file.metadata() {
+            Ok(metadata) => {
+                usize::try_from(metadata.len().min(MAX_NOTEBOOK_BYTES)).unwrap_or_default()
+            }
+            Err(error) => {
+                tracing::warn!(
+                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                        "read notebook metadata for bounded preallocation",
+                        &error,
+                    ),
+                    "notebook edit is continuing without a preallocated read buffer"
+                );
+                0
+            }
+        };
+        let mut original = Vec::with_capacity(capacity);
+        file.take(MAX_NOTEBOOK_BYTES.saturating_add(1))
+            .read_to_end(&mut original)
+            .map_err(io_error)?;
+        if original.len() as u64 > MAX_NOTEBOOK_BYTES {
+            return Err(PluginError::invalid_params(format!(
+                "notebook.edit_cell supports notebooks up to {} MiB",
+                MAX_NOTEBOOK_BYTES / 1024 / 1024
+            )));
+        }
+        let before_sha256 = sha256(original.as_slice());
+        if !before_sha256.eq_ignore_ascii_case(input.expected_sha256.trim()) {
+            return Err(PluginError::invalid_params(format!(
+                "stale notebook revision: expected {}, actual {before_sha256}",
+                input.expected_sha256.trim()
+            )));
+        }
+        let mut notebook: serde_json::Value =
+            serde_json::from_slice(original.as_slice()).map_err(|error| {
+                PluginError::invalid_params(
+                    agena_failure::diagnostic::format_error_chain_with_context(
+                        "invalid notebook JSON",
+                        &error,
+                    ),
+                )
+            })?;
+        let cells = notebook
+            .get_mut("cells")
+            .and_then(serde_json::Value::as_array_mut)
+            .ok_or_else(|| PluginError::invalid_params("notebook has no cells array"))?;
+
+        let previous_source = cells
+            .get(input.cell_index)
+            .map(cell_source_text)
+            .unwrap_or_default();
+        let source_before = match input.action {
+            NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => None,
+            _ => Some(previous_source.as_str()),
+        };
+        let source_after = if matches!(input.action, NotebookEditAction::Delete) {
+            None
+        } else {
+            Some(input.source.as_str())
+        };
+        let cell_label = if matches!(input.action, NotebookEditAction::InsertAfter) {
+            format!("after cell {}", input.cell_index)
+        } else {
+            format!("cell {}", input.cell_index)
+        };
+        let preview = agena_runtime_tools::file_diff_preview(
+            &format!("{} ({cell_label})", input.path),
+            source_before,
+            source_after,
+        );
+        let mut outputs_may_be_stale = false;
+
+        match input.action {
+            NotebookEditAction::Replace => {
+                let cell_count = cells.len();
+                let cell = cells.get_mut(input.cell_index).ok_or_else(|| {
+                    PluginError::invalid_params(format!(
+                        "cell_index {} is out of range for {} cells",
+                        input.cell_index, cell_count
+                    ))
+                })?;
+                let object = cell.as_object_mut().ok_or_else(|| {
+                    PluginError::invalid_params("target notebook cell is not an object")
+                })?;
+                let previous_type = object
+                    .get("cell_type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let kind = input
+                    .cell_type
+                    .map(|kind| kind.as_str().to_string())
+                    .unwrap_or(previous_type.clone());
+                if !matches!(kind.as_str(), "code" | "markdown" | "raw") {
+                    return Err(PluginError::invalid_params(
+                        "editing a future cell type requires an explicit supported cell_type",
+                    ));
+                }
+                object.insert("cell_type".into(), serde_json::Value::String(kind.clone()));
+                object.insert("source".to_string(), notebook_source(input.source.as_str()));
+                let preserve_outputs =
+                    input.preserve_outputs && previous_type == "code" && kind == "code";
+                outputs_may_be_stale = preserve_outputs
+                    && object
+                        .get("outputs")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|outputs| !outputs.is_empty());
+                validation::normalize_cell(object, &kind, preserve_outputs);
+            }
+            NotebookEditAction::InsertBefore | NotebookEditAction::InsertAfter => {
+                if input.cell_index > cells.len()
+                    || (matches!(input.action, NotebookEditAction::InsertAfter)
+                        && input.cell_index >= cells.len())
+                {
+                    return Err(PluginError::invalid_params(format!(
+                        "cell_index {} is out of range for {} cells",
+                        input.cell_index,
+                        cells.len()
+                    )));
+                }
+                let cell_type = input.cell_type.unwrap_or(NotebookCellType::Code);
+                let insert_at = if matches!(input.action, NotebookEditAction::InsertAfter) {
+                    input.cell_index + 1
+                } else {
+                    input.cell_index
+                };
+                cells.insert(insert_at, new_cell(cell_type, input.source.as_str()));
+            }
+            NotebookEditAction::Delete => {
+                if input.cell_index >= cells.len() {
+                    return Err(PluginError::invalid_params(format!(
+                        "cell_index {} is out of range for {} cells",
+                        input.cell_index,
+                        cells.len()
+                    )));
+                }
+                cells.remove(input.cell_index);
+            }
+        }
+
+        let cell_count = cells.len();
+        validation::validate(&mut notebook)?;
+        let updated = validation::serialize(&notebook)?;
+        agena_runtime_tools::atomic_replace_file_with_check(&path, updated.as_slice(), || {
+            agena_runtime_tools::verify_file_contents(&path, &original)
+        })
+        .map_err(io_error)?;
+        let after_sha256 = sha256(updated.as_slice());
+        Ok(ToolInvokeOutput::from_parts(
+            format!("edited notebook {}", input.path),
+            format!(
+                "{:?} cell {} · {cell_count} cells",
+                input.action, input.cell_index
+            ),
+            format!(
+                "Applied {:?} at cell {} in '{}' ({} cells, sha256 {} -> {}).",
+                input.action, input.cell_index, input.path, cell_count, before_sha256, after_sha256
+            ),
+            Some(serde_json::json!({
+                "path": input.path,
+                "action": input.action,
+                "cell_index": input.cell_index,
+                "cell_count": cell_count,
+                "before_sha256": before_sha256,
+                "after_sha256": after_sha256,
+                "outputs_may_be_stale": outputs_may_be_stale,
+                "diff": preview.diff,
+                "diff_truncated": preview.diff_truncated,
+                "additions": preview.additions,
+                "deletions": preview.deletions,
+            })),
+            std::collections::BTreeMap::from([
+                ("agena.effect".to_string(), "file_changes".to_string()),
+                ("path".to_string(), input.path.clone()),
+                ("after_sha256".to_string(), after_sha256),
+            ]),
+            Vec::new(),
+        ))
+    })
+    .map_err(io_error)?
 }
 
 fn new_cell(cell_type: NotebookCellType, source: &str) -> serde_json::Value {
@@ -487,5 +528,44 @@ fn cell_source_text(cell: &serde_json::Value) -> String {
             lines.iter().filter_map(serde_json::Value::as_str).collect()
         }
         _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    #[test]
+    fn isolated_notebook_operation_preserves_revision_and_cell_rules() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("notebook.ipynb");
+        let original = serde_json::to_vec(&serde_json::json!({
+            "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+            "cells": [{"id": "original", "cell_type": "code", "metadata": {},
+                "source": ["print(1)"], "execution_count": 1,
+                "outputs": [{"output_type": "stream", "name": "stdout", "text": ["1\n"]}]}]
+        }))
+        .unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let request = serde_json::json!({
+            "path": path, "expected_sha256": sha256(&original),
+            "cell_index": 0, "action": "replace", "source": "print(2)"
+        });
+        let response = execute_sandbox_tool(request.clone(), directory.path()).unwrap();
+        let updated = std::fs::read(&path).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&updated).unwrap();
+        assert!(
+            document["cells"][0]["outputs"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(document["cells"][0]["execution_count"].is_null());
+        assert_eq!(
+            response.payload.as_ref().unwrap()["after_sha256"],
+            sha256(&updated)
+        );
+        assert!(execute_sandbox_tool(request, directory.path()).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), updated);
     }
 }

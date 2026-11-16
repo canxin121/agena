@@ -4,7 +4,7 @@ impl ToolExecutor {
     /// Host resolution and filesystem inspection must not block an async
     /// runtime thread. A running OS resolver retains its bounded worker slot
     /// after cancellation until the syscall returns.
-    pub(super) async fn run_permission_preflight<T, F>(&self, operation: F) -> Result<T, ToolError>
+    pub(crate) async fn run_permission_preflight<T, F>(&self, operation: F) -> Result<T, ToolError>
     where
         T: Send + 'static,
         F: FnOnce(ToolExecutor) -> Result<T, ToolError> + Send + 'static,

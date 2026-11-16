@@ -1,6 +1,7 @@
 //! Snapshot proxy selection once, so authorization and connection use the
 //! same route. Proxy-side DNS must not be replaced with local DNS checks.
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use hyper_util::client::proxy::matcher::Matcher;
 use url::Url;
@@ -13,6 +14,9 @@ pub struct WebHttpRoute {
     remote_dns: bool,
     proxy_key: String,
     addresses: Vec<SocketAddr>,
+    sandbox: Option<agena_process::sandbox::SandboxPolicy>,
+    sandbox_origin: Option<url::Origin>,
+    cancellation: Option<agena_process::sandbox_http::WorkerCancellation>,
 }
 
 impl std::fmt::Debug for WebHttpRoute {
@@ -21,6 +25,7 @@ impl std::fmt::Debug for WebHttpRoute {
             .field("proxied", &self.proxy.is_some())
             .field("remote_dns", &self.remote_dns)
             .field("addresses", &self.addresses)
+            .field("sandboxed", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -73,6 +78,9 @@ impl WebHttpRoute {
             remote_dns: matches!(proxy_url.scheme(), "http" | "https" | "socks4a" | "socks5h"),
             proxy_key: key.finalize().to_hex().to_string(),
             addresses: Vec::new(),
+            sandbox: None,
+            sandbox_origin: None,
+            cancellation: None,
         })
     }
 
@@ -86,7 +94,92 @@ impl WebHttpRoute {
     }
 
     pub fn cache_key(&self) -> String {
-        format!("{}:{:?}", self.proxy_key, self.addresses)
+        let policy = self.sandbox.as_ref().map(|policy| {
+            blake3::hash(&serde_json::to_vec(policy).expect("sandbox policy is serializable"))
+                .to_hex()
+                .to_string()
+        });
+        format!("{}:{:?}:{policy:?}", self.proxy_key, self.addresses)
+    }
+
+    /// Bind the approved destination to the current invocation's MXC policy.
+    /// The worker connects directly to the pinned addresses and never consults
+    /// proxy environment or resolves an additional destination.
+    pub fn with_sandbox_policy(
+        mut self,
+        url: &Url,
+        policy: agena_process::sandbox::SandboxPolicy,
+    ) -> Result<Self, CrawlError> {
+        if policy.disabled {
+            self.sandbox = None;
+            self.sandbox_origin = None;
+            return Ok(self);
+        }
+        if self.proxy.is_some() {
+            return Err(CrawlError::InvalidInput(
+                "this HTTP proxy route cannot enforce the approved destination IPs inside MXC; configure a direct route for sandboxed requests".into(),
+            ));
+        }
+        if self.addresses.is_empty() {
+            return Err(CrawlError::InvalidInput(
+                "sandboxed HTTP requests require approved destination addresses".into(),
+            ));
+        }
+        self.sandbox = Some(policy);
+        self.sandbox_origin = Some(url.origin());
+        Ok(self)
+    }
+
+    pub fn sandboxed(&self) -> bool {
+        self.sandbox.is_some()
+    }
+
+    /// The originating call owns the worker even when nobody polls its body.
+    pub fn with_cancellation(
+        mut self,
+        cancellation: Option<agena_process::sandbox_http::WorkerCancellation>,
+    ) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    /// Execute one authorized HTTP hop. The returned response streams from
+    /// the worker, so dropping it cancels the connection and its process.
+    pub async fn execute(
+        &self,
+        client: &reqwest::Client,
+        request: reqwest::Request,
+        connect_timeout: Duration,
+        total_timeout: Option<Duration>,
+        max_response_bytes: Option<u64>,
+    ) -> Result<reqwest::Response, CrawlError> {
+        if let Some(policy) = &self.sandbox {
+            if self.sandbox_origin.as_ref() != Some(&request.url().origin()) {
+                return Err(CrawlError::InvalidInput(
+                    "HTTP destination changed after sandbox authorization".into(),
+                ));
+            }
+            return agena_process::sandbox_http::execute(
+                request,
+                agena_process::sandbox_http::HttpOptions {
+                    policy: policy.clone(),
+                    pinned_addresses: self.addresses.clone(),
+                    connect_timeout,
+                    total_timeout,
+                    // File payloads are capped separately at 512 MiB. Reserve
+                    // a bounded extra MiB for multipart fields and framing.
+                    max_request_bytes: 513 * 1024 * 1024,
+                    max_response_bytes,
+                    cancellation: self.cancellation.clone(),
+                },
+            )
+            .await
+            .map_err(CrawlError::Io);
+        }
+        client
+            .execute(request)
+            .await
+            .map_err(|error| CrawlError::Http(error.without_url()))
     }
 
     /// Explicitly apply the previously selected route; never re-read proxy
@@ -110,6 +203,60 @@ impl WebHttpRoute {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn sandbox_route_rejects_retargeting_before_any_connection() {
+        let url = Url::parse("https://approved.example/resource").unwrap();
+        let route = WebHttpRoute::default()
+            .with_addresses(vec!["192.0.2.1:443".parse().unwrap()])
+            .with_sandbox_policy(&url, agena_process::sandbox::SandboxPolicy::default())
+            .unwrap();
+        let client = reqwest::Client::new();
+        let request = client
+            .get("https://different.example/resource")
+            .build()
+            .unwrap();
+        let error = route
+            .execute(&client, request, Duration::from_secs(1), None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed after sandbox authorization")
+        );
+        let disabled = route
+            .with_sandbox_policy(
+                &url,
+                agena_process::sandbox::SandboxPolicy {
+                    disabled: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!disabled.sandboxed());
+    }
+
+    #[test]
+    fn sandbox_route_requires_pins_and_rejects_proxy_bypass() {
+        let url = Url::parse("https://approved.example/resource").unwrap();
+        assert!(
+            WebHttpRoute::default()
+                .with_sandbox_policy(&url, agena_process::sandbox::SandboxPolicy::default())
+                .is_err()
+        );
+        let matcher = Matcher::builder().all("socks5://127.0.0.1:1080").build();
+        let route = WebHttpRoute::from_matcher(&url, &matcher)
+            .unwrap()
+            .with_addresses(vec!["192.0.2.1:443".parse().unwrap()]);
+        assert!(
+            route
+                .with_sandbox_policy(&url, agena_process::sandbox::SandboxPolicy::default())
+                .unwrap_err()
+                .to_string()
+                .contains("cannot enforce")
+        );
+    }
 
     async fn headers(stream: &mut tokio::net::TcpStream) -> String {
         let mut bytes = Vec::new();

@@ -796,6 +796,16 @@ struct OAuthNetworkPolicy {
 
 #[async_trait::async_trait]
 impl McpHttpNetworkAuthorizer for OAuthNetworkPolicy {
+    async fn sandbox_policy(
+        &self,
+        _target: &str,
+    ) -> agena_mcp_client::McpResult<agena_process::sandbox::SandboxPolicy> {
+        Ok(agena_process::sandbox::SandboxPolicy {
+            disabled: true,
+            ..Default::default()
+        })
+    }
+
     async fn authorize(&self, target: &str) -> agena_mcp_client::McpResult<()> {
         self.targets.lock().unwrap().push(target.to_owned());
         if self

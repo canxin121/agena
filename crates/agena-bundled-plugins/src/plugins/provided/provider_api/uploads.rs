@@ -48,7 +48,7 @@ pub(super) async fn file_search(
     metadata
         .entry("displayName".into())
         .or_insert_with(|| json!(filename));
-    let begin = client
+    let request = client
         .post(start)
         .headers(official_service::provider_headers(&service.connection)?)
         .header("x-agena-provider-api", "gemini")
@@ -56,18 +56,16 @@ pub(super) async fn file_search(
         .header("X-Goog-Upload-Command", "start")
         .header("X-Goog-Upload-Header-Content-Length", bytes.len())
         .header("X-Goog-Upload-Header-Content-Type", mime)
-        .json(&metadata)
-        .send()
-        .await
-        .map_err(|error| {
-            official_service::provider_transport_error(
-                service.provider,
-                "File Search upload start",
-                &error,
-                Some(&service.connection),
-            )
-            .with_remote_effect_unknown()
-        })?;
+        .json(&metadata);
+    let begin = client.send(request).await.map_err(|error| {
+        official_service::provider_transport_error(
+            service.provider,
+            "File Search upload start",
+            &error,
+            Some(&service.connection),
+        )
+        .with_remote_effect_unknown()
+    })?;
     if !begin.status().is_success() {
         let (status, request_id, value) = official_service::read_json_response_bounded(
             begin,
@@ -108,25 +106,23 @@ pub(super) async fn file_search(
         &service.connection,
     )
     .await?;
-    let response = client
+    let request = client
         .post(target)
         .headers(official_service::provider_headers(&service.connection)?)
         .header("x-agena-provider-api", "gemini")
         .header("X-Goog-Upload-Offset", "0")
         .header("X-Goog-Upload-Command", "upload, finalize")
         .header("content-type", mime)
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|error| {
-            official_service::provider_transport_error(
-                service.provider,
-                "File Search upload",
-                &error,
-                Some(&service.connection),
-            )
-            .with_remote_effect_unknown()
-        })?;
+        .body(bytes);
+    let response = client.send(request).await.map_err(|error| {
+        official_service::provider_transport_error(
+            service.provider,
+            "File Search upload",
+            &error,
+            Some(&service.connection),
+        )
+        .with_remote_effect_unknown()
+    })?;
     let (status, request_id, value) = official_service::read_json_response_bounded(
         response,
         "gemini",

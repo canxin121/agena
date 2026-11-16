@@ -46,7 +46,47 @@ fn parse_json_rpc_error(body: &str) -> Option<ServerJsonRpcMessage> {
     }
 }
 
-impl StreamableHttpClient for reqwest::Client {
+/// Runs the actual HTTP I/O while retaining the shared MCP response and SSE
+/// implementation. An executor may send the request through an isolated worker.
+pub trait HttpRequestExecutor: Clone + Send + Sync + 'static {
+    fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> impl std::future::Future<
+        Output = Result<reqwest::Response, StreamableHttpError<reqwest::Error>>,
+    > + Send;
+}
+
+impl HttpRequestExecutor for reqwest::Client {
+    async fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<reqwest::Response, StreamableHttpError<reqwest::Error>> {
+        reqwest::Client::execute(self, request)
+            .await
+            .map_err(Into::into)
+    }
+}
+
+/// Builds MCP requests using the supplied request client, then delegates all
+/// socket I/O to the executor. Authentication challenges, session expiry,
+/// JSON-RPC errors and bounded SSE parsing are identical to the reqwest path.
+#[derive(Clone)]
+pub struct RequestExecutingHttpClient<E> {
+    request_client: reqwest::Client,
+    executor: E,
+}
+
+impl<E> RequestExecutingHttpClient<E> {
+    pub fn new(request_client: reqwest::Client, executor: E) -> Self {
+        Self {
+            request_client,
+            executor,
+        }
+    }
+}
+
+impl<E: HttpRequestExecutor> StreamableHttpClient for RequestExecutingHttpClient<E> {
     type Error = reqwest::Error;
 
     async fn get_stream(
@@ -78,6 +118,7 @@ impl StreamableHttpClient for reqwest::Client {
         max_sse_event_size: usize,
     ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
         let mut request_builder = self
+            .request_client
             .get(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
         if let Some(session_id) = session_id {
@@ -90,7 +131,7 @@ impl StreamableHttpClient for reqwest::Client {
             request_builder = request_builder.bearer_auth(auth_header);
         }
         request_builder = apply_custom_headers(request_builder, custom_headers)?;
-        let response = request_builder.send().await?;
+        let response = self.executor.execute(request_builder.build()?).await?;
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
             return Err(StreamableHttpError::ServerDoesNotSupportSse);
         }
@@ -151,13 +192,13 @@ impl StreamableHttpClient for reqwest::Client {
         auth_token: Option<String>,
         custom_headers: HashMap<HeaderName, HeaderValue>,
     ) -> Result<(), StreamableHttpError<Self::Error>> {
-        let mut request_builder = self.delete(uri.as_ref());
+        let mut request_builder = self.request_client.delete(uri.as_ref());
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
         request_builder = request_builder.header(HEADER_SESSION_ID, session.as_ref());
         request_builder = apply_custom_headers(request_builder, custom_headers)?;
-        let response = request_builder.send().await?;
+        let response = self.executor.execute(request_builder.build()?).await?;
 
         // if method no allowed
         if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
@@ -197,6 +238,7 @@ impl StreamableHttpClient for reqwest::Client {
         max_sse_event_size: usize,
     ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
         let mut request = self
+            .request_client
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
         if let Some(auth_header) = auth_token {
@@ -208,7 +250,10 @@ impl StreamableHttpClient for reqwest::Client {
         if let Some(session_id) = session_id {
             request = request.header(HEADER_SESSION_ID, session_id.as_ref());
         }
-        let response = request.json(&message).send().await?;
+        let response = self
+            .executor
+            .execute(request.json(&message).build()?)
+            .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED
             && let Some(header) = response.headers().get(WWW_AUTHENTICATE)
         {
@@ -322,6 +367,90 @@ impl StreamableHttpClient for reqwest::Client {
                 Err(StreamableHttpError::UnexpectedContentType(content_type))
             }
         }
+    }
+}
+
+impl StreamableHttpClient for reqwest::Client {
+    type Error = reqwest::Error;
+
+    async fn post_message(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        RequestExecutingHttpClient::new(self.clone(), self.clone())
+            .post_message(uri, message, session_id, auth_header, custom_headers)
+            .await
+    }
+
+    async fn post_message_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        message: ClientJsonRpcMessage,
+        session_id: Option<Arc<str>>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
+        RequestExecutingHttpClient::new(self.clone(), self.clone())
+            .post_message_with_max_sse_event_size(
+                uri,
+                message,
+                session_id,
+                auth_header,
+                custom_headers,
+                max_sse_event_size,
+            )
+            .await
+    }
+
+    async fn delete_session(
+        &self,
+        uri: Arc<str>,
+        session_id: Arc<str>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<(), StreamableHttpError<Self::Error>> {
+        RequestExecutingHttpClient::new(self.clone(), self.clone())
+            .delete_session(uri, session_id, auth_header, custom_headers)
+            .await
+    }
+
+    async fn get_stream(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+    ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
+        RequestExecutingHttpClient::new(self.clone(), self.clone())
+            .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
+            .await
+    }
+
+    async fn get_stream_with_max_sse_event_size(
+        &self,
+        uri: Arc<str>,
+        session_id: Option<Arc<str>>,
+        last_event_id: Option<String>,
+        auth_header: Option<String>,
+        custom_headers: HashMap<HeaderName, HeaderValue>,
+        max_sse_event_size: usize,
+    ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
+        RequestExecutingHttpClient::new(self.clone(), self.clone())
+            .get_stream_with_max_sse_event_size(
+                uri,
+                session_id,
+                last_event_id,
+                auth_header,
+                custom_headers,
+                max_sse_event_size,
+            )
+            .await
     }
 }
 

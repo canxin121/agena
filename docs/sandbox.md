@@ -1,6 +1,6 @@
 # 执行保护：原生沙盒与资源预检
 
-Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作。作为 MCP 服务提供工具时，调用默认关闭 MXC，直接在宿主执行。路径权限放在 `permission.path`，网络权限使用 `permission.network` 的扁平规则，工具审批放在 `permission.tools`；启用沙盒时，Shell 和托管子进程直接把当前生效的路径、网络配置转换为 MXC 策略。
+Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工作和受控网络请求。路径权限放在 `permission.path`，网络权限放在 `permission.network`，工具审批放在 `permission.tools`；Shell、托管子进程和各类工作进程共用当前调用所属身份的生效策略。Agena 作为 MCP 服务接收的调用会强制关闭 MXC，按 `resource_guard` 决定是否启用资源预检；Agena 工具访问外部 MCP 服务则遵循普通会话的沙盒设置。
 
 路径规则的值只接受 `readonly`、`readwrite`、`deny`。它们分别对应 MXC 的只读、读写和拒绝路径。`ask`、`auto` 属于 Agena 的工具审批流程；路径与网络资源权限必须是能够执行的具体模式。
 
@@ -43,7 +43,7 @@ Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → �
 
 | 配置 | 策略与行为 |
 | --- | --- |
-| `sandbox` | 原生沙盒：通过 MXC 约束 Shell、PTY 和托管子进程的文件系统与网络访问 |
+| `sandbox` | 原生沙盒：通过 MXC 约束 Shell、PTY、托管子进程，以及文件、HTTP、媒体、技能和记忆等工作进程的实际 I/O |
 | `resource_guard` | 资源预检：在未使用 MXC 时，统一检查工具声明的 `reads`、`writes`、`network`，并根据命令分析提示补齐遗漏声明 |
 
 资源预检发生在调用前，依赖工具声明和命令分析。它适合直接执行时做基础检查；原生沙盒还会约束进程随后实际发生的 I/O。
@@ -75,7 +75,7 @@ Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → �
 }
 ```
 
-工具审批，以及文件发布、宿主 HTTP 等操作对真实资源的授权继续生效。MXC 启动失败仍返回错误，不会自动以直接执行方式重试；需要直接执行时显式关闭沙盒。
+两个开关共用 `permission.path`、`permission.network`，不需要另写一套 worker 权限。`permission.tools` 仍由 Agena 处理工具审批；文件发布、HTTP 目标等真实资源授权也继续生效。资源预检检查已声明的路径和出站目标，不能替代 MXC 对进程实际连接、入站或宿主回环访问的约束。MXC 启动失败返回错误；需要直接执行时，在调用前显式关闭沙盒。
 
 ### 旧配置兼容
 
@@ -107,7 +107,7 @@ AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 3. `SandboxPermissionSnapshot` 捕获生效的路径、网络策略，独立权限上限，以及本次调用可见的持久规则。
 4. Shell、PTY 和托管子进程直接从快照生成只读、读写、拒绝路径和完整网络策略，不要求模型重复声明资源。宿主控制的文件 worker 和固定辅助工具继续使用任务实际需要的最小资源范围。
 5. 统一 launcher 启动 MXC，再启动命令或 worker。后端和主机依赖无法落实策略时返回启动错误。
-6. 文件修改 worker 在私有暂存区生成结果，宿主验证修订和目标身份后发布到固定目标。
+6. 文件编辑和 Notebook worker 在私有暂存区生成结果，宿主验证修订和目标身份后发布到固定目标。技能与记忆沿用各自的修订检查、锁和事务，在获准目录内执行；取消技能写入时，工作进程退出后才释放宿主写锁。
 
 工具参数不能切换沙盒。模式由已保存的配置、服务启动环境与受信任 MCP 宿主入口共同决定。
 
@@ -227,7 +227,7 @@ Windows 使用对应 Shell 命令和实际路径。`workdir` 本身需要读取�
 
 - 配置中的挂载目标必须存在。新文件可以放在已授权且已存在的输出目录中，或先通过 `fs.write` 创建准确目标；执行器不会自动把父目录扩大为读写授权。
 - 文件的原子替换可能需要同目录临时文件和父目录操作。Agena 文件修改工具通过私有暂存区和固定目标提交处理。
-- 不能显式整体开放共享临时根（例如 `/tmp`、`/var/tmp`）。授权这些目录的祖先或设置宽泛的 `external` 默认值时，launcher 会排除共享临时目录；可以另行授权自己使用的具体临时子目录。其他任务的 `agena-sandbox-*`、`agena-tool-worker-*`、`agena-media-worker-*` 保留目录继续受保护。
+- 不能显式整体开放共享临时根（例如 `/tmp`、`/var/tmp`）。授权这些目录的祖先或设置宽泛的 `external` 默认值时，launcher 会排除共享临时目录；可以另行授权自己使用的具体临时子目录。其他任务的 `agena-sandbox-*`、`agena-tool-worker-*`、`agena-media-worker-*`、`agena-native-worker-*` 保留目录继续受保护。
 - `external: "readonly"`、`"readwrite"` 均可在启用 MXC 时保存。launcher 按上述隔离边界分解实际挂载；工作区仍按 `workspace` 和具体路径规则执行。
 
 ### 运行时依赖
@@ -415,15 +415,19 @@ TUI 使用 `Tab` 切换面板，`Ctrl+N` 新增规则，`Enter` 编辑字段，`
 
 只有关闭 MXC 且开启 `resource_guard` 时，工具 `network` 数组才作为调用前的资源声明检查，例如 `["192.0.2.10:443"]` 或 `["https://api.example.com"]`。空数组表示没有声明网络操作，不能使宿主直接执行的命令自动离线。
 
-### 宿主 HTTP 请求与 DNS 地址校验
+### 受控 HTTP 工作进程与 DNS 地址校验
 
-宿主 Web 插件的普通抓取、重定向、robots.txt 请求和 HTML 搜索使用同一份调用网络权限。DNS 返回的数值地址必须通过当前原生配置、独立权限上限和持久拒绝检查；只有允许的地址进入 HTTP 客户端的固定解析表。没有获准地址时返回权限错误。
+普通 Web 抓取、robots.txt、HTML/API 搜索、技能归档下载、provider HTTP 和工具侧 HTTP MCP/OAuth 共用受控 HTTP 传输。宿主先授权原始 URL，再解析 DNS，逐个审核数值地址是否符合当前策略、独立权限上限和持久拒绝；没有获准地址时返回权限错误。原始 hostname 继续用于 HTTP Host 和 TLS 证书校验。
 
-受控下载、provider HTTP/WebSocket 和 MCP 出站访问同样绑定实际连接地址。MCP 对每个 POST、GET、DELETE 请求及 OAuth 的每次跳转先检查原始 URL，再解析并逐个审核数值 IP，将获准地址固定到本次 HTTP 客户端；禁用其代理和自动跳转，避免把目的地址交给另一次 DNS 解析。原始 hostname 继续用于 HTTP Host 与 TLS 校验。
+启用 MXC 时，每次 HTTP 跳转对应一个工作进程中的单次请求。实际 TCP/TLS 连接、请求发送和响应接收在工作进程内完成，只连接宿主已审核的 IP；worker 禁用自动重定向和代理，也不重新解析目标。请求和响应经进程管道流式传输，保留 multipart、SSE 和有界大文件上传；Agena 不为这些请求创建 HTTP/SOCKS 权限代理服务。
+
+支持重定向的 Web 抓取、robots.txt、技能下载与 OAuth 由宿主审核下一跳后再启动请求。HTML 搜索只跟随已授权同源跳转，并继续固定同一批获准地址；provider 与 MCP 协议请求保留原有的禁止自动跳转策略。Cookie、User-Agent、认证头和超时由调用端明确传入；搜索在复用 Cookie 时仍为每次调用刷新权限与取消状态。响应被丢弃或所属调用结束时回收 HTTP 工作进程，即使没有继续读取 SSE 正文也会停止。
+
+这类受控 HTTP 请求的 DNS 查询由宿主执行，审核后的目的 IP 才进入 worker。Shell 或其他程序自行在沙盒内解析域名时，仍需允许其实际 DNS 服务器。provider 实时语音和 WebSocket monitor 同样先由宿主授权 URL 与解析结果，再由独立 worker 直接连接固定 IP。
 
 这条校验通过宿主的 `check_resolved_network_permission` 接口执行，保留原调用的身份与权限上限；原生、HTTP 和 stdio 插件回调使用相同接口。
 
-服务自身的 HTTP/SOCKS 路由配置与沙盒权限策略分开。Web 插件不会把已经审核的目标交给远端代理重新解析；无法固定实际目的 IP 的代理 DNS 路由会明确报错。移除的是每次沙盒调用创建的权限代理，服务与 provider 自己的网络配置仍按各自客户端处理。
+服务自身的 HTTP/SOCKS 路由配置与沙盒权限策略分开。当前 MXC HTTP worker 使用直连；选中的代理路由无法落实固定目的 IP 时明确报错，不会静默忽略代理或改用宿主请求。关闭沙盒时沿用原客户端路由及原有的目标地址授权要求。
 
 ### 浏览器渲染的当前状态
 
@@ -452,7 +456,7 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 
 ## 已接入的工具和辅助进程
 
-下表描述启用沙盒时的执行边界；MCP 或显式关闭沙盒的调用按前述宿主模式执行。
+下表描述启用沙盒时的执行边界；通过 Agena 入站 MCP 接口接收的调用、环境强制关闭或设置关闭沙盒的调用，按前述宿主模式与资源预检开关执行。
 
 | 工具或执行入口 | 隔离方式与资源边界 |
 | --- | --- |
@@ -462,6 +466,7 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 | `fs.stat` | 普通文件在独立 worker 中查询；符号链接通过宿主已授权目标的元数据 broker 保留 `lstat` 语义，不读取链接目标内容 |
 | `fs.write`、`fs.replace`、`fs.apply_patch` | worker 在私有暂存区运行；宿主只向固定、已授权的目标发布验证后的结果 |
 | `code.search_ast`、`code.syntax_tree`、`code.rewrite_ast` | 语法解析在 worker 内；实际改写使用暂存和宿主发布流程 |
+| Notebook `edit_cell` | 在文件 worker 内读取与编辑 notebook，保留修订校验；宿主向固定目标发布已验证结果 |
 | `fs.read_media` | 本地读取、文件格式识别、图片解码和像素限制在离线 worker 内；宿主验证传输大小、哈希和元数据后绑定当前模型 route |
 | LSP 子进程 | 根据实际项目根与会话权限构造只读项目策略，使用私有 HOME/cache；不同完整策略不会共用同一个服务进程 |
 | MCP stdio 服务 | 配置按需启动；发现、调用、资源、提示与重连都选择当前宿主授权的 scope 和完整策略实例；连接测试使用独立沙盒进程 |
@@ -469,7 +474,13 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 | 文档转换和提取辅助程序 | 外部 Python/文档转换器使用离线 MXC，仅获得已准备的有界输入副本及私有临时资源 |
 | 固定 CLI 版本探测 | 原有工具名单、参数和时间/输出限制继续生效；探测进程也经统一原生沙盒启动 |
 | `session.environment` 的 Git 探针 | 使用当前宿主调用授权投影的只读工作区策略和离线进程；Git 信息不可用时返回诊断，不改为宿主 Git 执行 |
-| Web HTTP 抓取与 HTML 搜索 | 宿主逐目标授权，使用当前调用权限检查 DNS 返回 IP，并将允许地址固定到实际客户端；外部代理重新解析目标的路由返回错误 |
+| Web HTTP 抓取、robots.txt、HTML/API 搜索 | 宿主审核 URL 与 DNS 地址；实际单跳请求及流式响应在 MXC HTTP worker 内，重定向按各工具策略逐跳处理 |
+| 工具侧 HTTP MCP 与 OAuth | POST、GET/SSE、DELETE 及 OAuth 发现、注册、刷新、令牌交换进入 HTTP worker；重定向与重连继续使用当前调用授权 |
+| ChatGPT / Claude / Gemini 的本地媒体分析和文件上传 | 文件读取与媒体识别在离线 worker；目标授权后通过 HTTP worker 上传，保留大小、修订、哈希和格式校验 |
+| ChatGPT / Gemini 实时语音 | 有界语音 turn 的 WebSocket 连接、输入发送和响应收集在 MXC worker；宿主只准备已授权输入和发布校验后的音频 |
+| WebSocket monitor | 独立 MXC worker 使用获准固定 IP、原 TLS hostname 与子协议；停止、超时或句柄释放时回收进程树 |
+| Skills 目录、资源与安装 | 列表、读取、修改、安装预览及安装在离线 worker；目录扫描、归档解包与包校验也在 worker，远程下载使用 HTTP worker |
+| Memory 存储与搜索 | 读取、列表、搜索、写入、删除、恢复在离线 worker；保留原有锁、修订和事务日志，派生搜索索引放在任务私有目录 |
 | 浏览器渲染和交互 | 当前入口在执行前拒绝；Chrome 尚未接入完整 MXC 边界，辅助进程自身的隔离不足以开放浏览器功能 |
 
 PTY 和其他常驻子进程的内核权限在创建时固定。需要新增目录或网络目标时，先修改 `permission.path`、`permission.network`，再创建新的终端或进程。已有终端的执行模式或资源策略改变后，`shell.write` 会拒绝输入，仍可读取输出或停止进程；修改设置不会给运行中的进程追加挂载或网络权限。
@@ -492,7 +503,15 @@ PTY 和其他常驻子进程的内核权限在创建时固定。需要新增目�
 
 共享的普通 `PreparedMedia` 序列化仍只包含元数据。媒体 worker 的私有传输字段不会因此进入其他调用的常规 JSON 输出。
 
-用户附件准备、结果附件处理以及 provider 上传工具中其他直接使用共享媒体准备函数的路径，仍需分别迁移到具备适用授权上下文的 worker。此处的进程隔离覆盖表中的 `fs.read_media` 路径。
+ChatGPT、Claude、Gemini 工具读取本地分析输入时使用同一媒体 worker；文件上传先在受限文件 worker 中读取，再在离线媒体 worker 中识别格式。普通文件上传保留 512 MiB 上限，媒体解码沿用 20 MiB 上限；较大的音视频只检查有界容器头，不为上传完整解码。非媒体数据集可以按原文件类型上传，worker 启动或传输失败会返回错误。
+
+实时语音的本地输入先经过路径授权与有界文件读取。独立网络 worker 只接收目标请求头、固定地址、模型/session、文本或 PCM，完成 1～50 秒的 turn 后返回有界音频、转录和事件；宿主检查返回 PCM 与大小限制，再使用原有授权输出流程保存音频。
+
+### 技能与记忆的持久写入
+
+Skills 和 Memory 的工作进程直接操作当前授权的目标目录，保留各自原有的原子替换、修订检查与恢复机制。技能变更由宿主保持变更锁，直到 worker 完成或取消清理结束；记忆读写由 worker 内的文件锁、修订检查和事务日志保护。技能包下载与本地解包分开授权，解包、目录遍历和包校验在离线 worker 中执行；worker 只接收业务数据与必要路径，不启动完整服务或模型。
+
+记忆读写保留文件锁、事务日志、SHA-256、删除标记与恢复逻辑。搜索需要的派生索引在 worker 私有临时目录建立，读操作不因此获得宿主数据库或共享缓存目录的写权限。
 
 ### LSP 服务复用
 
@@ -500,7 +519,7 @@ LSP 缓存键包含会话身份、服务器名称、实际根目录和完整 `Sa
 
 语言服务所需的程序和安装目录由受信任配置提供；当前工具接线保持项目只读，HOME、缓存和 `CARGO_TARGET_DIR` 写入进程私有目录。需要在项目内写缓存的语言服务，应配置为使用其私有缓存目录；当前接线不会自动授予项目写权限。
 
-### MCP stdio 服务
+### MCP 服务连接
 
 MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<name>.process` 使用 `command`、`args`、`env`、`cwd` 描述启动方式。启用 MXC 时，服务使用当前生效的 `permission.path`、`permission.network`，并与全部 ceiling 和持久拒绝共同约束；`reads`、`writes`、`network` 声明不会改变此范围，省略声明也不会强制离线。需要确认的启动操作仍由工具审批处理。
 
@@ -525,7 +544,9 @@ MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<n
 
 当所有资源已由现有策略明确允许时，同一会话可以复用相同策略实例；一次性批准的资源和 operator 调用绑定本次宿主调用的完成信号，调用结束即移除并关闭对应实例。`connections.test` 总是建立独立连接，并在完成后关闭它。缺少可信调用 scope 或所选模式需要的后端能力时直接返回错误。
 
-工具访问 HTTP MCP 时，每次宿主调用创建独立连接管理器，保留该服务器的认证存储、工具过滤、roots 和超时配置。连接、重连、OAuth discovery/registration/refresh 及 token exchange 都使用当前调用的授权上下文和逐请求固定地址。清理在建立连接前注册，调用成功、失败或取消后关闭该独立管理器；连接测试也在取消时回收。结束的 OAuth 授权作用域不能退回可信管理客户端。
+工具访问 HTTP MCP 时，每次宿主调用创建独立连接管理器，保留该服务器的认证存储、工具过滤、roots 和超时配置。连接、重连、OAuth discovery/registration/refresh 及 token exchange 都使用当前调用的授权上下文和逐请求固定地址，实际请求进入 MXC HTTP worker。流式 HTTP 的 POST、GET/SSE 和 DELETE 使用同一传输与取消边界。清理在建立连接前注册，调用成功、失败或取消后关闭该独立管理器；连接测试也在取消时回收。结束的 OAuth 授权作用域不能退回可信管理客户端。
+
+管理界面的可信连接管理请求沿用管理端传输；模型通过工具访问外部 MCP 服务时使用其所属调用的权限。Agena 自身入站 `/mcp` 和 stdio 桥接仍按前述规则关闭本次 MXC，两种方向的 MCP 入口分别处理。
 
 ### 外部 stdio 插件
 
@@ -650,6 +671,31 @@ cargo run -p agena-process --example sandbox_smoke
 
 smoke 检查输入可读、输入不可写、输出可写、秘密目录不可读取、外部路径不可读取、宿主回环不可访问、环境清理、私有 HOME、超时和子孙进程回收。后端不可用时，该测试会直接失败，不能跳过为成功。
 
+新增工作进程的本地集成检查：
+
+```bash
+cargo run -p agena-process --example sandbox_io_smoke -- --files-only
+cargo run -p agena-bundled-plugins --example sandbox_local_smoke
+```
+
+第一条检查真实文件读取与 MXC 对未授权文件的拒绝。第二条在临时目录检查 TAR 解析、技能安装与修订冲突、记忆读写和只读搜索、Notebook 编辑，以及越权访问失败。测试不会读取用户技能库、记忆库或修改实例配置。
+
+在支持细粒度原生网络规则的宿主上，允许测试连接本机非回环 IPv4 后，运行完整 HTTP 检查：
+
+```bash
+cargo run -p agena-process --example sandbox_io_smoke
+```
+
+该检查使用临时本机 HTTP 服务，验证固定目标地址、流式上传、重复响应头、SSE、调用取消及关闭网络后不回退宿主执行。`--files-only` 只运行文件部分，不计为网络验证成功。
+
+测试环境允许访问 GitHub、但禁止访问本机服务时，可以单独验证原生 HTTPS 和禁网拒绝：
+
+```bash
+cargo run -p agena-process --example sandbox_io_smoke -- --https-only
+```
+
+该模式只读取公开的 `https://github.com/robots.txt`，不使用凭证；它检查 TLS、地址固定、完整响应传输和离线拒绝，本机 SSE 时序与连接取消仍由完整本机检查覆盖。
+
 针对实现的回归与编译检查：
 
 ```bash
@@ -699,4 +745,8 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | `agena-plugin-host/src/transport/stdio/scoped.rs` | 外部 stdio 插件的 bootstrap 与作用域进程路由 |
 | `agena-runtime-tools/src/media_input.rs` | 媒体准备与私有 IPC 传输校验 |
 | `agena-process/src/sandbox.rs` | MXC launcher、环境、运行时目录、平台能力和进程生命周期 |
+| `agena-process/src/sandbox_http.rs` | 固定目标的单跳 HTTP、流式匿名管道、连接取消和超时 |
+| `agena-process/src/sandbox_file.rs` | 上传文件的隔离读取、大小限制与修订校验 |
+| `agena-bundled-plugins/src/worker.rs` | 技能、记忆与实时语音的最小请求协议和调用生命周期 |
+| `agena-runtime-tools/src/monitor/websocket.rs` | 固定目标的监控 WebSocket 与工作进程清理 |
 | `agena-lsp/src/registry.rs` | 按完整权限策略区分语言服务实例 |

@@ -845,6 +845,7 @@ const PRIVATE_TEMP_PREFIXES: &[&str] = &[
     "agena-sandbox-",
     "agena-tool-worker-",
     "agena-media-worker-",
+    "agena-native-worker-",
 ];
 
 fn reserved_temporary_child(path: &Path, root: &Path) -> bool {
@@ -1034,7 +1035,7 @@ fn reject_denied_runtime(policy: &SandboxPolicy, granted: &[PathBuf]) -> io::Res
 // here so a more-specific grant through a symlink cannot reopen a denied tree
 // on Bubblewrap or ProcessContainer. Retain original spellings for MXC's alias
 // reconstruction; this helper is only for validation.
-fn policy_path_identity(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn policy_path_identity(path: &Path) -> io::Result<PathBuf> {
     let mut current = path.to_path_buf();
     let mut missing = Vec::new();
     loop {
@@ -1070,7 +1071,7 @@ fn policy_path_identity(path: &Path) -> io::Result<PathBuf> {
     }
 }
 
-fn identity_within(path: &Path, parent: &Path) -> bool {
+pub(crate) fn identity_within(path: &Path, parent: &Path) -> bool {
     #[cfg(not(windows))]
     {
         path.starts_with(parent)

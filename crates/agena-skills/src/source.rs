@@ -278,16 +278,244 @@ pub fn resolve_github_source(
 
 /// Authorizers retain their own error type, including pending permission
 /// requests; a denial must not be flattened into a generic import error.
+/// Execute one bounded source operation either locally or in a native worker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SkillSourceOperation {
+    EnumerateFolder {
+        path: PathBuf,
+    },
+    ReadFile {
+        path: PathBuf,
+        limit: usize,
+    },
+    ImportFolderFiles {
+        entries: Vec<(String, PathBuf, bool)>,
+    },
+    MutationPaths {
+        path: PathBuf,
+    },
+    ImportArchive {
+        filename: String,
+        #[serde(with = "crate::import::content_base64")]
+        bytes: Vec<u8>,
+        subpath: Option<String>,
+    },
+    ImportFiles {
+        files: Vec<SkillImportFile>,
+    },
+    ImportUpload {
+        files: Vec<SkillUploadFile>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SkillSourceResult {
+    Entries(Vec<(String, PathBuf, bool)>),
+    Paths(Vec<PathBuf>),
+    Bytes(#[serde(with = "crate::import::content_base64")] Vec<u8>),
+    Package(SkillImport),
+}
+
+impl SkillSourceResult {
+    fn entries(self) -> Result<Vec<(String, PathBuf, bool)>, SkillError> {
+        match self {
+            Self::Entries(value) => Ok(value),
+            _ => Err(SkillError::invalid(
+                "Invalid source worker entries response",
+            )),
+        }
+    }
+    fn bytes(self) -> Result<Vec<u8>, SkillError> {
+        match self {
+            Self::Bytes(value) => Ok(value),
+            _ => Err(SkillError::invalid("Invalid source worker bytes response")),
+        }
+    }
+    fn package(self) -> Result<SkillImport, SkillError> {
+        match self {
+            Self::Package(value) => Ok(value),
+            _ => Err(SkillError::invalid(
+                "Invalid source worker package response",
+            )),
+        }
+    }
+}
+
+impl SkillSourceOperation {
+    pub fn read_paths(&self) -> Vec<String> {
+        match self {
+            Self::EnumerateFolder { path }
+            | Self::ReadFile { path, .. }
+            | Self::MutationPaths { path } => vec![path.to_string_lossy().into_owned()],
+            Self::ImportFolderFiles { entries } => entries
+                .iter()
+                .map(|(_, path, _)| path.to_string_lossy().into_owned())
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn execute(self) -> Result<SkillSourceResult, SkillError> {
+        match self {
+            Self::EnumerateFolder { path } => folder_entries(&path).map(SkillSourceResult::Entries),
+            Self::ReadFile { path, limit } => {
+                if limit > MAX_SOURCE_BYTES {
+                    return Err(SkillError::invalid("Source read exceeds 64 MiB"));
+                }
+                read_bounded(&path, limit).map(SkillSourceResult::Bytes)
+            }
+            Self::ImportFolderFiles { entries } => {
+                if entries.len() > MAX_SOURCE_FILES {
+                    return Err(SkillError::invalid("Skill source exceeds 10000 files"));
+                }
+                let mut total = 0;
+                let mut files = Vec::with_capacity(entries.len());
+                for (relative, path, executable) in entries {
+                    let content = read_bounded(&path, MAX_SOURCE_BYTES - total)?;
+                    total += content.len();
+                    files.push(SkillImportFile {
+                        path: relative,
+                        content,
+                        executable,
+                    });
+                }
+                SkillImport::from_files(files).map(SkillSourceResult::Package)
+            }
+            Self::MutationPaths { path } => {
+                let mut builder = ignore::WalkBuilder::new(path);
+                builder
+                    .hidden(false)
+                    .ignore(false)
+                    .git_ignore(false)
+                    .parents(false)
+                    .follow_links(false)
+                    .max_depth(Some(32));
+                let mut paths = Vec::new();
+                for (index, entry) in builder.build().enumerate() {
+                    if index > 20000 {
+                        return Err(SkillError::invalid(
+                            "The installed package is too large to remove safely.",
+                        ));
+                    }
+                    let entry = entry.map_err(|error| SkillError::invalid(error.to_string()))?;
+                    if entry.depth() >= 32 {
+                        return Err(SkillError::invalid(
+                            "The installed package exceeds the supported directory depth.",
+                        ));
+                    }
+                    paths.push(entry.path().to_owned());
+                }
+                Ok(SkillSourceResult::Paths(paths))
+            }
+            Self::ImportArchive {
+                filename,
+                bytes,
+                subpath,
+            } => {
+                let package = SkillImport::from_archive(&filename, &bytes)?;
+                let package = match subpath {
+                    Some(path) => package.with_subpath(&path)?,
+                    None => package,
+                };
+                Ok(SkillSourceResult::Package(package))
+            }
+            Self::ImportFiles { files } => {
+                SkillImport::from_files(files).map(SkillSourceResult::Package)
+            }
+            Self::ImportUpload { files } => {
+                if files.is_empty() || files.len() > MAX_SOURCE_FILES {
+                    return Err(SkillError::invalid(
+                        "A folder upload must contain between 1 and 10000 files.",
+                    ));
+                }
+                let mut total = 0usize;
+                let mut decoded = Vec::with_capacity(files.len());
+                for file in files {
+                    let content = decode_upload(&file.content_base64, MAX_SOURCE_BYTES - total)?;
+                    total += content.len();
+                    decoded.push(SkillImportFile {
+                        path: file.path,
+                        content,
+                        executable: file.executable,
+                    });
+                }
+                SkillImport::from_files(decoded).map(SkillSourceResult::Package)
+            }
+        }
+    }
+}
+
 pub async fn load_install_source<E, F, Fut, M>(
     source: SkillInstallSource,
     workspace: PathBuf,
-    mut authorize: F,
+    authorize: F,
     map_error: M,
 ) -> Result<LoadedSkillImport, E>
 where
     F: FnMut(SkillSourceAccess) -> Fut,
     Fut: Future<Output = Result<(), E>>,
     M: Fn(SkillError) -> E,
+{
+    load_install_source_with_worker(source, workspace, authorize, map_error, |operation| {
+        blocking(move || operation.execute())
+    })
+    .await
+}
+
+/// Keep authorization on the host while moving source reads and package
+/// interpretation to a caller-supplied isolated executor.
+pub async fn load_install_source_with_worker<E, F, Fut, M, W, WFuture>(
+    source: SkillInstallSource,
+    workspace: PathBuf,
+    authorize: F,
+    map_error: M,
+    execute: W,
+) -> Result<LoadedSkillImport, E>
+where
+    F: FnMut(SkillSourceAccess) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+    M: Fn(SkillError) -> E,
+    W: FnMut(SkillSourceOperation) -> WFuture,
+    WFuture: Future<Output = Result<SkillSourceResult, SkillError>>,
+{
+    let map_http_error = &map_error;
+    load_install_source_with_transports(
+        source,
+        workspace,
+        authorize,
+        &map_error,
+        execute,
+        move |request| async move { execute_download(request).await.map_err(map_http_error) },
+    )
+    .await
+}
+
+/// One authorized HTTP hop with a fixed resolver; transports must not follow
+/// redirects, since the source loader authorizes each next destination.
+pub struct SkillDownloadRequest {
+    pub client: reqwest::Client,
+    pub request: reqwest::Request,
+    pub addresses: Vec<SocketAddr>,
+}
+
+pub async fn load_install_source_with_transports<E, F, Fut, M, W, WFuture, H, HFuture>(
+    source: SkillInstallSource,
+    workspace: PathBuf,
+    mut authorize: F,
+    map_error: M,
+    mut execute: W,
+    mut send: H,
+) -> Result<LoadedSkillImport, E>
+where
+    F: FnMut(SkillSourceAccess) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+    M: Fn(SkillError) -> E,
+    W: FnMut(SkillSourceOperation) -> WFuture,
+    WFuture: Future<Output = Result<SkillSourceResult, SkillError>>,
+    H: FnMut(SkillDownloadRequest) -> HFuture,
+    HFuture: Future<Output = Result<reqwest::Response, E>>,
 {
     let _permit = SOURCE_WORKERS
         .acquire()
@@ -301,16 +529,20 @@ where
         } => {
             let github = resolve_github_source(&url, reference.as_deref(), subpath.as_deref())
                 .map_err(&map_error)?;
-            let bytes = download(&github.download_url, &mut authorize, &map_error).await?;
-            let selected_path = github.subpath.clone();
-            let package = blocking(move || {
-                let package = SkillImport::from_archive("github.tar.gz", &bytes)?;
-                match selected_path {
-                    Some(path) => package.with_subpath(&path),
-                    None => Ok(package),
-                }
+            let bytes = download_with_transport(
+                &github.download_url,
+                &mut authorize,
+                &map_error,
+                &mut send,
+            )
+            .await?;
+            let package = execute(SkillSourceOperation::ImportArchive {
+                filename: "github.tar.gz".into(),
+                bytes,
+                subpath: github.subpath.clone(),
             })
             .await
+            .and_then(SkillSourceResult::package)
             .map_err(&map_error)?;
             (
                 package,
@@ -325,27 +557,16 @@ where
         }
         SkillInstallSource::Folder { path } => {
             let path = authorized_local_path(&workspace, &path, &mut authorize, &map_error).await?;
-            let enumerate = path.clone();
-            let paths = blocking(move || folder_entries(&enumerate))
+            let paths = execute(SkillSourceOperation::EnumerateFolder { path: path.clone() })
                 .await
+                .and_then(SkillSourceResult::entries)
                 .map_err(&map_error)?;
-            let mut files = Vec::with_capacity(paths.len());
-            let mut total = 0usize;
-            for (relative, path, executable) in paths {
+            for (_, path, _) in &paths {
                 authorize(SkillSourceAccess::Read(path.clone())).await?;
-                let remaining = MAX_SOURCE_BYTES - total;
-                let content = blocking(move || read_bounded(&path, remaining))
-                    .await
-                    .map_err(&map_error)?;
-                total += content.len();
-                files.push(SkillImportFile {
-                    path: relative,
-                    content,
-                    executable,
-                });
             }
-            let package = blocking(move || SkillImport::from_files(files))
+            let package = execute(SkillSourceOperation::ImportFolderFiles { entries: paths })
                 .await
+                .and_then(SkillSourceResult::package)
                 .map_err(&map_error)?;
             (
                 package,
@@ -384,9 +605,13 @@ where
                         .to_string_lossy()
                         .into_owned()
                 });
-                let bytes = blocking(move || read_bounded(&path, MAX_SOURCE_BYTES))
-                    .await
-                    .map_err(&map_error)?;
+                let bytes = execute(SkillSourceOperation::ReadFile {
+                    path,
+                    limit: MAX_SOURCE_BYTES,
+                })
+                .await
+                .and_then(SkillSourceResult::bytes)
+                .map_err(&map_error)?;
                 (bytes, archive_name, location)
             } else if let Some(url) = url {
                 let parsed = http_url(&url).map_err(&map_error)?;
@@ -397,7 +622,9 @@ where
                         .unwrap_or("archive.zip")
                         .to_owned()
                 });
-                let bytes = download(parsed.as_str(), &mut authorize, &map_error).await?;
+                let bytes =
+                    download_with_transport(parsed.as_str(), &mut authorize, &map_error, &mut send)
+                        .await?;
                 let mut location = parsed;
                 location.set_query(None);
                 location.set_fragment(None);
@@ -408,9 +635,14 @@ where
                 let bytes = decode_upload(&encoded, MAX_SOURCE_BYTES).map_err(&map_error)?;
                 (bytes, archive_name.clone(), archive_name)
             };
-            let package = blocking(move || SkillImport::from_archive(&archive_name, &bytes))
-                .await
-                .map_err(&map_error)?;
+            let package = execute(SkillSourceOperation::ImportArchive {
+                filename: archive_name,
+                bytes,
+                subpath: None,
+            })
+            .await
+            .and_then(SkillSourceResult::package)
+            .map_err(&map_error)?;
             (
                 package,
                 SkillSource {
@@ -428,22 +660,10 @@ where
                     "A folder upload must contain between 1 and 10000 files.",
                 )));
             }
-            let package = blocking(move || {
-                let mut total = 0usize;
-                let mut decoded = Vec::with_capacity(files.len());
-                for file in files {
-                    let content = decode_upload(&file.content_base64, MAX_SOURCE_BYTES - total)?;
-                    total += content.len();
-                    decoded.push(SkillImportFile {
-                        path: file.path,
-                        content,
-                        executable: file.executable,
-                    });
-                }
-                SkillImport::from_files(decoded)
-            })
-            .await
-            .map_err(&map_error)?;
+            let package = execute(SkillSourceOperation::ImportUpload { files })
+                .await
+                .and_then(SkillSourceResult::package)
+                .map_err(&map_error)?;
             (
                 package,
                 SkillSource {
@@ -689,6 +909,23 @@ async fn blocking<T: Send + 'static>(
     })?
 }
 
+async fn execute_download(request: SkillDownloadRequest) -> Result<reqwest::Response, SkillError> {
+    request
+        .client
+        .execute(request.request)
+        .await
+        .map_err(|error| {
+            SkillError::new(
+                SkillErrorKind::Io,
+                format!(
+                    "Could not download the skill archive: {}",
+                    error.without_url()
+                ),
+            )
+        })
+}
+
+#[cfg(test)]
 async fn download<E, F, Fut, M>(
     initial: &str,
     authorize: &mut F,
@@ -698,6 +935,25 @@ where
     F: FnMut(SkillSourceAccess) -> Fut,
     Fut: Future<Output = Result<(), E>>,
     M: Fn(SkillError) -> E,
+{
+    download_with_transport(initial, authorize, map_error, &mut |request| async move {
+        execute_download(request).await.map_err(map_error)
+    })
+    .await
+}
+
+async fn download_with_transport<E, F, Fut, M, H, HFuture>(
+    initial: &str,
+    authorize: &mut F,
+    map_error: &M,
+    send: &mut H,
+) -> Result<Vec<u8>, E>
+where
+    F: FnMut(SkillSourceAccess) -> Fut,
+    Fut: Future<Output = Result<(), E>>,
+    M: Fn(SkillError) -> E,
+    H: FnMut(SkillDownloadRequest) -> HFuture,
+    HFuture: Future<Output = Result<reqwest::Response, E>>,
 {
     let mut url = http_url(initial).map_err(map_error)?;
     for hop in 0..=5 {
@@ -757,12 +1013,22 @@ where
             .user_agent("Agena-Skills/0.1")
             .build()
             .map_err(|error| map_error(SkillError::new(SkillErrorKind::Io, error.to_string())))?;
-        let response = client.get(url.clone()).send().await.map_err(|error| {
-            map_error(SkillError::new(
-                SkillErrorKind::Io,
-                format!("Could not download the skill archive: {error}"),
-            ))
-        })?;
+        let request = client
+            .get(url.clone())
+            .header(reqwest::header::USER_AGENT, "Agena-Skills/0.1")
+            .build()
+            .map_err(|error| {
+                map_error(SkillError::new(
+                    SkillErrorKind::Io,
+                    error.without_url().to_string(),
+                ))
+            })?;
+        let response = send(SkillDownloadRequest {
+            client,
+            request,
+            addresses: permitted,
+        })
+        .await?;
         if response.status().is_redirection() {
             if hop == 5 {
                 return Err(map_error(SkillError::invalid(

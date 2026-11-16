@@ -34,7 +34,6 @@ use regex::Regex;
 use thiserror::Error;
 use tokio::process::Command;
 use tokio::runtime::Handle;
-use tokio_tungstenite::tungstenite::Message as WsMessage;
 use uuid::Uuid;
 
 use crate::part::{ShellMonitorPatternKind, ShellWatchNotifications, ShellWatchPolicy};
@@ -44,6 +43,9 @@ use agena_process::ManagedChild;
 #[path = "monitor/watch.rs"]
 mod watch;
 use watch::{OutputMatcher, WatchState};
+#[path = "monitor/websocket.rs"]
+mod websocket;
+pub use websocket::try_run_monitor_worker;
 
 const DEFAULT_BUFFER_LINES: usize = 1_000;
 const MAX_BUFFER_LINES: usize = 10_000;
@@ -107,6 +109,11 @@ pub struct StartParams {
 pub struct MonitorWsParams {
     pub url: String,
     pub protocols: Vec<String>,
+    /// Addresses authorized immediately before launch; neither execution mode
+    /// resolves the URL a second time.
+    pub addresses: Vec<std::net::SocketAddr>,
+    /// Host-selected execution policy, never deserialized from a tool input.
+    pub policy: agena_process::sandbox::SandboxPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -1316,23 +1323,7 @@ async fn run_ws_monitor(
     abort_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut abort_rx = abort_rx;
-    let connect = async {
-        let mut request =
-            tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-                ws.url.clone(),
-            )
-            .map_err(|error| format!("invalid websocket url: {error}"))?;
-        if !ws.protocols.is_empty() {
-            request.headers_mut().insert(
-                tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL,
-                ws.protocols.join(", ").parse().expect("valid header value"),
-            );
-        }
-        tokio_tungstenite::connect_async(request)
-            .await
-            .map(|(stream, _)| stream)
-            .map_err(|error| format!("websocket connect failed: {error}"))
-    };
+    let connect = websocket::connect(ws);
     tokio::pin!(connect);
     let timeout_sleep = tokio::time::sleep(Duration::from_millis(timeout_ms));
     tokio::pin!(timeout_sleep);
@@ -1345,7 +1336,7 @@ async fn run_ws_monitor(
         result = &mut connect => match result {
             Ok(stream) => stream,
             Err(error) => {
-                push_event(&state, ProcessStream::Stderr, error);
+                push_event(&state, ProcessStream::Stderr, error.to_string());
                 mark_ws_finished(&state, ProcessStatus::Failed, "ws_connect_failed".to_string());
                 return;
             }
@@ -1371,29 +1362,24 @@ async fn run_ws_monitor(
         loop {
             tokio::task::consume_budget().await;
             match stream.next().await {
-                Some(Ok(WsMessage::Text(text))) => {
+                Some(Ok(websocket::Event::Text(text))) => {
                     push_event(&state, ProcessStream::Stdout, text.to_string());
                 }
-                Some(Ok(WsMessage::Binary(data))) => {
+                Some(Ok(websocket::Event::Binary(bytes))) => {
                     if let Some(output) = &state.launch.output {
                         output.record_loss(
                             agena_domain::ContentKind::Log,
-                            data.len(),
+                            bytes,
                             "binary WebSocket frame cannot be represented by the text feed",
                         );
                     }
-                    // Text frames are the event contract; binary frames are
-                    // surfaced as an opaque marker so nothing is silently lost.
                     push_event(
                         &state,
                         ProcessStream::Stderr,
-                        format!("[binary frame, {} bytes]", data.len()),
+                        format!("[binary frame, {bytes} bytes]"),
                     );
                 }
-                Some(Ok(WsMessage::Close(frame))) => {
-                    let reason = frame
-                        .map(|frame| frame.reason.to_string())
-                        .unwrap_or_default();
+                Some(Ok(websocket::Event::Close(reason))) => {
                     push_event(
                         &state,
                         ProcessStream::Stderr,
@@ -1401,11 +1387,6 @@ async fn run_ws_monitor(
                     );
                     return TerminationCause::Exited(None);
                 }
-                Some(Ok(WsMessage::Ping(payload))) => {
-                    let _ = payload;
-                    continue;
-                }
-                Some(Ok(WsMessage::Pong(_))) | Some(Ok(WsMessage::Frame(_))) => continue,
                 Some(Err(error)) => {
                     push_event(
                         &state,

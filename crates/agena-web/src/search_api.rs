@@ -152,11 +152,21 @@ pub async fn search_api(
             ("categories", "general"),
         ]),
     };
-    let mut response = request
+    let request = request
         .header(ACCEPT, "application/json")
-        .send()
-        .await
+        .header(reqwest::header::USER_AGENT, options.user_agent)
+        .build()
         .map_err(|error| CrawlError::Http(error.without_url()))?;
+    let mut response = options
+        .route
+        .execute(
+            &client,
+            request,
+            options.timeout.min(std::time::Duration::from_secs(30)),
+            Some(options.timeout),
+            Some(MAX_RESPONSE_BYTES as u64),
+        )
+        .await?;
     if !response.status().is_success() {
         let retry = response
             .headers()

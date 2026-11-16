@@ -7,7 +7,7 @@ pub mod http_header;
 pub mod mcp_headers;
 
 #[cfg(feature = "__reqwest")]
-mod reqwest;
+pub(crate) mod reqwest;
 
 // Note: This module provides SSE stream parsing and auto-reconnect utilities.
 // It's used by the streamable HTTP client (which receives SSE-formatted responses),

@@ -28,6 +28,7 @@ fn ai_profile(id: Uuid) -> BotProfile {
         }
         .into(),
         persona: BotPersona::default(),
+        avatar: None,
         revision: 1,
         archived: false,
         created_at_ms: 0,

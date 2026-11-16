@@ -369,23 +369,28 @@ impl Service<'_> {
         // Uploads transport arbitrary datasets and archives; interpreting media
         // remains a separate, content-checked operation with its own limits.
         let media = if bytes.len() <= media_input::MAX_MEDIA_BYTES {
-            media_input::from_bytes(&filename, bytes.clone(), None).ok()
+            crate::sandbox_operations::inspect_media(self.host.as_ref(), &filename, bytes.clone())
+                .await?
         } else {
             // Container signatures identify audio/video without decoding large files.
-            media_input::from_bytes(&filename, bytes[..bytes.len().min(4096)].to_vec(), None)
-                .ok()
-                .filter(|m| {
-                    matches!(
-                        m.kind,
-                        agena_domain::AttachmentKind::Audio | agena_domain::AttachmentKind::Video
-                    )
-                })
-                .map(|mut m| {
-                    m.bytes = bytes.clone();
-                    m.size_bytes = bytes.len() as u64;
-                    m.sha256 = hex::encode(Sha256::digest(&bytes));
-                    m
-                })
+            crate::sandbox_operations::inspect_media(
+                self.host.as_ref(),
+                &filename,
+                bytes[..bytes.len().min(4096)].to_vec(),
+            )
+            .await?
+            .filter(|m| {
+                matches!(
+                    m.kind,
+                    agena_domain::AttachmentKind::Audio | agena_domain::AttachmentKind::Video
+                )
+            })
+            .map(|mut m| {
+                m.bytes = bytes.clone();
+                m.size_bytes = bytes.len() as u64;
+                m.sha256 = hex::encode(Sha256::digest(&bytes));
+                m
+            })
         }
         .unwrap_or_else(|| PreparedMedia {
             filename,
@@ -505,27 +510,24 @@ impl Service<'_> {
             &self.connection,
         )
         .await?;
-        let begin = self
-            .authenticated(
-                client
-                    .post(start)
-                    .header("X-Goog-Upload-Protocol", "resumable")
-                    .header("X-Goog-Upload-Command", "start")
-                    .header("X-Goog-Upload-Header-Content-Length", media.size_bytes)
-                    .header("X-Goog-Upload-Header-Content-Type", &media.mime)
-                    .json(&json!({"file":{"display_name":media.filename}})),
+        let request = self.authenticated(
+            client
+                .post(start)
+                .header("X-Goog-Upload-Protocol", "resumable")
+                .header("X-Goog-Upload-Command", "start")
+                .header("X-Goog-Upload-Header-Content-Length", media.size_bytes)
+                .header("X-Goog-Upload-Header-Content-Type", &media.mime)
+                .json(&json!({"file":{"display_name":media.filename}})),
+        );
+        let begin = client.send(request).await.map_err(|error| {
+            official_service::provider_transport_error(
+                self.provider,
+                "file upload start",
+                &error,
+                Some(&self.connection),
             )
-            .send()
-            .await
-            .map_err(|error| {
-                official_service::provider_transport_error(
-                    self.provider,
-                    "file upload start",
-                    &error,
-                    Some(&self.connection),
-                )
-                .with_remote_effect_unknown()
-            })?;
+            .with_remote_effect_unknown()
+        })?;
         if !begin.status().is_success() {
             let (status, request_id, value) = official_service::read_json_response_bounded(
                 begin,
@@ -600,23 +602,26 @@ impl Service<'_> {
             record.sign(key);
             self.save(&record, false).await?;
         }
-        let response = self.authenticated(request).send().await.map_err(|error| {
-            let error = official_service::provider_transport_error(
-                self.provider,
+        let response = client
+            .send(self.authenticated(request))
+            .await
+            .map_err(|error| {
+                let error = official_service::provider_transport_error(
+                    self.provider,
+                    if delete {
+                        "file deletion"
+                    } else {
+                        "file status"
+                    },
+                    &error,
+                    Some(&self.connection),
+                );
                 if delete {
-                    "file deletion"
+                    error.with_remote_effect_unknown()
                 } else {
-                    "file status"
-                },
-                &error,
-                Some(&self.connection),
-            );
-            if delete {
-                error.with_remote_effect_unknown()
-            } else {
-                error
-            }
-        })?;
+                    error
+                }
+            })?;
         let status = response.status();
         if delete && (status.is_success() || status == reqwest::StatusCode::NOT_FOUND) {
             if self.provider == "chatgpt"

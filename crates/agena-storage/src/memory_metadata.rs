@@ -7,7 +7,8 @@ pub use agena_domain::{
 
 /// Optional control fields retain their existing values on an update.
 /// Source provenance always describes this write and is cleared when omitted.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryWriteOptions {
     pub scope: Option<MemoryScope>,
     pub status: Option<MemoryStatus>,

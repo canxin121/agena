@@ -697,6 +697,21 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn prepare_worker_sandbox(
+        &self,
+        resources: crate::sdk::host_api::HostProcessResources,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostPreparedProcessSandbox> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                crate::sdk::permission_wait::waiting(inner.prepare_worker_sandbox(resources)),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn display_contribute(
         &self,
         req: HostDisplayContributeRequest,

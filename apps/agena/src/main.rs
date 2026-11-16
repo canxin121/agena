@@ -30,11 +30,26 @@ use clap::Parser;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
+    // Worker modes construct TLS clients before normal application bootstrap.
+    // Cargo can unify rustls-no-provider through the content extraction crates.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     // Sandboxed helpers must run before configuration, credentials or plugins load.
     if let Some(code) = agena_process::sandbox::try_run_launcher() {
         std::process::exit(code);
     }
     if let Some(code) = agena_process::sandbox_check::try_run_cli() {
+        std::process::exit(code);
+    }
+    if let Some(code) = agena_process::sandbox_http::try_run_worker() {
+        std::process::exit(code);
+    }
+    if let Some(code) = agena_process::sandbox_file::try_run_worker() {
+        std::process::exit(code);
+    }
+    if let Some(code) = agena_runtime_tools::try_run_monitor_worker() {
+        std::process::exit(code);
+    }
+    if let Some(code) = agena_bundled_plugins::worker::try_run_worker() {
         std::process::exit(code);
     }
     #[cfg(target_os = "macos")]
@@ -62,11 +77,6 @@ fn main() -> ExitCode {
 
 fn run() -> error::Result<()> {
     agena_runtime::ensure_default_thread_stack();
-    // `crw-extract` enables jsonschema's `rustls-no-provider` feature. Cargo
-    // feature unification therefore puts the process-wide reqwest instance in
-    // no-provider mode, so install the provider before any client can be
-    // constructed (including clients created during runtime bootstrap).
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = AgenaCli::parse();
     // Capture trusted sandbox configuration before plugins or tools run.
     let _ = agena_process::sandbox::enabled();

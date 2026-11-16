@@ -196,6 +196,7 @@ async fn http_permission_events_hide_query_and_restore_the_original_call() {
             session_id: Some(17),
             ..Default::default()
         },
+        cancellation: None,
         denial: Default::default(),
     };
     let target = "https://api.example:8443/mcp/private?api_key=secret#secret";

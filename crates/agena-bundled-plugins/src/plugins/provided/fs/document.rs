@@ -201,7 +201,7 @@ pub(super) async fn invoke(
         .map_err(|error| PluginError::internal_error(&error))?;
     let root = workspace.to_owned();
     let selected = input.backend;
-    let sandbox_enabled = agena_process::sandbox::enabled();
+    let sandbox_enabled = crate::sandbox_operations::enabled();
     let (source, command, backend) = run_fs_blocking(move || {
         let source = prepare(&authorized_path)?;
         let (command, backend) = command(&root, &source, selected, sandbox_enabled)?;

@@ -47,7 +47,7 @@ impl From<Vec<WebSearchResult>> for WebSearchResponse {
 
 #[derive(Default)]
 struct EngineSession {
-    client: Option<(String, reqwest::Client)>,
+    client: Option<(String, transport::SearchClient)>,
     next_request: Option<Instant>,
     cooldown: Option<(Instant, SearchIssue)>,
     cache: VecDeque<(String, Instant, WebSearchResponse)>,
@@ -135,7 +135,7 @@ impl WebSearchCoordinator {
         render: R,
     ) -> Result<WebSearchResponse, CrawlError>
     where
-        F: Fn(reqwest::Client, usize, Option<transport::SearchRequest>) -> FetchFuture,
+        F: Fn(transport::SearchClient, usize, Option<transport::SearchRequest>) -> FetchFuture,
         FetchFuture: Future<Output = Result<WebSearchPage, CrawlError>>,
         R: Fn(url::Url, Duration) -> RenderFuture,
         RenderFuture: Future<Output = Result<Option<WebSearchPage>, CrawlError>>,
@@ -205,7 +205,13 @@ impl WebSearchCoordinator {
                 transport::client(engine, &options.user_agent, options.route.as_ref())?,
             ));
         }
-        let client = session.client.as_ref().unwrap().1.clone();
+        let client = session
+            .client
+            .as_ref()
+            .unwrap()
+            .1
+            .clone()
+            .for_invocation(options.route.as_ref());
         let mut response = WebSearchResponse::default();
         let mut seen = HashSet::new();
         let mut continuation = None;

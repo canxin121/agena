@@ -41,22 +41,39 @@ impl OAuthAuthorizationSlot {
             .take()
     }
 
-    async fn client(&self, target: &str) -> Result<reqwest::Client, OAuthHttpClientError> {
-        let authorizer = {
-            let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
-            if !state.active || state.failure.is_some() {
-                return Err(Box::new(McpError::PermissionDenied));
-            }
-            state.authorizer.clone()
-        };
-        let result = match authorizer {
+    fn active_authorizer(
+        &self,
+    ) -> Result<Option<Arc<dyn McpHttpNetworkAuthorizer>>, OAuthHttpClientError> {
+        let state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if !state.active || state.failure.is_some() {
+            return Err(Box::new(McpError::PermissionDenied));
+        }
+        Ok(state.authorizer.clone())
+    }
+
+    async fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<reqwest::Response, OAuthHttpClientError> {
+        let result = match self.active_authorizer()? {
             Some(authorizer) => {
-                crate::http_transport::authorized_client(target, authorizer.as_ref()).await
+                crate::http_transport::execute_authorized(
+                    request,
+                    authorizer.as_ref(),
+                    Some(1024 * 1024),
+                )
+                .await
             }
-            None => crate::http_transport::trusted_client(),
+            None => match crate::http_transport::trusted_client() {
+                Ok(client) => client
+                    .execute(request)
+                    .await
+                    .map_err(|error| McpError::http_error(&error)),
+                Err(error) => Err(error),
+            },
         };
         match result {
-            Ok(client) => Ok(client),
+            Ok(response) => Ok(response),
             Err(error) => {
                 self.0
                     .lock()
@@ -117,11 +134,11 @@ impl OAuthHttpClient for AuthorizedOAuthHttpClient {
                     .min(Duration::from_secs(30)),
             );
             for redirects in 0..=10 {
-                let client = self.authorization.client(request.url().as_str()).await?;
                 let outgoing = request
                     .try_clone()
                     .ok_or_else(|| http_error("Could not replay the OAuth HTTP request."))?;
-                let mut response = client
+                let mut response = self
+                    .authorization
                     .execute(outgoing)
                     .await
                     .map_err(|_| http_error("The OAuth HTTP request failed."))?;
@@ -211,10 +228,10 @@ mod tests {
     #[tokio::test]
     async fn completed_oauth_scope_cannot_fall_back_to_trusted_http() {
         let slot = Arc::new(OAuthAuthorizationSlot::default());
-        assert!(slot.client("http://127.0.0.1:39123").await.is_err());
+        assert!(slot.active_authorizer().is_err());
         let scope = slot.install(None);
-        assert!(slot.client("http://127.0.0.1:39123").await.is_ok());
+        assert!(slot.active_authorizer().is_ok());
         drop(scope);
-        assert!(slot.client("http://127.0.0.1:39123").await.is_err());
+        assert!(slot.active_authorizer().is_err());
     }
 }

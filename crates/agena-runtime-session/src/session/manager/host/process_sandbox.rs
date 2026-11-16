@@ -10,12 +10,39 @@ impl SessionManager {
         call: i64,
         resources: HostProcessResources,
     ) -> Result<HostPreparedProcessSandbox, AppError> {
+        self.prepare_host_sandbox(session, call, resources, false)
+            .await
+    }
+
+    pub async fn prepare_host_worker_sandbox(
+        &self,
+        session: i64,
+        call: i64,
+        resources: HostProcessResources,
+    ) -> Result<HostPreparedProcessSandbox, AppError> {
+        self.prepare_host_sandbox(session, call, resources, true)
+            .await
+    }
+
+    async fn prepare_host_sandbox(
+        &self,
+        session: i64,
+        call: i64,
+        resources: HostProcessResources,
+        worker: bool,
+    ) -> Result<HostPreparedProcessSandbox, AppError> {
         if session == OPERATOR_SESSION {
             let authority = self.operator_invocation(call).map_err(tool_error)?;
-            let resources = authority
-                .executor
-                .resolve_process_sandbox_resources(resources)
-                .map_err(tool_error)?;
+            let resources = if worker {
+                authority
+                    .executor
+                    .resolve_worker_sandbox_resources(resources)
+            } else {
+                authority
+                    .executor
+                    .resolve_process_sandbox_resources(resources)
+            }
+            .map_err(tool_error)?;
             let checks = authority
                 .executor
                 .process_sandbox_permission_checks_async(&resources)
@@ -39,10 +66,16 @@ impl SessionManager {
                 .cwd
                 .clone()
                 .ok_or_else(|| AppError::Config("process cwd is missing".into()))?;
-            let (policy, _) = executor
-                .prepare_process_sandbox_policy(resources)
-                .await
-                .map_err(tool_error)?;
+            let (policy, _) = if worker {
+                executor.prepare_worker_sandbox_policy(resources).await
+            } else {
+                executor.prepare_process_sandbox_policy(resources).await
+            }
+            .map_err(tool_error)?;
+            let permission_snapshot = Some(
+                serde_json::to_value(executor.sandbox_permission_snapshot())
+                    .map_err(|error| AppError::Internal(error.to_string()))?,
+            );
             if authority.cancel.is_cancelled() {
                 return Err(AppError::Cancelled);
             }
@@ -51,6 +84,7 @@ impl SessionManager {
                 workspace_root: executor.workspace_root().to_string_lossy().into_owned(),
                 cwd,
                 policy,
+                permission_snapshot,
                 call_bound: true,
             });
         }
@@ -75,9 +109,12 @@ impl SessionManager {
             .for_session_context_async(&context)
             .await
             .with_cancellation_token(Some(cancel.clone()));
-        let resources = executor
-            .resolve_process_sandbox_resources(resources)
-            .map_err(tool_error)?;
+        let resources = if worker {
+            executor.resolve_worker_sandbox_resources(resources)
+        } else {
+            executor.resolve_process_sandbox_resources(resources)
+        }
+        .map_err(tool_error)?;
         let checks = executor
             .process_sandbox_permission_checks_async(&resources)
             .await
@@ -98,10 +135,16 @@ impl SessionManager {
             .cwd
             .clone()
             .ok_or_else(|| AppError::Config("process cwd is missing".into()))?;
-        let (policy, call_bound) = executor
-            .prepare_process_sandbox_policy(resources)
-            .await
-            .map_err(tool_error)?;
+        let (policy, call_bound) = if worker {
+            executor.prepare_worker_sandbox_policy(resources).await
+        } else {
+            executor.prepare_process_sandbox_policy(resources).await
+        }
+        .map_err(tool_error)?;
+        let permission_snapshot = Some(
+            serde_json::to_value(executor.sandbox_permission_snapshot())
+                .map_err(|error| AppError::Internal(error.to_string()))?,
+        );
         if cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
@@ -114,6 +157,7 @@ impl SessionManager {
             workspace_root: executor.workspace_root().to_string_lossy().into_owned(),
             cwd,
             policy,
+            permission_snapshot,
             call_bound,
         })
     }

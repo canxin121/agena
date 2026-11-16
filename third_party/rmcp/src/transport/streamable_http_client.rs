@@ -13,6 +13,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
+#[cfg(feature = "transport-streamable-http-client-reqwest")]
+pub use super::common::reqwest::{HttpRequestExecutor, RequestExecutingHttpClient};
+
 use super::common::client_side_sse::{
     DEFAULT_MAX_SSE_EVENT_SIZE, ExponentialBackoff, SseRetryPolicy, SseStreamReconnect,
 };

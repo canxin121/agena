@@ -36,6 +36,9 @@ pub fn execute_sandbox_tool_with_read_filter(
                 access,
             )
         }
+        "notebook.edit_cell" => {
+            crate::plugins::provided::notebook::execute_sandbox_tool(input, workspace_root)
+        }
         _ => Err(PluginError::invalid_params(format!(
             "unsupported sandbox worker operation: {operation}"
         ))),

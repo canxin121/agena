@@ -3,7 +3,7 @@
 mod plugin;
 mod retrieval;
 
-pub(crate) use plugin::{MEMORY_PLUGIN_ID, MemoryPlugin};
+pub(crate) use plugin::{MEMORY_PLUGIN_ID, MemoryPlugin, execute_worker};
 
 pub fn new_memory_plugin() -> impl agena_plugin_host::sdk::Plugin {
     MemoryPlugin::new()

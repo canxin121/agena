@@ -23,6 +23,12 @@ impl PluginCallCompletion {
         &self.id
     }
 
+    /// Observe completion from a subprocess supervisor without granting the
+    /// consumer authority to finish the originating plugin call.
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.finished.child_token()
+    }
+
     pub async fn wait(&self) {
         self.finished.cancelled().await;
     }
@@ -117,5 +123,24 @@ impl HostHandle {
                 }
             }).await
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_token_tests {
+    use super::*;
+
+    #[test]
+    fn cancellation_token_is_one_way_from_the_originating_call() {
+        let completion = PluginCallCompletion {
+            id: "test".into(),
+            finished: CancellationToken::new(),
+        };
+        let child = completion.cancellation_token();
+        child.cancel();
+        assert!(!completion.finished.is_cancelled());
+        let other = completion.cancellation_token();
+        completion.finished.cancel();
+        assert!(other.is_cancelled());
     }
 }

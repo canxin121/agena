@@ -73,6 +73,12 @@ impl MemoryIndex {
         Self::at_cache_root(StorageLayout::current().memory_index_dir(workspace_root))
     }
 
+    /// Construct a rebuildable cache inside an explicitly approved directory.
+    /// Native workers use a private temporary directory instead of global state.
+    pub fn in_directory(root: PathBuf) -> Self {
+        Self::at_cache_root(root)
+    }
+
     fn at_cache_root(root: PathBuf) -> Self {
         Self {
             dir: root.join(CACHE_NAMESPACE),

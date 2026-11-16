@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -11,9 +12,11 @@ use crate::{
     Result, STATE_FILE, SkillError, SkillInstallCandidate, validate_document,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillImportFile {
     pub path: String,
+    #[serde(with = "content_base64")]
     pub content: Vec<u8>,
     pub executable: bool,
 }
@@ -23,6 +26,50 @@ pub struct SkillImportFile {
 #[derive(Debug, Clone)]
 pub struct SkillImport {
     pub(crate) files: BTreeMap<String, SkillImportFile>,
+}
+
+impl Serialize for SkillImport {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        let mut sequence = serializer.serialize_seq(Some(self.files.len()))?;
+        for file in self.files.values() {
+            sequence.serialize_element(file)?;
+        }
+        sequence.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SkillImport {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let files = Vec::<SkillImportFile>::deserialize(deserializer)?;
+        Self::from_files(files).map_err(serde::de::Error::custom)
+    }
+}
+
+pub(crate) mod content_base64 {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use serde::Deserialize;
+
+    pub fn serialize<S: serde::Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<u8>, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        if encoded.len() > crate::MAX_PACKAGE_BYTES.div_ceil(3) * 4 {
+            return Err(serde::de::Error::custom(
+                "Skill worker file exceeds 128 MiB",
+            ));
+        }
+        STANDARD.decode(encoded).map_err(serde::de::Error::custom)
+    }
 }
 
 impl SkillImport {

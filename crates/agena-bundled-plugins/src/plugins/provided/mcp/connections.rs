@@ -4,7 +4,10 @@ mod tests;
 use super::*;
 use agena_domain::{PathKind, mcp_connections::*};
 use agena_mcp_client::{FileTokenStore, HttpAuth, McpToolPolicy, ServerSpec, management};
-use agena_plugin_host::sdk::{HostClient, host_api::HostMcpServerSpec};
+use agena_plugin_host::sdk::{
+    HostClient,
+    host_api::{HostMcpServerSpec, HostProcessResources},
+};
 use agena_runtime_config::{
     McpHttpAuthConfig, McpServerConfig,
     mcp_connections::{
@@ -132,10 +135,15 @@ pub(super) fn network_permission_target(target: &str) -> SdkResult<String> {
 pub(super) struct ConnectionNetworkAuthority {
     host: Arc<dyn HostClient>,
     context: agena_plugin_host::sdk::host_api::HostCallbackContext,
+    cancellation: Option<agena_process::sandbox_http::WorkerCancellation>,
     denial: std::sync::Mutex<Option<PluginError>>,
 }
 #[async_trait::async_trait]
 impl agena_mcp_client::McpHttpNetworkAuthorizer for ConnectionNetworkAuthority {
+    fn cancellation(&self) -> Option<agena_process::sandbox_http::WorkerCancellation> {
+        self.cancellation.as_ref().map(|token| token.child_token())
+    }
+
     async fn authorize(&self, target: &str) -> agena_mcp_client::McpResult<()> {
         let target = network_permission_target(target)
             .map_err(|_| agena_mcp_client::McpError::PermissionDenied)?;
@@ -151,6 +159,32 @@ impl agena_mcp_client::McpHttpNetworkAuthorizer for ConnectionNetworkAuthority {
             return Err(agena_mcp_client::McpError::PermissionDenied);
         }
         Ok(())
+    }
+
+    async fn sandbox_policy(
+        &self,
+        target: &str,
+    ) -> agena_mcp_client::McpResult<agena_process::sandbox::SandboxPolicy> {
+        let target = network_permission_target(target)
+            .map_err(|_| agena_mcp_client::McpError::PermissionDenied)?;
+        let result = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            self.context.clone(),
+            self.host.prepare_worker_sandbox(HostProcessResources {
+                network: vec![target],
+                ..Default::default()
+            }),
+        )
+        .await;
+        match result {
+            Ok(prepared) => serde_json::from_value(prepared.policy)
+                .map_err(|_| agena_mcp_client::McpError::PermissionDenied),
+            Err(error) => {
+                if let Ok(mut denial) = self.denial.lock() {
+                    *denial = Some(error);
+                }
+                Err(agena_mcp_client::McpError::PermissionDenied)
+            }
+        }
     }
 
     async fn authorize_resolved(
@@ -255,6 +289,10 @@ impl McpPlugin {
             context: agena_plugin_host::sdk::host_api::current_host_callback_context().ok_or_else(
                 || PluginError::internal("MCP HTTP requires an active host callback context"),
             )?,
+            // Controlled HTTP managers are call-owned; this never attaches a
+            // tool lifetime to the shared management manager or its sessions.
+            cancellation: agena_plugin_host::current_plugin_call_completion()
+                .map(|completion| completion.cancellation_token()),
             denial: Default::default(),
         }))
     }

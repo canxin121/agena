@@ -14,9 +14,11 @@ mod plugin_metadata;
 mod plugin_settings_docs;
 mod plugin_tool_docs;
 pub mod plugins;
+mod sandbox_operations;
 mod sandbox_worker;
 pub mod tool;
 pub mod web;
+pub mod worker;
 
 pub(crate) static BLOCKING_PLUGIN_WORKERS: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(32);

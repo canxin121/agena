@@ -606,6 +606,7 @@ mod tests {
             workspace_root: workspace.clone(),
             cwd: workspace,
             policy: serde_json::to_value(policy).unwrap(),
+            permission_snapshot: None,
             call_bound: false,
         }
     }

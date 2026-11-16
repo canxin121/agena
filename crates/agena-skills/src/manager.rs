@@ -29,6 +29,7 @@ pub struct SkillManager {
     disabled_names: Vec<String>,
     read_filter: Option<ReadFilter>,
     instance_only: bool,
+    resolved_roots: Option<Vec<SkillRoot>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +119,7 @@ impl SkillManager {
             disabled_names: Vec::new(),
             read_filter: None,
             instance_only: false,
+            resolved_roots: None,
         }
     }
 
@@ -147,6 +149,31 @@ impl SkillManager {
         self
     }
 
+    /// Copy only the catalog identity required by a native worker. Resolved
+    /// roots preserve host discovery when the worker has a private HOME.
+    pub fn worker_snapshot(&self) -> crate::worker::SkillManagerSnapshot {
+        crate::worker::SkillManagerSnapshot {
+            workspace: self.workspace.clone(),
+            global_root: self.global_root.clone(),
+            roots: self.roots(),
+            declared: self.declared.clone(),
+            disabled_names: self.disabled_names.clone(),
+        }
+    }
+
+    pub fn from_worker_snapshot(snapshot: crate::worker::SkillManagerSnapshot) -> Self {
+        Self {
+            workspace: snapshot.workspace,
+            global_root: snapshot.global_root,
+            additional_roots: Vec::new(),
+            declared: snapshot.declared,
+            disabled_names: snapshot.disabled_names,
+            read_filter: None,
+            instance_only: false,
+            resolved_roots: Some(snapshot.roots),
+        }
+    }
+
     pub fn managed_root(&self, scope: SkillScope) -> PathBuf {
         match scope {
             SkillScope::Global => self.global_root.clone(),
@@ -155,6 +182,9 @@ impl SkillManager {
     }
 
     pub fn roots(&self) -> Vec<SkillRoot> {
+        if let Some(roots) = &self.resolved_roots {
+            return roots.clone();
+        }
         if self.instance_only {
             return vec![SkillRoot {
                 path: self.global_root.to_string_lossy().into_owned(),
@@ -851,6 +881,13 @@ impl SkillManager {
         state.revision = state.revision.saturating_add(1);
         write_state(directory, &state)
     }
+}
+
+/// Keep the host's mutation gate alive while an isolated process performs a
+/// mutation. Settings clients and direct callers use this same gate.
+pub fn with_mutation_lock<T>(operation: impl FnOnce() -> T) -> Result<T> {
+    let _guard = mutation_guard()?;
+    Ok(operation())
 }
 
 fn mutation_guard() -> Result<std::sync::MutexGuard<'static, ()>> {

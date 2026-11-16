@@ -91,70 +91,73 @@ fn recovery_test_plugin(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_preserves_callback_authority_and_requires_write_on_every_target() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().to_path_buf();
-    let store = MemoryStore::at(root.join("memory"));
-    std::fs::create_dir_all(store.dir()).unwrap();
-    let target = store.dir().join("protected.md");
-    let journal = store.dir().join(".memory-transaction.json");
-    std::fs::write(&target, "interrupted publication").unwrap();
-    std::fs::write(
-        &journal,
-        json!({
-            "schema_version": 1,
-            "entries": [{"name": "protected.md", "previous": "last committed revision"}]
-        })
-        .to_string(),
-    )
-    .unwrap();
-    let (plugin, host) = recovery_test_plugin(&root, false);
-    let callback = HostCallbackContext {
-        session_id: Some(27),
-        plugin_id: Some("agena.memory".to_string()),
-        tool_name: Some("write".to_string()),
-        ..Default::default()
-    };
-    let result = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
-        callback.clone(),
-        plugin.recover_memory_store(store.clone()),
-    )
-    .await;
-    assert!(result.is_err());
-    assert_eq!(
-        std::fs::read_to_string(&target).unwrap(),
-        "interrupted publication"
-    );
-    assert!(journal.exists());
-    assert!(!store.dir().join(".memory.lock").exists());
-    *host.deny_target_write.lock().unwrap() = false;
-    agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
-        callback,
-        plugin.recover_memory_store(store.clone()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        std::fs::read_to_string(&target).unwrap(),
-        "last committed revision"
-    );
-    assert!(!journal.exists());
-    assert!(!host.checked_sessions.lock().unwrap().is_empty());
-    assert!(
-        host.checked_sessions
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|session| *session == Some(27))
-    );
-
-    let untouched = MemoryStore::at(root.join("absent"));
-    let checks = host.checked_sessions.lock().unwrap().len();
-    plugin
-        .recover_memory_store(untouched.clone())
+    agena_process::sandbox::scope_enabled(false, async {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let store = MemoryStore::at(root.join("memory"));
+        std::fs::create_dir_all(store.dir()).unwrap();
+        let target = store.dir().join("protected.md");
+        let journal = store.dir().join(".memory-transaction.json");
+        std::fs::write(&target, "interrupted publication").unwrap();
+        std::fs::write(
+            &journal,
+            json!({
+                "schema_version": 1,
+                "entries": [{"name": "protected.md", "previous": "last committed revision"}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (plugin, host) = recovery_test_plugin(&root, false);
+        let callback = HostCallbackContext {
+            session_id: Some(27),
+            plugin_id: Some("agena.memory".to_string()),
+            tool_name: Some("write".to_string()),
+            ..Default::default()
+        };
+        let result = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            callback.clone(),
+            plugin.recover_memory_store(store.clone()),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "interrupted publication"
+        );
+        assert!(journal.exists());
+        assert!(!store.dir().join(".memory.lock").exists());
+        *host.deny_target_write.lock().unwrap() = false;
+        agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            callback,
+            plugin.recover_memory_store(store.clone()),
+        )
         .await
         .unwrap();
-    assert!(!untouched.dir().exists());
-    assert_eq!(host.checked_sessions.lock().unwrap().len(), checks);
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "last committed revision"
+        );
+        assert!(!journal.exists());
+        assert!(!host.checked_sessions.lock().unwrap().is_empty());
+        assert!(
+            host.checked_sessions
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|session| *session == Some(27))
+        );
+
+        let untouched = MemoryStore::at(root.join("absent"));
+        let checks = host.checked_sessions.lock().unwrap().len();
+        plugin
+            .recover_memory_store(untouched.clone())
+            .await
+            .unwrap();
+        assert!(!untouched.dir().exists());
+        assert_eq!(host.checked_sessions.lock().unwrap().len(), checks);
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -259,7 +262,7 @@ fn recalled(name: &str, body: String, reason: &'static str, query: &str) -> Reca
             },
             ..Default::default()
         },
-        reason,
+        reason: reason.to_owned(),
     }
 }
 
@@ -592,4 +595,215 @@ fn recall_lands_before_the_current_request_and_never_rewrites_history() {
     // A request with no user message still gets recall after the system runs.
     let system_only = vec![ChatMessage::system("base system")];
     assert_eq!(recall_insert_index(&system_only), 1);
+}
+
+fn call_memory_worker(
+    directory: &std::path::Path,
+    operation: MemoryWorkerOperation,
+) -> SdkResult<serde_json::Value> {
+    use agena_runtime_tools::authorization::ExecutionPrincipal;
+    use agena_runtime_tools::permission::{PermissionPolicy, ToolPermissionPolicy};
+    let mut input = serde_json::to_value(MemoryWorkerRequest {
+        directory: directory.to_path_buf(),
+        operation,
+    })
+    .unwrap();
+    input["_agena_permission_snapshot"] = serde_json::to_value(
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .sandbox_permission_snapshot(directory),
+    )
+    .unwrap();
+    execute_worker("memory.store", input)
+}
+
+fn worker_memory_write(directory: &std::path::Path, name: &str, content: &str) -> ToolInvokeOutput {
+    serde_json::from_value(
+        call_memory_worker(
+            directory,
+            MemoryWorkerOperation::Write {
+                name: name.into(),
+                content: content.into(),
+                description: "Worker record".into(),
+                kind: MemoryKind::Fact,
+                expected: None,
+                options: MemoryWriteOptions::default(),
+                session_id: Some(7),
+                instance_id: Some("worker-instance".into()),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap()
+}
+
+fn memory_worker_snapshot(root: &std::path::Path, rule: &str) -> serde_json::Value {
+    use agena_runtime_tools::authorization::{ExecutionPrincipal, PermissionConfig};
+    use agena_runtime_tools::permission::{PermissionPolicy, ToolPermissionPolicy};
+    let config: PermissionConfig = serde_json::from_value(json!({
+        "path": {"workspace": "readwrite", "external": "deny", "rules": {
+            "<workspace>/memory/protected.md": rule
+        }}
+    }))
+    .unwrap();
+    serde_json::to_value(
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&config)
+        .unwrap()
+        .sandbox_permission_snapshot(root),
+    )
+    .unwrap()
+}
+
+#[test]
+fn memory_worker_roundtrip_preserves_revisions_and_atomic_delete() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = MemoryStore::at(directory.path().join("chosen-memory"));
+    let output = worker_memory_write(store.dir(), "decision", "Original decision");
+    let sha = output.payload.as_ref().unwrap()["sha256"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stale = call_memory_worker(
+        store.dir(),
+        MemoryWorkerOperation::Write {
+            name: "decision".into(),
+            content: "Wrong replacement".into(),
+            description: String::new(),
+            kind: MemoryKind::Fact,
+            expected: Some("00".repeat(32)),
+            options: MemoryWriteOptions::default(),
+            session_id: Some(7),
+            instance_id: Some("worker-instance".into()),
+        },
+    );
+    assert!(stale.is_err());
+    assert_eq!(store.get("decision").unwrap().body, "Original decision\n");
+    let response: ToolInvokeOutput = serde_json::from_value(
+        call_memory_worker(
+            store.dir(),
+            MemoryWorkerOperation::Get {
+                name: "decision".into(),
+                session_id: Some(7),
+                instance_id: Some("worker-instance".into()),
+                offset: 0,
+                limit: 8000,
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response.payload.as_ref().unwrap()["sha256"], sha);
+    call_memory_worker(
+        store.dir(),
+        MemoryWorkerOperation::Delete {
+            name: "decision".into(),
+            expected: sha,
+            session_id: Some(7),
+            instance_id: Some("worker-instance".into()),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        store.get("decision"),
+        Err(MemoryError::NotFound(_))
+    ));
+}
+
+#[test]
+fn memory_worker_list_and_search_respect_denied_record_filter() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let store = MemoryStore::at(root.join("memory"));
+    worker_memory_write(store.dir(), "visible", "worker_search_token visible");
+    worker_memory_write(
+        store.dir(),
+        "protected",
+        "worker_search_token PRIVATE_MARKER",
+    );
+    let mut list = serde_json::to_value(MemoryWorkerRequest {
+        directory: store.dir().to_path_buf(),
+        operation: MemoryWorkerOperation::List {
+            limit: 200,
+            offset: 0,
+            include_history: false,
+            session_id: Some(7),
+            context: MemoryContext::default(),
+        },
+    })
+    .unwrap();
+    list["_agena_permission_snapshot"] = memory_worker_snapshot(&root, "deny");
+    let output: ToolInvokeOutput =
+        serde_json::from_value(execute_worker("memory.store", list).unwrap()).unwrap();
+    let memories = output.payload.as_ref().unwrap()["memories"]
+        .as_array()
+        .unwrap();
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0]["name"], "visible");
+    let mut search = serde_json::to_value(MemoryWorkerRequest {
+        directory: store.dir().to_path_buf(),
+        operation: MemoryWorkerOperation::Search {
+            query: "worker_search_token".into(),
+            limit: 20,
+            interactive: true,
+            include_history: false,
+            session_id: Some(7),
+            context: MemoryContext::default(),
+        },
+    })
+    .unwrap();
+    search["_agena_permission_snapshot"] = memory_worker_snapshot(&root, "deny");
+    let result = execute_worker("memory.store", search).unwrap();
+    assert_eq!(result["indexed_records"], 1);
+    assert!(!result.to_string().contains("PRIVATE_MARKER"));
+    assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+}
+
+#[test]
+fn memory_worker_recovery_keeps_denied_target_unchanged() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let store = MemoryStore::at(root.join("memory"));
+    std::fs::create_dir_all(store.dir()).unwrap();
+    let target = store.dir().join("protected.md");
+    let journal = store.dir().join(".memory-transaction.json");
+    std::fs::write(&target, "interrupted publication").unwrap();
+    std::fs::write(
+        &journal,
+        json!({"schema_version": 1, "entries": [
+            {"name": "protected.md", "previous": "last committed revision"}
+        ]})
+        .to_string(),
+    )
+    .unwrap();
+    let mut request = serde_json::to_value(MemoryWorkerRequest {
+        directory: store.dir().to_path_buf(),
+        operation: MemoryWorkerOperation::Recover,
+    })
+    .unwrap();
+    request["_agena_permission_snapshot"] = memory_worker_snapshot(&root, "readonly");
+    assert!(execute_worker("memory.store", request).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&target).unwrap(),
+        "interrupted publication"
+    );
+    assert!(journal.exists());
+}
+
+#[test]
+fn memory_worker_rejects_missing_permission_snapshot() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = serde_json::to_value(MemoryWorkerRequest {
+        directory: directory.path().join("memory"),
+        operation: MemoryWorkerOperation::Recover,
+    })
+    .unwrap();
+    let error = execute_worker("memory.store", input).unwrap_err();
+    assert!(error.to_string().contains("host permission snapshot"));
+    assert!(!directory.path().join("memory").exists());
 }

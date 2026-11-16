@@ -259,25 +259,12 @@ impl<'a> Service<'a> {
                     expected_sha256,
                 } => {
                     let local_path = official_service::resolve_local_path(self.root, path)?;
-                    crate::permissions::require_path(
+                    let prepared = crate::sandbox_operations::read_media(
                         self.host.as_ref(),
-                        agena_domain::PathKind::Read,
-                        &local_path.to_string_lossy(),
+                        &local_path,
+                        expected_sha256.as_deref(),
                     )
                     .await?;
-                    // Blocking workers do not inherit callback task-local state.
-                    // Read the already-resolved target without joining it to
-                    // the plugin initialization directory a second time.
-                    let path = local_path.to_string_lossy().into_owned();
-                    let expected = expected_sha256.clone();
-                    let prepared = tokio::task::spawn_blocking(move || {
-                        media_input::read_local(Path::new(""), &path, expected.as_deref())
-                    })
-                    .await
-                    .map_err(|e| {
-                        PluginError::internal(format!("media preparation worker failed: {e}"))
-                    })?
-                    .map_err(PluginError::invalid_params)?;
                     total = total.saturating_add(prepared.bytes.len());
                     if total > 12 * 1024 * 1024 {
                         return Err(PluginError::invalid_params(

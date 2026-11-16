@@ -3,6 +3,7 @@
 mod accounting;
 mod multipart;
 pub(crate) mod realtime;
+pub(crate) use realtime::execute_worker as execute_realtime_worker;
 mod routes;
 #[cfg(test)]
 mod tests;
@@ -657,7 +658,7 @@ async fn request(
     } else if route.method != reqwest::Method::GET && route.method != reqwest::Method::DELETE {
         req = req.json(&body);
     }
-    let response = req.send().await.map_err(|error| {
+    let response = client.send(req).await.map_err(|error| {
         request_error(
             family,
             &route.method,
@@ -832,48 +833,8 @@ pub(super) async fn authorized_input(
     expected: Option<&str>,
     limit: u64,
 ) -> Result<Vec<u8>> {
-    use tokio::io::AsyncReadExt;
     let path = official_service::resolve_local_path(service.root, path)?;
-    crate::permissions::require_path(
-        service.host.as_ref(),
-        agena_domain::PathKind::Read,
-        &path.to_string_lossy(),
-    )
-    .await?;
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .map_err(|e| PluginError::internal_error(&e))?;
-    let before = file
-        .metadata()
-        .await
-        .map_err(|e| PluginError::internal_error(&e))?;
-    if !before.is_file() || before.len() == 0 || before.len() > limit {
-        return Err(invalid(format!(
-            "input must be a nonempty regular file, at most {limit} bytes"
-        )));
-    }
-    let mut bytes = Vec::new();
-    (&mut file)
-        .take(limit + 1)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|e| PluginError::internal_error(&e))?;
-    let after = file
-        .metadata()
-        .await
-        .map_err(|e| PluginError::internal_error(&e))?;
-    if bytes.len() as u64 > limit
-        || before.len() != after.len()
-        || before.modified().ok() != after.modified().ok()
-    {
-        return Err(invalid(
-            "input changed during reading or exceeded its size limit",
-        ));
-    }
-    if expected.is_some_and(|e| !e.eq_ignore_ascii_case(&hex::encode(Sha256::digest(&bytes)))) {
-        return Err(invalid("input SHA256 mismatch; nothing was sent"));
-    }
-    Ok(bytes)
+    crate::sandbox_operations::read_file(service.host.as_ref(), &path, limit, expected).await
 }
 
 async fn response_bytes(response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {

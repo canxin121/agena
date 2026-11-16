@@ -67,6 +67,55 @@ impl ToolExecutor {
         })
     }
 
+    /// A trusted I/O worker chooses its own private cwd. Resolve only explicit
+    /// declarations; neither a missing project root nor a denied cwd is an
+    /// implicit read request for network-only work.
+    pub fn resolve_worker_sandbox_resources(
+        &self,
+        input: HostProcessResources,
+    ) -> Result<HostProcessResources, ToolError> {
+        let cwd = input
+            .cwd
+            .as_deref()
+            .map(|raw| self.process_resource_path(raw, self.workspace_root()))
+            .transpose()?
+            .unwrap_or_else(|| self.workspace_root().to_owned());
+        if !self.resource_guard_enabled() {
+            return Ok(HostProcessResources {
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                ..Default::default()
+            });
+        }
+        if input.reads.len() + input.writes.len() > 512 || input.network.len() > 128 {
+            return Err(ToolError::invalid_input(
+                "too many worker resource declarations",
+            ));
+        }
+        let normalize = |values: Vec<String>| -> Result<Vec<String>, ToolError> {
+            let mut paths = values
+                .into_iter()
+                .map(|value| {
+                    self.process_resource_path(&value, &cwd)
+                        .map(|path| path.to_string_lossy().into_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            paths.sort();
+            paths.dedup();
+            Ok(paths)
+        };
+        let writes = normalize(input.writes)?;
+        let mut reads = normalize(input.reads)?;
+        reads.extend(writes.iter().cloned());
+        reads.sort();
+        reads.dedup();
+        Ok(HostProcessResources {
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            reads,
+            writes,
+            network: crate::shell_sandbox::declared_network_targets(&input.network)?,
+        })
+    }
+
     fn process_resource_path(&self, raw: &str, base: &Path) -> Result<PathBuf, ToolError> {
         if raw.is_empty() || raw.contains('\0') {
             return Err(ToolError::invalid_input(
@@ -134,12 +183,31 @@ impl ToolExecutor {
         &self,
         resources: HostProcessResources,
     ) -> Result<(serde_json::Value, bool), ToolError> {
+        self.prepare_sandbox_policy(resources, true).await
+    }
+
+    /// Compile a trusted worker's actual configured policy without requiring
+    /// access to its business cwd. Worker launch supplies a private directory.
+    pub async fn prepare_worker_sandbox_policy(
+        &self,
+        resources: HostProcessResources,
+    ) -> Result<(serde_json::Value, bool), ToolError> {
+        self.prepare_sandbox_policy(resources, false).await
+    }
+
+    async fn prepare_sandbox_policy(
+        &self,
+        resources: HostProcessResources,
+        require_cwd: bool,
+    ) -> Result<(serde_json::Value, bool), ToolError> {
         self.run_permission_preflight(move |executor| {
             if executor.sandbox_enabled() || !executor.resource_guard_enabled() {
-                let cwd = resources.cwd.as_deref().ok_or_else(|| {
-                    ToolError::invalid_input("process working directory is missing")
-                })?;
-                executor.validate_sandbox_workdir(Path::new(cwd))?;
+                if require_cwd {
+                    let cwd = resources.cwd.as_deref().ok_or_else(|| {
+                        ToolError::invalid_input("process working directory is missing")
+                    })?;
+                    executor.validate_sandbox_workdir(Path::new(cwd))?;
+                }
                 return Ok((
                     serde_json::to_value(crate::shell_sandbox::policy_from_settings(&executor)?)
                         .map_err(|error| ToolError::invalid_input_error(&error))?,
@@ -212,6 +280,81 @@ mod tests {
             None,
             None,
         )
+    }
+
+    #[test]
+    fn worker_declarations_do_not_implicitly_read_the_project_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let executor = executor(&root).with_sandbox_enabled(false);
+        let network = executor
+            .resolve_worker_sandbox_resources(HostProcessResources {
+                network: vec!["https://example.com".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(network.reads.is_empty());
+        assert!(network.writes.is_empty());
+        assert_eq!(network.network, vec!["https://example.com"]);
+        let files = executor
+            .resolve_worker_sandbox_resources(HostProcessResources {
+                reads: vec!["input.txt".into()],
+                writes: vec!["output.txt".into()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(files.reads.len(), 2);
+        assert_eq!(files.writes.len(), 1);
+        assert!(!files.reads.contains(&root.to_string_lossy().into_owned()));
+    }
+
+    #[tokio::test]
+    async fn disabled_worker_policy_does_not_require_an_existing_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("not-created");
+        let executor = executor(&root).with_execution_settings(false, false);
+        let resources = executor
+            .resolve_worker_sandbox_resources(Default::default())
+            .unwrap();
+        let (value, call_bound) = executor
+            .prepare_worker_sandbox_policy(resources)
+            .await
+            .unwrap();
+        let policy: agena_process::sandbox::SandboxPolicy = serde_json::from_value(value).unwrap();
+        assert!(policy.disabled);
+        assert!(!call_bound);
+    }
+
+    #[tokio::test]
+    async fn native_worker_policy_keeps_network_ceiling_without_cwd_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let executor = executor(&root).with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path": {"workspace":"deny", "external":"deny"},
+                "network": {"default":"deny"}
+            }))
+            .unwrap(),
+        );
+        let resources = executor
+            .resolve_worker_sandbox_resources(Default::default())
+            .unwrap();
+        assert!(resources.reads.is_empty());
+        let (value, call_bound) = executor
+            .prepare_worker_sandbox_policy(resources)
+            .await
+            .unwrap();
+        let policy: agena_process::sandbox::SandboxPolicy = serde_json::from_value(value).unwrap();
+        assert_eq!(policy.disabled, !executor.sandbox_enabled());
+        assert!(!call_bound);
+        assert!(policy.readonly_paths.is_empty());
+        assert!(policy.readwrite_paths.is_empty());
+        if executor.sandbox_enabled() {
+            assert!(matches!(
+                policy.network,
+                agena_process::sandbox::SandboxNetwork::Native { .. }
+            ));
+        }
     }
 
     #[test]

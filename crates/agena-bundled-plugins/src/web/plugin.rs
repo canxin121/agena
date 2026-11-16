@@ -1823,12 +1823,25 @@ impl WebPlugin {
                     .build()
                     .map_err(|error| PluginError::internal_error(&error))?;
                 checked.push(current.to_string());
-                let response = client.head(current.clone()).send().await.map_err(|error| {
-                    plugin_internal_error_with_context(
-                        format!("browser redirect preflight failed for {current}").as_str(),
-                        &error,
+                let request = client
+                    .head(current.clone())
+                    .build()
+                    .map_err(|error| PluginError::internal_error(&error.without_url()))?;
+                let response = route
+                    .execute(
+                        &client,
+                        request,
+                        timeout.min(Duration::from_secs(30)),
+                        Some(timeout),
+                        Some(0),
                     )
-                })?;
+                    .await
+                    .map_err(|error| {
+                        plugin_internal_error_with_context(
+                            format!("browser redirect preflight failed for {current}").as_str(),
+                            &error,
+                        )
+                    })?;
                 if !response.status().is_redirection() {
                     return Ok(checked);
                 }
@@ -4259,7 +4272,7 @@ async fn resolve_public_http_route(
     }
     let addresses = resolve_public_network_target(url, network).await?;
     let addresses = authorized_network_addresses(url, addresses, host, false).await?;
-    Ok(route.with_addresses(addresses))
+    crate::sandbox_operations::http_route(host, url, route.with_addresses(addresses)).await
 }
 
 /// Transports without a pinned resolver may not select a denied member of a

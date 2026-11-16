@@ -61,6 +61,9 @@ pub struct HostPreparedProcessSandbox {
     pub workspace_root: String,
     pub cwd: String,
     pub policy: serde_json::Value,
+    /// Current authority for trusted native workers that validate individual
+    /// resources inside the kernel boundary. Never exposed through plugin RPC.
+    pub permission_snapshot: Option<serde_json::Value>,
     /// A one-call approval or operator scope must end with its originating call.
     pub call_bound: bool,
 }
@@ -505,6 +508,17 @@ pub trait HostClient: Send + Sync + 'static {
     /// validated host callback. Native host integrations only: this method is
     /// deliberately absent from external plugin RPC transports.
     async fn prepare_process_sandbox(
+        &self,
+        _resources: HostProcessResources,
+    ) -> Result<HostPreparedProcessSandbox> {
+        Err(unavailable())
+    }
+
+    /// Prepare an application-owned I/O worker with a private working directory.
+    /// Only explicit resources participate in fallback declaration checks; a
+    /// network request does not require read permission for the project cwd.
+    /// Native-only capability, intentionally absent from external plugin RPC.
+    async fn prepare_worker_sandbox(
         &self,
         _resources: HostProcessResources,
     ) -> Result<HostPreparedProcessSandbox> {

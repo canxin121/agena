@@ -1,21 +1,18 @@
-//! HTTP transports whose actual socket addresses are authorized by the caller.
+//! Call-scoped HTTP execution with pinned addresses and native worker isolation.
 //!
-//! A request gets a fresh client with only its approved DNS answers. No client
-//! or connection pool carrying another call's authority is reused.
+//! The parent retains MCP sessions and OAuth state. Every actual HTTP request
+//! uses a fresh host-authorized policy; isolated sockets live in an MXC worker.
 
-use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use agena_process::sandbox::SandboxPolicy;
+use agena_process::sandbox_http::{HttpOptions, WorkerCancellation, execute};
 use async_trait::async_trait;
-use futures::stream::BoxStream;
-use http::{HeaderName, HeaderValue};
-use rmcp::model::ClientJsonRpcMessage;
 use rmcp::transport::streamable_http_client::{
-    SseError, StreamableHttpClient, StreamableHttpError, StreamableHttpPostResponse,
+    HttpRequestExecutor, RequestExecutingHttpClient, StreamableHttpError,
 };
-use sse_stream::Sse;
 use url::{Host, Url};
 
 use crate::{McpError, McpResult};
@@ -23,31 +20,26 @@ use crate::{McpError, McpResult};
 #[cfg(test)]
 mod tests;
 
-/// An active host authority for MCP transport and OAuth HTTP requests.
-/// Implementations must preserve the originating call's context and lifetime.
+/// Active host authority for both MCP transport and OAuth requests.
 #[async_trait]
 pub trait McpHttpNetworkAuthorizer: Send + Sync {
-    /// Authorize the original URL, including permission to resolve its hostname.
     async fn authorize(&self, target: &str) -> McpResult<()>;
 
-    /// Check the exact numeric address that the HTTP client will connect to.
-    /// An implementation without resolved-address support cannot authorize I/O.
+    /// Authorize each numeric address that may reach the socket connector.
     async fn authorize_resolved(&self, _target: &str, _address: SocketAddr) -> McpResult<bool> {
         Ok(false)
     }
-}
 
-struct RejectUnpinnedDns;
+    /// Compile the current call's execution mode and network ceiling. A missing
+    /// implementation must not silently turn an isolated request into host I/O.
+    async fn sandbox_policy(&self, _target: &str) -> McpResult<SandboxPolicy> {
+        Err(McpError::PermissionDenied)
+    }
 
-impl reqwest::dns::Resolve for RejectUnpinnedDns {
-    fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        Box::pin(async {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "MCP HTTP transport cannot resolve an unpinned hostname",
-            )
-            .into())
-        })
+    /// Lifetime of this authority, independent of whether an SSE body is being
+    /// polled. Return a child token so consumers cannot cancel the owning call.
+    fn cancellation(&self) -> Option<WorkerCancellation> {
+        None
     }
 }
 
@@ -66,30 +58,20 @@ fn http_url(target: &str) -> McpResult<Url> {
     Ok(url)
 }
 
-fn pinned_client(url: &Url, addresses: &[SocketAddr]) -> McpResult<reqwest::Client> {
-    if addresses.is_empty() {
-        return Err(McpError::PermissionDenied);
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| McpError::Transport("MCP HTTP target is missing its host".into()))?;
-    reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(Duration::from_secs(20))
-        .dns_resolver(Arc::new(RejectUnpinnedDns))
-        .resolve_to_addrs(host, addresses)
-        .build()
-        .map_err(|error| McpError::http_error(&error))
-}
-
-/// Called for every request and every OAuth redirect. Authorization happens
-/// before DNS; only separately approved numeric answers enter the transport.
-pub(crate) async fn authorized_client(
+/// Authorization precedes DNS; only approved answers reach the worker. The
+/// policy is refreshed for every POST, reconnecting SSE GET and OAuth redirect.
+pub(crate) async fn authorized_options(
     target: &str,
     authorizer: &dyn McpHttpNetworkAuthorizer,
-) -> McpResult<reqwest::Client> {
+) -> McpResult<HttpOptions> {
     let url = http_url(target)?;
+    let cancellation = authorizer.cancellation();
+    if cancellation
+        .as_ref()
+        .is_some_and(WorkerCancellation::is_cancelled)
+    {
+        return Err(McpError::PermissionDenied);
+    }
     authorizer.authorize(target).await?;
     let port = url
         .port_or_known_default()
@@ -113,11 +95,35 @@ pub(crate) async fn authorized_client(
             addresses.push(address);
         }
     }
-    pinned_client(&url, &addresses)
+    if addresses.is_empty() {
+        return Err(McpError::PermissionDenied);
+    }
+    Ok(HttpOptions {
+        policy: authorizer.sandbox_policy(target).await?,
+        pinned_addresses: addresses,
+        connect_timeout: Duration::from_secs(20),
+        total_timeout: None,
+        max_request_bytes: 512 * 1024 * 1024,
+        max_response_bytes: None,
+        cancellation,
+    })
 }
 
-/// The trusted management path has no plugin-call authority. Its client is
-/// kept separate from every controlled plugin operation.
+pub(crate) async fn execute_authorized(
+    request: reqwest::Request,
+    authorizer: &dyn McpHttpNetworkAuthorizer,
+    max_response_bytes: Option<u64>,
+) -> McpResult<reqwest::Response> {
+    let mut options = authorized_options(request.url().as_str(), authorizer).await?;
+    options.total_timeout = request.timeout().copied();
+    options.max_response_bytes = max_response_bytes;
+    execute(request, options)
+        .await
+        .map_err(|error| McpError::Transport(format!("MCP HTTP execution failed: {error}")))
+}
+
+/// Trusted management traffic has no plugin-call authority. It remains
+/// separate from every controlled tool request and never supplies a fallback.
 pub(crate) fn trusted_client() -> McpResult<reqwest::Client> {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -127,115 +133,43 @@ pub(crate) fn trusted_client() -> McpResult<reqwest::Client> {
 }
 
 #[derive(Clone)]
-pub(crate) struct AuthorizedMcpHttpClient {
+pub(crate) struct McpRequestExecutor {
     authorizer: Arc<dyn McpHttpNetworkAuthorizer>,
 }
 
-impl AuthorizedMcpHttpClient {
-    pub(crate) fn new(authorizer: Arc<dyn McpHttpNetworkAuthorizer>) -> Self {
-        Self { authorizer }
-    }
-
-    async fn client(
+impl HttpRequestExecutor for McpRequestExecutor {
+    async fn execute(
         &self,
-        target: &str,
-    ) -> Result<reqwest::Client, StreamableHttpError<reqwest::Error>> {
-        authorized_client(target, self.authorizer.as_ref())
+        request: reqwest::Request,
+    ) -> Result<reqwest::Response, StreamableHttpError<reqwest::Error>> {
+        let mut options = authorized_options(request.url().as_str(), self.authorizer.as_ref())
             .await
             .map_err(|error| {
                 StreamableHttpError::Io(std::io::Error::new(
                     std::io::ErrorKind::PermissionDenied,
                     error,
                 ))
-            })
+            })?;
+        options.total_timeout = request.timeout().copied();
+        // Streaming responses remain open for their MCP call lifetime. Dropping
+        // the response, cancelling a request or retiring its manager kills its
+        // worker, including reconnecting SSE streams.
+        execute(request, options)
+            .await
+            .map_err(StreamableHttpError::Io)
     }
 }
 
-impl StreamableHttpClient for AuthorizedMcpHttpClient {
-    type Error = reqwest::Error;
-
-    async fn post_message(
-        &self,
-        uri: Arc<str>,
-        message: ClientJsonRpcMessage,
-        session_id: Option<Arc<str>>,
-        auth_header: Option<String>,
-        custom_headers: HashMap<HeaderName, HeaderValue>,
-    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.client(&uri)
-            .await?
-            .post_message(uri, message, session_id, auth_header, custom_headers)
-            .await
-    }
-
-    async fn post_message_with_max_sse_event_size(
-        &self,
-        uri: Arc<str>,
-        message: ClientJsonRpcMessage,
-        session_id: Option<Arc<str>>,
-        auth_header: Option<String>,
-        custom_headers: HashMap<HeaderName, HeaderValue>,
-        max_sse_event_size: usize,
-    ) -> Result<StreamableHttpPostResponse, StreamableHttpError<Self::Error>> {
-        self.client(&uri)
-            .await?
-            .post_message_with_max_sse_event_size(
-                uri,
-                message,
-                session_id,
-                auth_header,
-                custom_headers,
-                max_sse_event_size,
-            )
-            .await
-    }
-
-    async fn delete_session(
-        &self,
-        uri: Arc<str>,
-        session_id: Arc<str>,
-        auth_header: Option<String>,
-        custom_headers: HashMap<HeaderName, HeaderValue>,
-    ) -> Result<(), StreamableHttpError<Self::Error>> {
-        self.client(&uri)
-            .await?
-            .delete_session(uri, session_id, auth_header, custom_headers)
-            .await
-    }
-
-    async fn get_stream(
-        &self,
-        uri: Arc<str>,
-        session_id: Option<Arc<str>>,
-        last_event_id: Option<String>,
-        auth_header: Option<String>,
-        custom_headers: HashMap<HeaderName, HeaderValue>,
-    ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
-        self.client(&uri)
-            .await?
-            .get_stream(uri, session_id, last_event_id, auth_header, custom_headers)
-            .await
-    }
-
-    async fn get_stream_with_max_sse_event_size(
-        &self,
-        uri: Arc<str>,
-        session_id: Option<Arc<str>>,
-        last_event_id: Option<String>,
-        auth_header: Option<String>,
-        custom_headers: HashMap<HeaderName, HeaderValue>,
-        max_sse_event_size: usize,
-    ) -> Result<BoxStream<'static, Result<Sse, SseError>>, StreamableHttpError<Self::Error>> {
-        self.client(&uri)
-            .await?
-            .get_stream_with_max_sse_event_size(
-                uri,
-                session_id,
-                last_event_id,
-                auth_header,
-                custom_headers,
-                max_sse_event_size,
-            )
-            .await
-    }
+pub(crate) fn authorized_mcp_client(
+    authorizer: Arc<dyn McpHttpNetworkAuthorizer>,
+) -> McpResult<RequestExecutingHttpClient<McpRequestExecutor>> {
+    Ok(RequestExecutingHttpClient::new(
+        // This client only builds Request values; it never opens a connection.
+        reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| McpError::http_error(&error))?,
+        McpRequestExecutor { authorizer },
+    ))
 }

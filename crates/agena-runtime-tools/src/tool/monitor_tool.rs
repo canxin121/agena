@@ -23,6 +23,7 @@ pub(crate) async fn execute_async(
                 .monitor_registry()
                 .cloned()
                 .ok_or_else(|| ToolError::invalid_input("monitor registry unavailable"))?;
+            let ws = prepare_ws(executor, ws, *timeout_ms).await?;
             let permit = super::shell_tool::launch_worker_permit(executor).await?;
             let output = context
                 .begin_activity_output(
@@ -41,10 +42,7 @@ pub(crate) async fn execute_async(
                     .zip(context.call_id)
                     .map(|(session, call)| crate::managed_process_id(session, call)),
                 command: String::new(),
-                ws: Some(MonitorWsParams {
-                    url: ws.url.clone(),
-                    protocols: ws.protocols.clone(),
-                }),
+                ws: Some(ws),
                 description: description.clone(),
                 workdir: executor.workspace_root().to_path_buf(),
                 timeout_ms: *timeout_ms,
@@ -83,6 +81,77 @@ pub(crate) async fn execute_async(
             .await
         }
     }
+}
+
+/// Revalidate actual destinations at launch and pin those exact addresses.
+/// Only the network policy enters the socket worker; workspace grants and
+/// unrelated writable paths are unnecessary for a WebSocket subscription.
+async fn prepare_ws(
+    executor: &ToolExecutor,
+    ws: &crate::part::MonitorWsInput,
+    timeout_ms: Option<u64>,
+) -> Result<MonitorWsParams, ToolError> {
+    let url = ws.url.clone();
+    let protocols = ws.protocols.clone();
+    executor
+        .run_permission_preflight(move |executor| {
+            let target: agena_domain::NetworkTarget = url.parse().map_err(|error| {
+                ToolError::invalid_input(format!("invalid WebSocket target: {error}"))
+            })?;
+            let snapshot = executor.sandbox_permission_snapshot();
+            let mut addresses = Vec::new();
+            for resolved in crate::shell_sandbox::resolved_network_targets(&url, &snapshot)? {
+                if !matches!(
+                    snapshot.authorize_resolved_network_address(&target, &resolved),
+                    agena_domain::PermissionDecision::Allow
+                ) {
+                    continue;
+                }
+                let ip = resolved.host().parse().map_err(|_| {
+                    ToolError::invalid_input("WebSocket destination is not a numeric address")
+                })?;
+                let port = resolved
+                    .port()
+                    .or(target.port())
+                    .ok_or_else(|| ToolError::invalid_input("WebSocket destination has no port"))?;
+                let address = std::net::SocketAddr::new(ip, port);
+                if !addresses.contains(&address) {
+                    addresses.push(address);
+                }
+            }
+            if addresses.is_empty() {
+                return Err(ToolError::invalid_input(
+                    "network policy denies every WebSocket destination",
+                ));
+            }
+            let policy = if executor.sandbox_enabled() {
+                let network = snapshot.native_network_policy(None).map_err(|error| {
+                    ToolError::invalid_input(format!("WebSocket network policy: {error}"))
+                })?;
+                network
+                    .validate_for_platform(std::env::consts::OS)
+                    .map_err(|error| {
+                        ToolError::invalid_input(format!("WebSocket network policy: {error}"))
+                    })?;
+                agena_process::sandbox::SandboxPolicy {
+                    network: agena_process::sandbox::SandboxNetwork::Native { policy: network },
+                    timeout_ms: Some(timeout_ms.unwrap_or(300_000).min(3_600_000)),
+                    ..Default::default()
+                }
+            } else {
+                agena_process::sandbox::SandboxPolicy {
+                    disabled: true,
+                    ..Default::default()
+                }
+            };
+            Ok(MonitorWsParams {
+                url,
+                protocols,
+                addresses,
+                policy,
+            })
+        })
+        .await
 }
 
 fn into_tool_error(err: MonitorError) -> ToolError {

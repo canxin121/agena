@@ -194,7 +194,8 @@ async fn resolve_endpoint(
         addresses = network_policy::permitted_addresses(url, addresses, network)?;
     }
     addresses = authorized_network_addresses(url, addresses, permission_host, false).await?;
-    Ok(route.with_addresses(addresses))
+    crate::sandbox_operations::http_route(permission_host, url, route.with_addresses(addresses))
+        .await
 }
 
 impl WebPlugin {

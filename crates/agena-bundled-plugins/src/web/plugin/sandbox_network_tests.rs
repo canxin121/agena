@@ -24,6 +24,19 @@ impl HostClient for AddressHost {
     async fn invoke_tool(&self, _: String, _: serde_json::Value) -> SdkResult<ToolInvokeOutput> {
         unreachable!("permission checks must not invoke tools")
     }
+    async fn prepare_worker_sandbox(
+        &self,
+        _: agena_plugin_sdk::host_api::HostProcessResources,
+    ) -> SdkResult<agena_plugin_sdk::host_api::HostPreparedProcessSandbox> {
+        Ok(agena_plugin_sdk::host_api::HostPreparedProcessSandbox {
+            scope: "route-fixture".into(),
+            workspace_root: String::new(),
+            cwd: String::new(),
+            policy: serde_json::to_value(agena_process::sandbox::SandboxPolicy::default()).unwrap(),
+            permission_snapshot: None,
+            call_bound: false,
+        })
+    }
     async fn check_resolved_network_permission(
         &self,
         original: String,

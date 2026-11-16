@@ -52,6 +52,19 @@ impl HostClient for ProbeHost {
     ) -> crate::sdk::Result<ToolInvokeOutput> {
         self.0.wait(name).await
     }
+
+    async fn prepare_worker_sandbox(
+        &self,
+        resources: crate::sdk::host_api::HostProcessResources,
+    ) -> crate::sdk::Result<crate::sdk::host_api::HostPreparedProcessSandbox> {
+        assert!(current_plugin_call_completion().is_some());
+        assert_eq!(
+            host_api::current_host_callback_context().and_then(|context| context.call_id),
+            Some(8)
+        );
+        assert_eq!(resources.network, ["https://fixture.invalid"]);
+        self.0.wait("worker_policy".into()).await
+    }
 }
 
 struct ProbeService(Probe);
@@ -188,6 +201,33 @@ async fn natural_origin_completion_stops_admitted_inproc_callback_body() {
     finish.send(()).unwrap();
     origin.await.unwrap();
     assert_eq!(receive(&mut stops).await, "inproc");
+    assert_eq!(
+        callback.await.unwrap().unwrap_err().kind,
+        PluginErrorKind::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn native_worker_policy_preserves_origin_context_and_cancellation() {
+    let (probe, mut starts, mut stops) = probe();
+    let (handle, plugin) = handle(probe);
+    let (context, origin, finish) = origin(handle.clone(), plugin.clone(), 8).await;
+    let scoped = handle.scoped_host_client(plugin.to_string());
+    let callback = tokio::spawn(host_api::run_in_isolated_host_callback_context(
+        context,
+        async move {
+            scoped
+                .prepare_worker_sandbox(crate::sdk::host_api::HostProcessResources {
+                    network: vec!["https://fixture.invalid".into()],
+                    ..Default::default()
+                })
+                .await
+        },
+    ));
+    assert_eq!(receive(&mut starts).await, "worker_policy");
+    finish.send(()).unwrap();
+    origin.await.unwrap();
+    assert_eq!(receive(&mut stops).await, "worker_policy");
     assert_eq!(
         callback.await.unwrap().unwrap_err().kind,
         PluginErrorKind::Cancelled

@@ -1,3 +1,4 @@
+use reqwest::cookie::CookieStore;
 use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HeaderValue, RETRY_AFTER};
 
 use super::*;
@@ -73,16 +74,40 @@ pub(super) fn duckduckgo_next(page: &WebSearchPage) -> Option<SearchRequest> {
     None
 }
 
+#[derive(Clone)]
+pub(super) struct SearchClient {
+    http: reqwest::Client,
+    route: crate::WebHttpRoute,
+    cookies: std::sync::Arc<reqwest::cookie::Jar>,
+    user_agent: String,
+}
+
+impl SearchClient {
+    pub(super) fn for_invocation(mut self, route: Option<&crate::WebHttpRoute>) -> Self {
+        // Cookies and client settings may be reused; call cancellation is always
+        // taken from the currently authorized route.
+        if let Some(route) = route {
+            self.route = route.clone();
+        }
+        self
+    }
+}
+
 pub(super) fn client(
     engine: WebSearchEngine,
     user_agent: &str,
     route: Option<&crate::WebHttpRoute>,
-) -> Result<reqwest::Client, CrawlError> {
+) -> Result<SearchClient, CrawlError> {
     let url = url::Url::parse(engine.permission_url())?;
     let origin = url.origin();
+    let route = match route {
+        Some(route) => route.clone(),
+        None => crate::WebHttpRoute::for_url(&url, None)?,
+    };
+    let cookies = std::sync::Arc::new(reqwest::cookie::Jar::default());
     let mut builder = reqwest::Client::builder()
         .user_agent(user_agent)
-        .cookie_store(true)
+        .cookie_provider(cookies.clone())
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             if attempt.previous().len() >= 5 {
@@ -99,30 +124,36 @@ pub(super) fn client(
                 attempt.stop()
             }
         }));
-    if let Some(route) = route {
-        builder = route.apply(builder, &url);
-    } else {
-        builder = crate::WebHttpRoute::for_url(&url, None)?.apply(builder, &url);
+    if route.sandboxed() {
+        builder = builder.redirect(reqwest::redirect::Policy::none());
     }
-    Ok(builder.build()?)
+    let http = route.apply(builder, &url).build()?;
+    Ok(SearchClient {
+        http,
+        route,
+        cookies,
+        user_agent: user_agent.to_owned(),
+    })
 }
 
 pub(super) async fn fetch(
-    client: reqwest::Client,
+    client: SearchClient,
     engine: WebSearchEngine,
     query: String,
     page: usize,
     continuation: Option<SearchRequest>,
 ) -> Result<WebSearchPage, CrawlError> {
-    let request = match continuation {
-        Some(SearchRequest {
-            url,
-            form: Some(fields),
-        }) => client.post(url).form(&fields),
-        Some(SearchRequest { url, form: None }) => client.get(url),
-        None => client.get(public_html::page_url(engine, &query, page)?),
-    };
-    let response = request
+    let mut next = continuation.unwrap_or(SearchRequest {
+        url: public_html::page_url(engine, &query, page)?,
+        form: None,
+    });
+    let origin = url::Url::parse(engine.permission_url())?.origin();
+    for hop in 0..=5 {
+        let mut request = match &next.form {
+            Some(fields) => client.http.post(next.url.clone()).form(fields),
+            None => client.http.get(next.url.clone()),
+        }
+        .header(reqwest::header::USER_AGENT, &client.user_agent)
         .header(
             ACCEPT,
             HeaderValue::from_static(
@@ -132,15 +163,64 @@ pub(super) async fn fetch(
         .header(
             ACCEPT_LANGUAGE,
             HeaderValue::from_static("en-US,en;q=0.9,zh-CN;q=0.8"),
-        )
-        .send()
-        .await?;
-    response_page(response).await
+        );
+        if client.route.sandboxed()
+            && let Some(cookies) = client.cookies.cookies(&next.url)
+        {
+            request = request.header(reqwest::header::COOKIE, cookies);
+        }
+        let response = client
+            .route
+            .execute(
+                &client.http,
+                request.build()?,
+                Duration::from_secs(10),
+                None,
+                Some(MAX_SEARCH_RESPONSE_BYTES as u64),
+            )
+            .await?;
+        if !client.route.sandboxed() {
+            let final_url = response.url().clone();
+            return response_page(response, final_url).await;
+        }
+        client.cookies.set_cookies(
+            &mut response
+                .headers()
+                .get_all(reqwest::header::SET_COOKIE)
+                .iter(),
+            &next.url,
+        );
+        if matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308)
+            && let Some(target) = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|location| next.url.join(location).ok())
+            && target.origin() == origin
+            && target.username().is_empty()
+            && target.password().is_none()
+        {
+            if hop == 5 {
+                return Err(CrawlError::InvalidInput(
+                    "search redirect limit exceeded".into(),
+                ));
+            }
+            if matches!(response.status().as_u16(), 301 | 302 | 303) {
+                next.form = None;
+            }
+            next.url = target;
+            continue;
+        }
+        return response_page(response, next.url).await;
+    }
+    unreachable!("the redirect loop returns at its configured limit")
 }
 
-async fn response_page(mut response: reqwest::Response) -> Result<WebSearchPage, CrawlError> {
+async fn response_page(
+    mut response: reqwest::Response,
+    mut final_url: url::Url,
+) -> Result<WebSearchPage, CrawlError> {
     let status = response.status().as_u16();
-    let mut final_url = response.url().clone();
     if response.status().is_redirection()
         && let Some(location) = response
             .headers()
@@ -230,6 +310,7 @@ mod tests {
         };
         let request = async {
             let response = client
+                .http
                 .get(format!("http://www.bing.com:{}/search", address.port()))
                 .send()
                 .await

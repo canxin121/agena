@@ -28,7 +28,6 @@ use agena_provider::{
 use base64::Engine as _;
 use futures_util::StreamExt as _;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncReadExt as _;
 
 const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 const MAX_IMAGE_BASE64_BYTES: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4 + 4;
@@ -153,79 +152,22 @@ fn provider_permission_url(url: &str) -> SdkResult<url::Url> {
     Ok(parsed)
 }
 
-/// Read one provider image without allowing a request containing several
-/// paths to allocate an unbounded amount of memory. The metadata check gives
-/// a fast rejection; the `take` boundary also closes the race where a file
-/// grows after it was statted.
+/// Authorize and read one image through the bounded file worker. The remaining
+/// budget applies across every image in this provider request.
 pub(crate) async fn read_image_input_bounded(
     host: &Arc<dyn HostClient>,
     path: &Path,
     total_bytes: &mut u64,
     provider: &str,
 ) -> SdkResult<Vec<u8>> {
-    crate::permissions::require_path(
-        host.as_ref(),
-        agena_domain::PathKind::Read,
-        &path.to_string_lossy(),
-    )
-    .await?;
-    let metadata = tokio::fs::metadata(path).await.map_err(|error| {
-        PluginError::internal(format!(
-            "cannot stat {provider} image '{}': {error}",
-            path.display()
-        ))
-    })?;
-    if !metadata.is_file() {
-        return Err(PluginError::invalid_params(format!(
-            "{provider} image is not a regular file: {}",
-            path.display()
-        )));
-    }
-    if metadata.len() == 0 {
-        return Err(PluginError::invalid_params(format!(
-            "{provider} image is empty: {}",
-            path.display()
-        )));
-    }
-    if metadata.len() > MAX_PROVIDER_IMAGE_INPUT_BYTES
-        || total_bytes.saturating_add(metadata.len()) > MAX_PROVIDER_IMAGE_INPUT_BYTES
-    {
-        return Err(PluginError::invalid_params(format!(
-            "{provider} image inputs exceed the {} MiB request limit",
-            MAX_PROVIDER_IMAGE_INPUT_BYTES / 1024 / 1024
-        )));
-    }
-
-    let file = tokio::fs::File::open(path).await.map_err(|error| {
-        PluginError::internal(format!(
-            "cannot read {provider} image '{}': {error}",
-            path.display()
-        ))
-    })?;
     let remaining = MAX_PROVIDER_IMAGE_INPUT_BYTES.saturating_sub(*total_bytes);
-    let mut bytes =
-        Vec::with_capacity(usize::try_from(metadata.len().min(remaining)).unwrap_or_default());
-    file.take(remaining.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|error| {
-            PluginError::internal(format!(
-                "cannot read {provider} image '{}': {error}",
-                path.display()
-            ))
-        })?;
-    if bytes.is_empty() {
-        return Err(PluginError::invalid_params(format!(
-            "{provider} image is empty: {}",
-            path.display()
-        )));
-    }
-    if bytes.len() as u64 > remaining {
+    if remaining == 0 {
         return Err(PluginError::invalid_params(format!(
             "{provider} image inputs exceed the {} MiB request limit",
             MAX_PROVIDER_IMAGE_INPUT_BYTES / 1024 / 1024
         )));
     }
+    let bytes = crate::sandbox_operations::read_file(host.as_ref(), path, remaining, None).await?;
     *total_bytes = total_bytes.saturating_add(bytes.len() as u64);
     Ok(bytes)
 }
@@ -466,12 +408,31 @@ fn provider_transport_detail(
 pub(crate) fn provider_transport_error(
     provider: &str,
     operation: &str,
-    error: &reqwest::Error,
+    error: &(dyn std::error::Error + 'static),
     connection: Option<&agena_plugin_sdk::host_api::BuiltinProviderConnection>,
 ) -> PluginError {
     let provider = agena_failure::diagnostic::scrubbed_preserve(provider, 16);
     let operation = agena_failure::diagnostic::scrubbed_preserve(operation, 32);
-    let reason = provider_transport_detail(error, connection);
+    let mut source = Some(error);
+    let mut reason = "sandbox HTTP request or response transport failed".to_owned();
+    while let Some(error) = source {
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            reason = provider_transport_detail(error, connection);
+            break;
+        }
+        if let Some(error) = error.downcast_ref::<std::io::Error>() {
+            reason = match error.kind() {
+                std::io::ErrorKind::TimedOut => "sandbox HTTP request timed out",
+                std::io::ErrorKind::PermissionDenied => "sandbox policy denied the HTTP request",
+                std::io::ErrorKind::InvalidData => {
+                    "sandbox HTTP transfer exceeded its limits or returned invalid data"
+                }
+                _ => "sandbox HTTP worker could not complete the request",
+            }
+            .to_owned();
+        }
+        source = error.source();
+    }
     let message = format!("{provider} {operation} failed: {reason}.");
     PluginError::from_kind_with_public_detail(
         agena_plugin_host::sdk::PluginErrorKind::Internal,
@@ -644,7 +605,7 @@ pub(crate) async fn post_json(
     for (name, value) in headers {
         request = request.header(name, value);
     }
-    let response = request.send().await.map_err(|error| {
+    let response = client.send(request).await.map_err(|error| {
         provider_transport_error(provider, operation, &error, Some(connection))
             .with_remote_effect_unknown()
     })?;

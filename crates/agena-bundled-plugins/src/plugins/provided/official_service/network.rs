@@ -4,6 +4,45 @@ use super::*;
 use agena_plugin_host::sdk::{PluginErrorKind, host_api::PermissionQuery};
 use std::net::SocketAddr;
 
+pub(crate) struct AuthorizedProviderHttpClient {
+    client: reqwest::Client,
+    route: agena_web::WebHttpRoute,
+    connect_timeout: Duration,
+    timeout: Duration,
+}
+
+impl std::ops::Deref for AuthorizedProviderHttpClient {
+    type Target = reqwest::Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+
+impl AuthorizedProviderHttpClient {
+    pub(crate) async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, agena_web::CrawlError> {
+        self.execute(request.build()?).await
+    }
+
+    pub(crate) async fn execute(
+        &self,
+        request: reqwest::Request,
+    ) -> Result<reqwest::Response, agena_web::CrawlError> {
+        self.route
+            .execute(
+                &self.client,
+                request,
+                self.connect_timeout,
+                Some(self.timeout),
+                None,
+            )
+            .await
+    }
+}
+
 pub(crate) async fn authorized_provider_addresses(
     host: &Arc<dyn HostClient>,
     url: &str,
@@ -49,7 +88,7 @@ pub(crate) async fn authorized_provider_http_client(
     host: &Arc<dyn HostClient>,
     url: &str,
     connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
-) -> SdkResult<reqwest::Client> {
+) -> SdkResult<AuthorizedProviderHttpClient> {
     let permission_url = provider_permission_url(url)?;
     let route = agena_web::WebHttpRoute::for_url(&permission_url, None)
         .map_err(|_| PluginError::invalid_params("invalid provider HTTP route"))?;
@@ -61,7 +100,7 @@ async fn authorized_provider_http_client_for_route(
     url: &str,
     connection: &agena_plugin_sdk::host_api::BuiltinProviderConnection,
     route: agena_web::WebHttpRoute,
-) -> SdkResult<reqwest::Client> {
+) -> SdkResult<AuthorizedProviderHttpClient> {
     let permission_url = provider_permission_url(url)?;
     if route.remote_dns() {
         return Err(PluginError::from_kind(
@@ -75,11 +114,22 @@ async fn authorized_provider_http_client_for_route(
         Duration::from_secs(connection.connect_timeout_secs.max(1).min(30)),
     )
     .await?;
-    route
-        .with_addresses(addresses)
+    let route = crate::sandbox_operations::http_route(
+        host.as_ref(),
+        &permission_url,
+        route.with_addresses(addresses),
+    )
+    .await?;
+    let client = route
         .apply(provider_http_builder(connection), &permission_url)
         .build()
-        .map_err(|error| PluginError::internal_error(&error))
+        .map_err(|error| PluginError::internal_error(&error))?;
+    Ok(AuthorizedProviderHttpClient {
+        client,
+        route,
+        connect_timeout: Duration::from_secs(connection.connect_timeout_secs.max(1)),
+        timeout: Duration::from_secs(connection.timeout_secs.max(1)),
+    })
 }
 
 #[cfg(test)]
@@ -192,57 +242,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn provider_http_client_pins_approved_ips_and_keeps_host_header() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = listener.local_addr().unwrap();
-        let url = format!("http://localhost:{}/endpoint", endpoint.port());
-        let host = Arc::new(AddressHost {
-            allowed: Some(endpoint),
-            denied: PermissionQuery::Deny {
-                reason: "other address denied".into(),
-            },
-            seen: Default::default(),
-        });
-        let authority: Arc<dyn HostClient> = host.clone();
-        let client = authorized_provider_http_client_for_route(
-            &authority,
-            &url,
-            &connection(&url),
-            agena_web::WebHttpRoute::default(),
-        )
-        .await
-        .unwrap();
-        let server = tokio::spawn(async move {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = Vec::new();
-            while !request.ends_with(b"\r\n\r\n") {
-                request.push(stream.read_u8().await.unwrap());
-                assert!(request.len() < 16_384);
-            }
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                .await
-                .unwrap();
-            String::from_utf8(request).unwrap()
-        });
-        assert_eq!(
-            client.get(&url).send().await.unwrap().text().await.unwrap(),
-            "ok"
-        );
-        assert!(
-            server
-                .await
-                .unwrap()
-                .to_ascii_lowercase()
-                .contains(&format!("host: localhost:{}\r\n", endpoint.port()))
-        );
-        assert!(
-            host.seen
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|(_, resolved)| resolved == &endpoint.to_string())
-        );
+    async fn provider_http_client_pins_approved_ips_with_sandbox_disabled() {
+        agena_process::sandbox::scope_enabled(false, async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            let url = format!("http://localhost:{}/endpoint", endpoint.port());
+            let host = Arc::new(AddressHost {
+                allowed: Some(endpoint),
+                denied: PermissionQuery::Deny {
+                    reason: "other address denied".into(),
+                },
+                seen: Default::default(),
+            });
+            let authority: Arc<dyn HostClient> = host.clone();
+            let client = authorized_provider_http_client_for_route(
+                &authority,
+                &url,
+                &connection(&url),
+                agena_web::WebHttpRoute::default(),
+            )
+            .await
+            .unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    request.push(stream.read_u8().await.unwrap());
+                    assert!(request.len() < 16_384);
+                }
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                    )
+                    .await
+                    .unwrap();
+                String::from_utf8(request).unwrap()
+            });
+            assert_eq!(
+                client
+                    .send(client.get(&url))
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                "ok"
+            );
+            assert!(
+                server
+                    .await
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .contains(&format!("host: localhost:{}\r\n", endpoint.port()))
+            );
+            assert!(
+                host.seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, resolved)| resolved == &endpoint.to_string())
+            );
+        })
+        .await;
     }
 }

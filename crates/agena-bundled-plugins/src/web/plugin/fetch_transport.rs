@@ -45,18 +45,28 @@ where
         )
         .build()
         .map_err(|error| PluginError::internal_error(&error))?;
-    client
+    let request = client
         .get(url.clone())
+        .header(reqwest::header::USER_AGENT, &options.user_agent)
         .header(
             "Accept",
             "text/html, text/plain, application/xhtml+xml, application/json;q=0.9, */*;q=0.1",
         )
-        .send()
+        .build()
+        .map_err(|error| PluginError::internal_error(&error.without_url()))?;
+    route
+        .execute(
+            &client,
+            request,
+            options.timeout.min(Duration::from_secs(30)),
+            Some(options.timeout),
+            None,
+        )
         .await
-        .map_err(|error| PluginError::internal_error(&error.without_url()))
+        .map_err(crawl_error_to_plugin)
 }
 
-fn redirect(response: &reqwest::Response) -> SdkResult<Option<url::Url>> {
+fn redirect(response: &reqwest::Response, current_url: &url::Url) -> SdkResult<Option<url::Url>> {
     if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
         return Ok(None);
     }
@@ -65,8 +75,7 @@ fn redirect(response: &reqwest::Response) -> SdkResult<Option<url::Url>> {
         .get(reqwest::header::LOCATION)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(|| PluginError::internal("HTTP redirect has no valid Location header"))?;
-    let mut next = response
-        .url()
+    let mut next = current_url
         .join(location)
         .map_err(|error| PluginError::invalid_params_error(&error))?;
     next.set_fragment(None);
@@ -111,7 +120,7 @@ where
             break;
         }
         let response = send(&url, options, resolve).await?;
-        if let Some(next) = redirect(&response)? {
+        if let Some(next) = redirect(&response, &url)? {
             url = next;
             continue;
         }
@@ -174,7 +183,7 @@ where
                 }
             }
             let response = send(&url, options, &resolve).await?;
-            if let Some(next) = redirect(&response)? {
+            if let Some(next) = redirect(&response, &url)? {
                 url = next;
                 continue;
             }
@@ -256,4 +265,79 @@ pub(super) async fn extract(
     agena_web::extract_with_backend(page, &body, backend)
         .await
         .map_err(crawl_error_to_plugin)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn fetch_and_robots_reauthorize_redirects_before_the_next_connection() {
+        for check_robots in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = listener.local_addr().unwrap();
+            let denied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            denied.set_nonblocking(true).unwrap();
+            let url = url::Url::parse(&format!(
+                "http://approved.invalid:{}/start",
+                endpoint.port()
+            ))
+            .unwrap();
+            let next = format!(
+                "http://denied.invalid:{}/private",
+                denied.local_addr().unwrap().port()
+            );
+            let next_for_server = next.clone();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(stream.read_u8().await.unwrap());
+                    assert!(headers.len() < 8192);
+                }
+                stream.write_all(format!("HTTP/1.1 302 Found\r\nLocation: {next_for_server}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+                String::from_utf8(headers).unwrap()
+            });
+            let seen = std::sync::Mutex::new(Vec::new());
+            let resolve = |target: url::Url| {
+                seen.lock().unwrap().push(target.to_string());
+                std::future::ready(if target.host_str() == Some("approved.invalid") {
+                    Ok(agena_web::WebHttpRoute::default().with_addresses(vec![endpoint]))
+                } else {
+                    Err(PluginError::from_kind(
+                        agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                        "redirect destination denied",
+                    ))
+                })
+            };
+            let options = SpiderFetchOptions {
+                timeout: Duration::from_secs(3),
+                user_agent: "Agena-Worker-Header-Fixture".into(),
+                respect_robots_txt: false,
+                ..Default::default()
+            };
+            let error = if check_robots {
+                robots(&url, &options, &resolve).await.unwrap_err()
+            } else {
+                fetch(&url, &options, resolve).await.unwrap_err()
+            };
+            assert_eq!(error.kind, agena_plugin_sdk::PluginErrorKind::PolicyDenied);
+            let requests = seen.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[1], next);
+            drop(requests);
+            assert_eq!(
+                denied.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+            let headers = tokio::time::timeout(Duration::from_secs(3), server)
+                .await
+                .unwrap()
+                .unwrap()
+                .to_ascii_lowercase();
+            assert!(headers.contains("user-agent: agena-worker-header-fixture\r\n"));
+            assert!(headers.contains("accept: text/html"));
+        }
+    }
 }

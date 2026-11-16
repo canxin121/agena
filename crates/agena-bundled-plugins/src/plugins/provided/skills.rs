@@ -8,6 +8,7 @@ use std::{
 };
 
 use agena_domain::PathKind;
+use agena_plugin_host::sdk::host_api::HostProcessResources;
 use agena_plugin_host::sdk::{
     ApplicableSessions, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
     PluginError, PluginManifest, Result as SdkResult, ToolContract, ToolDefinition, ToolDocs,
@@ -16,9 +17,14 @@ use agena_plugin_host::sdk::{
 };
 use agena_skills::source::{
     SkillCreateRequest, SkillDeleteResult, SkillInstallRequest, SkillResourceWriteRequest,
-    SkillSourceAccess, SkillValidationRequest, load_install_source,
+    SkillSourceAccess, SkillSourceOperation, SkillSourceResult, SkillValidationRequest,
+    load_install_source_with_transports,
 };
-use agena_skills::{DeclaredSkill, SkillError, SkillManager, SkillScope};
+use agena_skills::worker::{SkillWorkerOperation, SkillWorkerRequest};
+use agena_skills::{
+    DeclaredSkill, SkillCatalog, SkillDetail, SkillError, SkillInstallPreview, SkillManager,
+    SkillScope, SkillSummary,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
@@ -345,7 +351,7 @@ impl Plugin for SkillsPlugin {
         match input.tool_name.as_str() {
             "list" => {
                 let input: ListInput = parse(value)?;
-                let catalog = self.run(|manager| manager.list()).await?;
+                let catalog: SkillCatalog = parse(self.run(SkillWorkerOperation::List).await?)?;
                 let query = input.query.unwrap_or_default().to_lowercase();
                 let mut skills = catalog
                     .skills
@@ -376,7 +382,8 @@ impl Plugin for SkillsPlugin {
             "get" => {
                 let input: IdInput = parse(value)?;
                 self.authorize_id(&input.id, false).await?;
-                let detail = self.run(move |manager| manager.get(&input.id)).await?;
+                let detail: SkillDetail =
+                    parse(self.run(SkillWorkerOperation::Get { id: input.id }).await?)?;
                 let directory = detail
                     .summary
                     .path
@@ -429,8 +436,11 @@ impl Plugin for SkillsPlugin {
                     .await?;
                 output(
                     "Skill created",
-                    self.run(move |manager| manager.create(input.scope, &input.document))
-                        .await?,
+                    self.run(SkillWorkerOperation::Create {
+                        scope: input.scope,
+                        document: input.document,
+                    })
+                    .await?,
                     true,
                 )
             }
@@ -440,8 +450,10 @@ impl Plugin for SkillsPlugin {
                 self.authorize_id(&input.id, true).await?;
                 output(
                     "Skill updated",
-                    self.run(move |manager| {
-                        manager.update(&input.id, &input.document, Some(&input.expected_revision))
+                    self.run(SkillWorkerOperation::Update {
+                        id: input.id,
+                        document: input.document,
+                        expected_revision: input.expected_revision,
                     })
                     .await?,
                     true,
@@ -459,9 +471,13 @@ impl Plugin for SkillsPlugin {
                         .ok_or_else(|| PluginError::invalid_params("Invalid package path"))?,
                 )
                 .await?;
-                let skill = self
-                    .run(move |manager| manager.remove(&input.id, Some(&input.expected_revision)))
-                    .await?;
+                let skill: SkillSummary = parse(
+                    self.run(SkillWorkerOperation::Remove {
+                        id: input.id,
+                        expected_revision: input.expected_revision,
+                    })
+                    .await?,
+                )?;
                 output(
                     "Skill removed",
                     SkillDeleteResult {
@@ -477,12 +493,10 @@ impl Plugin for SkillsPlugin {
                 self.authorize_id(&input.id, true).await?;
                 output(
                     "Skill availability updated",
-                    self.run(move |manager| {
-                        manager.set_enabled(
-                            &input.id,
-                            input.enabled,
-                            Some(&input.expected_revision),
-                        )
+                    self.run(SkillWorkerOperation::SetEnabled {
+                        id: input.id,
+                        enabled: input.enabled,
+                        expected_revision: input.expected_revision,
                     })
                     .await?,
                     true,
@@ -495,8 +509,11 @@ impl Plugin for SkillsPlugin {
                 self.require_path(&resource, PathKind::Read).await?;
                 output(
                     "Skill resource",
-                    self.run(move |manager| manager.read_resource(&input.id, &input.path))
-                        .await?,
+                    self.run(SkillWorkerOperation::ReadResource {
+                        id: input.id,
+                        path: input.path,
+                    })
+                    .await?,
                     false,
                 )
             }
@@ -513,13 +530,11 @@ impl Plugin for SkillsPlugin {
                 };
                 output(
                     "Skill resource saved",
-                    self.run(move |manager| {
-                        manager.write_resource(
-                            &input.id,
-                            &request.path,
-                            &request.content,
-                            Some(request.expected_revision.as_deref().unwrap_or("")),
-                        )
+                    self.run(SkillWorkerOperation::WriteResource {
+                        id: input.id,
+                        path: request.path,
+                        content: request.content,
+                        expected_revision: request.expected_revision,
                     })
                     .await?,
                     true,
@@ -534,12 +549,10 @@ impl Plugin for SkillsPlugin {
                 self.require_path(&resource, PathKind::Write).await?;
                 output(
                     "Skill resource removed",
-                    self.run(move |manager| {
-                        manager.remove_resource(
-                            &input.id,
-                            &input.path,
-                            Some(&input.expected_revision),
-                        )
+                    self.run(SkillWorkerOperation::RemoveResource {
+                        id: input.id,
+                        path: input.path,
+                        expected_revision: input.expected_revision,
                     })
                     .await?,
                     true,
@@ -557,7 +570,9 @@ impl Plugin for SkillsPlugin {
                 let preview_only = input.tool_name == "preview_install";
                 let request: SkillInstallRequest = parse(value)?;
                 let host = self.permission_host()?;
-                let loaded = load_install_source(
+                let source_host = host.clone();
+                let download_host = host.clone();
+                let loaded = load_install_source_with_transports(
                     request.source,
                     self.workspace_root()?,
                     move |access| {
@@ -594,18 +609,20 @@ impl Plugin for SkillsPlugin {
                         }
                     },
                     skill_error,
+                    move |operation| execute_source_worker(source_host.clone(), operation),
+                    move |request| execute_source_download(download_host.clone(), request),
                 )
                 .await?;
                 loaded
                     .verify_revision(request.expected_source_revision.as_deref())
                     .map_err(skill_error)?;
-                let (preview, loaded) = self
-                    .run(move |manager| {
-                        manager
-                            .preview_install(&loaded.package, request.scope)
-                            .map(|preview| (preview, loaded))
+                let preview: SkillInstallPreview = parse(
+                    self.run(SkillWorkerOperation::PreviewInstall {
+                        package: loaded.package.clone(),
+                        scope: request.scope,
                     })
-                    .await?;
+                    .await?,
+                )?;
                 if preview_only {
                     return output("Skill installation preview", preview, false);
                 }
@@ -647,14 +664,12 @@ impl Plugin for SkillsPlugin {
                 }
                 output(
                     "Skills installed",
-                    self.run(move |manager| {
-                        manager.install(
-                            &loaded.package,
-                            request.scope,
-                            &request.selected,
-                            request.replace,
-                            Some(loaded.source),
-                        )
+                    self.run(SkillWorkerOperation::Install {
+                        package: loaded.package,
+                        scope: request.scope,
+                        selected: request.selected,
+                        replace: request.replace,
+                        source: loaded.source,
                     })
                     .await?,
                     true,
@@ -767,16 +782,50 @@ impl SkillsPlugin {
         Ok(manager)
     }
 
-    async fn run<T: Send + 'static>(
-        &self,
-        operation: impl FnOnce(SkillManager) -> Result<T, SkillError> + Send + 'static,
-    ) -> SdkResult<T> {
-        let filter = crate::permissions::read_filter(self.permission_host()?, true)?;
+    async fn run(&self, operation: SkillWorkerOperation) -> SdkResult<Value> {
+        let host = self.permission_host()?;
+        let manager = self.manager()?;
+        if crate::sandbox_operations::enabled() {
+            let mutation = operation.is_mutation();
+            let snapshot = manager.worker_snapshot();
+            let resources = HostProcessResources {
+                reads: snapshot
+                    .roots
+                    .iter()
+                    .map(|root| root.path.clone())
+                    .collect(),
+                writes: if mutation {
+                    snapshot
+                        .roots
+                        .iter()
+                        .filter(|root| root.editable)
+                        .map(|root| root.path.clone())
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            };
+            let input = serde_json::to_value(SkillWorkerRequest {
+                manager: snapshot,
+                operation,
+            })
+            .map_err(|error| PluginError::internal_error(&error))?;
+            if mutation {
+                return execute_mutation_worker(host, input, resources).await;
+            }
+            return crate::worker::execute_bundled_worker(
+                host.as_ref(),
+                "skills.manager",
+                input,
+                resources,
+            )
+            .await;
+        }
+        let filter = crate::permissions::read_filter(host, true)?;
         let predicate = filter.predicate();
-        let manager = self
-            .manager()?
-            .with_read_filter(Arc::new(move |path| predicate.allows(path)));
-        let result = worker(move || operation(manager)).await;
+        let manager = manager.with_read_filter(Arc::new(move |path| predicate.allows(path)));
+        let result = worker(move || operation.execute(manager)).await;
         filter.finish(result)
     }
 
@@ -790,9 +839,10 @@ impl SkillsPlugin {
     }
 
     async fn authorize_id(&self, id: &str, write: bool) -> SdkResult<PathBuf> {
-        let manager = self.manager()?;
-        let id = id.to_owned();
-        let path = worker(move || manager.resolve_path(&id)).await?;
+        let path: PathBuf = parse(
+            self.run(SkillWorkerOperation::ResolvePath { id: id.to_owned() })
+                .await?,
+        )?;
         if path.to_string_lossy().starts_with("plugin://") {
             if write {
                 return Err(PluginError::invalid_params(
@@ -814,38 +864,146 @@ impl SkillsPlugin {
     }
 
     async fn authorize_tree_write(&self, root: &Path) -> SdkResult<()> {
-        let root = root.to_owned();
-        let paths = worker(move || {
-            let mut builder = ignore::WalkBuilder::new(root);
-            builder
-                .hidden(false)
-                .ignore(false)
-                .git_ignore(false)
-                .parents(false)
-                .follow_links(false)
-                .max_depth(Some(32));
-            let mut paths = Vec::new();
-            for (index, entry) in builder.build().enumerate() {
-                if index > 20000 {
-                    return Err(SkillError::invalid(
-                        "The installed package is too large to remove safely.",
-                    ));
-                }
-                let entry = entry.map_err(|error| SkillError::invalid(error.to_string()))?;
-                if entry.depth() >= 32 {
-                    return Err(SkillError::invalid(
-                        "The installed package exceeds the supported directory depth.",
-                    ));
-                }
-                paths.push(entry.path().to_owned());
-            }
-            Ok(paths)
-        })
-        .await?;
+        let result = execute_source_worker(
+            self.permission_host()?,
+            SkillSourceOperation::MutationPaths {
+                path: root.to_owned(),
+            },
+        )
+        .await
+        .map_err(skill_error)?;
+        let SkillSourceResult::Paths(paths) = result else {
+            return Err(PluginError::internal(
+                "invalid skills mutation-path response",
+            ));
+        };
         for path in paths {
             self.require_path(&path, PathKind::Write).await?;
         }
         Ok(())
+    }
+}
+
+async fn execute_source_download(
+    host: Arc<dyn HostClient>,
+    request: agena_skills::source::SkillDownloadRequest,
+) -> SdkResult<reqwest::Response> {
+    let url = request.request.url().clone();
+    let route = crate::sandbox_operations::http_route(
+        host.as_ref(),
+        &url,
+        agena_web::WebHttpRoute::default().with_addresses(request.addresses),
+    )
+    .await?;
+    route
+        .execute(
+            &request.client,
+            request.request,
+            std::time::Duration::from_secs(20),
+            Some(std::time::Duration::from_secs(120)),
+            Some(agena_skills::MAX_ARCHIVE_BYTES as u64),
+        )
+        .await
+        .map_err(|error| PluginError::internal(format!("skill archive transfer failed: {error}")))
+}
+
+async fn execute_source_worker(
+    host: Arc<dyn HostClient>,
+    operation: SkillSourceOperation,
+) -> Result<SkillSourceResult, SkillError> {
+    if !crate::sandbox_operations::enabled() {
+        let permit = crate::BLOCKING_PLUGIN_WORKERS
+            .acquire()
+            .await
+            .map_err(|error| {
+                SkillError::new(agena_skills::SkillErrorKind::Io, error.to_string())
+            })?;
+        return tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            operation.execute()
+        })
+        .await
+        .map_err(|error| SkillError::new(agena_skills::SkillErrorKind::Io, error.to_string()))?;
+    }
+    let resources = HostProcessResources {
+        reads: operation.read_paths(),
+        ..Default::default()
+    };
+    let input =
+        serde_json::to_value(operation).map_err(|error| SkillError::invalid(error.to_string()))?;
+    let result =
+        crate::worker::execute_bundled_worker(host.as_ref(), "skills.source", input, resources)
+            .await
+            .map_err(|error| {
+                SkillError::new(agena_skills::SkillErrorKind::Io, error.to_string())
+            })?;
+    serde_json::from_value(result).map_err(|error| SkillError::invalid(error.to_string()))
+}
+
+/// Run the isolated mutation while retaining the same host-side lock used by
+/// settings clients. Cancellation signals the runner; the blocking lock is
+/// released only after that runner has terminated and reaped the child.
+async fn execute_mutation_worker(
+    host: Arc<dyn HostClient>,
+    input: Value,
+    resources: HostProcessResources,
+) -> SdkResult<Value> {
+    let prepared = crate::worker::prepare_bundled_worker(host.as_ref(), resources).await?;
+    let cancel_on_drop = prepared.cancellation_token().drop_guard();
+    let runtime = tokio::runtime::Handle::current();
+    let result = tokio::task::spawn_blocking(move || {
+        agena_skills::with_mutation_lock(|| {
+            runtime.block_on(crate::worker::execute_prepared_bundled_worker(
+                prepared,
+                "skills.manager",
+                input,
+            ))
+        })
+        .map_err(skill_error)?
+    })
+    .await
+    .map_err(|error| PluginError::internal_error(&error))?;
+    drop(cancel_on_drop);
+    result
+}
+
+/// Worker entry point: only catalog identity, public declarations and explicit
+/// operation arguments cross the boundary. No plugin host is initialized.
+pub(crate) fn execute_worker(operation: &str, mut input: Value) -> SdkResult<Value> {
+    let snapshot = input
+        .as_object_mut()
+        .and_then(|object| object.remove("_agena_permission_snapshot"))
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| {
+            PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                "skills worker requires the host permission snapshot",
+            )
+        })?;
+    let snapshot: agena_runtime_tools::authorization::SandboxPermissionSnapshot =
+        serde_json::from_value(snapshot)
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+    match operation {
+        "skills.manager" => {
+            let request: SkillWorkerRequest = parse(input)?;
+            let manager = SkillManager::from_worker_snapshot(request.manager).with_read_filter(
+                Arc::new(move |path| {
+                    matches!(
+                        snapshot.authorize_path_access(agena_domain::AccessKind::Read, path),
+                        agena_domain::PermissionDecision::Allow
+                    )
+                }),
+            );
+            request.operation.execute(manager).map_err(skill_error)
+        }
+        "skills.source" => {
+            let request: SkillSourceOperation = parse(input)?;
+            serde_json::to_value(request.execute().map_err(skill_error)?)
+                .map_err(|error| PluginError::internal_error(&error))
+        }
+        _ => Err(PluginError::invalid_params(format!(
+            "unsupported skills worker operation: {operation}"
+        ))),
     }
 }
 

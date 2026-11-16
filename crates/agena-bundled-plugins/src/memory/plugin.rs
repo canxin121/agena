@@ -306,19 +306,21 @@ struct MemoryBodyRange {
     next_offset: Option<usize>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct RecalledMemory {
     hit: MemorySearchHit,
     metadata: MemoryMetadata,
-    reason: &'static str,
+    reason: String,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct MemoryContext {
     global: bool,
     instance_id: Option<String>,
     checkpoint_entry_id: Option<i64>,
 }
 
+#[derive(Serialize, Deserialize)]
 struct MemoryRecall {
     items: Vec<RecalledMemory>,
     indexed_records: usize,
@@ -512,17 +514,9 @@ impl MemoryPlugin {
     /// Every actual target must already have both read and write access; a
     /// read-only tool or automatic recall never repairs persistent source data.
     async fn recover_memory_store(&self, store: MemoryStore) -> SdkResult<()> {
-        let read_access = self.permissions.read_filter(false)?;
-        let write_access = self.permissions.write_filter(false)?;
-        let can_read = read_access.predicate();
-        let can_write = write_access.predicate();
-        let result = run_memory_blocking(move || {
-            store
-                .recover_pending(|path| can_read.allows(path) && can_write.allows(path))
-                .map_err(memory_error_to_plugin)
-        })
-        .await;
-        let recovered = read_access.finish(write_access.finish(result))?;
+        let recovered: bool = self
+            .run_store_operation(store, MemoryWorkerOperation::Recover, false, None)
+            .await?;
         if recovered {
             tracing::info!(target: "agena::memory", "recovered an authorized interrupted memory transaction");
         }
@@ -580,173 +574,71 @@ impl MemoryPlugin {
         include_history: bool,
         session_id: Option<i64>,
     ) -> SdkResult<MemoryRecall> {
-        let access = self.permissions.read_filter(interactive)?;
-        let predicate = access.predicate();
-        let workspace_root = self.workspace_root().await?.to_path_buf();
+        let workspace_root = self.workspace_root().await?;
         let context = self.memory_context().await;
-        let query = query.to_string();
-        let guard = Arc::clone(&self.sync_lock).lock_owned().await;
-        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
-            .acquire()
-            .await
-            .map_err(|error| {
-                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                    "acquire a memory index worker",
-                    &error,
-                ))
-            })?;
-        tokio::task::spawn_blocking(move || {
-            let _worker_permit = worker_permit;
-            let _guard = guard;
-            let store = MemoryStore::for_workspace(&workspace_root);
-            let entries = access.finish(
-                store
-                    .list_filtered(|path| predicate.allows(path))
-                    .map_err(memory_error_to_plugin),
-            )?;
-            let inactive_records = entries
-                .iter()
-                .filter(|entry| entry.metadata.status != MemoryStatus::Active)
-                .count();
-            let scoped_out_records = entries
-                .iter()
-                .filter(|entry| {
-                    !entry
-                        .metadata
-                        .scope
-                        .includes_context(session_id, context.instance_id.as_deref())
-                })
-                .count();
-            let mut metadata = BTreeMap::new();
-            let documents = entries
-                .into_iter()
-                .filter(|entry| {
-                    memory_record_is_visible(entry, session_id, &context, include_history)
-                })
-                .map(|entry| {
-                    let meta = entry.metadata.clone();
-                    let document = memory_document_from_entry(entry);
-                    metadata.insert(document.id.clone(), meta);
-                    document
-                })
-                .collect::<Vec<_>>();
-            let index = MemoryIndex::for_workspace(&workspace_root);
-            index.replace_documents(&documents).map_err(|error| {
-                PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to synchronize memory index",
-                    &error,
-                ))
-            })?;
-            let mut matches = if query.trim().is_empty() || documents.is_empty() {
-                Vec::new()
-            } else {
-                let search_limit = limit + if interactive { 0 } else { MAX_CORE_MEMORIES };
-                let result = match index.search(query.as_str(), search_limit) {
-                    Err(MemoryIndexError::InvalidCache(reason)) => {
-                        tracing::warn!(target: "agena::memory", %reason, "rebuilding damaged memory cache from the authorized source snapshot");
-                        index
-                            .rebuild_documents(&documents)
-                            .and_then(|()| index.search(query.as_str(), search_limit))
-                    }
-                    result => result,
-                };
-                result.map_err(|error| {
-                    PluginError::internal(
-                        agena_failure::diagnostic::format_error_chain_with_context(
-                            "memory search failed",
-                            &error,
-                        ),
-                    )
-                })?
-            };
-            // Another process can synchronize this shared cache with a different
-            // permission/session snapshot. Only expose bytes from this call's
-            // authorized source snapshot, never an index-only result.
-            matches.retain(|hit| {
-                documents.iter().any(|document| {
-                    document.id == hit.document.id
-                        && document.path == hit.document.path
-                        && document.body == hit.document.body
-                        && document.name == hit.document.name
-                        && document.description == hit.document.description
-                        && document.kind == hit.document.kind
-                })
-            });
-            let mut items = Vec::new();
-            let mut seen = BTreeSet::new();
-            if !interactive {
-                let mut core = documents
-                    .iter()
-                    .filter(|document| {
-                        let meta = &metadata[&document.id];
-                        meta.status == MemoryStatus::Active
-                            && (meta.kind == MemoryKind::Preference
-                                || (meta.kind == MemoryKind::Task
-                                    && matches!(meta.scope, MemoryScope::Session { .. })))
-                    })
-                    .collect::<Vec<_>>();
-                core.sort_by(|left, right| {
-                    let l = &metadata[&left.id];
-                    let r = &metadata[&right.id];
-                    (r.kind == MemoryKind::Task)
-                        .cmp(&(l.kind == MemoryKind::Task))
-                        .then_with(|| r.importance.cmp(&l.importance))
-                        .then_with(|| r.updated_at_ms.cmp(&l.updated_at_ms))
-                        .then_with(|| left.id.cmp(&right.id))
-                });
-                for document in core.into_iter().take(MAX_CORE_MEMORIES) {
-                    let meta = metadata[&document.id].clone();
-                    let hit = if let Some(position) = matches
-                        .iter()
-                        .position(|hit| hit.document.id == document.id)
-                    {
-                        matches.remove(position)
-                    } else {
-                        MemorySearchHit {
-                            document: document.clone(),
-                            score: 0.0,
-                            excerpt: document.excerpt("", 1024),
-                            matched_terms: Vec::new(),
-                        }
-                    };
-                    seen.insert(document.id.clone());
-                    items.push(RecalledMemory {
-                        hit,
-                        reason: if meta.kind == MemoryKind::Task {
-                            "current_task"
-                        } else {
-                            "core_preference"
-                        },
-                        metadata: meta,
-                    });
-                }
-            }
-            for hit in matches
-                .into_iter()
-                .filter(|hit| !seen.contains(&hit.document.id))
-                .take(limit)
-            {
-                let meta = metadata[&hit.document.id].clone();
-                items.push(RecalledMemory {
-                    hit,
-                    metadata: meta,
-                    reason: "query_match",
-                });
-            }
-            Ok(MemoryRecall {
-                items,
-                indexed_records: documents.len(),
-                inactive_records,
-                scoped_out_records,
-            })
-        })
+        let _guard = Arc::clone(&self.sync_lock).lock_owned().await;
+        self.run_store_operation(
+            MemoryStore::for_workspace(&workspace_root),
+            MemoryWorkerOperation::Search {
+                query: query.to_owned(),
+                limit,
+                interactive,
+                include_history,
+                session_id,
+                context,
+            },
+            interactive,
+            Some(MemoryIndex::for_workspace(&workspace_root)),
+        )
         .await
-        .map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "memory index worker failed",
-                &error,
-            ))
-        })?
+    }
+
+    async fn run_store_operation<T: serde::de::DeserializeOwned>(
+        &self,
+        store: MemoryStore,
+        operation: MemoryWorkerOperation,
+        interactive: bool,
+        index: Option<MemoryIndex>,
+    ) -> SdkResult<T> {
+        let request = MemoryWorkerRequest {
+            directory: store.dir().to_path_buf(),
+            operation,
+        };
+        let value = if crate::sandbox_operations::enabled() {
+            let host = self
+                .host
+                .get()
+                .ok_or_else(|| PluginError::internal("memory permission host is unavailable"))?;
+            let resources = agena_plugin_host::sdk::host_api::HostProcessResources {
+                reads: vec![store.dir().to_string_lossy().into_owned()],
+                writes: if request.operation.is_mutation() {
+                    vec![store.dir().to_string_lossy().into_owned()]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            };
+            let input = serde_json::to_value(request)
+                .map_err(|error| PluginError::internal_error(&error))?;
+            crate::worker::execute_bundled_worker(host.as_ref(), "memory.store", input, resources)
+                .await?
+        } else {
+            let read_access = self.permissions.read_filter(interactive)?;
+            let write_access = self.permissions.write_filter(false)?;
+            let can_read = read_access.predicate();
+            let can_write = write_access.predicate();
+            let result = run_memory_blocking(move || {
+                execute_memory_request(
+                    request,
+                    &|path| can_read.allows(path),
+                    &|path| can_write.allows(path),
+                    index,
+                )
+            })
+            .await;
+            read_access.finish(write_access.finish(result))?
+        };
+        serde_json::from_value(value).map_err(|error| PluginError::internal_error(&error))
     }
 
     #[tool(
@@ -860,25 +752,18 @@ impl MemoryPlugin {
             .limit
             .map_or(DEFAULT_MEMORY_GET_CHARS, |limit| limit as usize)
             .clamp(1, MAX_MEMORY_GET_CHARS);
-        run_memory_blocking(move || {
-            let store = MemoryStore::for_workspace(&workspace_root);
-            let repository: &dyn MemoryRepository = &store;
-            let entry = repository
-                .get(name.as_str())
-                .map_err(memory_error_to_plugin)?;
-            require_model_record_read(&entry, session_id, instance_id.as_deref())?;
-            let output = memory_record_output(&entry, offset, limit);
-            let payload =
-                serde_json::to_value(&output).map_err(|err| PluginError::internal_error(&err))?;
-            Ok(ToolInvokeOutput::from_parts(
-                format!("Read memory · {}", output.name),
-                format!("Loaded {}", output.name),
-                format_memory_entry(&output),
-                Some(payload),
-                std::collections::BTreeMap::new(),
-                Vec::new(),
-            ))
-        })
+        self.run_store_operation(
+            MemoryStore::for_workspace(&workspace_root),
+            MemoryWorkerOperation::Get {
+                name,
+                session_id,
+                instance_id,
+                offset,
+                limit,
+            },
+            true,
+            None,
+        )
         .await
     }
 
@@ -911,42 +796,19 @@ impl MemoryPlugin {
         let include_history = input.include_history;
         let session_id = current_memory_session_id();
         let context = self.memory_context().await;
-        let access = self.permissions.read_filter(true)?;
-        let predicate = access.predicate();
-        let result = run_memory_blocking(move || {
-            let store = MemoryStore::for_workspace(&workspace_root);
-            let entries = store
-                .list_filtered(|path| predicate.allows(path))
-                .map_err(memory_error_to_plugin)?
-                .into_iter()
-                .filter(|entry| {
-                    memory_record_is_visible(entry, session_id, &context, include_history)
-                })
-                .skip(offset)
-                .take(limit)
-                .collect::<Vec<_>>();
-            let memories = entries
-                .iter()
-                .map(memory_navigation_output)
-                .collect::<Vec<_>>();
-            let payload = serde_json::json!({
-                "limit": limit,
-                "offset": offset,
-                "include_history": include_history,
-                "memories": memories,
-            });
-            let text = format_memory_list(&entries);
-            Ok(ToolInvokeOutput::from_parts(
-                "List memory",
-                format!("{} records", entries.len()),
-                text,
-                Some(payload),
-                std::collections::BTreeMap::new(),
-                Vec::new(),
-            ))
-        })
-        .await;
-        access.finish(result)
+        self.run_store_operation(
+            MemoryStore::for_workspace(&workspace_root),
+            MemoryWorkerOperation::List {
+                limit,
+                offset,
+                include_history,
+                session_id,
+                context,
+            },
+            true,
+            None,
+        )
+        .await
     }
 
     #[tool(
@@ -1079,50 +941,22 @@ impl MemoryPlugin {
         let expected = input.expected_sha256.clone();
         // Keep this plugin's source snapshot and index synchronization ordered.
         // The store independently provides cross-process revision protection.
-        let guard = Arc::clone(&self.sync_lock).lock_owned().await;
-        run_memory_blocking(move || {
-            let _guard = guard;
-            let store = MemoryStore::for_workspace(&workspace_root);
-            match store.get(&name) {
-                Ok(current) => {
-                    require_record_context(&current, session_id, instance_id.as_deref())?
-                }
-                Err(MemoryError::NotFound(_)) => {}
-                Err(error) => return Err(memory_error_to_plugin(error)),
-            }
-            for replaced in &options.supersedes {
-                let current = store.get(&replaced.name).map_err(memory_error_to_plugin)?;
-                require_record_context(&current, session_id, instance_id.as_deref())?;
-            }
-            let entry = store
-                .save_with_options(
-                    NewMemory {
-                        name: name.clone(),
-                        description: description.clone(),
-                        kind,
-                        body: content.clone(),
-                    },
-                    expected.as_deref(),
-                    options,
-                )
-                .map_err(memory_error_to_plugin)?;
-            let output = memory_record_output(&entry, 0, DEFAULT_MEMORY_GET_CHARS);
-            let payload =
-                serde_json::to_value(&output).map_err(|err| PluginError::internal_error(&err))?;
-            Ok(ToolInvokeOutput::from_parts(
-                format!("Write memory · {}", memory_name(&entry)),
-                format!("Saved {}", memory_name(&entry)),
-                format!(
-                    "Saved memory '{}'.\nRevision (sha256): {}{}",
-                    memory_name(&entry),
-                    entry.sha256,
-                    body_page_note(&output)
-                ),
-                Some(payload),
-                std::collections::BTreeMap::new(),
-                Vec::new(),
-            ))
-        })
+        let _guard = Arc::clone(&self.sync_lock).lock_owned().await;
+        self.run_store_operation(
+            MemoryStore::for_workspace(&workspace_root),
+            MemoryWorkerOperation::Write {
+                name,
+                content,
+                description,
+                kind,
+                expected,
+                options,
+                session_id,
+                instance_id,
+            },
+            true,
+            None,
+        )
         .await
     }
 
@@ -1160,24 +994,18 @@ impl MemoryPlugin {
         let instance_id = self.memory_instance_id().await;
         // Same gate as `invoke_write`: a delete must not land between the
         // search path's `list()` snapshot and its index rebuild.
-        let guard = Arc::clone(&self.sync_lock).lock_owned().await;
-        run_memory_blocking(move || {
-            let _guard = guard;
-            let store = MemoryStore::for_workspace(&workspace_root);
-            let current = store.get(&name).map_err(memory_error_to_plugin)?;
-            require_record_context(&current, session_id, instance_id.as_deref())?;
-            store
-                .forget_checked(name.as_str(), &expected)
-                .map_err(memory_error_to_plugin)?;
-            Ok(ToolInvokeOutput::from_parts(
-                format!("Delete memory · {name}"),
-                format!("Deleted {name}"),
-                format!("Deleted memory '{}'.", name),
-                Some(serde_json::json!({"name": name, "sha256": current.sha256, "deleted": true})),
-                std::collections::BTreeMap::new(),
-                Vec::new(),
-            ))
-        })
+        let _guard = Arc::clone(&self.sync_lock).lock_owned().await;
+        self.run_store_operation(
+            MemoryStore::for_workspace(&workspace_root),
+            MemoryWorkerOperation::Delete {
+                name,
+                expected,
+                session_id,
+                instance_id,
+            },
+            true,
+            None,
+        )
         .await
     }
 
@@ -1290,6 +1118,434 @@ impl MemoryPlugin {
 /// user message — never at the start of the transcript. A front insertion makes
 /// a turn whose recall changed rewrite every earlier message in the
 /// provider-cached prefix, exactly as if the conversation had been edited.
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryWorkerRequest {
+    directory: PathBuf,
+    operation: MemoryWorkerOperation,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+enum MemoryWorkerOperation {
+    Recover,
+    Get {
+        name: String,
+        session_id: Option<i64>,
+        instance_id: Option<String>,
+        offset: usize,
+        limit: usize,
+    },
+    List {
+        limit: usize,
+        offset: usize,
+        include_history: bool,
+        session_id: Option<i64>,
+        context: MemoryContext,
+    },
+    Search {
+        query: String,
+        limit: usize,
+        interactive: bool,
+        include_history: bool,
+        session_id: Option<i64>,
+        context: MemoryContext,
+    },
+    Write {
+        name: String,
+        content: String,
+        description: String,
+        kind: MemoryKind,
+        expected: Option<String>,
+        options: MemoryWriteOptions,
+        session_id: Option<i64>,
+        instance_id: Option<String>,
+    },
+    Delete {
+        name: String,
+        expected: String,
+        session_id: Option<i64>,
+        instance_id: Option<String>,
+    },
+}
+
+impl MemoryWorkerOperation {
+    fn is_mutation(&self) -> bool {
+        matches!(
+            self,
+            Self::Recover | Self::Write { .. } | Self::Delete { .. }
+        )
+    }
+}
+
+fn memory_worker_value(value: impl Serialize) -> SdkResult<serde_json::Value> {
+    serde_json::to_value(value).map_err(|error| PluginError::internal_error(&error))
+}
+
+fn execute_memory_request(
+    request: MemoryWorkerRequest,
+    can_read: &dyn Fn(&std::path::Path) -> bool,
+    can_write: &dyn Fn(&std::path::Path) -> bool,
+    index: Option<MemoryIndex>,
+) -> SdkResult<serde_json::Value> {
+    let store = MemoryStore::at(request.directory);
+    match request.operation {
+        MemoryWorkerOperation::Recover => memory_worker_value(
+            store
+                .recover_pending(|path| can_read(path) && can_write(path))
+                .map_err(memory_error_to_plugin)?,
+        ),
+        MemoryWorkerOperation::Get {
+            name,
+            session_id,
+            instance_id,
+            offset,
+            limit,
+        } => {
+            let result: SdkResult<ToolInvokeOutput> = (|| {
+                let repository: &dyn MemoryRepository = &store;
+                let entry = repository
+                    .get(name.as_str())
+                    .map_err(memory_error_to_plugin)?;
+                require_model_record_read(&entry, session_id, instance_id.as_deref())?;
+                let output = memory_record_output(&entry, offset, limit);
+                let payload = serde_json::to_value(&output)
+                    .map_err(|err| PluginError::internal_error(&err))?;
+                Ok(ToolInvokeOutput::from_parts(
+                    format!("Read memory · {}", output.name),
+                    format!("Loaded {}", output.name),
+                    format_memory_entry(&output),
+                    Some(payload),
+                    std::collections::BTreeMap::new(),
+                    Vec::new(),
+                ))
+            })();
+            memory_worker_value(result?)
+        }
+        MemoryWorkerOperation::List {
+            limit,
+            offset,
+            include_history,
+            session_id,
+            context,
+        } => {
+            let result: SdkResult<ToolInvokeOutput> = (|| {
+                let entries = store
+                    .list_filtered(can_read)
+                    .map_err(memory_error_to_plugin)?
+                    .into_iter()
+                    .filter(|entry| {
+                        memory_record_is_visible(entry, session_id, &context, include_history)
+                    })
+                    .skip(offset)
+                    .take(limit)
+                    .collect::<Vec<_>>();
+                let memories = entries
+                    .iter()
+                    .map(memory_navigation_output)
+                    .collect::<Vec<_>>();
+                let payload = serde_json::json!({
+                    "limit": limit,
+                    "offset": offset,
+                    "include_history": include_history,
+                    "memories": memories,
+                });
+                let text = format_memory_list(&entries);
+                Ok(ToolInvokeOutput::from_parts(
+                    "List memory",
+                    format!("{} records", entries.len()),
+                    text,
+                    Some(payload),
+                    std::collections::BTreeMap::new(),
+                    Vec::new(),
+                ))
+            })();
+            memory_worker_value(result?)
+        }
+        MemoryWorkerOperation::Search {
+            query,
+            limit,
+            interactive,
+            include_history,
+            session_id,
+            context,
+        } => {
+            let result: SdkResult<MemoryRecall> = (|| {
+                let entries = store
+                    .list_filtered(can_read)
+                    .map_err(memory_error_to_plugin)?;
+                let inactive_records = entries
+                    .iter()
+                    .filter(|entry| entry.metadata.status != MemoryStatus::Active)
+                    .count();
+                let scoped_out_records = entries
+                    .iter()
+                    .filter(|entry| {
+                        !entry
+                            .metadata
+                            .scope
+                            .includes_context(session_id, context.instance_id.as_deref())
+                    })
+                    .count();
+                let mut metadata = BTreeMap::new();
+                let documents = entries
+                    .into_iter()
+                    .filter(|entry| {
+                        memory_record_is_visible(entry, session_id, &context, include_history)
+                    })
+                    .map(|entry| {
+                        let meta = entry.metadata.clone();
+                        let document = memory_document_from_entry(entry);
+                        metadata.insert(document.id.clone(), meta);
+                        document
+                    })
+                    .collect::<Vec<_>>();
+                let index = index
+                    .ok_or_else(|| PluginError::internal("memory search index is unavailable"))?;
+                index.replace_documents(&documents).map_err(|error| {
+                    PluginError::internal(
+                        agena_failure::diagnostic::format_error_chain_with_context(
+                            "failed to synchronize memory index",
+                            &error,
+                        ),
+                    )
+                })?;
+                let mut matches = if query.trim().is_empty() || documents.is_empty() {
+                    Vec::new()
+                } else {
+                    let search_limit = limit + if interactive { 0 } else { MAX_CORE_MEMORIES };
+                    let result = match index.search(query.as_str(), search_limit) {
+                        Err(MemoryIndexError::InvalidCache(reason)) => {
+                            tracing::warn!(target: "agena::memory", %reason, "rebuilding damaged memory cache from the authorized source snapshot");
+                            index
+                                .rebuild_documents(&documents)
+                                .and_then(|()| index.search(query.as_str(), search_limit))
+                        }
+                        result => result,
+                    };
+                    result.map_err(|error| {
+                        PluginError::internal(
+                            agena_failure::diagnostic::format_error_chain_with_context(
+                                "memory search failed",
+                                &error,
+                            ),
+                        )
+                    })?
+                };
+                // Another process can synchronize this shared cache with a different
+                // permission/session snapshot. Only expose bytes from this call's
+                // authorized source snapshot, never an index-only result.
+                matches.retain(|hit| {
+                    documents.iter().any(|document| {
+                        document.id == hit.document.id
+                            && document.path == hit.document.path
+                            && document.body == hit.document.body
+                            && document.name == hit.document.name
+                            && document.description == hit.document.description
+                            && document.kind == hit.document.kind
+                    })
+                });
+                let mut items = Vec::new();
+                let mut seen = BTreeSet::new();
+                if !interactive {
+                    let mut core = documents
+                        .iter()
+                        .filter(|document| {
+                            let meta = &metadata[&document.id];
+                            meta.status == MemoryStatus::Active
+                                && (meta.kind == MemoryKind::Preference
+                                    || (meta.kind == MemoryKind::Task
+                                        && matches!(meta.scope, MemoryScope::Session { .. })))
+                        })
+                        .collect::<Vec<_>>();
+                    core.sort_by(|left, right| {
+                        let l = &metadata[&left.id];
+                        let r = &metadata[&right.id];
+                        (r.kind == MemoryKind::Task)
+                            .cmp(&(l.kind == MemoryKind::Task))
+                            .then_with(|| r.importance.cmp(&l.importance))
+                            .then_with(|| r.updated_at_ms.cmp(&l.updated_at_ms))
+                            .then_with(|| left.id.cmp(&right.id))
+                    });
+                    for document in core.into_iter().take(MAX_CORE_MEMORIES) {
+                        let meta = metadata[&document.id].clone();
+                        let hit = if let Some(position) = matches
+                            .iter()
+                            .position(|hit| hit.document.id == document.id)
+                        {
+                            matches.remove(position)
+                        } else {
+                            MemorySearchHit {
+                                document: document.clone(),
+                                score: 0.0,
+                                excerpt: document.excerpt("", 1024),
+                                matched_terms: Vec::new(),
+                            }
+                        };
+                        seen.insert(document.id.clone());
+                        items.push(RecalledMemory {
+                            hit,
+                            reason: if meta.kind == MemoryKind::Task {
+                                "current_task"
+                            } else {
+                                "core_preference"
+                            }
+                            .to_owned(),
+                            metadata: meta,
+                        });
+                    }
+                }
+                for hit in matches
+                    .into_iter()
+                    .filter(|hit| !seen.contains(&hit.document.id))
+                    .take(limit)
+                {
+                    let meta = metadata[&hit.document.id].clone();
+                    items.push(RecalledMemory {
+                        hit,
+                        metadata: meta,
+                        reason: "query_match".into(),
+                    });
+                }
+                Ok(MemoryRecall {
+                    items,
+                    indexed_records: documents.len(),
+                    inactive_records,
+                    scoped_out_records,
+                })
+            })();
+            memory_worker_value(result?)
+        }
+        MemoryWorkerOperation::Write {
+            name,
+            content,
+            description,
+            kind,
+            expected,
+            options,
+            session_id,
+            instance_id,
+        } => {
+            let result: SdkResult<ToolInvokeOutput> = (|| {
+                match store.get(&name) {
+                    Ok(current) => {
+                        require_record_context(&current, session_id, instance_id.as_deref())?
+                    }
+                    Err(MemoryError::NotFound(_)) => {}
+                    Err(error) => return Err(memory_error_to_plugin(error)),
+                }
+                for replaced in &options.supersedes {
+                    let current = store.get(&replaced.name).map_err(memory_error_to_plugin)?;
+                    require_record_context(&current, session_id, instance_id.as_deref())?;
+                }
+                let entry = store
+                    .save_with_options(
+                        NewMemory {
+                            name: name.clone(),
+                            description: description.clone(),
+                            kind,
+                            body: content.clone(),
+                        },
+                        expected.as_deref(),
+                        options,
+                    )
+                    .map_err(memory_error_to_plugin)?;
+                let output = memory_record_output(&entry, 0, DEFAULT_MEMORY_GET_CHARS);
+                let payload = serde_json::to_value(&output)
+                    .map_err(|err| PluginError::internal_error(&err))?;
+                Ok(ToolInvokeOutput::from_parts(
+                    format!("Write memory · {}", memory_name(&entry)),
+                    format!("Saved {}", memory_name(&entry)),
+                    format!(
+                        "Saved memory '{}'.\nRevision (sha256): {}{}",
+                        memory_name(&entry),
+                        entry.sha256,
+                        body_page_note(&output)
+                    ),
+                    Some(payload),
+                    std::collections::BTreeMap::new(),
+                    Vec::new(),
+                ))
+            })();
+            memory_worker_value(result?)
+        }
+        MemoryWorkerOperation::Delete {
+            name,
+            expected,
+            session_id,
+            instance_id,
+        } => {
+            let result: SdkResult<ToolInvokeOutput> = (|| {
+                let current = store.get(&name).map_err(memory_error_to_plugin)?;
+                require_record_context(&current, session_id, instance_id.as_deref())?;
+                store
+                    .forget_checked(name.as_str(), &expected)
+                    .map_err(memory_error_to_plugin)?;
+                Ok(ToolInvokeOutput::from_parts(
+                    format!("Delete memory · {name}"),
+                    format!("Deleted {name}"),
+                    format!("Deleted memory '{}'.", name),
+                    Some(
+                        serde_json::json!({"name": name, "sha256": current.sha256, "deleted": true}),
+                    ),
+                    std::collections::BTreeMap::new(),
+                    Vec::new(),
+                ))
+            })();
+            memory_worker_value(result?)
+        }
+    }
+}
+
+/// The child receives the chosen memory directory and explicit business state,
+/// never a runtime configuration, credential store, model client or live DB.
+pub(crate) fn execute_worker(
+    operation: &str,
+    mut input: serde_json::Value,
+) -> SdkResult<serde_json::Value> {
+    if operation != "memory.store" {
+        return Err(PluginError::invalid_params(format!(
+            "unsupported memory worker operation: {operation}"
+        )));
+    }
+    let snapshot = input
+        .as_object_mut()
+        .and_then(|object| object.remove("_agena_permission_snapshot"))
+        .filter(|value| !value.is_null())
+        .ok_or_else(|| {
+            PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                "memory worker requires the host permission snapshot",
+            )
+        })?;
+    let snapshot: agena_runtime_tools::authorization::SandboxPermissionSnapshot =
+        serde_json::from_value(snapshot)
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+    let request: MemoryWorkerRequest =
+        serde_json::from_value(input).map_err(|error| PluginError::invalid_params_error(&error))?;
+    let can_read = |path: &std::path::Path| {
+        matches!(
+            snapshot.authorize_path_access(agena_domain::AccessKind::Read, path),
+            agena_domain::PermissionDecision::Allow
+        )
+    };
+    let can_write = |path: &std::path::Path| {
+        matches!(
+            snapshot.authorize_path_access(agena_domain::AccessKind::Write, path),
+            agena_domain::PermissionDecision::Allow
+        )
+    };
+    let cache = matches!(&request.operation, MemoryWorkerOperation::Search { .. })
+        .then(tempfile::tempdir)
+        .transpose()
+        .map_err(|error| PluginError::internal_error(&error))?;
+    let index = cache
+        .as_ref()
+        .map(|directory| MemoryIndex::in_directory(directory.path().to_path_buf()));
+    execute_memory_request(request, &can_read, &can_write, index)
+}
+
 fn recall_insert_index(messages: &[ChatMessage]) -> usize {
     messages
         .iter()

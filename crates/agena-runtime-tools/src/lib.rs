@@ -37,6 +37,7 @@ pub use monitor::{
     MonitorStopOutcome, MonitorWsParams, ProcessReadOptions, default_monitor_registry,
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
+pub use monitor::try_run_monitor_worker;
 
 /// Deterministic external identity reserved before a session-owned process is
 /// spawned. The session manager and tool adapters both derive this value, so

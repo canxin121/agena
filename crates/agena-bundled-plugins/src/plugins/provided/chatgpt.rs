@@ -1509,18 +1509,17 @@ impl ChatGptToolsPlugin {
                 .map_err(|error| PluginError::internal(format!("invalid image MIME: {error}")))?;
             form = form.part("image[]", part);
         }
-        let response = super::official_service::authorized_provider_http_client(
+        let client = super::official_service::authorized_provider_http_client(
             self.host()?,
             url.as_str(),
             &connection,
         )
-        .await?
-        .post(url)
-        .headers(super::official_service::provider_headers(&connection)?)
-        .multipart(form)
-        .send()
-        .await
-        .map_err(|error| {
+        .await?;
+        let request = client
+            .post(url)
+            .headers(super::official_service::provider_headers(&connection)?)
+            .multipart(form);
+        let response = client.send(request).await.map_err(|error| {
             super::official_service::provider_transport_error(
                 "OpenAI",
                 "image edit",

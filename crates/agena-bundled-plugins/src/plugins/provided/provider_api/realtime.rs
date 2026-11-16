@@ -152,43 +152,213 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
         std::time::Duration::from_secs(service.connection.connect_timeout_secs.max(1).min(30)),
     )
     .await?;
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|_| invalid("invalid WebSocket request"))?;
-    request
-        .headers_mut()
-        .extend(official_service::provider_headers(&service.connection)?);
-    request.headers_mut().insert(
-        "x-agena-provider-api",
-        service
-            .provider
-            .parse()
-            .map_err(|_| invalid("invalid provider protocol"))?,
-    );
-    let deadline = tokio::time::Instant::now()
-        + std::time::Duration::from_secs(
-            (input.duration_seconds as u64).min(service.connection.timeout_secs.max(1)),
+    let headers = official_service::provider_headers(&service.connection)?;
+    let worker_input = RealtimeWorkerInput {
+        provider: service.provider.to_owned(),
+        url: url.to_string(),
+        headers: headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+            .collect(),
+        addresses,
+        model: model.clone(),
+        text: input.text.clone(),
+        audio_base64: audio.map(|bytes| STANDARD.encode(bytes)),
+        input_sample_rate: input.input_sample_rate,
+        session: input.session.clone(),
+        duration_seconds: (input.duration_seconds as u64)
+            .min(service.connection.timeout_secs.max(1)),
+        connect_timeout_seconds: service.connection.connect_timeout_secs.clamp(1, 30),
+    };
+    let value = crate::worker::execute_bundled_worker(
+        service.host.as_ref(),
+        "provider.realtime",
+        serde_json::to_value(worker_input).map_err(|error| PluginError::internal_error(&error))?,
+        agena_plugin_sdk::host_api::HostProcessResources {
+            network: vec![permission_url.origin().ascii_serialization()],
+            ..Default::default()
+        },
+    )
+    .await?;
+    let result: RealtimeWorkerOutput = serde_json::from_value(value)
+        .map_err(|_| PluginError::internal("invalid voice worker response"))?;
+    let pcm = result.validated_pcm()?;
+    let RealtimeWorkerOutput {
+        complete,
+        submitted,
+        transcripts,
+        events,
+        usage_response,
+        warnings,
+        ..
+    } = result;
+    let mut attachments = Vec::new();
+    if !pcm.is_empty() {
+        attachments.push(
+            save_binary(
+                &service,
+                input.output_path.as_deref(),
+                "audio/wav",
+                wav(pcm, 24000),
+            )
+            .await?,
         );
-    let connect_deadline = deadline.min(
-        tokio::time::Instant::now()
-            + std::time::Duration::from_secs(service.connection.connect_timeout_secs.max(1)),
-    );
-    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-        .max_message_size(Some(8 * 1024 * 1024))
-        .max_frame_size(Some(8 * 1024 * 1024));
-    let (mut socket, _) = tokio::time::timeout_at(connect_deadline, async {
-        let stream = tokio::net::TcpStream::connect(addresses.as_slice())
-            .await
-            .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
-        // Keep the original hostname for Host and TLS SNI while connecting
-        // only to the addresses approved for this invocation.
-        tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None).await
-    })
-    .await
-    .map_err(|_| invalid("voice connection deadline exceeded"))?
-    .map_err(|_| PluginError::internal("voice WebSocket connection failed"))?;
-    let gemini = service.provider == "gemini";
+    }
+    Ok(ToolInvokeOutput::from_parts(
+        "Realtime voice",
+        if complete {
+            "Voice turn completed"
+        } else {
+            "Voice turn incomplete"
+        },
+        transcripts,
+        Some(
+            json!({"provider":service.provider,"provider_id":service.connection.provider_id,"model":model,"completed":complete,
+            "execution_location":"vendor_cloud","local_workspace_automatically_available":false,
+            "input_submitted":submitted,"warnings":warnings,"events":events,"local_actions_executed":false,"safe_to_reexecute_automatically":false}),
+        ),
+        official_service::resource_usage(
+            &service.connection,
+            service.provider,
+            "realtime",
+            &model,
+            &usage_response,
+            true,
+        )?,
+        attachments,
+    ))
+}
+
+/// Only explicit target addresses, protocol fields and target request headers
+/// cross this boundary. Host services and provider configuration stay outside.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RealtimeWorkerInput {
+    provider: String,
+    url: String,
+    headers: Vec<(String, Vec<u8>)>,
+    addresses: Vec<std::net::SocketAddr>,
+    model: String,
+    text: Option<String>,
+    audio_base64: Option<String>,
+    input_sample_rate: u32,
+    session: BTreeMap<String, Value>,
+    duration_seconds: u64,
+    connect_timeout_seconds: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RealtimeWorkerOutput {
+    complete: bool,
+    submitted: bool,
+    pcm_base64: String,
+    transcripts: String,
+    events: Vec<Value>,
+    usage_response: Value,
+    warnings: Vec<String>,
+}
+
+impl RealtimeWorkerOutput {
+    fn validated_pcm(&self) -> Result<Vec<u8>> {
+        if self.pcm_base64.len() > MAX_INLINE_BINARY.div_ceil(3) * 4
+            || self.transcripts.len() > 128 * 1024
+            || self.events.len() > 256
+            || self
+                .events
+                .iter()
+                .map(|event| event.to_string().len())
+                .sum::<usize>()
+                > 128 * 1024
+            || self.usage_response.to_string().len() > 8 * 1024 * 1024
+            || self.warnings.len() > 16
+            || self.warnings.iter().any(|warning| warning.len() > 4096)
+        {
+            return Err(PluginError::internal(
+                "voice worker response exceeds limits",
+            ));
+        }
+        let pcm = STANDARD
+            .decode(&self.pcm_base64)
+            .map_err(|_| PluginError::internal("invalid voice worker audio"))?;
+        if pcm.len() > MAX_INLINE_BINARY || pcm.len() % 2 != 0 {
+            return Err(PluginError::internal("invalid voice worker PCM length"));
+        }
+        Ok(pcm)
+    }
+}
+
+pub(crate) async fn execute_worker(mut value: Value) -> Result<Value> {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("_agena_permission_snapshot");
+    }
+    let input: RealtimeWorkerInput =
+        serde_json::from_value(value).map_err(|_| invalid("invalid voice worker request"))?;
+    if !matches!(input.provider.as_str(), "chatgpt" | "gemini")
+        || !(1..=50).contains(&input.duration_seconds)
+        || !(1..=30).contains(&input.connect_timeout_seconds)
+        || input.text.as_ref().is_some_and(|text| text.len() > 64000)
+        || input.session.contains_key("model")
+        || (input.input_sample_rate != 24000
+            && !(input.provider == "gemini" && input.input_sample_rate == 16000))
+        || input.headers.len() > 128
+        || input
+            .headers
+            .iter()
+            .map(|(name, value)| name.len() + value.len())
+            .sum::<usize>()
+            > 64 * 1024
+    {
+        return Err(invalid("invalid voice worker protocol limits"));
+    }
+    let url = url::Url::parse(&input.url).map_err(|_| invalid("invalid voice worker URL"))?;
+    let port = url.port_or_known_default();
+    if !matches!(url.scheme(), "ws" | "wss")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || input.addresses.is_empty()
+        || input
+            .addresses
+            .iter()
+            .any(|address| Some(address.port()) != port)
+    {
+        return Err(invalid(
+            "voice worker requires approved addresses for its WS/WSS target",
+        ));
+    }
+    let audio = input
+        .audio_base64
+        .as_deref()
+        .map(|encoded| {
+            if encoded.len() > (10_usize * 1024 * 1024).div_ceil(3) * 4 {
+                return Err(invalid("voice worker audio exceeds limit"));
+            }
+            let bytes = STANDARD
+                .decode(encoded)
+                .map_err(|_| invalid("invalid voice worker audio"))?;
+            if bytes.len() > 10 * 1024 * 1024
+                || bytes.len() % 2 != 0
+                || bytes.starts_with(b"RIFF")
+                || bytes.starts_with(b"ID3")
+                || bytes.starts_with(b"OggS")
+            {
+                return Err(invalid("voice worker requires raw 16-bit mono PCM"));
+            }
+            Ok(bytes)
+        })
+        .transpose()?;
+    if input
+        .text
+        .as_deref()
+        .is_none_or(|text| text.trim().is_empty())
+        && audio.is_none()
+    {
+        return Err(invalid("voice worker requires text or PCM input"));
+    }
+    let model = input.model.clone();
+    let gemini = input.provider == "gemini";
     let mut session = Value::Object(input.session.clone().into_iter().collect());
     for path in [
         "/generationConfig",
@@ -225,6 +395,43 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
     } else {
         json!({"type":"session.update","session":session})
     };
+    let mut request = url
+        .as_str()
+        .into_client_request()
+        .map_err(|_| invalid("invalid voice worker request"))?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in &input.headers {
+        let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|_| invalid("invalid voice worker header"))?;
+        let value = reqwest::header::HeaderValue::from_bytes(value)
+            .map_err(|_| invalid("invalid voice worker header"))?;
+        headers.append(name, value);
+    }
+    request.headers_mut().extend(headers);
+    request.headers_mut().insert(
+        "x-agena-provider-api",
+        input
+            .provider
+            .parse()
+            .map_err(|_| invalid("invalid provider protocol"))?,
+    );
+    let deadline = Instant::now() + std::time::Duration::from_secs(input.duration_seconds);
+    let connect_deadline = deadline
+        .min(Instant::now() + std::time::Duration::from_secs(input.connect_timeout_seconds));
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(8 * 1024 * 1024))
+        .max_frame_size(Some(8 * 1024 * 1024));
+    let (mut socket, _) = timeout_at(connect_deadline, async {
+        let stream = tokio::net::TcpStream::connect(input.addresses.as_slice())
+            .await
+            .map_err(tokio_tungstenite::tungstenite::Error::Io)?;
+        // The URL supplies Host and TLS SNI; all TCP destinations were approved
+        // before this worker was started. No worker DNS lookup is performed.
+        tokio_tungstenite::client_async_tls_with_config(request, stream, Some(config), None).await
+    })
+    .await
+    .map_err(|_| invalid("voice connection deadline exceeded"))?
+    .map_err(|_| PluginError::internal("voice WebSocket connection failed"))?;
     send(&mut socket, setup.to_string().into(), deadline).await?;
     let mut submitted = false;
     let mut complete = false;
@@ -385,41 +592,16 @@ pub async fn invoke(service: Service<'_>, input: RealtimeInput) -> Result<ToolIn
         }
     }
     let _ = tokio::time::timeout(std::time::Duration::from_millis(200), socket.close(None)).await;
-    let mut attachments = Vec::new();
-    if !pcm.is_empty() {
-        attachments.push(
-            save_binary(
-                &service,
-                input.output_path.as_deref(),
-                "audio/wav",
-                wav(pcm, 24000),
-            )
-            .await?,
-        );
-    }
-    Ok(ToolInvokeOutput::from_parts(
-        "Realtime voice",
-        if complete {
-            "Voice turn completed"
-        } else {
-            "Voice turn incomplete"
-        },
+    serde_json::to_value(RealtimeWorkerOutput {
+        complete,
+        submitted,
+        pcm_base64: STANDARD.encode(pcm),
         transcripts,
-        Some(
-            json!({"provider":service.provider,"provider_id":service.connection.provider_id,"model":model,"completed":complete,
-            "execution_location":"vendor_cloud","local_workspace_automatically_available":false,
-            "input_submitted":submitted,"warnings":warnings,"events":events,"local_actions_executed":false,"safe_to_reexecute_automatically":false}),
-        ),
-        official_service::resource_usage(
-            &service.connection,
-            service.provider,
-            "realtime",
-            &model,
-            &usage_response,
-            true,
-        )?,
-        attachments,
-    ))
+        events,
+        usage_response,
+        warnings: warnings.into_iter().map(str::to_owned).collect(),
+    })
+    .map_err(|error| PluginError::internal_error(&error))
 }
 
 fn append_pcm(output: &mut Vec<u8>, data: &str) -> Result<()> {
@@ -464,4 +646,42 @@ where
     timeout_at(deadline,socket.send(Message::Text(text))).await
         .map_err(|_|ambiguous("Voice send deadline exceeded; acceptance may be unknown. Do not automatically repeat."))?
         .map_err(|_|ambiguous("Voice send failed; acceptance may be unknown. Do not automatically repeat."))
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn realtime_worker_rejects_unpinned_target_before_connecting() {
+        let input = json!({
+            "provider":"chatgpt", "url":"wss://example.invalid/realtime?model=fixture",
+            "headers":[["authorization", b"Bearer private-fixture".to_vec()]],
+            "addresses":[], "model":"fixture", "text":"hello", "audio_base64":null,
+            "input_sample_rate":24000, "session":{}, "duration_seconds":1,
+            "connect_timeout_seconds":1,
+            "_agena_permission_snapshot":null
+        });
+        let error = execute_worker(input).await.unwrap_err();
+        assert!(error.to_string().contains("approved addresses"));
+        assert!(!error.to_string().contains("private-fixture"));
+    }
+
+    #[test]
+    fn realtime_worker_audio_is_validated_before_host_publication() {
+        let mut output = RealtimeWorkerOutput {
+            complete: true,
+            submitted: true,
+            pcm_base64: STANDARD.encode([0, 0]),
+            transcripts: String::new(),
+            events: Vec::new(),
+            usage_response: Value::Null,
+            warnings: Vec::new(),
+        };
+        assert_eq!(output.validated_pcm().unwrap(), [0, 0]);
+        output.pcm_base64 = STANDARD.encode([0]);
+        assert!(output.validated_pcm().is_err());
+        output.pcm_base64 = "invalid base64".into();
+        assert!(output.validated_pcm().is_err());
+    }
 }

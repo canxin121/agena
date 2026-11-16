@@ -9,10 +9,13 @@ mod manager;
 mod metadata;
 pub mod source;
 mod types;
+pub mod worker;
 
 pub use error::{Result, SkillError, SkillErrorKind};
 pub use import::{SkillImport, SkillImportFile};
-pub use manager::{SkillManager, default_roots, package_enabled, package_enabled_override};
+pub use manager::{
+    SkillManager, default_roots, package_enabled, package_enabled_override, with_mutation_lock,
+};
 pub use metadata::{ParsedSkill, parse_document, validate_document, validate_name};
 pub use types::*;
 

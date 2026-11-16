@@ -1966,7 +1966,7 @@ async fn connect_http(
         if let Some(authorizer) = network_authorizer {
             let transport = StreamableHttpClientTransport::with_client(
                 AuthClient::new(
-                    crate::http_transport::AuthorizedMcpHttpClient::new(authorizer),
+                    crate::http_transport::authorized_mcp_client(authorizer)?,
                     manager,
                 ),
                 config,
@@ -1990,7 +1990,7 @@ async fn connect_http(
     };
     if let Some(authorizer) = network_authorizer {
         let transport = StreamableHttpClientTransport::with_client(
-            crate::http_transport::AuthorizedMcpHttpClient::new(authorizer),
+            crate::http_transport::authorized_mcp_client(authorizer)?,
             config,
         );
         return Ok(client_handler

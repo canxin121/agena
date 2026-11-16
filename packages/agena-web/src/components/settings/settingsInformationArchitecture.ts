@@ -106,6 +106,13 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
     keywords: ['security', 'allow', 'deny', '权限', '安全'],
     tasks: [
       {
+        id: 'sandbox',
+        section: 'permissions',
+        view: 'sandbox',
+        label: () => st('Sandbox & checks'),
+        keywords: ['sandbox', 'mxc', 'resource checks', 'command hints', '沙盒', '声明', '检查'],
+      },
+      {
         id: 'overview',
         section: 'permissions',
         view: 'overview',

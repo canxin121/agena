@@ -114,6 +114,7 @@ const PROMPT_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
 
 const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, readonly SettingsScopeSource[]>>> = {
   permissions: {
+    sandbox: LAYER_SCOPE_SOURCES,
     filesystem: PERMISSION_SCOPE_SOURCES,
     network: PERMISSION_SCOPE_SOURCES,
     tools: PERMISSION_SCOPE_SOURCES,

@@ -27,6 +27,14 @@ describe('current plugin settings route contract', () => {
   })
 })
 
+test('sandbox switches are reachable in permissions with global and workspace scopes', () => {
+  expect(buildSettingsSubpages('permissions').map((page) => page.id)).toContain('sandbox')
+  expect(buildSettingsScopes('permissions', 'sandbox').map((scope) => scope.id)).toEqual(['global', 'workspace'])
+  expect(
+    settingsQueryForDestination({ section: 'permissions', view: 'sandbox', scope: 'workspace' }, 'permissions', {}),
+  ).toEqual({ view: 'sandbox', scope: 'workspace' })
+})
+
 test('runtime settings expose a scoped saved prompt library beside prompt attachments', () => {
   const pages = buildSettingsSubpages('runtime-session').map((page) => page.id)
   expect(pages).toContain('prompt-library')

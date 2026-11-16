@@ -323,6 +323,7 @@ pub(crate) enum PermissionRuleStudioChoiceField {
 #[derive(Debug, Clone)]
 pub(crate) struct SettingsFieldSpec {
     pub(crate) section: SettingsStudioSectionId,
+    pub(crate) workspace: bool,
     pub(crate) path: String,
     pub(crate) label_key: &'static str,
     pub(crate) description_key: &'static str,

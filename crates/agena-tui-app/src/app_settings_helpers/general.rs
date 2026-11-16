@@ -156,7 +156,7 @@ pub(crate) fn settings_studio_permission_items(
     effective_permission: &PermissionConfig,
     current_session: Option<&SessionPermissionStudioState>,
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
-    let mut items = Vec::new();
+    let mut items = super::settings_studio_sandbox_items(i18n, sources);
     if let Some(session) = current_session {
         let effective_summary = permission_override_summary(i18n, &session.effective_permission);
         items.push(SettingsStudioItem::from_parts(

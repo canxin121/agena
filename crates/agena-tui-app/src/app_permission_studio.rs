@@ -384,6 +384,7 @@ impl App {
             SettingsPickerAction::EditMcpServerUrl => {
                 self.open_settings_field_editor(
                     SettingsFieldSpec {
+                        workspace: false,
                         section: agena_tui_settings::SettingsStudioSectionId::McpServer,
                         path: MCP_SERVER_URL_SETTINGS_PATH.to_owned(),
                         label_key: "settings-mcp-public-url-label",

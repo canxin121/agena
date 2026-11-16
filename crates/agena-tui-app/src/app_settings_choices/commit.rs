@@ -103,9 +103,16 @@ impl App {
                 match parse_settings_field_input(&self.i18n, &field, input.as_str()) {
                     Ok(Some(value)) => {
                         let path = field.path.clone();
+                        let workspace = field.workspace;
                         self.dispatch_backend_operation(
                             move |application| async move {
-                                application.set_config_setting(path.as_str(), value).await
+                                if workspace {
+                                    application
+                                        .set_workspace_config_setting(path.as_str(), value)
+                                        .await
+                                } else {
+                                    application.set_config_setting(path.as_str(), value).await
+                                }
                             },
                             move |app, result| match result {
                                 Ok(_) => {
@@ -122,9 +129,16 @@ impl App {
                     }
                     Ok(None) => {
                         let path = field.path.clone();
+                        let workspace = field.workspace;
                         self.dispatch_backend_operation(
                             move |application| async move {
-                                application.delete_config_setting(path.as_str()).await
+                                if workspace {
+                                    application
+                                        .delete_workspace_config_setting(path.as_str())
+                                        .await
+                                } else {
+                                    application.delete_config_setting(path.as_str()).await
+                                }
                             },
                             move |app, result| match result {
                                 Ok(_) => {
@@ -474,8 +488,13 @@ impl App {
                 return;
             }
         };
+        let source = if field.workspace {
+            &sources.project_file
+        } else {
+            &sources.file
+        };
         let file_value =
-            get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
+            get_json_path(source, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let effective_value =
             get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let prefill = if field.path == crate::MCP_SERVER_URL_SETTINGS_PATH {

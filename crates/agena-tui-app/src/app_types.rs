@@ -114,6 +114,7 @@ pub(super) const AWS_REGION_CHOICES: &[&str] = &[
 pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
     vec![
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.locale".to_string(),
             label_key: "settings-field-ui-locale-label",
@@ -123,6 +124,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.tui.color_scheme".to_string(),
             label_key: "settings-field-tui-color-scheme-label",
@@ -132,6 +134,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.tui.graphics".to_string(),
             label_key: "settings-field-tui-graphics-label",
@@ -141,6 +144,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.tui.theme".to_string(),
             label_key: "settings-field-tui-theme-label",
@@ -150,6 +154,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.transcript.activity.default_expanded".to_string(),
             label_key: "settings-field-activity-default-expanded-label",
@@ -159,6 +164,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Diagnostics,
             path: "tracing.filter".to_string(),
             label_key: "settings-field-tracing-filter-label",
@@ -168,6 +174,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Diagnostics,
             path: "tracing.database".to_string(),
             label_key: "settings-field-tracing-database-label",
@@ -177,6 +184,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Diagnostics,
             path: "tracing.adapter".to_string(),
             label_key: "settings-field-tracing-adapter-label",
@@ -186,6 +194,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::ProviderClientVersions,
             path: "runtime.providers.client_versions.codex".to_string(),
             label_key: "settings-field-runtime-codex-version-label",
@@ -195,6 +204,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::ProviderClientVersions,
             path: "runtime.providers.client_versions.claude".to_string(),
             label_key: "settings-field-runtime-claude-version-label",
@@ -204,6 +214,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::ProviderClientVersions,
             path: "runtime.providers.client_versions.gemini".to_string(),
             label_key: "settings-field-runtime-gemini-version-label",
@@ -213,6 +224,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.compaction.auto".to_string(),
             label_key: "settings-field-session-compaction-auto-label",
@@ -222,6 +234,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.auto_title.enabled".to_string(),
             label_key: "settings-auto-title-enabled-label",
@@ -231,6 +244,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.auto_title.message_interval".to_string(),
             label_key: "settings-auto-title-interval-label",
@@ -240,6 +254,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.auto_title.cooldown_seconds".to_string(),
             label_key: "settings-auto-title-cooldown-label",
@@ -249,6 +264,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.compaction.reserved_tokens".to_string(),
             label_key: "settings-field-session-compaction-reserved-tokens-label",

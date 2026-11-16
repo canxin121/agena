@@ -26,9 +26,16 @@ impl App {
                 match parse_settings_field_input(&self.i18n, &action, input.as_str()) {
                     Ok(Some(value)) => {
                         let path = action.path.clone();
+                        let workspace = action.workspace;
                         self.dispatch_backend_operation(
                             move |application| async move {
-                                application.set_config_setting(path.as_str(), value).await
+                                if workspace {
+                                    application
+                                        .set_workspace_config_setting(path.as_str(), value)
+                                        .await
+                                } else {
+                                    application.set_config_setting(path.as_str(), value).await
+                                }
                             },
                             move |app, result| match result {
                                 Ok(_) => {
@@ -45,9 +52,16 @@ impl App {
                     }
                     Ok(None) => {
                         let path = action.path.clone();
+                        let workspace = action.workspace;
                         self.dispatch_backend_operation(
                             move |application| async move {
-                                application.delete_config_setting(path.as_str()).await
+                                if workspace {
+                                    application
+                                        .delete_workspace_config_setting(path.as_str())
+                                        .await
+                                } else {
+                                    application.delete_config_setting(path.as_str()).await
+                                }
                             },
                             move |app, result| match result {
                                 Ok(_) => {

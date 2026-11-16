@@ -47,6 +47,11 @@ impl App {
                     })
                     .collect(),
             ),
+            "sandbox.enabled" | "sandbox.resource_checks" | "sandbox.command_hints" => {
+                Some(boolean_choice_items(
+                    crate::settings_field_display_description(&self.i18n, field).as_str(),
+                ))
+            }
             "session.compaction.auto" => Some(boolean_choice_items(
                 ui_text::t(
                     &self.i18n,
@@ -85,6 +90,9 @@ impl App {
             | "tracing.filter"
             | "tracing.database"
             | "tracing.adapter"
+            | "sandbox.enabled"
+            | "sandbox.resource_checks"
+            | "sandbox.command_hints"
             | "session.compaction.auto"
             | "ui.transcript.activity.default_expanded" => {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly

@@ -180,6 +180,7 @@ pub(crate) fn settings_studio_activity_kind_items(
             Some(kind.label.clone())
         };
         let field = SettingsFieldSpec {
+            workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: path.clone(),
             label_key: "settings-activity-kind-label",
@@ -267,6 +268,7 @@ pub(crate) fn settings_studio_activity_tool_items(
                 summary
             };
             let field = SettingsFieldSpec {
+                workspace: false,
                 section: SettingsStudioSectionId::Interface,
                 path: path.clone(),
                 label_key: "settings-field-activity-tool-label",

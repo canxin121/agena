@@ -34,6 +34,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   permissions: [
     {
+      id: 'sandbox',
+      label: () => st('Sandbox & checks'),
+      description: () => st('Choose MXC isolation and the checks used when the sandbox is disabled.'),
+      keywords: ['sandbox', 'mxc', 'isolation', 'resource', 'checks', 'command', 'hints', '沙盒', '声明', '检查'],
+    },
+    {
       id: 'overview',
       label: () => st('Permission overview'),
       description: () => st('Read-only merged policy.'),

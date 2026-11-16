@@ -9,6 +9,7 @@ const PermissionsOverviewPanel = defineAsyncComponent(
 )
 
 const pages = computed(() => buildSettingsSubpages('permissions'))
+const SandboxSettingsPanel = defineAsyncComponent(() => import('@/components/settings/SandboxSettingsPanel.vue'))
 // The permission workbench owns the scope selector and forwards its route-backed value.
 defineProps<{ activePage: string; scope: string; sessionId?: string }>()
 const studio = ref<{ refresh: () => Promise<void> } | null>(null)
@@ -26,12 +27,7 @@ defineExpose({ refresh: () => studio.value?.refresh() })
     v-slot="{ activePage }"
   >
     <PermissionsOverviewPanel v-if="activePage === 'overview'" ref="studio" :session-id="sessionId" />
-    <PermissionStudioPanel
-      v-else
-      ref="studio"
-      :scope="scope"
-      :section="activePage"
-      :session-id="sessionId"
-    />
+    <SandboxSettingsPanel v-else-if="activePage === 'sandbox'" ref="studio" :scope="scope" />
+    <PermissionStudioPanel v-else ref="studio" :scope="scope" :section="activePage" :session-id="sessionId" />
   </SettingsSectionWorkbench>
 </template>

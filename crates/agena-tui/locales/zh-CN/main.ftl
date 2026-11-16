@@ -3053,3 +3053,18 @@ permission-studio-network-column-setting = 设置项
 permission-studio-network-column-rule = 规则 / 字段
 
 permission-studio-network-column-value = 值
+
+# Sandbox execution settings
+settings-sandbox-enabled-label = 启用 MXC 沙盒
+settings-sandbox-enabled-description = 使用 MXC 的文件系统和网络隔离来运行智能体工具。
+settings-sandbox-resource-checks-label = 检查声明的路径与网络
+settings-sandbox-resource-checks-description = 关闭沙盒时，根据权限规则检查工具声明的 reads、writes 和 network。
+settings-sandbox-command-hints-label = 提示补充命令资源声明
+settings-sandbox-command-hints-description = 声明检查生效时，识别命令关键词，提示 AI 补充缺少的路径或网络目标。
+settings-sandbox-inactive-isolated = MXC 沙盒开启时暂不生效。
+settings-sandbox-inactive-checks = 声明检查关闭时暂不生效。
+settings-sandbox-environment-disabled = 运行环境已强制关闭沙盒。移除此覆盖后才能启用 MXC。
+settings-sandbox-active = 当前生效
+settings-sandbox-inactive = 当前未生效
+settings-sandbox-global-label = 全局 · { $label }
+settings-sandbox-workspace-label = 工作区 · { $label }

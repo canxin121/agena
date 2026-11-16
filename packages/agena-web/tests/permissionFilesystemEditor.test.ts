@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { nextTick } from 'vue'
 import { createPermissionEditor, disposePermissionEditors } from './helpers/permissionStudioHarness'
 
 afterEach(disposePermissionEditors)
@@ -12,6 +13,138 @@ const approvalModel = {
 }
 
 describe('filesystem permission editor persistence', () => {
+  test.each(['global', 'workspace'] as const)(
+    'saving and refreshing %s reads back that layer independently of session policy',
+    async (source) => {
+      const initial = { path: { workspace: 'readonly' as const, external: 'deny' as const } }
+      const { panel, reads, setServerPolicy, switchScope } = await createPermissionEditor(initial, null, {
+        section: 'filesystem',
+        scope: source,
+        useRuntimeTransport: true,
+      })
+      const otherSource = source === 'global' ? 'workspace' : 'global'
+      const other = { path: { workspace: 'deny' as const, external: 'deny' as const } }
+      setServerPolicy(other, otherSource)
+      panel.setPathDefault('workspace', 'readwrite')
+      panel.setPathDefault('external', 'readonly')
+      await panel.save()
+      const saved = { path: { workspace: 'readwrite', external: 'readonly' } }
+      await panel.refresh()
+      expect(panel.config.value).toEqual(saved)
+      expect(panel.savedConfig.value).toEqual(saved)
+      expect(panel.dirty.value).toBe(false)
+      expect(reads.filter((url) => url === `/api/v1/settings/layers/${source}?path=permission`)).toHaveLength(2)
+
+      const effective = {
+        path: {
+          workspace: 'readwrite' as const,
+          external: 'readonly' as const,
+          rules: { '<state>': 'readwrite' as const },
+        },
+      }
+      setServerPolicy(effective, 'effective')
+      await switchScope('effective')
+      expect(panel.config.value).toEqual(effective)
+      expect(reads).toContain('/api/v1/sessions/1/state')
+      await switchScope(otherSource)
+      expect(panel.config.value).toEqual(other)
+      await switchScope(source)
+      expect(panel.config.value).toEqual(saved)
+    },
+  )
+
+  test('the persisted response is authoritative while runtime reload is deferred', async () => {
+    const initial = { path: { workspace: 'readonly' as const, external: 'deny' as const } }
+    const { panel, reads, setSaveResponse, setServerPolicy } = await createPermissionEditor(initial, null, {
+      section: 'filesystem',
+      useRuntimeTransport: true,
+    })
+    panel.setPathDefault('workspace', 'readwrite')
+    panel.setPathDefault('external', 'readonly')
+    const confirmed = {
+      path: { workspace: 'readwrite', external: 'readonly', rules: { '<workspace>/output': 'readwrite' } },
+    }
+    setSaveResponse({ current: confirmed, reload: { deferred_task_id: 'reload-1' } })
+    setServerPolicy(initial, 'effective')
+    const readsBeforeSave = [...reads]
+    await panel.save()
+    expect(panel.config.value).toEqual(confirmed)
+    expect(panel.savedConfig.value).toEqual(confirmed)
+    expect(panel.dirty.value).toBe(false)
+    expect(reads).toEqual(readsBeforeSave)
+    await panel.refresh()
+    expect(panel.config.value).toEqual(confirmed)
+  })
+
+  test('an older edit response without current is confirmed against the same raw layer', async () => {
+    const { panel, reads, setSaveResponse } = await createPermissionEditor({}, null, {
+      section: 'filesystem',
+      scope: 'workspace',
+      useRuntimeTransport: true,
+    })
+    panel.setPathDefault('workspace', 'readwrite')
+    panel.setPathDefault('external', 'readonly')
+    setSaveResponse({ current: undefined })
+    const before = reads.length
+    await panel.save()
+    expect(reads.slice(before)).toEqual(['/api/v1/settings/layers/workspace?path=permission'])
+    expect(panel.savedConfig.value).toEqual({ path: { workspace: 'readwrite', external: 'readonly' } })
+    expect(panel.dirty.value).toBe(false)
+  })
+
+  test.each(['global', 'workspace'] as const)(
+    'unrelated conversation and directory changes cannot reset a pending %s save',
+    async (source) => {
+      const initial = { path: { workspace: 'readonly' as const, external: 'deny' as const } }
+      const { panel, props, reads, lastSessionId, directory, holdSaves } = await createPermissionEditor(initial, null, {
+        section: 'filesystem',
+        scope: source,
+        useRuntimeTransport: true,
+      })
+      panel.setPathDefault('workspace', 'readwrite')
+      panel.setPathDefault('external', 'readonly')
+      const key = panel.contextKey.value
+      const readsBeforeSave = [...reads]
+      const release = holdSaves()
+      const pending = panel.save()
+      expect(panel.saving.value).toBe(true)
+      lastSessionId.value = '2'
+      props.sessionId = '3'
+      directory.currentDirectory = '/workspace/other'
+      await nextTick()
+      await Promise.resolve()
+      await nextTick()
+      expect(panel.contextKey.value).toBe(key)
+      expect(reads).toEqual(readsBeforeSave)
+      release()
+      await pending
+      expect(panel.config.value).toEqual({ path: { workspace: 'readwrite', external: 'readonly' } })
+      expect(panel.dirty.value).toBe(false)
+      expect(panel.saveError.value).toBe('')
+    },
+  )
+
+  test('an invalid persisted response keeps the draft available for retry', async () => {
+    const initial = { path: { workspace: 'readonly' as const, external: 'deny' as const } }
+    const { panel, setSaveResponse, messages } = await createPermissionEditor(initial, null, {
+      section: 'filesystem',
+      useRuntimeTransport: true,
+    })
+    panel.setPathDefault('workspace', 'readwrite')
+    panel.setPathDefault('external', 'readonly')
+    setSaveResponse({ current: 'invalid permission response' })
+    await panel.save()
+    expect(panel.config.value).toEqual({ path: { workspace: 'readwrite', external: 'readonly' } })
+    expect(panel.savedConfig.value).toEqual(initial)
+    expect(panel.dirty.value).toBe(true)
+    expect(panel.saveError.value).toContain('Expected an object')
+    expect(messages).toHaveLength(0)
+    setSaveResponse({})
+    await panel.save()
+    expect(panel.dirty.value).toBe(false)
+    expect(panel.saveError.value).toBe('')
+  })
+
   test('workspace readwrite and external readonly produce the reported settings request without changing approval model', async () => {
     const { panel, requests, writes } = await createPermissionEditor(
       { approval_model: approvalModel },

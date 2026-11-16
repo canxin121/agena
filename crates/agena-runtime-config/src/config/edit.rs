@@ -398,7 +398,9 @@ fn finish_edit(
         deleted,
         validated: true,
         reload_requested,
-        reload_required: changed && !dry_run && reload_requested,
+        // File equality does not prove the running configuration is current:
+        // an earlier reload may have failed after the document was persisted.
+        reload_required: !dry_run && reload_requested,
         reload: None,
         previous,
         current,

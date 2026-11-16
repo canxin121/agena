@@ -18,6 +18,10 @@ use agena_api::resource::{
 
 static APPLICATION_FILE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 
+#[cfg(test)]
+#[path = "application/settings_reload_tests.rs"]
+mod settings_reload_tests;
+
 /// Shared in-process application handle.
 ///
 /// Construction remains in the app/runtime composition layer. Presentation

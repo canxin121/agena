@@ -951,7 +951,7 @@
   "Read, create, change, and delete files.": "Read, create, change, and delete files.",
   "Read-only": "Read-only",
   "Read-only merged model settings.": "Read-only merged model settings.",
-  "Read-only merged policy.": "Read-only merged policy.",
+  "Read-only merged policy.": "View the merged permissions currently in effect.",
   "Read-only tools": "Read-only tools",
   "Reasoning": "Reasoning",
   "Reasoning / cache read": "Reasoning / cache read",

@@ -53,3 +53,4 @@ workspace = true
 [dev-dependencies]
 agena-bundled-plugins = { workspace = true }
 agena-storage-sqlite = { workspace = true }
+async-trait = { workspace = true }

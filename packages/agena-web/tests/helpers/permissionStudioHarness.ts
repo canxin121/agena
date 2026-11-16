@@ -18,6 +18,7 @@ const runtimeSettingsCompiled = transformSync(
   { loader: 'ts', format: 'cjs' },
 ).code
 const scopes: vue.EffectScope[] = []
+type PermissionSource = 'global' | 'workspace' | 'session' | 'effective'
 export function disposePermissionEditors() {
   for (const scope of scopes.splice(0)) scope.stop()
 }
@@ -25,31 +26,46 @@ export function disposePermissionEditors() {
 export async function createPermissionEditor(
   initial: permissionConfig.PermissionConfig = {},
   inherited: permissionConfig.PermissionConfig | null = { network: { default: 'deny' } },
-  options: { section?: string; scope?: string; useRuntimeTransport?: boolean } = {},
+  options: { section?: string; scope?: PermissionSource; useRuntimeTransport?: boolean } = {},
 ) {
   const writes: Array<{ path: string; value: unknown; scope: string }> = []
   const requests: Array<{ url: string; method: string; body: unknown }> = []
-  let serverPolicy = structuredClone(initial)
+  const reads: string[] = []
+  const serverPolicies: Record<PermissionSource, permissionConfig.PermissionConfig> = {
+    global: {},
+    workspace: {},
+    session: {},
+    effective: {},
+  }
+  serverPolicies[options.scope ?? 'global'] = structuredClone(initial)
   let parentPolicy = structuredClone(inherited)
   let failure = ''
+  let saveResponse: Record<string, unknown> = {}
+  let saveGate: Promise<void> | undefined
+  const lastSessionId = vue.ref('1')
+  const directory = vue.reactive({ currentDirectory: '/workspace/example' })
   const props = vue.reactive({
     section: options.section ?? 'network',
     scope: options.scope ?? 'global',
-    sessionId: undefined,
+    sessionId: undefined as string | undefined,
   })
   const messages: Array<[string, string]> = []
   const translate = (key: string, values: Record<string, unknown> = {}) =>
     key.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? '{' + name + '}'))
+  async function persist(path: string, value: unknown, source: PermissionSource) {
+    if (saveGate) await saveGate
+    if (failure) throw new Error(failure)
+    writes.push({ path, value: structuredClone(value), scope: source })
+    const current = saveResponse.current !== undefined ? saveResponse.current : value
+    serverPolicies[source] = structuredClone(current ?? {}) as permissionConfig.PermissionConfig
+    return { changed: true, current: value ?? null, validated: true, ...structuredClone(saveResponse) }
+  }
   const transport = {
-    async setRuntimeSetting(path: string, value: unknown, _options: unknown, scope: string) {
-      if (failure) throw new Error(failure)
-      writes.push({ path, value: structuredClone(value), scope })
-      serverPolicy = structuredClone(value) as permissionConfig.PermissionConfig
+    async setRuntimeSetting(path: string, value: unknown, _options: unknown, source: PermissionSource) {
+      return await persist(path, value, source)
     },
-    async deleteRuntimeSetting(path: string, _options: unknown, scope: string) {
-      if (failure) throw new Error(failure)
-      writes.push({ path, value: undefined, scope })
-      serverPolicy = {}
+    async deleteRuntimeSetting(path: string, _options: unknown, source: PermissionSource) {
+      return await persist(path, undefined, source)
     },
   }
   const modules: Record<string, unknown> = {
@@ -63,26 +79,26 @@ export async function createPermissionEditor(
           const requestUrl = new URL(url, 'https://agena.test')
           const body = init.body ? JSON.parse(String(init.body)) : undefined
           requests.push({ url, method: init.method, body })
-          if (failure) throw new Error(failure)
           const value = init.method === 'DELETE' ? undefined : body.value
-          writes.push({
-            path: body?.path ?? requestUrl.searchParams.get('path'),
-            value: structuredClone(value),
-            scope: requestUrl.pathname.split('/').at(-1)!,
-          })
-          serverPolicy = structuredClone(value ?? {})
-          return { changed: true, current: value, validated: true }
+          return await persist(
+            body?.path ?? requestUrl.searchParams.get('path'),
+            value,
+            requestUrl.pathname.split('/').at(-1)! as PermissionSource,
+          )
         }
+        reads.push(url)
         if (url === '/api/v1/plugins/surface') return { permission_tools: [] }
         if (url.includes('/sessions/'))
           return {
             execution: {
-              selected_permission: structuredClone(serverPolicy),
+              selected_permission: structuredClone(serverPolicies.session),
               inherited_permission: structuredClone(parentPolicy),
-              effective_permission: structuredClone(serverPolicy),
+              effective_permission: structuredClone(serverPolicies.effective),
             },
           }
-        return { value: structuredClone(serverPolicy), inherited_value: structuredClone(parentPolicy) }
+        const source = new URL(url, 'https://agena.test').pathname.split('/').at(-1)
+        const policy = source === 'global' || source === 'workspace' ? serverPolicies[source] : serverPolicies.effective
+        return { value: structuredClone(policy), inherited_value: structuredClone(parentPolicy) }
       },
     },
     '@/lib/appConfirm': { confirmAction: async () => true },
@@ -93,13 +109,13 @@ export async function createPermissionEditor(
         async setSessionPermission(_id: string, value: unknown) {
           if (failure) throw new Error(failure)
           writes.push({ path: 'permission', value: structuredClone(value), scope: 'session' })
-          serverPolicy = structuredClone(value) as permissionConfig.PermissionConfig
-          return { execution: { selected_permission: structuredClone(serverPolicy) } }
+          serverPolicies.session = structuredClone(value) as permissionConfig.PermissionConfig
+          return { execution: { selected_permission: structuredClone(serverPolicies.session) } }
         },
       }),
     },
-    '@/lib/lastSession': { lastSessionId: vue.ref('1') },
-    '@/stores/directory': { useDirectoryStore: () => ({ currentDirectory: '/workspace/example' }) },
+    '@/lib/lastSession': { lastSessionId },
+    '@/stores/directory': { useDirectoryStore: () => directory },
     '@/stores/toasts': {
       useToastsStore: () => ({ push: (kind: string, message: string) => messages.push([kind, message]) }),
     },
@@ -140,17 +156,33 @@ export async function createPermissionEditor(
     props,
     writes,
     requests,
+    reads,
     messages,
+    lastSessionId,
+    directory,
     rejectSaves(message: string) {
       failure = message
     },
-    setServerPolicy(value: permissionConfig.PermissionConfig) {
-      serverPolicy = structuredClone(value)
+    setServerPolicy(value: permissionConfig.PermissionConfig, source = props.scope) {
+      serverPolicies[source] = structuredClone(value)
+    },
+    setSaveResponse(value: Record<string, unknown>) {
+      saveResponse = structuredClone(value)
+    },
+    holdSaves() {
+      let release!: () => void
+      saveGate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return () => {
+        release()
+        saveGate = undefined
+      }
     },
     setInheritedPolicy(value: permissionConfig.PermissionConfig | null) {
       parentPolicy = structuredClone(value)
     },
-    async switchScope(value: string) {
+    async switchScope(value: PermissionSource) {
       props.scope = value
       await vue.nextTick()
       await Promise.resolve()

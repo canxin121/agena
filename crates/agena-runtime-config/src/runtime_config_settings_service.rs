@@ -424,7 +424,9 @@ fn finish_runtime_settings_edit(
         deleted,
         validated,
         reload_requested: options.reload,
-        reload_required: changed && !options.dry_run && options.reload,
+        // A previous save may have reached disk while its runtime reload failed.
+        // Retrying the same value must still activate it in the running service.
+        reload_required: !options.dry_run && options.reload,
         reload: None,
         previous,
         current,

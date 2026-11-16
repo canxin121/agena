@@ -36,11 +36,15 @@ const activeScopeLabel = computed(
 // A viewport-filling page keeps its own scrolling panes, so the workbench must
 // stop contributing page scroll and hand it the remaining height instead.
 const fillsViewport = computed(() => activeDefinition.value?.fillsViewport === true)
-// A session layer always names its conversation: settings edit the one this
-// client used last, so there is nothing to pick here. A workspace layer names
-// its project.
+// Session overrides and effective permissions must identify the conversation
+// they describe. A workspace layer names its project.
 const sessionScope = computed(() => props.activeScope === 'session')
 const sessionTarget = useSettingsSessionTarget()
+const showSessionContext = computed(
+  () =>
+    sessionScope.value ||
+    (props.section === 'permissions' && props.activeScope === 'effective' && Boolean(sessionTarget.sessionId.value)),
+)
 const workspaceScope = computed(() => props.activeScope === 'workspace')
 const directory = useDirectoryStore()
 const directories = useDirectorySessionStore()
@@ -181,10 +185,9 @@ function selectScope(scope: string) {
             {{ scope.label }}
           </button>
         </nav>
-        <!-- A session layer always edits the conversation this client used last;
-             the page states which one so the layer selector is unambiguous. -->
+        <!-- Name the conversation whose overrides or effective permissions are shown. -->
         <div
-          v-if="sessionScope"
+          v-if="showSessionContext"
           class="mb-4 flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2"
           :aria-label="$st('Session for this setting')"
         >
@@ -199,7 +202,7 @@ function selectScope(scope: string) {
           >
             {{ sessionTarget.selected.value.project }}
           </span>
-          <span v-else class="min-w-0 text-xs text-muted-foreground">
+          <span v-else-if="!sessionTarget.selected.value" class="min-w-0 text-xs text-muted-foreground">
             {{ $st('Open a conversation to set this layer.') }}
           </span>
         </div>

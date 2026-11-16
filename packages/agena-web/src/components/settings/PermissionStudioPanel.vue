@@ -31,7 +31,6 @@ import { confirmAction } from '@/lib/appConfirm'
 import { deleteRuntimeSetting, setRuntimeSetting } from '@/lib/runtimeSettings'
 import { useChatStore } from '@/stores/chat'
 import { lastSessionId } from '@/lib/lastSession'
-import { useDirectoryStore } from '@/stores/directory'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -79,7 +78,6 @@ const SHELL_CAPABLE_TOOLS = [...SHELL_LAUNCH_TOOLS, 'agena.shell.write'] as cons
 
 const props = defineProps<{ section: string; scope: string; sessionId?: string }>()
 const chat = useChatStore()
-const directory = useDirectoryStore()
 const toasts = useToastsStore()
 const PermissionsPanel = defineAsyncComponent(() => import('@/components/settings/PermissionsPanel.vue'))
 
@@ -899,9 +897,12 @@ function applyRawJson(): boolean {
   }
 }
 
-const contextKey = computed(() =>
-  JSON.stringify([selectedSource.value, activeSessionId.value, directory.currentDirectory]),
-)
+const contextKey = computed(() => {
+  const source = selectedSource.value
+  // Layer endpoints belong to the server runtime. Only session-backed reads
+  // change their target when the client opens another conversation.
+  return JSON.stringify(source === 'session' || source === 'effective' ? [source, activeSessionId.value] : [source])
+})
 type PermissionDraft = {
   config: PermissionConfig
   saved: PermissionConfig
@@ -1079,10 +1080,23 @@ async function save() {
           execution?.selected_permission ||
           execution?.context?.selected_permission,
       )
-    } else if (!Object.keys(snapshot).length) {
-      await deleteRuntimeSetting('permission', { reload: true }, source as 'global' | 'workspace')
     } else {
-      await setRuntimeSetting('permission', snapshot as JsonValue, { reload: true }, source as 'global' | 'workspace')
+      const response = !Object.keys(snapshot).length
+        ? await deleteRuntimeSetting('permission', { reload: true }, source as 'global' | 'workspace')
+        : await setRuntimeSetting(
+            'permission',
+            snapshot as JsonValue,
+            { reload: true },
+            source as 'global' | 'workspace',
+          )
+      // `current` is the persisted layer value even when runtime reload is
+      // deferred. Do not replace it with a potentially older effective read.
+      // Older response shapes must be confirmed by reading the same raw layer.
+      savedPermission = parsePermissionConfig(
+        response.current !== undefined
+          ? (response.current ?? {})
+          : (await readPolicy(source, sessionId, new AbortController().signal)).policy,
+      )
     }
     drafts.delete(key)
     if (key === contextKey.value) {

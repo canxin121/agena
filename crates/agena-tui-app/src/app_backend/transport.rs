@@ -2164,7 +2164,6 @@ impl TuiBackend {
     pub async fn list_child_sessions(&self, parent_id: i64) -> Result<Vec<SessionResource>> {
         Ok(self
             .list_sessions(ListSessionsParams {
-                workspace_id: Some(self.inner.workspace_id),
                 parent_id: Some(parent_id),
                 limit: Some(200),
                 ..Default::default()

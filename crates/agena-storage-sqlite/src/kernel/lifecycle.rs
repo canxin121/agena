@@ -1625,6 +1625,9 @@ fn filter<'a>(
     cursor: bool,
 ) {
     builder.push("s.deleted_at_ms IS NULL");
+    if query.exclude_bot_owned {
+        builder.push(" AND s.owner_bot_id IS NULL");
+    }
     if let Some(bot) = &query.owner_bot_id {
         builder.push(" AND s.owner_bot_id=").push_bind(bot.clone());
     }
@@ -1855,7 +1858,7 @@ pub(super) async fn workspace_statistics(
         .try_acquire_owned()
         .map_err(|_| KernelError::Busy)?;
     let sql = format!(
-        "SELECT s.workspace_id,count(*) AS total,sum(s.parent_session_id IS NULL) AS roots,sum(s.pinned) AS pinned,sum(({STATE_SQL}) IN ('running','awaiting_interaction')) AS running,sum(({STATE_SQL}) IN ('awaiting_interaction','failed')) AS attention FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.deleted_at_ms IS NULL AND s.workspace_id IN (SELECT value FROM json_each(?)) AND s.temporary=0 GROUP BY s.workspace_id"
+        "SELECT s.workspace_id,count(*) AS total,sum(s.parent_session_id IS NULL) AS roots,sum(s.pinned) AS pinned,sum(({STATE_SQL}) IN ('running','awaiting_interaction')) AS running,sum(({STATE_SQL}) IN ('awaiting_interaction','failed')) AS attention FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.deleted_at_ms IS NULL AND s.owner_bot_id IS NULL AND s.workspace_id IN (SELECT value FROM json_each(?)) AND s.temporary=0 GROUP BY s.workspace_id"
     );
     let rows = sqlx::query(&sql)
         .bind(encode(ids)?)

@@ -28,11 +28,15 @@ impl ApplicationService {
             .session_kernel
             .reader
             .query_summaries(SummaryQuery {
-                // Bot conversations have no project workspace. An explicit
-                // owner filter must include them in the same summary query.
+                // Ownership decides sidebar membership independently of the
+                // working directory. Explicit Bot queries and unscoped child
+                // queries can still read global and workspace-backed Bots.
                 include_global: query.parent_id.is_some()
                     || query.owner_bot_id.is_some()
                     || query.owner_surface.is_some(),
+                exclude_bot_owned: query.owner_bot_id.is_none()
+                    && query.owner_surface.is_none()
+                    && (query.parent_id.is_none() || query.workspace_id.is_some()),
                 owner_bot_id: query.owner_bot_id.map(|id| id.to_string()),
                 owner_surface: query.owner_surface.map(|s| s.as_str().to_owned()),
                 workspace_id: query.workspace_id,

@@ -344,6 +344,14 @@ impl App {
                 self.sessions.replace_items(
                     items
                         .into_iter()
+                        // Explicit subtree reads also serve Bot navigation;
+                        // use the same project scope as the backend lists.
+                        .filter(|session| {
+                            agena_domain::SessionKind::from_scope(
+                                session.workspace_id,
+                                session.owner_bot_id.is_some(),
+                            ) == agena_domain::SessionKind::Project
+                        })
                         .map(|mut session| {
                             self.session_mark_writes.project(&mut session);
                             agena_tui_session::session_list::SessionListItem {

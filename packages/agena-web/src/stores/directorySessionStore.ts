@@ -20,6 +20,7 @@ import {
 import { normalizeDirectories } from '@/features/sessions/model/projects'
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
+import { isBotOwnedSession } from '@/features/sessions/model/ownership'
 import { loadExpandedTree } from '@/features/sessions/model/expandedTree'
 import { sessionStateKind, type Session } from '@/types/chat'
 import type { SseEvent } from '@/lib/sse'
@@ -108,7 +109,7 @@ function toSidebarRowFromAgenaSession(
   expandedParents?: Set<string>,
 ): SidebarSessionRow | null {
   const sid = agenaSessionId(record)
-  if (!sid || sessionWasDeleted(sid)) return null
+  if (!sid || sessionWasDeleted(sid) || isBotOwnedSession(record)) return null
   const session: SidebarSessionSummary = { ...(record as UnknownRecord), id: sid }
   const parentId = agenaSessionId({ id: record?.parent_id } as UnknownRecord) || null
   const rootId = agenaSessionId({ id: record?.root_id } as UnknownRecord) || sid
@@ -489,6 +490,7 @@ function normalizeSidebarSessionRow(raw: JsonValue): SidebarSessionRow | null {
   if (!id || sessionWasDeleted(id)) return null
 
   const session = toSessionSummarySnapshot(record.session as JsonValue)
+  if (isBotOwnedSession(session)) return null
   const wireDirectory = toDirectoryEntry(record.directory as JsonValue)
   const directory = wireDirectory || null
 
@@ -864,7 +866,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
   const releaseSessionActions = chat.$onAction(({ name, after }) => {
     if (name === 'updateSessionMetadata' || name === 'renameSession') {
       after((session) => {
-        if (disposed || !session) return
+        if (disposed || !session || isBotOwnedSession(session)) return
         const previous = knownSidebarRowBySessionId()[session.id]
         if (Number(previous?.session?.version || 0) > Number(session.version || 0)) return
         applyHydratedSidebarSessions(
@@ -896,7 +898,7 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
     if (name !== 'createSession' && name !== 'forkSession' && name !== 'revertToMessage') return
     after((result) => {
       const session = name === 'revertToMessage' ? result?.session : result
-      if (disposed || !session) return
+      if (disposed || !session || isBotOwnedSession(session)) return
       const directoryId = String(session.workspace_id)
       const needsReveal =
         uiPrefs.value.collapsedDirectoryIds.includes(directoryId) ||
@@ -1998,7 +2000,9 @@ export const useDirectorySessionStore = defineStore('directorySession', () => {
       pinnedRows,
       recentRows,
       recentParentById: parentById,
-      recentRootIds: roots.sessions.filter((session) => !sessionWasDeleted(session.id)).map((session) => session.id),
+      recentRootIds: roots.sessions
+        .filter((session) => !sessionWasDeleted(session.id) && !isBotOwnedSession(session))
+        .map((session) => session.id),
     }
   }
 

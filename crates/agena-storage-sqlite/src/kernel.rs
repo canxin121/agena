@@ -2164,7 +2164,7 @@ pub(super) async fn list_state(
     session: SessionId,
 ) -> Result<Option<SessionListState>> {
     let statement = format!(
-        "SELECT s.workspace_id,s.parent_session_id,s.favorite,s.pinned,s.temporary=0 AS include_in_lists,s.relation_kind='subagent' AS is_subagent,s.metadata_version,s.updated_at_ms,t.queued_executions,t.running_executions,t.user_message_count,t.last_message_at_ms,({}) AS processing_state FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.id=? AND s.deleted_at_ms IS NULL",
+        "SELECT s.workspace_id,s.owner_bot_id IS NOT NULL AS bot_owned,s.parent_session_id,s.favorite,s.pinned,s.temporary=0 AS include_in_lists,s.relation_kind='subagent' AS is_subagent,s.metadata_version,s.updated_at_ms,t.queued_executions,t.running_executions,t.user_message_count,t.last_message_at_ms,({}) AS processing_state FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.id=? AND s.deleted_at_ms IS NULL",
         lifecycle::STATE_SQL
     );
     let Some(row) = sqlx::query(&statement)
@@ -2183,6 +2183,7 @@ pub(super) async fn list_state(
     Ok(Some(SessionListState {
         session,
         workspace_id: row.try_get("workspace_id").map_err(storage)?,
+        bot_owned: row.try_get("bot_owned").map_err(storage)?,
         parent_session_id: row
             .try_get::<Option<i64>, _>("parent_session_id")
             .map_err(storage)?

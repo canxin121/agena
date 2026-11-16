@@ -16,8 +16,17 @@ REQUIRED = {
         r'workspace_id INTEGER REFERENCES agena_workspaces\(id\)',
     ],
     'crates/agena-runtime-session/src/session/manager/bot/registry.rs': [
-        r'create_global\(',
-        r'deny_unknown_fields',
+        r'\.ensure_local_bot_session\s*\(\s*command,\s*bot,\s*title\.to_owned\(\)\s*\)',
+    ],
+    'crates/agena-storage/src/kernel/lifecycle.rs': [
+        r'Command::EnsureLocalBotSession\s*\{\s*bot,\s*title\s*\}',
+        r'#\[serde\(default, deny_unknown_fields\)\]\s*pub struct SessionConfiguration\b',
+    ],
+    'crates/agena-assistant/src/bot.rs': [
+        r'#\[serde\(deny_unknown_fields\)\]\s*pub struct BotPersona\b',
+        r'#\[serde\(deny_unknown_fields\)\]\s*pub struct BotCreate\b',
+        r'#\[serde\(deny_unknown_fields\)\]\s*pub struct BotUpdate\b',
+        r'#\[serde\(deny_unknown_fields\)\]\s*pub struct BotArchive\b',
     ],
     'crates/agena-runtime-contracts/src/lib.rs': [r'fn is_global\('],
     'crates/agena-runtime/src/runtime/snapshot/mod.rs': [
@@ -103,6 +112,20 @@ def audit(root: Path) -> list[str]:
         for expression in expressions:
             if re.search(expression, text):
                 errors.append(f'retired runtime fallback {expression!r} in {relative}')
+    # The canonical Bot command owns creation now. Scope this check to that
+    # handler so an unrelated global creation cannot conceal a project fallback.
+    relative = 'crates/agena-storage-sqlite/src/kernel/lifecycle.rs'
+    source = root / relative
+    body = re.search(
+        r'(?ms)^async fn ensure_local_bot_session\(.*?^\}',
+        source.read_text() if source.is_file() else '',
+    )
+    global_create = (
+        r'commands::create_session\s*\('
+        r'\s*connection,\s*None,\s*title,\s*now_ms\(\)\s*\)'
+    )
+    if body is None or not re.search(global_create, body.group()):
+        errors.append(f'local Bot creation must explicitly use no workspace: {relative}')
     return errors
 
 

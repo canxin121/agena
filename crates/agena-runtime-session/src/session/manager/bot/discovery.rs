@@ -470,6 +470,7 @@ impl SessionManager {
                 .reader
                 .query_summaries(SummaryQuery {
                     workspace_id: r.workspace_id,
+                    exclude_bot_owned: true,
                     parent_id: parent,
                     exclude_subagents: true,
                     search: query.clone(),

@@ -24,6 +24,9 @@ pub enum ChangeKind {
 pub struct SessionListState {
     pub session: SessionId,
     pub workspace_id: Option<i64>,
+    /// Bot ownership is independent of the execution workspace.
+    #[serde(default)]
+    pub bot_owned: bool,
     pub parent_session_id: Option<SessionId>,
     pub favorite: bool,
     pub pinned: bool,

@@ -568,6 +568,104 @@ async fn discovery_and_targeting_exclude_every_bot_conversation() {
 }
 
 #[tokio::test]
+async fn workspace_owned_bots_stay_out_of_runtime_project_lists() {
+    let (manager, ordinary) = fixture().await;
+    let bot = manager
+        .create_bot_profile(create("workspace-list", "Workspace Bot"))
+        .await
+        .unwrap();
+    let workspace = manager.current_workspace_id().await.unwrap();
+    let owner = agena_domain::SessionOwner {
+        bot: bot.id,
+        surface: SessionSurface::Group,
+        scope_key: None,
+    };
+    let root = manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Bot group".into(),
+            SessionConfiguration {
+                owner: Some(owner.clone()),
+                effective_workspace_root: Some(std::env::temp_dir()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let child = manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Bot child".into(),
+            SessionConfiguration {
+                owner: Some(owner),
+                parent_session_id: Some(root),
+                relation_kind: agena_domain::SessionRelationKind::Child,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let listed = manager
+        .list_session_summaries(agena_domain::SessionListRequest {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, ordinary.get());
+    assert!(
+        manager
+            .list_session_summaries(agena_domain::SessionListRequest {
+                parent_id: Some(root.get()),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let tree = manager.list_session_tree(root.get()).await.unwrap();
+    assert_eq!(
+        tree.iter().map(|session| session.id).collect::<Vec<_>>(),
+        vec![root.get(), child.get()]
+    );
+    let local = manager.ensure_named_bot_session(bot.id).await.unwrap();
+    let discovered = manager
+        .bot_discovery(
+            local.session_id,
+            &serde_json::from_value(serde_json::json!({
+                "action":"sessions","workspace_id":workspace,"limit":1
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(discovered["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(discovered["sessions"][0]["session_id"], ordinary.get());
+    assert_eq!(discovered["has_more"], false);
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .metadata(root)
+            .await
+            .unwrap()
+            .workspace_id,
+        Some(workspace)
+    );
+}
+
+#[tokio::test]
 async fn owner_filtered_listing_returns_only_that_bots_conversations() {
     let (manager, ordinary) = fixture().await;
     let first = manager

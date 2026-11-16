@@ -97,7 +97,8 @@ impl Clock {
 
 const BUCKETS: [&str; 5] = ["pinned", "favorite", "running", "attention", "recent"];
 fn bucket_membership(state: Option<&SessionListState>, bucket: &str) -> bool {
-    let Some(state) = state.filter(|state| state.include_in_lists && state.workspace_id.is_some())
+    let Some(state) = state
+        .filter(|state| state.include_in_lists && !state.bot_owned && state.workspace_id.is_some())
     else {
         return false;
     };
@@ -134,9 +135,9 @@ fn list_row_keys(state: &SessionListState, keys: &mut BTreeSet<String>) {
 }
 
 fn statistics_contribution(state: Option<&SessionListState>, workspace: i64) -> [bool; 5] {
-    let Some(state) =
-        state.filter(|state| state.include_in_lists && state.workspace_id == Some(workspace))
-    else {
+    let Some(state) = state.filter(|state| {
+        state.include_in_lists && !state.bot_owned && state.workspace_id == Some(workspace)
+    }) else {
         return [false; 5];
     };
     [
@@ -153,6 +154,20 @@ fn list_change_keys(change: &SessionListChange) -> BTreeSet<String> {
     let before = change.before.as_ref();
     let after = change.after.as_ref();
     if before != after {
+        // The catalog hides workspaces used only by Bot conversations. The
+        // first session or a change of ownership can change that visibility,
+        // even when the workspace path itself has not changed.
+        let catalog_scope = |state: Option<&SessionListState>| {
+            state.and_then(|state| {
+                state
+                    .workspace_id
+                    .map(|workspace| (workspace, state.bot_owned))
+            })
+        };
+        if catalog_scope(before) != catalog_scope(after) {
+            keys.insert("workspaces".into());
+            keys.insert("workspaces:catalog".into());
+        }
         for state in [before, after].into_iter().flatten() {
             list_row_keys(state, &mut keys);
         }
@@ -357,7 +372,11 @@ impl ResourceRevisions {
         change: Option<&SessionChangeResource>,
         signal: Option<&RuntimeSignalResource>,
     ) -> BTreeMap<String, String> {
-        let mut keys = vec!["sessions".to_owned(), "workspaces".to_owned()];
+        let mut keys = vec![
+            "sessions".to_owned(),
+            "workspaces".to_owned(),
+            "workspaces:catalog".to_owned(),
+        ];
         if let Some(change) = change {
             let id = change.session_id();
             for suffix in ["state", "parts", "files"] {
@@ -479,6 +498,7 @@ mod tests {
         SessionListState {
             session: 7_i64.try_into().unwrap(),
             workspace_id,
+            bot_owned: false,
             parent_session_id: None,
             favorite: true,
             pinned: true,
@@ -521,6 +541,140 @@ mod tests {
             clock: Arc::new(Mutex::new(Clock::new())),
             durable_watch: Mutex::new(None),
             _signal_observation: None,
+        }
+    }
+
+    fn observe_list_change(
+        revisions: &ResourceRevisions,
+        epoch: agena_domain::KernelEpoch,
+        sequence: i64,
+        before: Option<SessionListState>,
+        after: Option<SessionListState>,
+    ) {
+        let state = after.as_ref().or(before.as_ref()).unwrap();
+        revisions.observe_kernel_change(&KernelChange {
+            cursor: WatchCursor {
+                session: state.session,
+                epoch,
+                position: agena_storage::kernel::CommitPosition {
+                    sequence: sequence.try_into().unwrap(),
+                    ordinal: 0,
+                },
+            },
+            session: state.session,
+            kind: agena_storage::kernel::ChangeKind::Metadata,
+            workspace_id: state.workspace_id,
+            include_in_lists: state.include_in_lists,
+            list_change: Some(SessionListChange {
+                before,
+                after,
+                parents: vec![],
+            }),
+            affected_entries: vec![],
+            requires_snapshot: false,
+        });
+    }
+
+    #[test]
+    fn workspace_catalog_revisions_follow_bot_ownership_and_session_creation() {
+        let project = list_state(Some(2));
+        let bot = SessionListState {
+            bot_owned: true,
+            ..project.clone()
+        };
+        for (before, after) in [
+            (None, Some(bot.clone())),
+            (None, Some(project.clone())),
+            (Some(bot.clone()), Some(project.clone())),
+            (Some(project), Some(bot.clone())),
+            (Some(bot), None),
+        ] {
+            let revisions = revisions();
+            let old_catalog = revisions.token("workspaces:catalog");
+            let old_workspaces = revisions.token("workspaces");
+            let old_sessions = revisions.token("sessions");
+            observe_list_change(
+                &revisions,
+                agena_domain::KernelEpoch::new(),
+                1,
+                before,
+                after,
+            );
+            let catalog = revisions.token("workspaces:catalog");
+            assert_ne!(catalog, old_catalog);
+            assert_ne!(revisions.token("workspaces"), old_workspaces);
+            assert_ne!(revisions.token("sessions"), old_sessions);
+            assert_eq!(
+                revisions.live_tokens(None, None).get("workspaces:catalog"),
+                Some(&catalog),
+                "SSE carries the same catalog version as conditional reads"
+            );
+        }
+    }
+
+    #[test]
+    fn bot_activity_keeps_workspace_catalog_cacheable() {
+        let revisions = revisions();
+        let epoch = agena_domain::KernelEpoch::new();
+        let bot = SessionListState {
+            bot_owned: true,
+            ..list_state(Some(2))
+        };
+        observe_list_change(&revisions, epoch, 1, None, Some(bot.clone()));
+        let catalog = revisions.token("workspaces:catalog");
+        let sessions = revisions.token("sessions");
+        let stats = revisions.token("workspace:2:stats");
+        let recent_count = revisions.token("sessions:bucket:recent:count");
+        let running_count = revisions.token("sessions:bucket:running:count");
+        let updated = SessionListState {
+            metadata_version: 2,
+            updated_at_ms: 2,
+            processing_state: SessionStateKind::Running,
+            running_executions: 1,
+            ..bot.clone()
+        };
+        observe_list_change(&revisions, epoch, 2, Some(bot), Some(updated));
+        assert_eq!(revisions.token("workspaces:catalog"), catalog);
+        assert_eq!(revisions.token("workspace:2:stats"), stats);
+        assert_eq!(
+            revisions.token("sessions:bucket:recent:count"),
+            recent_count
+        );
+        assert_eq!(
+            revisions.token("sessions:bucket:running:count"),
+            running_count
+        );
+        assert_ne!(
+            revisions.token("sessions"),
+            sessions,
+            "Bot sidebar session subscriptions remain live"
+        );
+    }
+
+    #[test]
+    fn bot_ownership_changes_invalidate_project_counts() {
+        let project = list_state(Some(2));
+        let bot = SessionListState {
+            bot_owned: true,
+            ..project.clone()
+        };
+        for (before, after) in [(project.clone(), bot.clone()), (bot, project)] {
+            let keys = list_change_keys(&SessionListChange {
+                before: Some(before),
+                after: Some(after),
+                parents: vec![],
+            });
+            for key in [
+                "workspace:2:stats",
+                "sessions:bucket:recent:count",
+                "sessions:bucket:pinned:count",
+                "sessions:bucket:favorite:count",
+            ] {
+                assert!(
+                    keys.contains(key),
+                    "ownership changes the project count: {key}"
+                );
+            }
         }
     }
 

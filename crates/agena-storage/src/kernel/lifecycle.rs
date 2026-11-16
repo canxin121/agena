@@ -250,6 +250,9 @@ pub struct SummaryQuery {
     /// Include global sessions when no particular workspace is selected.
     #[serde(default)]
     pub include_global: bool,
+    /// Exclude Bot-owned conversations even when they have a working directory.
+    #[serde(default)]
+    pub exclude_bot_owned: bool,
     /// Restrict to conversations owned by this Bot (UUID text).
     #[serde(default)]
     pub owner_bot_id: Option<String>,

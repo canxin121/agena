@@ -362,6 +362,7 @@ impl SessionManager {
             .reader
             .query_summaries(SummaryQuery {
                 workspace_id: Some(self.current_workspace_id().await?),
+                exclude_bot_owned: true,
                 parent_id: request.parent_id.map(session_id).transpose()?,
                 roots_only: request.roots_only,
                 exclude_subagents: !request.include_subagents,

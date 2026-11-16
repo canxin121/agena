@@ -173,7 +173,7 @@ fn mock_response(
                        "message_count": 2, "favorite": false, "pinned": false, "state": {"kind": "ready", "data": {}},
                        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
                        "last_message_at": "2026-01-01T00:01:00Z"}),
-                json!({"id": 902, "title": "Team room", "depth": 0, "root_id": 902, "version": 1, "child_session_count": 0, "relation_kind": "root", "lifecycle_state": "ready", "owner_bot_id": id, "owner_surface": "group",
+                json!({"id": 902, "workspace_id": 17, "title": "Team room", "depth": 0, "root_id": 902, "version": 1, "child_session_count": 0, "relation_kind": "root", "lifecycle_state": "ready", "owner_bot_id": id, "owner_surface": "group",
                        "message_count": 5, "favorite": true, "pinned": false, "state": {"kind": "ready", "data": {}},
                        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
                        "last_message_at": "2026-01-01T00:02:00Z"}),
@@ -1524,6 +1524,76 @@ async fn narrow_list_clips_long_utf8_instructions_and_shows_empty_hint() {
         rendered.contains("No additional system instructions"),
         "{rendered}"
     );
+}
+
+#[tokio::test]
+async fn bot_subtrees_stay_out_of_the_project_session_list() {
+    use agena_tui_session::session_view::SessionViewMode;
+
+    let (_temp, mut app) = app(None);
+    let session = |id: i64, parent_id: Option<i64>, bot: Option<Uuid>| {
+        serde_json::from_value::<agena_api::resource::SessionResource>(serde_json::json!({
+            "id":id,"workspace_id":17,"title":"Conversation","parent_id":parent_id,
+            "depth":u32::from(parent_id.is_some()),"root_id":parent_id.unwrap_or(id),
+            "version":1,"child_session_count":0,"relation_kind":if parent_id.is_some(){"child"}else{"root"},
+            "lifecycle_state":"ready","owner_bot_id":bot,"owner_surface":bot.map(|_|"group"),
+            "message_count":0,"favorite":false,"pinned":false,"state":{"kind":"ready","data":{}},
+            "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"
+        }))
+        .unwrap()
+    };
+    let bot = Uuid::from_u128(1);
+    let mut global = session(904, None, None);
+    global.workspace_id = None;
+    let scope = crate::app_types::SessionLoadScope {
+        mode: SessionViewMode::All,
+        anchor_session_id: None,
+    };
+    app.session_load.pending_scope = Some(scope.clone());
+    app.handle_sessions_loaded(
+        scope,
+        None,
+        Ok(vec![
+            session(1, None, None),
+            session(902, None, Some(bot)),
+            global.clone(),
+        ]),
+    );
+    assert_eq!(app.sessions.view().items.len(), 1);
+    assert_eq!(app.sessions.view().items[0].session_id, 1);
+
+    app.transcript.session_id = Some(902);
+    app.transcript.owner_bot_id = Some(bot);
+    let scope = crate::app_types::SessionLoadScope {
+        mode: SessionViewMode::Subtree,
+        anchor_session_id: Some(902),
+    };
+    app.session_load.pending_scope = Some(scope.clone());
+    app.handle_sessions_loaded(
+        scope,
+        Some(902),
+        Ok(vec![
+            session(902, None, Some(bot)),
+            session(903, Some(902), Some(bot)),
+            global,
+        ]),
+    );
+    assert!(app.sessions.view().items.is_empty());
+    assert_eq!(app.transcript.session_id, Some(902));
+}
+
+#[tokio::test]
+async fn child_navigation_queries_the_parent_without_project_scope() {
+    let server = Server::start().await;
+    let (_temp, app) = app(Some(&server.endpoint));
+    app.application.list_child_sessions(902).await.unwrap();
+    let requests = server.bodies.lock().unwrap();
+    let (_, query) = requests
+        .iter()
+        .find(|(_, body)| body["method"] == "list_sessions")
+        .unwrap();
+    assert_eq!(query["params"]["parent_id"], 902);
+    assert!(query["params"]["workspace_id"].is_null());
 }
 
 #[tokio::test]

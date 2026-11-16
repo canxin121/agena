@@ -343,6 +343,8 @@ pub trait WorkspaceRepository: Send + Sync {
         workspace_id: i64,
     ) -> Result<Option<WorkspaceRecord>, WorkspaceRepositoryError>;
 
+    /// List project workspaces. Bot-only execution directories stay addressable
+    /// through `get` and `path_by_id`, but do not belong to the project catalog.
     async fn list(
         &self,
         query: WorkspaceListQuery,

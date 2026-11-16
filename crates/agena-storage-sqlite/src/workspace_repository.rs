@@ -94,7 +94,13 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
         &self,
         query: WorkspaceListQuery,
     ) -> Result<Vec<WorkspaceRecord>, WorkspaceRepositoryError> {
-        let mut clauses = Vec::new();
+        // A Bot's execution directory is not a project. Classify from all
+        // persisted owners so deleting its last conversation cannot expose an
+        // internal directory. Empty projects and directories with project
+        // history remain visible. Apply this before pagination for every client.
+        let mut clauses = vec![
+            "id NOT IN (SELECT workspace_id FROM agena_sessions WHERE workspace_id IS NOT NULL GROUP BY workspace_id HAVING COUNT(owner_bot_id) = COUNT(*))",
+        ];
         let mut values = Vec::<Value>::new();
         if let Some(search) = query.search.filter(|value| !value.is_empty()) {
             clauses.push("path LIKE ?");
@@ -106,11 +112,7 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
         }
         values.push(query.limit.into());
         values.push(query.offset.min(i64::MAX as u64).into());
-        let where_clause = if clauses.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", clauses.join(" AND "))
-        };
+        let where_clause = format!(" WHERE {}", clauses.join(" AND "));
         let rows = self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             format!("SELECT id, path, created_at_ms, updated_at_ms FROM {TABLE}{where_clause} ORDER BY updated_at_ms DESC, id DESC LIMIT ? OFFSET ?"), values)).await.map_err(map_error)?;
         rows.into_iter().map(record_from_row).collect()

@@ -13,6 +13,63 @@ struct Fixture {
 }
 
 impl Fixture {
+    async fn application_only() -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("workspace")).unwrap();
+        let plugins = agena_bundled_plugins::plugins::sources::bundled_plugin_entries()
+            .into_keys()
+            .map(|id| (id, json!({"enabled":false,"package":{"kind":"static"}})))
+            .collect::<serde_json::Map<String, Value>>();
+        std::fs::write(
+            root.join("agena.json"),
+            serde_json::to_vec(&json!({"plugins":{"list":plugins}})).unwrap(),
+        )
+        .unwrap();
+        let (application, runtime) =
+            Application::bootstrap(agena_runtime::RuntimeBootstrapRequest {
+                workspace_root: Some(root.join("workspace")),
+                config_path: Some(root.join("agena.json")),
+                database_path: Some(root.join("test.sqlite")),
+                automatic_maintenance: Some(false),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        Self {
+            application,
+            runtime,
+            directory,
+        }
+    }
+
+    async fn query_in_process(&self, request: Value) -> Value {
+        let backend = self.application.create_session_api_backend();
+        let actual = backend
+            .query(serde_json::from_value(request.clone()).unwrap())
+            .await
+            .unwrap();
+        let expected = serde_json::to_value(
+            dispatch::dispatch_query(&self.application, serde_json::from_value(request).unwrap())
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            actual, expected,
+            "Bridge and dispatcher envelopes must match"
+        );
+        actual
+    }
+
+    async fn command_in_process(&self, request: Value) -> Value {
+        self.application
+            .create_session_api_backend()
+            .command(serde_json::from_value(request).unwrap())
+            .await
+            .unwrap()
+    }
+
     async fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path();
@@ -139,6 +196,122 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         self.runtime.shutdown();
     }
+}
+
+#[tokio::test]
+async fn bot_owned_sessions_stay_out_of_project_lists() {
+    use agena_domain::{SessionOwner, SessionRelationKind, SessionSurface};
+    use agena_storage::kernel::{RequestId, SessionConfiguration};
+
+    let fixture = Fixture::application_only().await;
+    let path = fixture.directory.path().join("shared-project");
+    std::fs::create_dir(&path).unwrap();
+    let workspace = fixture
+        .command_in_process(json!({"method":"create_workspace","params":{"path":path}}))
+        .await;
+    let workspace_id = workspace["data"]["id"].as_i64().unwrap();
+    let kernel = fixture.application.session_kernel().unwrap();
+    let ordinary = kernel
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace_id,
+            "Project conversation".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let bot = uuid::Uuid::new_v4();
+    let owner = SessionOwner {
+        bot,
+        surface: SessionSurface::Group,
+        scope_key: None,
+    };
+    let root = kernel
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace_id,
+            "Bot group".into(),
+            SessionConfiguration {
+                owner: Some(owner.clone()),
+                effective_workspace_root: Some(path.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let child = kernel
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace_id,
+            "Bot child".into(),
+            SessionConfiguration {
+                owner: Some(owner),
+                parent_session_id: Some(root),
+                relation_kind: SessionRelationKind::Child,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    for params in [
+        json!({"workspace_id":workspace_id,"limit":1,"include_total":true}),
+        json!({"roots":true,"include_total":true}),
+    ] {
+        let listed = fixture
+            .query_in_process(json!({"method":"list_sessions","params":params}))
+            .await;
+        assert_eq!(listed["data"]["total"], 1);
+        assert_eq!(listed["data"]["items"].as_array().unwrap().len(), 1);
+        assert_eq!(listed["data"]["items"][0]["id"], ordinary.get());
+        assert_eq!(listed["data"]["page"]["has_more"], false);
+    }
+    let counted = fixture
+        .query_in_process(json!({"method":"list_sessions","params":{
+            "workspace_id":workspace_id,"count_only":true
+        }}))
+        .await;
+    assert_eq!(counted["data"]["total"], 1);
+    assert_eq!(counted["data"]["items"], json!([]));
+    for params in [
+        json!({"owner_bot_id":bot,"workspace_id":workspace_id,"roots":true}),
+        json!({"owner_surface":"group","roots":true}),
+    ] {
+        let owned = fixture
+            .query_in_process(json!({"method":"list_sessions","params":params}))
+            .await;
+        assert_eq!(owned["data"]["items"].as_array().unwrap().len(), 1);
+        assert_eq!(owned["data"]["items"][0]["id"], root.get());
+    }
+    for params in [
+        json!({"parent_id":root.get()}),
+        json!({"workspace_id":workspace_id,"parent_id":root.get(),"owner_bot_id":bot}),
+    ] {
+        let children = fixture
+            .query_in_process(json!({"method":"list_sessions","params":params}))
+            .await;
+        assert_eq!(children["data"]["items"].as_array().unwrap().len(), 1);
+        assert_eq!(children["data"]["items"][0]["id"], child.get());
+    }
+    let project_children = fixture
+        .query_in_process(json!({"method":"list_sessions","params":{
+            "workspace_id":workspace_id,"parent_id":root.get(),"include_total":true
+        }}))
+        .await;
+    assert_eq!(project_children["data"]["items"], json!([]));
+    assert_eq!(project_children["data"]["total"], 0);
+    let snapshot = kernel.reader.control_snapshot(root, 8).await.unwrap();
+    assert_eq!(snapshot.summary.workspace_id, Some(workspace_id));
+    assert_eq!(snapshot.configuration.effective_workspace_root, Some(path));
+    fixture.close().await;
 }
 
 #[tokio::test]

@@ -45,6 +45,7 @@ import {
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 import type { FlatTreeRow } from '@/features/sessions/model/tree'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
+import { isBotOwnedSession } from '@/features/sessions/model/ownership'
 import { useSidebarLocate } from '@/layout/chatSidebar/useSidebarLocate'
 import { normalizeSidebarUiPrefsForUi } from '@/features/sessions/model/sidebarUiPrefs'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -2075,6 +2076,7 @@ async function searchSessionHits(query: string, limit: number, signal?: AbortSig
     const page = await chatApi.listSessions({ search: q, limit, signal })
     const out: SidebarSearchHit[] = []
     for (const session of page.sessions) {
+      if (isBotOwnedSession(session)) continue
       const sessionId = String(session?.id || '').trim()
       if (!sessionId) continue
       const directory = directoryForWorkspaceId(session.workspace_id)

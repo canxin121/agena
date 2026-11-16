@@ -1,4 +1,6 @@
-use agena_domain::{ComposerDocument, ComposerNode, SessionRelationKind};
+use agena_domain::{
+    ComposerDocument, ComposerNode, SessionOwner, SessionRelationKind, SessionSurface,
+};
 use agena_storage::kernel::*;
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
 use sea_orm::{ConnectionTrait, Statement};
@@ -88,6 +90,179 @@ async fn global_creation_uses_no_project() {
         0
     );
 }
+#[tokio::test]
+async fn project_queries_exclude_bot_ownership_before_pagination_and_statistics() {
+    let rt = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = rt.workspaces.ensure_id("/shared-workspace").await.unwrap();
+    let mut ordinary = Vec::new();
+    for title in ["First project conversation", "Second project conversation"] {
+        ordinary.push(
+            rt.ports
+                .sessions
+                .create_configured(
+                    RequestId::new(),
+                    workspace,
+                    title.into(),
+                    Default::default(),
+                )
+                .await
+                .unwrap()
+                .value
+                .id,
+        );
+    }
+    let bot = uuid::Uuid::new_v4();
+    let owner = SessionOwner {
+        bot,
+        surface: SessionSurface::Group,
+        scope_key: Some("test-room".into()),
+    };
+    let root = rt
+        .ports
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Bot group".into(),
+            SessionConfiguration {
+                owner: Some(owner.clone()),
+                effective_workspace_root: Some("/shared-workspace".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let child = rt
+        .ports
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Bot child".into(),
+            SessionConfiguration {
+                parent_session_id: Some(root),
+                relation_kind: SessionRelationKind::Child,
+                owner: Some(SessionOwner {
+                    scope_key: None,
+                    ..owner
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    rt.ports
+        .sessions
+        .update_metadata(
+            RequestId::new(),
+            root,
+            MetadataChange {
+                pinned: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    sql(
+        &rt,
+        &format!(
+            "UPDATE agena_session_statistics SET processing_state='awaiting_interaction' WHERE session_id={}",
+            child.get()
+        ),
+    )
+    .await;
+
+    let query = SummaryQuery {
+        workspace_id: Some(workspace),
+        exclude_bot_owned: true,
+        limit: 1,
+        ..Default::default()
+    };
+    let first = rt
+        .ports
+        .reader
+        .query_summaries(query.clone())
+        .await
+        .unwrap();
+    assert_eq!(first.sessions.len(), 1);
+    assert_eq!(first.sessions[0].id, ordinary[1]);
+    assert_eq!(first.total, Some(2));
+    assert!(first.has_more);
+    for next in [
+        SummaryQuery {
+            before: first.next,
+            ..query.clone()
+        },
+        SummaryQuery {
+            offset: 1,
+            ..query.clone()
+        },
+    ] {
+        let page = rt.ports.reader.query_summaries(next).await.unwrap();
+        assert_eq!(page.sessions.len(), 1);
+        assert_eq!(page.sessions[0].id, ordinary[0]);
+        assert_eq!(page.total, Some(2));
+        assert!(!page.has_more);
+    }
+    let pinned = rt
+        .ports
+        .reader
+        .query_summaries(SummaryQuery {
+            pinned: Some(true),
+            ..query
+        })
+        .await
+        .unwrap();
+    assert!(pinned.sessions.is_empty());
+    assert_eq!(pinned.total, Some(0));
+
+    let owned = rt
+        .ports
+        .reader
+        .query_summaries(SummaryQuery {
+            workspace_id: Some(workspace),
+            include_global: true,
+            owner_bot_id: Some(bot.to_string()),
+            owner_surface: Some("group".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(owned.total, Some(2));
+    assert!(owned.sessions.iter().any(|session| session.id == root));
+    assert!(owned.sessions.iter().any(|session| session.id == child));
+
+    let stats = rt
+        .ports
+        .reader
+        .workspace_statistics(&[workspace])
+        .await
+        .unwrap();
+    assert_eq!(stats[&workspace].total, 2);
+    assert_eq!(stats[&workspace].roots, 2);
+    assert_eq!(stats[&workspace].pinned, 0);
+    assert_eq!(stats[&workspace].running, 0);
+    assert_eq!(stats[&workspace].attention, 0);
+    let snapshot = rt.ports.reader.control_snapshot(root, 8).await.unwrap();
+    assert_eq!(snapshot.summary.workspace_id, Some(workspace));
+    assert_eq!(
+        snapshot.configuration.effective_workspace_root.as_deref(),
+        Some(std::path::Path::new("/shared-workspace"))
+    );
+    assert_eq!(
+        rt.workspaces
+            .path_by_id(workspace)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("/shared-workspace")
+    );
+}
+
 #[tokio::test]
 async fn detach_guards_all_descendants_and_preserves_source_scope() {
     let rt = open_kernel_runtime("sqlite::memory:").await.unwrap();

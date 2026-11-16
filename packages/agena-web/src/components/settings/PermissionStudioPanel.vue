@@ -46,7 +46,6 @@ import {
   type PermissionConfig,
   type PermissionMode,
   type NetworkAction,
-  type NetworkPermissionConfig,
   type NetworkProtocol,
   type NetworkRule,
 } from '@/lib/permissionConfig'
@@ -116,7 +115,8 @@ const rawJson = ref('{}')
 const rawJsonError = ref('')
 const networkJson = ref('{}')
 const networkJsonError = ref('')
-const inheritedNetwork = ref<NetworkPermissionConfig | null>(null)
+const inheritedPermission = ref<PermissionConfig | null>(null)
+const inheritedNetwork = computed(() => inheritedPermission.value?.network ?? null)
 const inheritedNetworkError = ref('')
 type NetworkRuleList = 'allow' | 'deny'
 type NetworkRuleDraft = {
@@ -446,6 +446,12 @@ function mutate(mutator: (next: PermissionConfig) => void): boolean {
 function modeAt(scope: 'workspace' | 'external'): PathPermissionMode | '' {
   const mode = config.value.path?.[scope]
   return isPathPermissionMode(mode) ? mode : ''
+}
+
+function pathInheritanceLabel(scope: 'workspace' | 'external'): string {
+  const mode = inheritedPermission.value?.path?.[scope]
+  const label = pathModeOptions.value.find((option) => option.value === mode)?.label
+  return label ? `${st('Inherit')} · ${label}` : st('Inherit')
 }
 
 function setPathDefault(scope: 'workspace' | 'external', value: string) {
@@ -974,7 +980,7 @@ async function load() {
     loadedContext = key
     const draft = drafts.get(key)
     cancelNetworkRule()
-    inheritedNetwork.value = null
+    inheritedPermission.value = null
     inheritedNetworkError.value = ''
     config.value = clone(draft?.config || {})
     savedConfig.value = clone(draft?.saved || {})
@@ -1003,14 +1009,14 @@ async function load() {
         .sort((a, b) => a.name.localeCompare(b.name))
     }
     if (policy.status === 'rejected') throw policy.reason
-    inheritedNetwork.value = null
+    inheritedPermission.value = null
     inheritedNetworkError.value = ''
     if (source !== 'effective') {
       try {
         const parent = parsePermissionConfig(policy.value.inherited)
+        inheritedPermission.value = parent
         if (parent.network === undefined)
           throw new Error(st('The inherited network policy could not be loaded. Refresh before customizing it.'))
-        inheritedNetwork.value = parent.network
       } catch {
         inheritedNetworkError.value = st(
           'The inherited network policy could not be loaded. Refresh before customizing it.',
@@ -1246,7 +1252,7 @@ onBeforeUnmount(() => {
                 <OptionPicker
                   :model-value="modeAt(scope.id)"
                   :options="pathModeOptions"
-                  :empty-label="$st('Inherit')"
+                  :empty-label="pathInheritanceLabel(scope.id)"
                   :title="$st('Path access mode')"
                   :disabled="formDisabled"
                   @update:model-value="setPathDefault(scope.id, $event)"

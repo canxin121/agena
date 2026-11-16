@@ -79,6 +79,7 @@ async function refresh() {
 
 const cards = computed(() => {
   const policy = permission.value
+  const network = policy.network
   return [
     {
       id: 'filesystem',
@@ -96,9 +97,9 @@ const cards = computed(() => {
       icon: RiGlobalLine,
       count: (policy.network?.allow?.length || 0) + (policy.network?.deny?.length || 0),
       rows: [
-        { label: st('Outbound default'), mode: policy.network?.default ?? ('deny' as const) },
-        { label: st('Inbound default'), mode: policy.network?.inbound ?? ('deny' as const) },
-        { label: st('Host loopback'), mode: policy.network?.hostLoopback ?? ('deny' as const) },
+        { label: st('Outbound default'), mode: network ? (network.default ?? ('deny' as const)) : undefined },
+        { label: st('Inbound default'), mode: network ? (network.inbound ?? ('deny' as const)) : undefined },
+        { label: st('Host loopback'), mode: network ? (network.hostLoopback ?? ('deny' as const)) : undefined },
       ],
     },
     {

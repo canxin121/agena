@@ -196,7 +196,7 @@ struct RemoteBackend {
     /// connect and refreshed before settings-studio rebuilds; settings reads
     /// are synchronous in the TUI event loop.
     config_sources: tokio::sync::RwLock<Option<agena_api::resource::ConfigJsonSources>>,
-    permission_parents: tokio::sync::RwLock<HashMap<String, agena_domain::NetworkPermissionConfig>>,
+    permission_parents: tokio::sync::RwLock<HashMap<String, agena_domain::PermissionConfig>>,
     /// Authoritative runtime projection used for status and capability caches.
     runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
     /// Cached control projection for Agena's own HTTP MCP surface.
@@ -933,27 +933,28 @@ impl TuiBackend {
             .context("server did not provide inherited permission configuration")?;
         let permission: agena_domain::PermissionConfig = serde_json::from_value(inherited.clone())
             .context("invalid inherited permission configuration")?;
-        let network = permission
+        permission
             .network
+            .as_ref()
             .context("server did not provide inherited network configuration")?;
         self.inner
             .permission_parents
             .write()
             .await
-            .insert(layer.to_string(), network);
+            .insert(layer.to_string(), permission);
         Ok(())
     }
 
-    pub(crate) fn inherited_network(
+    pub(crate) fn inherited_permission(
         &self,
         layer: &str,
-    ) -> Result<agena_domain::NetworkPermissionConfig> {
+    ) -> Result<agena_domain::PermissionConfig> {
         self.inner
             .permission_parents
             .try_read()
             .ok()
             .and_then(|parents| parents.get(layer).cloned())
-            .context("inherited network configuration has not been loaded from the server")
+            .context("inherited permission configuration has not been loaded from the server")
     }
 
     pub(crate) fn runtime_status(&self) -> Option<agena_api::resource::RuntimeStatusResponse> {

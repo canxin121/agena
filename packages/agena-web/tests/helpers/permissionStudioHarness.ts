@@ -25,7 +25,10 @@ export function disposePermissionEditors() {
 
 export async function createPermissionEditor(
   initial: permissionConfig.PermissionConfig = {},
-  inherited: permissionConfig.PermissionConfig | null = { network: { default: 'deny' } },
+  inherited: permissionConfig.PermissionConfig | null = {
+    path: { workspace: 'readwrite', external: 'deny' },
+    network: { default: 'allow', inbound: 'deny', hostLoopback: 'deny' },
+  },
   options: { section?: string; scope?: PermissionSource; useRuntimeTransport?: boolean } = {},
 ) {
   const writes: Array<{ path: string; value: unknown; scope: string }> = []

@@ -18,28 +18,14 @@ pub(crate) fn permission_studio_sections(
             items: vec![
                 PermissionStudioItem {
                     label: ui_text::t(i18n, "permission-studio-path-workspace"),
-                    value: path_access_modes_summary(
-                        i18n,
-                        dialog
-                            .permission
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.workspace.as_ref()),
-                    ),
+                    value: permission_studio_path_default_summary(i18n, dialog, false),
                     action: PermissionStudioAction::EditMode(
                         PermissionStudioModeTarget::PathWorkspace,
                     ),
                 },
                 PermissionStudioItem {
                     label: ui_text::t(i18n, "permission-studio-path-external"),
-                    value: path_access_modes_summary(
-                        i18n,
-                        dialog
-                            .permission
-                            .path
-                            .as_ref()
-                            .and_then(|path| path.external.as_ref()),
-                    ),
+                    value: permission_studio_path_default_summary(i18n, dialog, true),
                     action: PermissionStudioAction::EditMode(
                         PermissionStudioModeTarget::PathExternal,
                     ),
@@ -242,6 +228,34 @@ pub(crate) fn permission_studio_sections(
             }]
         }
     }
+}
+
+fn permission_studio_path_default_summary(
+    i18n: &I18n,
+    dialog: &PermissionStudioOverlay,
+    external: bool,
+) -> String {
+    let selected = dialog.permission.path.as_ref();
+    let parent = dialog.inherited_permission.path.as_ref();
+    let (value, inherited) = if external {
+        (
+            selected.and_then(|path| path.external.as_ref()),
+            parent.and_then(|path| path.external.as_ref()),
+        )
+    } else {
+        (
+            selected.and_then(|path| path.workspace.as_ref()),
+            parent.and_then(|path| path.workspace.as_ref()),
+        )
+    };
+    if value.is_some() {
+        return path_access_modes_summary(i18n, value);
+    }
+    format!(
+        "{} · {}",
+        ui_text::t(i18n, "value-inherit"),
+        path_access_modes_summary(i18n, inherited),
+    )
 }
 
 fn permission_studio_new_rule_item(i18n: &I18n) -> PermissionStudioItem {

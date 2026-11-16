@@ -206,27 +206,26 @@ impl App {
                 )
             }
         };
-        let inherited_network = match &source {
+        let inherited_permission = match &source {
             PermissionStudioSource::GlobalConfig => self
                 .application
-                .inherited_network("global")
+                .inherited_permission("global")
                 .map_err(crate::UiFailure::internal)?,
             PermissionStudioSource::WorkspaceConfig => self
                 .application
-                .inherited_network("workspace")
+                .inherited_permission("workspace")
                 .map_err(crate::UiFailure::internal)?,
             PermissionStudioSource::Session { session_id }
             | PermissionStudioSource::EffectiveSession { session_id } => self
                 .cached_session_permission_studio_state(*session_id)?
                 .inherited_permission
-                .network
-                .clone()
-                .ok_or_else(|| {
-                    crate::UiFailure::internal(
-                        "server did not provide inherited network configuration",
-                    )
-                })?,
+                .clone(),
         };
+        if inherited_permission.network.is_none() {
+            return Err(crate::UiFailure::internal(
+                "server did not provide inherited network configuration",
+            ));
+        }
         let mut dialog = PermissionStudioOverlay {
             title: String::new(),
             footer: String::new(),
@@ -236,7 +235,7 @@ impl App {
             scope_label,
             editable,
             permission,
-            inherited_network,
+            inherited_permission,
             network_rule: None,
             network_advanced: false,
             save_request: None,

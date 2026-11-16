@@ -19,7 +19,8 @@ pub(crate) fn permission_studio_network(
         .permission
         .network
         .as_ref()
-        .unwrap_or(&dialog.inherited_network)
+        .or(dialog.inherited_permission.network.as_ref())
+        .expect("server-provided inherited network configuration")
 }
 
 pub(crate) fn permission_studio_custom_network(
@@ -28,7 +29,7 @@ pub(crate) fn permission_studio_custom_network(
     let mut permission = dialog.permission.clone();
     permission
         .network
-        .get_or_insert_with(|| dialog.inherited_network.clone());
+        .get_or_insert_with(|| permission_studio_network(dialog).clone());
     permission
 }
 
@@ -668,7 +669,8 @@ mod tests {
         let rules = (1..=80)
             .map(|ip| json!({"to": format!("192.0.2.{ip}")}))
             .collect::<Vec<_>>();
-        dialog.inherited_network = serde_json::from_value(json!({"allow": rules})).unwrap();
+        dialog.inherited_permission.network =
+            Some(serde_json::from_value(json!({"allow": rules})).unwrap());
         crate::refresh_permission_studio_dialog(&app.i18n, &mut dialog, None, None, None);
         crate::set_permission_studio_pane_focus(
             &mut dialog,
@@ -738,10 +740,13 @@ mod tests {
             scope_label: String::new(),
             editable: true,
             permission: PermissionConfig::default(),
-            inherited_network: serde_json::from_value(json!({
-                "default": "deny",
-                "allow": [{"to": "192.0.2.10", "protocol": "tcp", "ports": [443]}],
-                "deny": [{"to": "10.0.0.0/8"}]
+            inherited_permission: serde_json::from_value(json!({
+                "path": {"workspace": "readwrite", "external": "deny"},
+                "network": {
+                    "default": "deny",
+                    "allow": [{"to": "192.0.2.10", "protocol": "tcp", "ports": [443]}],
+                    "deny": [{"to": "10.0.0.0/8"}]
+                }
             }))
             .unwrap(),
             network_rule: None,
@@ -761,10 +766,104 @@ mod tests {
     }
 
     #[test]
+    fn built_in_permission_defaults_are_visible_without_creating_overrides() {
+        let i18n = I18n::english();
+        let mut dialog = inherited_dialog();
+        dialog.source = crate::PermissionStudioSource::GlobalConfig;
+        dialog.page = crate::PermissionStudioPage::PathDefaults;
+        dialog.inherited_permission = PermissionConfig::global_default();
+        let sections = crate::permission_studio_sections(&i18n, &dialog);
+        assert_eq!(
+            sections[0].items[0].value,
+            format!(
+                "{} · {}",
+                i18n.text("value-inherit"),
+                i18n.text("permission-studio-path-readwrite")
+            )
+        );
+        assert_eq!(
+            sections[0].items[1].value,
+            format!(
+                "{} · {}",
+                i18n.text("value-inherit"),
+                i18n.text("value-deny")
+            )
+        );
+        let network = permission_studio_network(&dialog).resolved();
+        assert_eq!(
+            network.egress.as_ref().unwrap().default,
+            Some(NetworkAction::Allow)
+        );
+        assert_eq!(
+            network.ingress.as_ref().unwrap().default,
+            Some(NetworkAction::Deny)
+        );
+        assert_eq!(
+            network.ingress.as_ref().unwrap().host_loopback,
+            Some(NetworkAction::Deny)
+        );
+        assert_eq!(serde_json::to_value(&dialog.permission).unwrap(), json!({}));
+        let custom = permission_studio_custom_network(&dialog);
+        assert!(custom.path.is_none());
+        assert_eq!(custom.network, dialog.inherited_permission.network);
+        assert_eq!(
+            serde_json::to_value(custom).unwrap()["network"]["default"],
+            "allow"
+        );
+    }
+
+    #[test]
+    fn explicit_restrictions_remain_until_reset_to_inheritance() {
+        let i18n = I18n::english();
+        let mut dialog = inherited_dialog();
+        dialog.page = crate::PermissionStudioPage::PathDefaults;
+        dialog.inherited_permission = PermissionConfig::global_default();
+        dialog.permission = serde_json::from_value(json!({
+            "path": {"workspace": "readonly", "external": "deny"},
+            "network": {}
+        }))
+        .unwrap();
+        let sections = crate::permission_studio_sections(&i18n, &dialog);
+        assert_eq!(
+            sections[0].items[0].value,
+            i18n.text("permission-studio-path-readonly")
+        );
+        assert_eq!(sections[0].items[1].value, i18n.text("value-deny"));
+        assert_eq!(
+            permission_studio_network(&dialog).resolved(),
+            NetworkPermissionConfig::offline().resolved()
+        );
+        crate::apply_permission_studio_mode_input(
+            &i18n,
+            &mut dialog.permission,
+            &crate::PermissionStudioModeTarget::PathWorkspace,
+            "",
+        )
+        .unwrap();
+        let sections = crate::permission_studio_sections(&i18n, &dialog);
+        assert!(
+            sections[0].items[0]
+                .value
+                .contains(&i18n.text("permission-studio-path-readwrite"))
+        );
+        assert_eq!(sections[0].items[1].value, i18n.text("value-deny"));
+        assert!(dialog.permission.network.is_some());
+        dialog.permission.network = None;
+        assert_eq!(
+            permission_studio_network(&dialog)
+                .resolved()
+                .egress
+                .unwrap()
+                .default,
+            Some(NetworkAction::Allow)
+        );
+    }
+
+    #[test]
     fn network_form_customization_copies_the_complete_parent_policy() {
         let dialog = inherited_dialog();
         let permission = permission_studio_custom_network(&dialog);
-        assert_eq!(permission.network.as_ref(), Some(&dialog.inherited_network));
+        assert_eq!(permission.network, dialog.inherited_permission.network);
         assert!(dialog.permission.network.is_none());
         let mut rule = permission_studio_network_rule_draft(&dialog, false, None).unwrap();
         rule.to = "192.0.2.11".into();

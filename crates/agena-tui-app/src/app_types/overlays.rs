@@ -49,7 +49,7 @@ pub(crate) struct PermissionStudioOverlay {
     pub(crate) scope_label: String,
     pub(crate) editable: bool,
     pub(crate) permission: PermissionConfig,
-    pub(crate) inherited_network: agena_domain::NetworkPermissionConfig,
+    pub(crate) inherited_permission: agena_domain::PermissionConfig,
     pub(crate) network_rule: Option<PermissionStudioNetworkRuleDraft>,
     pub(crate) network_advanced: bool,
     pub(crate) save_request: Option<uuid::Uuid>,

@@ -5,6 +5,24 @@ import { createPermissionEditor as editor, disposePermissionEditors } from './he
 afterEach(disposePermissionEditors)
 
 describe('flat network permission editor', () => {
+  test('customizing the built-in policy starts its JSON draft with outbound access', async () => {
+    const { panel, writes } = await editor()
+    expect(panel.networkMode('default')).toBe('allow')
+    expect(panel.networkMode('inbound')).toBe('deny')
+    expect(panel.networkMode('hostLoopback')).toBe('deny')
+    panel.setNetworkSource('custom')
+    expect(JSON.parse(panel.networkJson.value)).toEqual({
+      default: 'allow',
+      inbound: 'deny',
+      hostLoopback: 'deny',
+    })
+    expect(panel.config.value.path).toBeUndefined()
+    expect(writes).toHaveLength(0)
+    panel.setNetworkSource('inherit')
+    expect(panel.config.value).toEqual({})
+    expect(panel.networkMode('default')).toBe('allow')
+  })
+
   test.each([
     '{"allow":',
     JSON.stringify({ internet: 'allow' }),
@@ -44,6 +62,9 @@ describe('flat network permission editor', () => {
     await panel.save()
     expect(writes).toEqual([{ path: 'permission', value: { network: {} }, scope: 'global' }])
     expect(panel.networkCustom.value).toBe(true)
+    expect(panel.networkMode('default')).toBe('deny')
+    expect(panel.networkMode('inbound')).toBe('deny')
+    expect(panel.networkMode('hostLoopback')).toBe('deny')
     expect(panel.dirty.value).toBe(false)
   })
 

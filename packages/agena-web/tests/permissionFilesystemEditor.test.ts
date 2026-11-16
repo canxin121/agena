@@ -13,6 +13,53 @@ const approvalModel = {
 }
 
 describe('filesystem permission editor persistence', () => {
+  test.each(['global', 'workspace', 'session'] as const)(
+    'empty %s permissions display the inherited defaults without writing overrides',
+    async (scope) => {
+      const { panel, writes } = await createPermissionEditor({}, undefined, { section: 'filesystem', scope })
+      expect(panel.modeAt('workspace')).toBe('')
+      expect(panel.modeAt('external')).toBe('')
+      expect(panel.pathInheritanceLabel('workspace')).toBe('Inherit · Read and write')
+      expect(panel.pathInheritanceLabel('external')).toBe('Inherit · Deny')
+      expect(panel.networkMode('default')).toBe('allow')
+      expect(panel.networkMode('inbound')).toBe('deny')
+      expect(panel.networkMode('hostLoopback')).toBe('deny')
+      expect(panel.rawJson.value).toBe('{}')
+      expect(panel.dirty.value).toBe(false)
+      expect(writes).toHaveLength(0)
+    },
+  )
+
+  test('resetting explicit restrictions returns to the server-provided defaults', async () => {
+    const { panel, writes } = await createPermissionEditor(
+      { path: { workspace: 'readonly', external: 'deny' }, network: {} },
+      undefined,
+      { section: 'filesystem' },
+    )
+    expect(panel.modeAt('workspace')).toBe('readonly')
+    expect(panel.modeAt('external')).toBe('deny')
+    expect(panel.networkMode('default')).toBe('deny')
+    await panel.clearSource()
+    expect(panel.rawJson.value).toBe('{}')
+    expect(panel.pathInheritanceLabel('workspace')).toBe('Inherit · Read and write')
+    expect(panel.networkMode('default')).toBe('allow')
+    await panel.save()
+    expect(writes).toEqual([{ path: 'permission', value: undefined, scope: 'global' }])
+    expect(panel.config.value).toEqual({})
+    expect(panel.dirty.value).toBe(false)
+  })
+
+  test('inheritance labels follow a restrictive parent instead of a UI default', async () => {
+    const { panel } = await createPermissionEditor(
+      {},
+      { path: { workspace: 'readonly', external: 'deny' }, network: { default: 'deny' } },
+      { section: 'filesystem' },
+    )
+    expect(panel.pathInheritanceLabel('workspace')).toBe('Inherit · Read only')
+    expect(panel.networkMode('default')).toBe('deny')
+    expect(panel.config.value).toEqual({})
+  })
+
   test.each(['global', 'workspace'] as const)(
     'saving and refreshing %s reads back that layer independently of session policy',
     async (source) => {

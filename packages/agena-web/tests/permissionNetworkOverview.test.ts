@@ -16,7 +16,7 @@ afterEach(() => {
   for (const scope of scopes.splice(0)) scope.stop()
 })
 
-async function overview(policy: permissionConfig.PermissionConfig) {
+async function overview(policy: permissionConfig.PermissionConfig, cardId = 'network') {
   const modules: Record<string, unknown> = {
     vue: { ...vue, onMounted() {}, onBeforeUnmount() {} },
     'vue-router': { useRoute: () => ({}), useRouter: () => ({ push() {} }) },
@@ -39,10 +39,29 @@ async function overview(policy: permissionConfig.PermissionConfig) {
   const panel = scope.run(() => module.exports.default!.setup({}, { expose() {} }))!
   await panel.refresh()
   expect(panel.error.value).toBe('')
-  return panel.cards.value.find((card: { id: string }) => card.id === 'network')
+  return panel.cards.value.find((card: { id: string }) => card.id === cardId)
 }
 
 describe('native network permissions overview', () => {
+  test('shows the server-resolved built-in workspace and network defaults', async () => {
+    const policy: permissionConfig.PermissionConfig = {
+      path: { workspace: 'readwrite', external: 'deny' },
+      network: { default: 'allow', inbound: 'deny', hostLoopback: 'deny' },
+    }
+    const files = await overview(policy, 'filesystem')
+    expect(files.rows).toEqual([
+      { label: 'Workspace files', mode: 'readwrite' },
+      { label: 'External files', mode: 'deny' },
+    ])
+    const network = await overview(policy)
+    expect(network.rows.map((row: { mode: string }) => row.mode)).toEqual(['allow', 'deny', 'deny'])
+  })
+
+  test('an absent effective policy is not presented as explicit offline access', async () => {
+    const card = await overview({})
+    expect(card.rows.map((row: { mode?: string }) => row.mode)).toEqual([undefined, undefined, undefined])
+  })
+
   test('shows native effective actions and counts allow plus deny selectors', async () => {
     const card = await overview({
       network: {
@@ -61,8 +80,8 @@ describe('native network permissions overview', () => {
     ])
   })
 
-  test('an omitted native policy displays the effective deny defaults', async () => {
-    const card = await overview({})
+  test('an explicit empty network policy displays offline defaults', async () => {
+    const card = await overview({ network: {} })
     expect(card.count).toBe(0)
     expect(card.rows.map((row: { mode: string }) => row.mode)).toEqual(['deny', 'deny', 'deny'])
   })

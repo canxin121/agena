@@ -97,6 +97,26 @@ describe('sandbox-compatible permission configuration', () => {
     (path) => expect(() => parsePermissionConfig({ path: { rules: { [path]: 'readonly' } } })).toThrow(),
   )
 
+  test('nested readonly and readwrite directory rules retain their modes in either JSON order', () => {
+    for (const rules of [
+      {
+        '<workspace>/tree': 'readonly',
+        '<workspace>/tree/output': 'readwrite',
+        '<workspace>/tree/output/reference': 'readonly',
+      },
+      {
+        '<workspace>/tree': 'readwrite',
+        '<workspace>/tree/reference': 'readonly',
+        '<workspace>/tree/reference/output': 'readwrite',
+      },
+    ]) {
+      for (const entries of [Object.entries(rules), Object.entries(rules).reverse()]) {
+        const config = { path: { workspace: 'readwrite', external: 'readonly', rules: Object.fromEntries(entries) } }
+        expect(parsePermissionConfig(config)).toEqual(config)
+      }
+    }
+  })
+
   test('denied ancestors cannot be reopened in either JSON order', () => {
     for (const rules of [
       { '<workspace>/secrets': 'deny', '<workspace>/secrets/public.txt': 'readonly' },
@@ -117,6 +137,35 @@ describe('sandbox-compatible permission configuration', () => {
         path: { workspace: 'deny', rules: { '<workspace>/result.txt': 'readwrite' } },
       }).path?.rules,
     ).toEqual({ '<workspace>/result.txt': 'readwrite' })
+  })
+
+  test('filesystem and volume roots normalize as concrete directory grants', () => {
+    for (const [input, expected] of [
+      ['/', '/'],
+      ['/**', '/'],
+      ['/./', '/'],
+      ['C:/', 'C:/'],
+      ['c:\\', 'C:/'],
+      ['C:/**', 'C:/'],
+    ]) {
+      expect(canonicalPermissionPath(input!)).toBe(expected)
+      for (const mode of ['readonly', 'readwrite'])
+        expect(parsePermissionConfig({ path: { rules: { [input!]: mode } } }).path?.rules).toEqual({
+          [expected!]: mode,
+        })
+    }
+    for (const path of ['C:', 'C:relative', '//server/share', '/tmp/*.key'])
+      expect(() => canonicalPermissionPath(path)).toThrow()
+  })
+
+  test('denied filesystem and volume roots still prevent reopening descendants', () => {
+    for (const [root, child] of [
+      ['/', '/tmp/public'],
+      ['C:/', 'C:/public'],
+    ])
+      expect(() => parsePermissionConfig({ path: { rules: { [root!]: 'deny', [child!]: 'readwrite' } } })).toThrow(
+        'cannot reopen denied path',
+      )
   })
 
   test('normalizes duplicate identical directory boundaries without a wildcard policy', () => {
@@ -140,17 +189,10 @@ describe('sandbox-compatible permission configuration', () => {
     ).toThrow('conflicting modes')
   })
 
-  test.each([
-    '/',
-    '/**',
-    'C:/',
-    'c:relative',
-    '//server/share',
-    '~/.ssh',
-    ' file ',
-    '<home>/file:stream',
-    'dir/<home>',
-  ])('rejects unsupported path syntax %s', (path) => expect(() => canonicalPermissionPath(path)).toThrow())
+  test.each(['C:', 'c:relative', '//server/share', '~/.ssh', ' file ', '<home>/file:stream', 'dir/<home>'])(
+    'rejects unsupported path syntax %s',
+    (path) => expect(() => canonicalPermissionPath(path)).toThrow(),
+  )
 
   test('allows legacy deny migration because it only tightens access', () => {
     expect(
@@ -160,7 +202,7 @@ describe('sandbox-compatible permission configuration', () => {
     ).toEqual({ '<workspace>/secrets': 'deny' })
   })
 
-  test('rejects nested readonly/readwrite grants independently of input order', () => {
+  test('accepts nested readonly/readwrite grants independently of input order', () => {
     for (const [parent, child] of [
       ['readonly', 'readwrite'],
       ['readwrite', 'readonly'],
@@ -175,7 +217,9 @@ describe('sandbox-compatible permission configuration', () => {
           ['<workspace>/work', parent],
         ],
       ]) {
-        expect(() => parsePermissionConfig({ path: { rules: Object.fromEntries(entries) } })).toThrow('separate roots')
+        expect(parsePermissionConfig({ path: { rules: Object.fromEntries(entries) } }).path?.rules).toEqual(
+          Object.fromEntries(entries),
+        )
       }
     }
     expect(

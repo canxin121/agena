@@ -108,11 +108,7 @@ export function canonicalPermissionPath(value: string): string {
     throw new PermissionConfigError('Path rule {path} must not have surrounding whitespace.', { path: value })
   let path = value.replace(/\\/g, '/')
   // Only the former full-subtree suffix has a safe concrete-path equivalent.
-  if (path.endsWith('/**')) path = path.slice(0, -3)
-  if (!path)
-    throw new PermissionConfigError('Path rule {path} must name a specific directory instead of a filesystem root.', {
-      path: value,
-    })
+  if (path.endsWith('/**')) path = path.slice(0, -2)
   if (/[*?]/.test(path))
     throw new PermissionConfigError('Path rule {path} must name a file or directory; wildcards are not supported.', {
       path: value,
@@ -147,10 +143,6 @@ export function canonicalPermissionPath(value: string): string {
     throw new PermissionConfigError('Path rule {path} must not contain parent traversal.', { path: value })
   if (parts.some((part) => /[<>:]/.test(part)))
     throw new PermissionConfigError('Path rule {path} has a misplaced alias or an unsupported alternate data stream.', {
-      path: value,
-    })
-  if (!parts.length && prefix.endsWith('/'))
-    throw new PermissionConfigError('Path rule {path} must name a specific directory instead of a filesystem root.', {
       path: value,
     })
   return parts.length ? prefix + (prefix.endsWith('/') ? '' : '/') + parts.join('/') : prefix
@@ -368,13 +360,8 @@ export function parsePermissionConfig(value: unknown): PermissionConfig {
       for (const [path, mode] of rules) {
         if (mode === 'deny') continue
         for (const [parent, parentMode] of rules) {
-          if (path === parent || !path.startsWith(parent + '/') || parentMode === mode) continue
-          if (parentMode === 'deny')
+          if (parentMode === 'deny' && path.startsWith(parent.endsWith('/') ? parent : parent + '/'))
             throw new PermissionConfigError('Path rule {path} cannot reopen denied path {parent}.', { path, parent })
-          throw new PermissionConfigError(
-            'Path rule {path} conflicts with {parent}: use separate roots for readonly and readwrite access.',
-            { path, parent },
-          )
         }
       }
       result.path.rules = Object.fromEntries(rules)

@@ -611,6 +611,12 @@ impl App {
             ConfirmAction::PermissionStudioDeleteNetworkPolicy => {
                 self.delete_permission_studio_network_policy()
             }
+            ConfirmAction::PermissionStudioNetworkPreset { allow } => {
+                self.set_permission_studio_network_preset(allow)
+            }
+            ConfirmAction::PermissionStudioDeleteNetworkRule { deny, index } => {
+                self.delete_permission_studio_network_rule(deny, index)
+            }
             ConfirmAction::PermissionStudioDeleteToolName { key } => {
                 self.delete_permission_studio_tool_name(key.as_str())
             }

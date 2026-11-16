@@ -46,12 +46,11 @@ describe('native network permissions overview', () => {
   test('shows native effective actions and counts allow plus deny selectors', async () => {
     const card = await overview({
       network: {
-        egress: {
-          default: 'deny',
-          allow: [{ to: [{ cidr: '192.0.2.10/32' }], ports: [{ protocol: 'tcp', port: 443 }] }],
-          deny: [{ to: [{ cidr: '192.0.2.11/32' }] }],
-        },
-        ingress: { default: 'allow', hostLoopback: 'deny' },
+        default: 'deny',
+        allow: [{ to: '192.0.2.10', protocol: 'tcp', ports: [443] }],
+        deny: [{ to: '192.0.2.11' }],
+        inbound: 'allow',
+        hostLoopback: 'deny',
       },
     })
     expect(card.count).toBe(2)

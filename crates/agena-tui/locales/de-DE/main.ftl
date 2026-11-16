@@ -743,9 +743,9 @@ permission-studio-page-path-defaults = Dateisystem / Standardzonen
 permission-studio-page-path-rules = Dateisystem / Pfadregeln
 
 
-permission-studio-page-network-defaults = Netzwerk / Native Vorgaben
+permission-studio-page-network-defaults = Netzwerk / Richtlinie
 
-permission-studio-page-network-rules = Netzwerk / Native Regeln
+permission-studio-page-network-rules = Netzwerk / Regeln
 
 permission-studio-page-tools = Werkzeuge
 
@@ -769,9 +769,9 @@ permission-studio-nav-path-rules = Pfadregeln
 
 permission-studio-nav-network = Netzwerk
 
-permission-studio-nav-network-defaults = Native Vorgaben
+permission-studio-nav-network-defaults = Richtlinie
 
-permission-studio-nav-network-rules = Native Regeln
+permission-studio-nav-network-rules = Regeln
 
 permission-studio-nav-tool-access = Werkzeugzugriff
 
@@ -3437,8 +3437,78 @@ permission-studio-rule-path = Pfad
 permission-studio-path-duplicate = Für diesen Pfad besteht bereits eine Regel.
 permission-studio-rule-duplicate = Die Regel besteht bereits.
 
-permission-studio-network-json = Native Netzwerkrichtlinie als JSON
+permission-studio-network-json = Erweitertes Netzwerk-JSON
 
-permission-studio-network-json-help = MXC-Objekte egress und ingress mit CIDRs, except, Protokollen und Portbereichen verwenden. Verbote haben Vorrang. Fehlende Felder werden geerbt; [] leert eine geerbte Liste.
+permission-studio-network-json-help = Vollständige Richtlinie mit default, allow, deny, inbound und hostLoopback bearbeiten. Regeln nutzen to, protocol, ports und except. Fehlende Felder bedeuten deny oder leere Listen. Zum Erben network entfernen.
 
-permission-studio-network-invalid-action = Netzwerkaktionen müssen allow, deny oder nicht gesetzt sein.
+permission-studio-network-invalid-action = Netzwerkaktionen müssen allow oder deny sein.
+
+permission-studio-network-source = Konfigurationsquelle
+
+permission-studio-network-custom = Benutzerdefiniert
+
+permission-studio-network-inherited = Übergeordnete Konfiguration erben
+
+permission-studio-network-offline = Offline-Richtlinie verwenden
+
+permission-studio-network-outbound = Ausgehende Verbindungen standardmäßig erlauben
+
+permission-studio-network-preset-help = Gesamte Netzwerkrichtlinie ersetzen. Erlaubnis-/Sperrlisten leeren und eingehende Verbindungen sowie Host-Loopback sperren.
+
+permission-studio-network-advanced = Erweiterte Einstellungen
+
+permission-studio-network-collapse = Einklappen
+
+permission-studio-network-expand = Ausklappen
+
+permission-studio-network-json-short = Vollständiges Netzwerk-JSON bearbeiten
+
+permission-studio-network-rule-form = Netzwerkregel
+
+permission-studio-network-action = Aktion (mit Enter wechseln)
+
+permission-studio-network-target = Ziel-IP / CIDR / *
+
+permission-studio-network-protocol = Protokoll
+
+permission-studio-network-ports = Ports
+
+permission-studio-network-except = Ausgeschlossene Subnetze
+
+permission-studio-network-all-ports = Alle Ports
+
+permission-studio-network-save = Regel speichern
+
+permission-studio-network-cancel = Abbrechen
+
+permission-studio-network-add-allow = Erlaubnisregel hinzufügen
+
+permission-studio-network-add-deny = Sperrregel hinzufügen
+
+permission-studio-network-saving = Berechtigungen werden gespeichert. Bitte warten.
+
+permission-studio-network-save-or-cancel = Aktuelle Änderung zuerst speichern oder abbrechen.
+
+permission-studio-network-inherit-title = Übergeordnete Netzwerkrichtlinie erben
+
+permission-studio-network-inherit-help = Gesamte Netzwerkrichtlinie dieser Ebene entfernen und die übergeordnete Konfiguration erben.
+
+permission-studio-network-target-help = IP, Netzwerk-CIDR oder * für alle Ziele eingeben.
+
+permission-studio-network-protocol-help = tcp, udp, icmp oder any auswählen. ICMP verwendet keine Ports.
+
+permission-studio-network-ports-help = Ports 1–65535 durch Kommas trennen: 443, 8000-8099. Leer bedeutet alle Ports.
+
+permission-studio-network-except-help = Ausgeschlossene Subnetze innerhalb des Ziel-CIDR durch Kommas trennen. Leer bedeutet keine.
+
+permission-studio-network-defaults-footer = Tab Bereiche · ↑/↓ auswählen · Enter ändern · Esc zurück
+
+permission-studio-network-rules-footer = Tab Bereiche · Ctrl+N hinzufügen · ↑/↓ auswählen · Enter bearbeiten · Ctrl+D löschen · Esc zurück
+
+permission-studio-network-form-footer = ↑/↓ Feld wählen · Enter bearbeiten · Ctrl+S Regel speichern · Esc abbrechen
+
+permission-studio-network-column-setting = Einstellung
+
+permission-studio-network-column-rule = Regel / Feld
+
+permission-studio-network-column-value = Wert

@@ -60,7 +60,11 @@ pub(crate) fn refresh_permission_studio_dialog(
         .or(Some(dialog.state.focus()))
         .unwrap_or_else(|| permission_studio_default_focus(&dialog.page));
     dialog.title = permission_studio_title(i18n, dialog);
-    dialog.footer = permission_studio_footer(i18n, &dialog.page);
+    dialog.footer = if dialog.network_rule.is_some() {
+        i18n.text("permission-studio-network-form-footer")
+    } else {
+        permission_studio_footer(i18n, &dialog.page)
+    };
     dialog.state = SectionedListState::new(sections, selected_section, selected_item, focus);
     if dialog.state.selected_item().is_none()
         && dialog.state.focus() == PermissionStudioFocus::Items
@@ -81,10 +85,12 @@ pub(crate) fn permission_studio_title(i18n: &I18n, dialog: &PermissionStudioOver
 
 pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage) -> String {
     match page {
+        PermissionStudioPage::NetworkDefaults => {
+            i18n.text("permission-studio-network-defaults-footer")
+        }
+        PermissionStudioPage::NetworkRules => i18n.text("permission-studio-network-rules-footer"),
         PermissionStudioPage::PathDefaults
         | PermissionStudioPage::PathRules
-        | PermissionStudioPage::NetworkDefaults
-        | PermissionStudioPage::NetworkRules
         | PermissionStudioPage::ToolNames
         | PermissionStudioPage::ToolCommandRules => {
             ui_text::t(i18n, "overlay-permission-studio-footer-nested")

@@ -359,7 +359,7 @@ async function removeRule(id: number) {
     >
       {{
         $st(
-          'Network decisions accept allow or deny and literal IP targets such as 192.0.2.10:443. Use tcp://, udp:// or icmp:// for a protocol; bare IP covers configured protocols and ports. Configure CIDRs in Native network policy JSON.',
+          'Network decisions accept allow or deny and literal IP targets such as 192.0.2.10:443. Use tcp://, udp:// or icmp:// for a protocol; bare IP covers configured protocols and ports. Configure CIDRs in network settings.',
         )
       }}
     </p>

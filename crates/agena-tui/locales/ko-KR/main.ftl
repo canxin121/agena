@@ -797,9 +797,9 @@ permission-studio-page-path-defaults = 파일 시스템 / 기본 영역
 permission-studio-page-path-rules = 파일 시스템 / 경로 규칙
 
 
-permission-studio-page-network-defaults = 네트워크 / 네이티브 기본값
+permission-studio-page-network-defaults = 네트워크 / 정책
 
-permission-studio-page-network-rules = 네트워크 / 네이티브 규칙
+permission-studio-page-network-rules = 네트워크 / 규칙
 
 permission-studio-page-tools = 회사 소개
 
@@ -823,9 +823,9 @@ permission-studio-nav-path-rules = 경로 규칙
 
 permission-studio-nav-network = 네트워크
 
-permission-studio-nav-network-defaults = 네이티브 기본값
+permission-studio-nav-network-defaults = 정책
 
-permission-studio-nav-network-rules = 네이티브 규칙
+permission-studio-nav-network-rules = 규칙
 
 permission-studio-nav-tool-access = 도구 접근
 
@@ -3287,8 +3287,78 @@ permission-studio-rule-path = 경로
 permission-studio-path-duplicate = 이 경로의 규칙이 이미 있습니다.
 permission-studio-rule-duplicate = 이 규칙이 이미 있습니다.
 
-permission-studio-network-json = 네이티브 네트워크 정책 JSON
+permission-studio-network-json = 고급 네트워크 JSON
 
-permission-studio-network-json-help = MXC의 egress 및 ingress 객체에서 CIDR, except, 프로토콜, 포트 범위를 설정합니다. 거부 규칙이 우선합니다. 생략한 필드는 상속되며 []는 상속 목록을 비웁니다.
+permission-studio-network-json-help = default, allow, deny, inbound, hostLoopback으로 전체 설정을 편집합니다. 규칙은 to, protocol, ports, except를 사용합니다. 생략한 필드는 거부 또는 빈 목록이 되며, network를 삭제하면 상위 설정을 상속합니다.
 
-permission-studio-network-invalid-action = 네트워크 동작은 allow, deny 또는 미설정이어야 합니다.
+permission-studio-network-invalid-action = 네트워크 동작은 allow 또는 deny여야 합니다.
+
+permission-studio-network-source = 설정 출처
+
+permission-studio-network-custom = 사용자 지정
+
+permission-studio-network-inherited = 상위 설정 상속
+
+permission-studio-network-offline = 오프라인 설정 사용
+
+permission-studio-network-outbound = 기본적으로 아웃바운드 허용
+
+permission-studio-network-preset-help = 전체 네트워크 설정을 교체합니다. 허용/거부 목록을 비우고 인바운드와 호스트 루프백을 거부합니다.
+
+permission-studio-network-advanced = 고급 설정
+
+permission-studio-network-collapse = 접기
+
+permission-studio-network-expand = 펼치기
+
+permission-studio-network-json-short = 전체 네트워크 JSON 편집
+
+permission-studio-network-rule-form = 네트워크 규칙
+
+permission-studio-network-action = 동작 (Enter로 전환)
+
+permission-studio-network-target = 대상 IP / CIDR / *
+
+permission-studio-network-protocol = 프로토콜
+
+permission-studio-network-ports = 포트
+
+permission-studio-network-except = 제외할 서브넷
+
+permission-studio-network-all-ports = 모든 포트
+
+permission-studio-network-save = 규칙 저장
+
+permission-studio-network-cancel = 취소
+
+permission-studio-network-add-allow = 허용 규칙 추가
+
+permission-studio-network-add-deny = 거부 규칙 추가
+
+permission-studio-network-saving = 권한을 저장하고 있습니다. 잠시 기다려 주세요.
+
+permission-studio-network-save-or-cancel = 현재 편집을 먼저 저장하거나 취소하세요.
+
+permission-studio-network-inherit-title = 상위 네트워크 설정 상속
+
+permission-studio-network-inherit-help = 이 계층의 전체 네트워크 설정을 삭제하고 상위 설정을 상속합니다.
+
+permission-studio-network-target-help = IP, 네트워크 CIDR 또는 모든 대상을 뜻하는 *를 입력하세요.
+
+permission-studio-network-protocol-help = tcp, udp, icmp, any 중 선택하세요. ICMP에는 포트가 없습니다.
+
+permission-studio-network-ports-help = 1–65535 포트를 쉼표로 구분하세요. 예: 443, 8000-8099. 비워 두면 모든 포트입니다.
+
+permission-studio-network-except-help = 대상 CIDR 안의 제외할 서브넷을 쉼표로 구분하세요. 비워 두면 제외하지 않습니다.
+
+permission-studio-network-defaults-footer = Tab 패널 전환 · ↑/↓ 선택 · Enter 변경 · Esc 뒤로
+
+permission-studio-network-rules-footer = Tab 패널 전환 · Ctrl+N 추가 · ↑/↓ 선택 · Enter 편집 · Ctrl+D 삭제 · Esc 뒤로
+
+permission-studio-network-form-footer = ↑/↓ 필드 선택 · Enter 편집 · Ctrl+S 규칙 저장 · Esc 규칙 취소
+
+permission-studio-network-column-setting = 설정
+
+permission-studio-network-column-rule = 규칙 / 필드
+
+permission-studio-network-column-value = 값

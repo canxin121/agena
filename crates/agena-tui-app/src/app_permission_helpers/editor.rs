@@ -78,98 +78,10 @@ pub(crate) fn permission_studio_sections(
                 items: rule_items,
             }]
         }
-        PermissionStudioPage::NetworkDefaults => vec![PermissionStudioSection {
-            id: PermissionStudioSectionId::NetworkDefaults,
-            label: ui_text::t(i18n, "permission-studio-page-network-defaults"),
-            items: vec![
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-network-egress-default"),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .network
-                            .as_ref()
-                            .and_then(|network| network.egress.as_ref())
-                            .and_then(|egress| egress.default)
-                            .map(|action| match action {
-                                agena_domain::NetworkAction::Allow => {
-                                    agena_domain::PermissionMode::Allow
-                                }
-                                agena_domain::NetworkAction::Deny => {
-                                    agena_domain::PermissionMode::Deny
-                                }
-                            }),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkEgressDefault,
-                    ),
-                },
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-network-ingress-default"),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .network
-                            .as_ref()
-                            .and_then(|network| network.ingress.as_ref())
-                            .and_then(|ingress| ingress.default)
-                            .map(|action| match action {
-                                agena_domain::NetworkAction::Allow => {
-                                    agena_domain::PermissionMode::Allow
-                                }
-                                agena_domain::NetworkAction::Deny => {
-                                    agena_domain::PermissionMode::Deny
-                                }
-                            }),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkIngressDefault,
-                    ),
-                },
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-network-host-loopback"),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .network
-                            .as_ref()
-                            .and_then(|network| network.ingress.as_ref())
-                            .and_then(|ingress| ingress.host_loopback)
-                            .map(|action| match action {
-                                agena_domain::NetworkAction::Allow => {
-                                    agena_domain::PermissionMode::Allow
-                                }
-                                agena_domain::NetworkAction::Deny => {
-                                    agena_domain::PermissionMode::Deny
-                                }
-                            }),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::NetworkHostLoopback,
-                    ),
-                },
-            ],
-        }],
-        PermissionStudioPage::NetworkRules => vec![PermissionStudioSection {
-            id: PermissionStudioSectionId::NetworkRules,
-            label: i18n.text("permission-studio-page-network-rules"),
-            items: vec![PermissionStudioItem {
-                label: i18n.text("permission-studio-network-json"),
-                value: serde_json::to_string(
-                    &dialog
-                        .permission
-                        .network
-                        .as_ref()
-                        .cloned()
-                        .unwrap_or_default(),
-                )
-                .unwrap_or_default(),
-                action: PermissionStudioAction::EditNetworkPolicy,
-            }],
-        }],
+        PermissionStudioPage::NetworkDefaults => {
+            super::permission_studio_network_defaults(i18n, dialog)
+        }
+        PermissionStudioPage::NetworkRules => super::permission_studio_network_rules(i18n, dialog),
         PermissionStudioPage::ToolNames => {
             let mut keys = dialog
                 .permission
@@ -377,10 +289,12 @@ pub(crate) fn permission_studio_mode_target_input_text(
             .unwrap_or_default()
             .to_owned();
     }
-    permission_mode_token_text(permission_studio_mode_target_value(
-        &dialog.permission,
-        target,
-    ))
+    let permission = if target.is_network() {
+        super::permission_studio_custom_network(dialog)
+    } else {
+        dialog.permission.clone()
+    };
+    permission_mode_token_text(permission_studio_mode_target_value(&permission, target))
 }
 
 pub(crate) fn permission_studio_text_target_label(
@@ -488,7 +402,7 @@ pub(crate) fn apply_permission_studio_mode_input(
         .map_err(crate::UiFailure::message)?;
     if target.is_network() {
         let action = match mode {
-            None => None,
+            None => Some(agena_domain::NetworkAction::Deny),
             Some(agena_domain::PermissionMode::Allow) => Some(agena_domain::NetworkAction::Allow),
             Some(agena_domain::PermissionMode::Deny) => Some(agena_domain::NetworkAction::Deny),
             _ => {
@@ -595,7 +509,7 @@ pub(crate) fn apply_permission_studio_network_input(
     // The TUI can connect to a host running a different OS. Validate the shared
     // shape here; the server checks its native backend before saving.
     network.validate().map_err(crate::UiFailure::message)?;
-    permission.network = (!network.is_empty()).then_some(network);
+    permission.network = Some(network);
     Ok(())
 }
 
@@ -710,20 +624,22 @@ mod tests {
     }
     #[test]
     fn invalid_native_network_json_keeps_existing_permission() {
-        let mut permission = PermissionConfig::default();
-        permission.network = Some(agena_domain::NetworkPermissionConfig::offline());
+        let mut permission = PermissionConfig {
+            network: Some(agena_domain::NetworkPermissionConfig::offline()),
+            ..PermissionConfig::default()
+        };
         let original = permission.clone();
         for input in [
             r#"{"rules":{"example.com":"allow"}}"#,
-            r#"{"egress":{"allow":[{"to":[]}]}}"#,
-            r#"{"egress":{"allow":[{"ports":[{"protocol":"icmp","port":443}]}]}}"#,
+            r#"{"allow":[{"to":"*","ports":[]}]}"#,
+            r#"{"allow":[{"to":"*","protocol":"icmp","ports":[443]}]}"#,
         ] {
             assert!(apply_permission_studio_network_input(&mut permission, input).is_err());
             assert_eq!(permission, original);
         }
         apply_permission_studio_network_input(
             &mut permission,
-            r#"{"egress":{"default":"deny","allow":[],"deny":[]}}"#,
+            r#"{"default":"deny","allow":[],"deny":[]}"#,
         )
         .unwrap();
         assert_eq!(
@@ -733,15 +649,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_network_json_is_an_explicit_offline_policy() {
+        let mut permission = PermissionConfig {
+            network: Some(agena_domain::NetworkPermissionConfig::allow_all()),
+            ..PermissionConfig::default()
+        };
+        apply_permission_studio_network_input(&mut permission, "{}").unwrap();
+        normalize_permission_config(&mut permission);
+        assert_eq!(
+            permission.network,
+            Some(agena_domain::NetworkPermissionConfig::offline())
+        );
+        assert!(!permission.is_empty());
+    }
+
+    #[test]
     fn native_network_json_defers_platform_capabilities_to_execution_host() {
         for (input, supported_platform, unsupported_platform) in [
             (
-                r#"{"egress":{"allow":[{"to":[{"cidr":"192.0.2.10/32"}],"ports":[{"protocol":"tcp","port":443}]}]}}"#,
+                r#"{"default":"deny","allow":[{"to":"192.0.2.10","protocol":"tcp","ports":[443]}]}"#,
                 "linux",
                 "macos",
             ),
             (
-                r#"{"ingress":{"default":"allow","hostLoopback":"allow"}}"#,
+                r#"{"default":"deny","inbound":"allow","hostLoopback":"allow"}"#,
                 "windows",
                 "linux",
             ),

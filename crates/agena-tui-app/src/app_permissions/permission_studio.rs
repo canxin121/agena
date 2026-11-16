@@ -31,6 +31,10 @@ impl App {
                 self.open_permission_studio_network_editor(dialog);
                 false
             }
+            PermissionStudioAction::Network(action) => {
+                self.activate_permission_studio_network(dialog, action);
+                false
+            }
             PermissionStudioAction::AddToolCommandPattern { tool_name } => {
                 if !dialog.editable {
                     self.flash_warning(permission_studio_read_only_message(
@@ -59,6 +63,11 @@ impl App {
         if !item.selectable {
             return;
         };
+        if dialog.network_rule.is_some() && item.page != dialog.page {
+            dialog.nav.selected = crate::permission_studio_nav_index_for_page(&dialog.page);
+            self.flash_warning(self.i18n.text("permission-studio-network-save-or-cancel"));
+            return;
+        }
         self.set_permission_studio_page_with_section(
             dialog,
             item.page,
@@ -91,8 +100,8 @@ impl App {
             } else {
                 permission_mode_choice_items(&self.i18n)
             },
-            ChoiceOverlayAction::PermissionStudioMode(target),
-            true,
+            ChoiceOverlayAction::PermissionStudioMode(target.clone()),
+            !target.is_network(),
             agena_tui::choice::ChoicePresentationStyle::SelectOnly,
         ));
     }
@@ -101,6 +110,10 @@ impl App {
         &mut self,
         dialog: &mut PermissionStudioOverlay,
     ) {
+        if dialog.network_rule.is_some() {
+            self.flash_warning(self.i18n.text("permission-studio-network-save-or-cancel"));
+            return;
+        }
         if !dialog.editable {
             self.flash_warning(permission_studio_read_only_message(
                 &self.i18n,
@@ -108,15 +121,8 @@ impl App {
             ));
             return;
         }
-        let input = serde_json::to_string_pretty(
-            &dialog
-                .permission
-                .network
-                .as_ref()
-                .cloned()
-                .unwrap_or_default(),
-        )
-        .unwrap_or_default();
+        let input = serde_json::to_string_pretty(crate::permission_studio_network(dialog))
+            .unwrap_or_default();
         dialog.editor = Some(PermissionStudioEditor::new(
             self.i18n.text("permission-studio-network-json"),
             self.i18n.text("permission-studio-network-json-help"),
@@ -274,6 +280,33 @@ impl App {
                 let mut permission = dialog.permission.clone();
                 apply_permission_studio_network_input(&mut permission, &input)?;
                 self.persist_permission_studio(dialog, permission)?;
+            }
+            PermissionStudioEditorAction::NetworkRuleField(field) => {
+                let draft = dialog
+                    .network_rule
+                    .as_mut()
+                    .ok_or_else(|| crate::UiFailure::internal("network draft is no longer open"))?;
+                match field {
+                    crate::PermissionStudioNetworkField::Target => {
+                        draft.to = input.trim().to_string()
+                    }
+                    crate::PermissionStudioNetworkField::Protocol => {
+                        draft.protocol = input.trim().to_string()
+                    }
+                    crate::PermissionStudioNetworkField::Ports => {
+                        draft.ports = input.trim().to_string()
+                    }
+                    crate::PermissionStudioNetworkField::Except => {
+                        draft.except = input.trim().to_string()
+                    }
+                }
+                crate::refresh_permission_studio_dialog(
+                    &self.i18n,
+                    dialog,
+                    None,
+                    None,
+                    Some(PermissionStudioFocus::Items),
+                );
             }
             PermissionStudioEditorAction::AddToolName => {
                 let key = parse_permission_studio_key_input(

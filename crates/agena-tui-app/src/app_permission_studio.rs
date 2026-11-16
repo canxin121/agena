@@ -41,7 +41,10 @@ impl App {
             }
             PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
             PermissionStudioPage::NetworkRules => {
-                self.open_permission_studio_network_editor(dialog);
+                self.activate_permission_studio_network(
+                    dialog,
+                    crate::PermissionStudioNetworkAction::AddRule { deny: false },
+                );
                 return;
             }
             PermissionStudioPage::ToolNames => {
@@ -171,17 +174,13 @@ impl App {
                     ConfirmAction::PermissionStudioDeletePathRule { pattern },
                 )
             }
-            PermissionStudioPage::NetworkRules => (
-                ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
-                vec![self.i18n.text_args(
-                    "overlay-permission-studio-delete-body",
-                    &agena_tui::fl_args!(
-                        "kind" => self.i18n.text("permission-studio-network-json"),
-                        "value" => "permission.network".to_string(),
-                    ),
-                )],
-                ConfirmAction::PermissionStudioDeleteNetworkPolicy,
-            ),
+            PermissionStudioPage::NetworkRules => {
+                self.activate_permission_studio_network(
+                    dialog,
+                    crate::PermissionStudioNetworkAction::DeleteRule,
+                );
+                return;
+            }
             PermissionStudioPage::ToolNames => {
                 let Some(key) = selected_action.and_then(|action| match action {
                     PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName {

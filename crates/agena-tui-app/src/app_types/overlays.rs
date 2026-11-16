@@ -49,12 +49,22 @@ pub(crate) struct PermissionStudioOverlay {
     pub(crate) scope_label: String,
     pub(crate) editable: bool,
     pub(crate) permission: PermissionConfig,
+    pub(crate) inherited_network: agena_domain::NetworkPermissionConfig,
+    pub(crate) network_rule: Option<PermissionStudioNetworkRuleDraft>,
+    pub(crate) network_advanced: bool,
     pub(crate) save_request: Option<uuid::Uuid>,
     pub(crate) nav: SelectableListState<PermissionStudioNavItem>,
     pub(crate) pane_focus: PermissionStudioPaneFocus,
     pub(crate) page: PermissionStudioPage,
     pub(crate) state: SectionedListState<PermissionStudioSection>,
     pub(crate) editor: Option<PermissionStudioEditor>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PermissionStudioLoadRequest {
+    pub(crate) id: uuid::Uuid,
+    pub(crate) origin_route: std::mem::Discriminant<crate::Route>,
+    pub(crate) session_revision: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +79,42 @@ pub(crate) enum PermissionStudioAction {
     CreateRule,
     EditMode(PermissionStudioModeTarget),
     EditNetworkPolicy,
+    Network(PermissionStudioNetworkAction),
     AddToolCommandPattern { tool_name: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionStudioNetworkAction {
+    Source,
+    Offline,
+    Outbound,
+    Advanced,
+    AddRule { deny: bool },
+    EditRule { deny: bool, index: usize },
+    Field(PermissionStudioNetworkField),
+    ToggleRuleAction,
+    SaveRule,
+    CancelRule,
+    DeleteRule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionStudioNetworkField {
+    Target,
+    Protocol,
+    Ports,
+    Except,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PermissionStudioNetworkRuleDraft {
+    pub(crate) policy: serde_json::Value,
+    pub(crate) original: Option<(bool, usize)>,
+    pub(crate) deny: bool,
+    pub(crate) to: String,
+    pub(crate) protocol: String,
+    pub(crate) ports: String,
+    pub(crate) except: String,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +136,7 @@ pub(crate) enum PermissionStudioEditorAction {
     Text(PermissionStudioTextTarget),
     AddPathRule,
     EditNetworkPolicy,
+    NetworkRuleField(PermissionStudioNetworkField),
     AddToolName,
     AddToolRule,
     AddToolCommandPattern { tool_name: String },
@@ -243,6 +289,7 @@ pub(crate) enum ChoiceOverlayAction {
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
     PermissionStudioMode(PermissionStudioModeTarget),
+    PermissionStudioNetworkProtocol,
     PermissionStudioAddEntries(PermissionStudioCatalogKind),
     PermissionStudioAddEntriesMode {
         kind: PermissionStudioCatalogKind,
@@ -450,6 +497,13 @@ pub(crate) enum ConfirmAction {
         pattern: String,
     },
     PermissionStudioDeleteNetworkPolicy,
+    PermissionStudioNetworkPreset {
+        allow: bool,
+    },
+    PermissionStudioDeleteNetworkRule {
+        deny: bool,
+        index: usize,
+    },
     PermissionStudioDeleteToolName {
         key: String,
     },

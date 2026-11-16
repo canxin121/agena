@@ -1,8 +1,8 @@
 //! Helpers for projecting permission rules into presentation state.
 
 use agena_domain::{
-    NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PathPermissionMode,
-    PermissionConfig, PermissionMode, ToolPermissionConfig, ToolPermissionRules,
+    PathAccessModes, PathPermissionConfig, PathPermissionMode, PermissionConfig, PermissionMode,
+    ToolPermissionConfig, ToolPermissionRules,
 };
 use agena_tui::i18n::I18n;
 
@@ -168,13 +168,7 @@ pub fn normalize_permission_config(permission: &mut PermissionConfig) {
     {
         permission.path = None;
     }
-    if permission
-        .network
-        .as_ref()
-        .is_some_and(NetworkPermissionConfig::is_empty)
-    {
-        permission.network = None;
-    }
+    // An explicit empty network policy is offline; only None means inherit.
     if permission
         .tools
         .as_ref()

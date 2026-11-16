@@ -33,7 +33,7 @@ describe('sandbox-compatible permission configuration', () => {
           '<workspace>/secrets': 'deny',
         },
       },
-      network: { egress: { default: 'deny' }, ingress: { default: 'deny', hostLoopback: 'deny' } },
+      network: { default: 'deny', inbound: 'deny', hostLoopback: 'deny' },
       tools: { names: { 'agena.shell.exec': 'ask' } },
     }
     expect(parsePermissionConfig(config)).toEqual(config)
@@ -205,101 +205,114 @@ describe('sandbox-compatible permission configuration', () => {
   })
 })
 
-describe('native MXC network configuration', () => {
+describe('flat MXC network configuration', () => {
+  test('keeps one target, one protocol and concise port ranges', () => {
+    const network = {
+      default: 'deny',
+      allow: [
+        { to: '192.0.2.10', protocol: 'tcp', ports: [443, '8000-8099'] },
+        { to: '10.20.0.0/16', except: ['10.20.10.0/24'], protocol: 'udp', ports: [53] },
+        { to: '2001:db8::10', protocol: 'icmp' },
+        { to: '*', protocol: 'tcp', ports: [443] },
+      ],
+      deny: [{ to: '192.0.2.11' }],
+      inbound: 'deny',
+      hostLoopback: 'deny',
+    }
+    expect(parseNetworkPermissionConfig(network)).toEqual(network)
+  })
+
+  test('a present empty object stays an explicit offline policy', () => {
+    expect(parsePermissionConfig({ network: {} })).toEqual({ network: {} })
+    expect(parsePermissionConfig({})).toEqual({})
+    expect(parseNetworkPermissionConfig({ default: 'deny' })).toEqual({ default: 'deny' })
+    expect(parseNetworkPermissionConfig({ allow: [], deny: [] })).toEqual({ allow: [], deny: [] })
+    expect(parseNetworkPermissionConfig({ allow: [{ to: '*', except: [] }] })).toEqual({
+      allow: [{ to: '*', except: [] }],
+    })
+  })
+
   test.each([
     ['permission.network', null],
-    ['permission.network.egress', { egress: null }],
-    ['permission.network.ingress', { ingress: null }],
-    ['permission.network.egress.default', { egress: { default: null } }],
-    ['permission.network.egress.allow', { egress: { allow: null } }],
-    ['permission.network.egress.deny', { egress: { deny: null } }],
-    ['permission.network.ingress.default', { ingress: { default: null } }],
-    ['permission.network.ingress.hostLoopback', { ingress: { hostLoopback: null } }],
-    ['permission.network.egress.allow[0].to', { egress: { allow: [{ to: null }] } }],
-    ['permission.network.egress.allow[0].ports', { egress: { allow: [{ ports: null }] } }],
-    [
-      'permission.network.egress.allow[0].to[0].except',
-      { egress: { allow: [{ to: [{ cidr: '192.0.2.0/24', except: null }] }] } },
-    ],
-    ['permission.network.egress.allow[0].ports[0].protocol', { egress: { allow: [{ ports: [{ protocol: null }] }] } }],
-    ['permission.network.egress.allow[0].ports[0].port', { egress: { allow: [{ ports: [{ port: null }] }] } }],
-    ['permission.network.egress.allow[0].ports[0].endPort', { egress: { allow: [{ ports: [{ endPort: null }] }] } }],
-  ])('rejects explicit null instead of inheriting or widening %s', (field, network) => {
+    ['permission.network.default', { default: null }],
+    ['permission.network.allow', { allow: null }],
+    ['permission.network.deny', { deny: null }],
+    ['permission.network.inbound', { inbound: null }],
+    ['permission.network.hostLoopback', { hostLoopback: null }],
+    ['permission.network.allow[0].to', { allow: [{ to: null }] }],
+    ['permission.network.allow[0].protocol', { allow: [{ to: '*', protocol: null }] }],
+    ['permission.network.allow[0].ports', { allow: [{ to: '*', ports: null }] }],
+    ['permission.network.allow[0].ports[0]', { allow: [{ to: '*', ports: [null] }] }],
+    ['permission.network.allow[0].except', { allow: [{ to: '192.0.2.0/24', except: null }] }],
+  ])('rejects explicit null at %s', (field, network) => {
     expect(() => parsePermissionConfig({ network })).toThrow(field as string)
   })
 
   test.each([
-    { egress: { allow: [{ to: [{ cidr: '192.0.2.7/24' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '2001:db8::1/64' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '::ffff:192.0.2.7/120' }] }] } },
-    { egress: { deny: [{ to: [{ cidr: '192.0.2.0/24', except: ['192.0.2.129/25'] }] }] } },
-    { egress: { deny: [{ to: [{ cidr: '2001:db8::/32', except: ['2001:db8::1/64'] }] }] } },
-  ])('rejects nonzero CIDR host bits before native compilation: %p', (network) => {
-    expect(() => parseNetworkPermissionConfig(network)).toThrow('network address')
-  })
-
-  test('preserves complex policies and explicit empty override lists', () => {
-    const network = {
-      egress: {
-        default: 'deny',
-        allow: [
-          {
-            to: [
-              { cidr: '10.20.0.0/16', except: ['10.20.10.0/24'] },
-              { cidr: 'fd20:20::/48', except: ['fd20:20:0:10::/64'] },
-            ],
-            ports: [
-              { protocol: 'tcp', port: 443 },
-              { protocol: 'udp', port: 8000, endPort: 8099 },
-            ],
-          },
-        ],
-        deny: [],
-      },
-      ingress: { default: 'deny', hostLoopback: 'deny' },
-    }
-    expect(parseNetworkPermissionConfig(network)).toEqual(network)
-    expect(parseNetworkPermissionConfig({})).toEqual({})
-    expect(parseNetworkPermissionConfig({ egress: { allow: [{}] } })).toEqual({ egress: { allow: [{}] } })
-  })
-
-  test.each([
+    { egress: { default: 'allow' } },
+    { ingress: { default: 'allow' } },
     { internet: 'allow' },
     { rules: { 'example.com': 'allow' } },
-    { egress: { default: 'ask' } },
-    { ingress: { host_loopback: 'deny' } },
-    { egress: { allow: [{ to: [] }] } },
-    { egress: { allow: [{ ports: [] }] } },
-    { egress: { allow: [{ to: [{ cidr: 'example.com/32' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: 'https://example.com' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '127.0.0.1' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '10.0.0.0/8', except: ['192.168.0.0/16'] }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '10.0.0.0/8', except: ['::/0'] }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '::/129' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '1::2::3/128' }] }] } },
-    { egress: { allow: [{ to: [{ cidr: '10.00.0.1/32' }] }] } },
-    { egress: { allow: [{ ports: [{ port: 0 }] }] } },
-    { egress: { allow: [{ ports: [{ port: 65536 }] }] } },
-    { egress: { allow: [{ ports: [{ port: 443.5 }] }] } },
-    { egress: { allow: [{ ports: [{ port: '443' }] }] } },
-    { egress: { allow: [{ ports: [{ endPort: 443 }] }] } },
-    { egress: { allow: [{ ports: [{ port: 443, endPort: 80 }] }] } },
-    { egress: { allow: [{ ports: [{ protocol: 'icmp', port: 443 }] }] } },
-    { egress: { allow: [{ ports: [{ protocol: 'sctp' }] }] } },
-  ])('rejects unsupported native policy without silently deleting it: %p', (network) => {
+    { default: 'ask' },
+    { host_loopback: 'deny' },
+    { allow: [{}] },
+    { allow: [{ to: [] }] },
+    { allow: [{ to: [{ cidr: '192.0.2.1/32' }] }] },
+    { allow: [{ to: 'example.com' }] },
+    { allow: [{ to: 'https://example.com' }] },
+    { allow: [{ to: '192.0.2.10:443' }] },
+    { allow: [{ to: ' 192.0.2.10' }] },
+    { allow: [{ to: '10.00.0.1' }] },
+    { allow: [{ to: '::/129' }] },
+    { allow: [{ to: '1::2::3/128' }] },
+    { allow: [{ to: '*', except: ['192.0.2.0/24'] }] },
+    { allow: [{ to: '*', except: null }] },
+    { allow: [{ to: '10.0.0.0/8', except: ['192.168.0.0/16'] }] },
+    { allow: [{ to: '10.0.0.0/8', except: ['::/0'] }] },
+    { allow: [{ to: '*', ports: [] }] },
+    { allow: [{ to: '*', ports: [0] }] },
+    { allow: [{ to: '*', ports: [65536] }] },
+    { allow: [{ to: '*', ports: [443.5] }] },
+    { allow: [{ to: '*', ports: ['443'] }] },
+    { allow: [{ to: '*', ports: ['65535-65536'] }] },
+    { allow: [{ to: '*', ports: ['443-80'] }] },
+    { allow: [{ to: '*', ports: ['0-443'] }] },
+    { allow: [{ to: '*', ports: ['080-443'] }] },
+    { allow: [{ to: '*', ports: ['80 - 443'] }] },
+    { allow: [{ to: '*', ports: [{ port: 443 }] }] },
+    { allow: [{ to: '*', protocol: 'icmp', ports: [443] }] },
+    { allow: [{ to: '*', protocol: 'sctp' }] },
+  ])('rejects unsupported flat policy without changing it: %p', (network) => {
     const before = JSON.stringify(network)
     expect(() => parseNetworkPermissionConfig(network)).toThrow()
     expect(JSON.stringify(network)).toBe(before)
   })
 
-  test('accepts full IPv4/IPv6 ranges, literal hosts, ICMP and any protocol', () => {
-    for (const cidr of ['0.0.0.0/0', '192.0.2.1/32', '::/0', '2001:db8::1/128', '::ffff:192.0.2.1/128']) {
-      expect(
-        parseNetworkPermissionConfig({ egress: { allow: [{ to: [{ cidr }] }] } }).egress?.allow?.[0]?.to?.[0]?.cidr,
-      ).toBe(cidr)
+  test.each([
+    { allow: [{ to: '192.0.2.7/24' }] },
+    { allow: [{ to: '2001:db8::1/64' }] },
+    { allow: [{ to: '::ffff:192.0.2.7/120' }] },
+    { deny: [{ to: '192.0.2.0/24', except: ['192.0.2.129/25'] }] },
+    { deny: [{ to: '2001:db8::/32', except: ['2001:db8::1/64'] }] },
+  ])('rejects nonzero CIDR host bits: %p', (network) => {
+    expect(() => parseNetworkPermissionConfig(network)).toThrow('network address')
+  })
+
+  test('accepts IPv4, IPv6, wildcard, and explicit any protocol', () => {
+    for (const to of [
+      '*',
+      '192.0.2.1',
+      '2001:db8::1',
+      '0.0.0.0/0',
+      '192.0.2.1/32',
+      '::/0',
+      '2001:db8::1/128',
+      '::ffff:192.0.2.1/128',
+    ]) {
+      expect(parseNetworkPermissionConfig({ allow: [{ to }] }).allow?.[0]?.to).toBe(to)
     }
-    for (const ports of [[{ protocol: 'icmp' }], [{ protocol: 'any' }], [{ port: 53 }]]) {
-      expect(parseNetworkPermissionConfig({ egress: { allow: [{ ports }] } }).egress?.allow?.[0]?.ports).toEqual(ports)
-    }
+    expect(
+      parseNetworkPermissionConfig({ allow: [{ to: '*', protocol: 'any', ports: [53, '53-53'] }] }).allow?.[0]?.ports,
+    ).toEqual([53, '53-53'])
   })
 })

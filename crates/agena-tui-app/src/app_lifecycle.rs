@@ -64,6 +64,7 @@ impl App {
             deferred_ui_completions: Default::default(),
             settings_runtime_snapshot_summary: None,
             settings_session_permission: None,
+            permission_studio_load_request: None,
             session_selection_revision: 0,
             launch: launch.clone(),
             math_renderer: launch

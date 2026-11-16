@@ -94,11 +94,11 @@ const cards = computed(() => {
       id: 'network',
       title: st('Network access'),
       icon: RiGlobalLine,
-      count: (policy.network?.egress?.allow?.length || 0) + (policy.network?.egress?.deny?.length || 0),
+      count: (policy.network?.allow?.length || 0) + (policy.network?.deny?.length || 0),
       rows: [
-        { label: st('Outbound default'), mode: policy.network?.egress?.default ?? ('deny' as const) },
-        { label: st('Inbound default'), mode: policy.network?.ingress?.default ?? ('deny' as const) },
-        { label: st('Host loopback'), mode: policy.network?.ingress?.hostLoopback ?? ('deny' as const) },
+        { label: st('Outbound default'), mode: policy.network?.default ?? ('deny' as const) },
+        { label: st('Inbound default'), mode: policy.network?.inbound ?? ('deny' as const) },
+        { label: st('Host loopback'), mode: policy.network?.hostLoopback ?? ('deny' as const) },
       ],
     },
     {

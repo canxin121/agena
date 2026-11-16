@@ -48,8 +48,21 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     {
       id: 'network',
       label: () => st('Network'),
-      description: () => st('Configure native MXC outbound, inbound, and IP rules for each permission scope.'),
-      keywords: ['network', 'mxc', 'egress', 'ingress', 'cidr', 'protocol', 'port', 'hostLoopback'],
+      description: () => st('Configure network destinations, protocols, and ports for each permission scope.'),
+      keywords: [
+        'network',
+        'mxc',
+        'outbound',
+        'inbound',
+        'destination',
+        'cidr',
+        'protocol',
+        'ports',
+        'allow',
+        'deny',
+        'inherit',
+        'hostLoopback',
+      ],
     },
     {
       id: 'tools',

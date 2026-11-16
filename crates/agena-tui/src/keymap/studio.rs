@@ -27,6 +27,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         KeyContext::PermissionStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
             K::Char('n') if only_ctrl(key) => Some(A::PermissionAdd),
+            K::Char('s') if only_ctrl(key) => Some(A::PermissionSave),
             K::Char('e') if only_ctrl(key) => Some(A::PermissionRename),
             K::Char('d') if only_ctrl(key) => Some(A::Delete),
             K::Left if unmodified(key) => Some(A::MoveLeft),

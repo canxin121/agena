@@ -770,9 +770,9 @@ permission-studio-page-path-defaults = Sistema de archivos / Zonas predeterminad
 permission-studio-page-path-rules = Sistema de archivos / Reglas de ruta
 
 
-permission-studio-page-network-defaults = Red / Valores nativos
+permission-studio-page-network-defaults = Red / Política
 
-permission-studio-page-network-rules = Red / Reglas nativas
+permission-studio-page-network-rules = Red / Reglas
 
 permission-studio-page-tools = Herramientas
 
@@ -796,9 +796,9 @@ permission-studio-nav-path-rules = Reglas de ruta
 
 permission-studio-nav-network = Red
 
-permission-studio-nav-network-defaults = Valores nativos
+permission-studio-nav-network-defaults = Política
 
-permission-studio-nav-network-rules = Reglas nativas
+permission-studio-nav-network-rules = Reglas
 
 permission-studio-nav-tool-access = Acceso a herramientas
 
@@ -3306,8 +3306,78 @@ permission-studio-rule-path = Ruta
 permission-studio-path-duplicate = Ya existe una regla para esta ruta.
 permission-studio-rule-duplicate = La regla ya existe.
 
-permission-studio-network-json = Política de red nativa en JSON
+permission-studio-network-json = JSON de red avanzado
 
-permission-studio-network-json-help = Use los objetos MXC egress e ingress con CIDR, except, protocolos e intervalos de puertos. Las denegaciones tienen prioridad. Los campos omitidos se heredan; [] vacía una lista heredada.
+permission-studio-network-json-help = Edite la política completa con default, allow, deny, inbound y hostLoopback. Las reglas usan to, protocol, ports y except. Los campos omitidos usan deny o listas vacías. Elimine network para heredar del nivel superior.
 
-permission-studio-network-invalid-action = Las acciones de red deben ser allow, deny o no estar definidas.
+permission-studio-network-invalid-action = Las acciones de red deben ser allow o deny.
+
+permission-studio-network-source = Origen de la configuración
+
+permission-studio-network-custom = Personalizada
+
+permission-studio-network-inherited = Heredar del nivel superior
+
+permission-studio-network-offline = Usar configuración sin conexión
+
+permission-studio-network-outbound = Permitir salida por defecto
+
+permission-studio-network-preset-help = Sustituir toda la política de red. Vaciar las listas y denegar la entrada y el bucle local del host.
+
+permission-studio-network-advanced = Configuración avanzada
+
+permission-studio-network-collapse = Contraer
+
+permission-studio-network-expand = Expandir
+
+permission-studio-network-json-short = Editar el JSON de red completo
+
+permission-studio-network-rule-form = Regla de red
+
+permission-studio-network-action = Acción (Intro para cambiar)
+
+permission-studio-network-target = IP de destino / CIDR / *
+
+permission-studio-network-protocol = Protocolo
+
+permission-studio-network-ports = Puertos
+
+permission-studio-network-except = Subredes excluidas
+
+permission-studio-network-all-ports = Todos los puertos
+
+permission-studio-network-save = Guardar regla
+
+permission-studio-network-cancel = Cancelar
+
+permission-studio-network-add-allow = Añadir regla de permiso
+
+permission-studio-network-add-deny = Añadir regla de denegación
+
+permission-studio-network-saving = Guardando permisos. Espere un momento.
+
+permission-studio-network-save-or-cancel = Guarde o cancele primero la edición actual.
+
+permission-studio-network-inherit-title = Heredar la política de red superior
+
+permission-studio-network-inherit-help = Eliminar toda la política de red de este nivel y heredar la configuración superior.
+
+permission-studio-network-target-help = Introduzca una IP, un CIDR de red o * para todos los destinos.
+
+permission-studio-network-protocol-help = Elija tcp, udp, icmp o any. ICMP no utiliza puertos.
+
+permission-studio-network-ports-help = Puertos de 1 a 65535 separados por comas: 443, 8000-8099. Vacío significa todos los puertos.
+
+permission-studio-network-except-help = Introduzca subredes excluidas dentro del CIDR de destino, separadas por comas. Déjelo vacío para ninguna.
+
+permission-studio-network-defaults-footer = Tab paneles · ↑/↓ seleccionar · Enter cambiar · Esc volver
+
+permission-studio-network-rules-footer = Tab paneles · Ctrl+N añadir · ↑/↓ seleccionar · Enter editar · Ctrl+D eliminar · Esc volver
+
+permission-studio-network-form-footer = ↑/↓ campo · Enter editar · Ctrl+S guardar regla · Esc cancelar regla
+
+permission-studio-network-column-setting = Ajuste
+
+permission-studio-network-column-rule = Regla / Campo
+
+permission-studio-network-column-value = Valor

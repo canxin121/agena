@@ -78,6 +78,7 @@ impl App {
                     dialog,
                     section,
                     content_width.saturating_sub(nav_width).saturating_sub(2),
+                    area.height.saturating_sub(10).clamp(1, 28) as usize,
                 )
             })
             .unwrap_or_else(|| {
@@ -128,8 +129,9 @@ impl App {
         dialog: &PermissionStudioOverlay,
         section: &PermissionStudioSection,
         width: u16,
+        visible_rows: usize,
     ) -> Text<'static> {
-        let (left_header, right_header) = Self::permission_studio_table_headers(section.id);
+        let (left_header, mut right_header) = self.permission_studio_table_headers(section.id);
         let width = width.max(24);
         let left_width = width
             .saturating_mul(45)
@@ -144,6 +146,24 @@ impl App {
         let selected_style = selection_highlight_style();
         let selected_index = dialog.state.selected_item_index();
         let selected_focus = dialog.state.focus() == PermissionStudioFocus::Items;
+        let visible_rows = if matches!(
+            section.id,
+            PermissionStudioSectionId::NetworkDefaults | PermissionStudioSectionId::NetworkRules
+        ) {
+            visible_rows.max(1)
+        } else {
+            section.items.len().max(1)
+        };
+        let first_visible = selected_index
+            .saturating_sub(visible_rows / 2)
+            .min(section.items.len().saturating_sub(visible_rows));
+        if section.items.len() > visible_rows {
+            right_header = format!(
+                "{right_header} ({}/{})",
+                selected_index + 1,
+                section.items.len()
+            );
+        }
 
         lines.push(Line::from(Span::styled(
             settings_table_columns(
@@ -168,7 +188,13 @@ impl App {
             return Text::from(lines);
         }
 
-        for (index, item) in section.items.iter().enumerate() {
+        for (index, item) in section
+            .items
+            .iter()
+            .enumerate()
+            .skip(first_visible)
+            .take(visible_rows)
+        {
             let is_selected = index == selected_index;
             let style = if is_selected && selected_focus {
                 selected_style
@@ -199,15 +225,20 @@ impl App {
     }
 
     pub(crate) fn permission_studio_table_headers(
+        &self,
         section_id: PermissionStudioSectionId,
     ) -> (String, String) {
         match section_id {
             PermissionStudioSectionId::PathDefaults => ("Setting".to_string(), "Value".to_string()),
             PermissionStudioSectionId::PathRules => ("Path".to_string(), "Access".to_string()),
-            PermissionStudioSectionId::NetworkDefaults => {
-                ("Direction".to_string(), "Action".to_string())
-            }
-            PermissionStudioSectionId::NetworkRules => ("Policy".to_string(), "JSON".to_string()),
+            PermissionStudioSectionId::NetworkDefaults => (
+                self.i18n.text("permission-studio-network-column-setting"),
+                self.i18n.text("permission-studio-network-column-value"),
+            ),
+            PermissionStudioSectionId::NetworkRules => (
+                self.i18n.text("permission-studio-network-column-rule"),
+                self.i18n.text("permission-studio-network-column-value"),
+            ),
             PermissionStudioSectionId::ToolDefaults | PermissionStudioSectionId::ToolNames => {
                 ("Name".to_string(), "Access".to_string())
             }

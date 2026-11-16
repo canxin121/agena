@@ -374,6 +374,7 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
         | ChoiceOverlayAction::RewindMode { .. }
         | ChoiceOverlayAction::ClearMode { .. }
         | ChoiceOverlayAction::PermissionStudioAddEntries(_)
+        | ChoiceOverlayAction::PermissionStudioNetworkProtocol
         | ChoiceOverlayAction::PermissionStudioAddEntriesMode { .. } => String::new(),
     }
 }

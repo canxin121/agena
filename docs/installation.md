@@ -183,11 +183,19 @@ the installation directory. Existing project paths, network rules, approval
 rules, configuration, and data are preserved. System preparation does not
 change tool approval settings to allow everything.
 
-Network settings now use `permission.network.egress` and `ingress`. Replace
-the former `internet`, `private`, `loopback`, and `rules` fields before starting
-the updated service; unsupported legacy settings return a configuration error.
-See [native network configuration](sandbox.md#网络设置与执行) for examples and
-platform capabilities.
+Network settings now use the flat `permission.network` fields `default`,
+`allow`, `deny`, `inbound`, and `hostLoopback`. On startup, recognized directional
+`egress` / `ingress` settings are resolved using their former inheritance rules
+and migrated to complete flat policies. Original configuration files are backed
+up beside the file as `*.network-v1-*.bak`; stored session policies are backed up
+and migrated in a database transaction. New saves accept only the flat format.
+An omitted network block inherits its parent; an explicit `network: {}` means
+offline.
+
+The older `internet`, `private`, `loopback`, and domain `rules` require an explicit
+IP/CIDR policy before starting the updated service. See
+[native network configuration](sandbox.md#网络设置与执行) for examples, editor
+controls, migration details, and platform capabilities.
 
 To repair the dependencies/host permissions and rerun the installed binary's
 checks without replacing it or restarting the service:

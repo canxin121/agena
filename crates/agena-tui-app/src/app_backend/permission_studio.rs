@@ -9,6 +9,7 @@ pub struct SessionPermissionStudioState {
     pub session_title: String,
     pub permission: agena_domain::PermissionConfig,
     pub effective_permission: agena_domain::PermissionConfig,
+    pub inherited_permission: agena_domain::PermissionConfig,
 }
 
 /// Builds the permission studio presentation from the current execution
@@ -23,5 +24,6 @@ pub(crate) async fn get_session_permission_studio_state(
         session_title: execution.session.title.clone(),
         permission: execution.execution.selected_permission.into(),
         effective_permission: execution.execution.effective_permission.into(),
+        inherited_permission: execution.execution.inherited_permission.into(),
     })
 }

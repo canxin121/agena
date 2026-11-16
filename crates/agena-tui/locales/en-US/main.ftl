@@ -809,8 +809,8 @@ permission-studio-page-overview = Overview
 permission-studio-page-path = Path
 permission-studio-page-path-defaults = Filesystem / Default Zones
 permission-studio-page-path-rules = Filesystem / Path Rules
-permission-studio-page-network-defaults = Network / Native Defaults
-permission-studio-page-network-rules = Network / Native Rules
+permission-studio-page-network-defaults = Network / Policy
+permission-studio-page-network-rules = Network / Rules
 permission-studio-page-tools = Tools
 permission-studio-page-tool-tags = Tool Access / Tag Rules
 permission-studio-page-tool-names = Tool Access / Name Rules
@@ -822,8 +822,8 @@ permission-studio-nav-filesystem = Filesystem
 permission-studio-nav-default-zones = Default Zones
 permission-studio-nav-path-rules = Path Rules
 permission-studio-nav-network = Network
-permission-studio-nav-network-defaults = Native Defaults
-permission-studio-nav-network-rules = Native Rules
+permission-studio-nav-network-defaults = Policy
+permission-studio-nav-network-rules = Rules
 permission-studio-nav-tool-access = Tool Access
 permission-studio-nav-name-rules = Name Rules
 permission-studio-nav-command-rules = Command Rules
@@ -2978,8 +2978,78 @@ permission-studio-rule-path = Path
 permission-studio-path-duplicate = A rule already exists for this path.
 permission-studio-rule-duplicate = Rule already exists.
 
-permission-studio-network-json = Native Network Policy JSON
+permission-studio-network-json = Advanced Network JSON
 
-permission-studio-network-json-help = Use MXC egress and ingress objects. CIDRs, except, protocols and port ranges are supported. Deny rules take precedence. Omitted fields inherit; [] clears an inherited list.
+permission-studio-network-json-help = Edit a complete network policy with default, allow, deny, inbound and hostLoopback. Rules use to, protocol, ports and except. Missing fields use deny or empty lists. Remove network to inherit the parent policy.
 
-permission-studio-network-invalid-action = Network actions must be allow, deny, or unset.
+permission-studio-network-invalid-action = Network actions must be allow or deny.
+
+permission-studio-network-source = Configuration source
+
+permission-studio-network-custom = Custom
+
+permission-studio-network-inherited = Inherit parent
+
+permission-studio-network-offline = Use offline policy
+
+permission-studio-network-outbound = Allow outbound by default
+
+permission-studio-network-preset-help = Replace this entire network policy. Clear allow/deny lists and deny inbound and host loopback.
+
+permission-studio-network-advanced = Advanced settings
+
+permission-studio-network-collapse = Collapse
+
+permission-studio-network-expand = Expand
+
+permission-studio-network-json-short = Edit complete network JSON
+
+permission-studio-network-rule-form = Network rule
+
+permission-studio-network-action = Action (Enter to switch)
+
+permission-studio-network-target = Target IP / CIDR / *
+
+permission-studio-network-protocol = Protocol
+
+permission-studio-network-ports = Ports
+
+permission-studio-network-except = Excluded subnets
+
+permission-studio-network-all-ports = All ports
+
+permission-studio-network-save = Save rule
+
+permission-studio-network-cancel = Cancel
+
+permission-studio-network-add-allow = Add allow rule
+
+permission-studio-network-add-deny = Add deny rule
+
+permission-studio-network-saving = Saving permissions. Please wait.
+
+permission-studio-network-save-or-cancel = Save or cancel the current edit first.
+
+permission-studio-network-inherit-title = Inherit parent network policy
+
+permission-studio-network-inherit-help = Remove this layer’s entire network policy and inherit the parent configuration.
+
+permission-studio-network-target-help = Enter an IP, a network CIDR, or * for all targets.
+
+permission-studio-network-protocol-help = Choose tcp, udp, icmp, or any. ICMP has no ports.
+
+permission-studio-network-ports-help = Use ports 1–65535, separated by commas: 443, 8000-8099. Leave blank for all ports.
+
+permission-studio-network-except-help = Enter comma-separated subnets contained in the target CIDR. Leave blank for none.
+
+permission-studio-network-defaults-footer = Tab switch panes · ↑/↓ select · Enter change · Esc back
+
+permission-studio-network-rules-footer = Tab switch panes · Ctrl+N add · ↑/↓ select · Enter edit · Ctrl+D delete · Esc back
+
+permission-studio-network-form-footer = ↑/↓ select field · Enter edit · Ctrl+S save rule · Esc cancel rule
+
+permission-studio-network-column-setting = Setting
+
+permission-studio-network-column-rule = Rule / Field
+
+permission-studio-network-column-value = Value

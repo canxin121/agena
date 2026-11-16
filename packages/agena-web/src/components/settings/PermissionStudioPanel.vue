@@ -7,6 +7,7 @@ import {
   RiCheckLine,
   RiCodeSSlashLine,
   RiDeleteBinLine,
+  RiEditLine,
   RiFolderLine,
   RiGlobalLine,
   RiLockLine,
@@ -46,17 +47,29 @@ import {
   type PermissionConfig,
   type PermissionMode,
   type NetworkAction,
+  type NetworkPermissionConfig,
+  type NetworkProtocol,
+  type NetworkRule,
 } from '@/lib/permissionConfig'
 
 type PermissionSource = 'global' | 'workspace' | 'session' | 'effective'
 type PermissionSection = 'path' | 'network' | 'tools'
-type SettingsResponse = { value?: JsonValue; config_found?: boolean; config_path?: string }
+type SettingsResponse = { value?: JsonValue; inherited_value?: JsonValue; config_found?: boolean; config_path?: string }
 type SessionStateResponse = {
   execution?: {
     selected_permission?: PermissionConfig
     effective_permission?: PermissionConfig
-    context?: { selected_permission?: PermissionConfig; effective_permission?: PermissionConfig }
-    execution?: { selected_permission?: PermissionConfig; effective_permission?: PermissionConfig }
+    inherited_permission?: PermissionConfig
+    context?: {
+      selected_permission?: PermissionConfig
+      effective_permission?: PermissionConfig
+      inherited_permission?: PermissionConfig
+    }
+    execution?: {
+      selected_permission?: PermissionConfig
+      effective_permission?: PermissionConfig
+      inherited_permission?: PermissionConfig
+    }
   }
 }
 type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?: string }> }
@@ -81,7 +94,11 @@ const rulesPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 const rawPending = computed(() => rawJson.value !== JSON.stringify(config.value, null, 2))
 const networkPending = computed(() => networkJson.value !== JSON.stringify(config.value.network || {}, null, 2))
 const dirty = computed(
-  () => JSON.stringify(config.value) !== JSON.stringify(savedConfig.value) || rawPending.value || networkPending.value,
+  () =>
+    JSON.stringify(config.value) !== JSON.stringify(savedConfig.value) ||
+    rawPending.value ||
+    networkPending.value ||
+    Boolean(networkRuleDraft.value),
 )
 const editingDisabled = computed(() => !canEdit.value || !loaded.value || loading.value || saving.value)
 const formDisabled = computed(() => editingDisabled.value || rawPending.value || networkPending.value)
@@ -101,6 +118,41 @@ const rawJson = ref('{}')
 const rawJsonError = ref('')
 const networkJson = ref('{}')
 const networkJsonError = ref('')
+const inheritedNetwork = ref<NetworkPermissionConfig | null>(null)
+const inheritedNetworkError = ref('')
+type NetworkRuleList = 'allow' | 'deny'
+type NetworkRuleDraft = {
+  action: NetworkRuleList
+  index: number | null
+  to: string
+  protocol: NetworkProtocol
+  ports: string
+  except: string
+}
+const networkRuleDraft = ref<NetworkRuleDraft | null>(null)
+const networkRuleError = ref('')
+const networkCustom = computed(() => config.value.network !== undefined)
+const displayedNetwork = computed(() => config.value.network ?? inheritedNetwork.value)
+const networkSourceOptions = computed(() => [
+  { value: 'inherit', label: st('Inherit parent policy') },
+  { value: 'custom', label: st('Custom network policy') },
+])
+const networkProtocolOptions = computed(() => [
+  ...(['tcp', 'udp', 'icmp'] as const).map((value) => ({ value, label: value.toUpperCase() })),
+  { value: 'any', label: st('Any protocol') },
+])
+const networkRuleLists = computed(() => [
+  {
+    action: 'allow' as const,
+    title: st('Allowed destinations'),
+    description: st('Permit these destinations, protocols, and ports.'),
+  },
+  {
+    action: 'deny' as const,
+    title: st('Denied destinations'),
+    description: st('Deny rules take precedence over every allow rule.'),
+  },
+])
 const toolCatalog = ref<Array<{ name: string; summary: string }>>([])
 const newPath = ref('')
 const newPathMode = ref<PathPermissionMode>('readonly')
@@ -151,10 +203,9 @@ const networkActionOptions = computed(() => [
   { value: 'allow', label: st('Allow'), description: st('Allow matching network traffic.') },
   { value: 'deny', label: st('Deny'), description: st('Block matching network traffic.') },
 ])
-const networkDefaults = computed(() => [
-  { id: 'egress' as const, label: st('Outbound default'), description: st('Action when no outbound rule matches.') },
+const networkAdvancedDefaults = computed(() => [
   {
-    id: 'ingress' as const,
+    id: 'inbound' as const,
     label: st('Inbound default'),
     description: st('Whether external peers can initiate connections.'),
   },
@@ -490,36 +541,128 @@ function renamePathRule(path: string, event: Event) {
   input.value = nextPath
 }
 
-type NetworkDefault = 'egress' | 'ingress' | 'hostLoopback'
+type NetworkDefault = 'default' | 'inbound' | 'hostLoopback'
 
-function networkMode(field: NetworkDefault): NetworkAction | '' {
-  if (field === 'egress') return config.value.network?.egress?.default || ''
-  if (field === 'ingress') return config.value.network?.ingress?.default || ''
-  return config.value.network?.ingress?.hostLoopback || ''
+function networkMode(field: NetworkDefault): NetworkAction {
+  return displayedNetwork.value?.[field] || 'deny'
+}
+
+function setNetworkSource(value: string) {
+  if (formDisabled.value || networkRuleDraft.value) return
+  if (value === 'inherit') {
+    mutate((next) => {
+      delete next.network
+    })
+  } else if (value === 'custom' && !networkCustom.value) {
+    if (!inheritedNetwork.value) {
+      inheritedNetworkError.value = st(
+        'The inherited network policy could not be loaded. Refresh before customizing it.',
+      )
+      return
+    }
+    mutate((next) => {
+      next.network = clone(inheritedNetwork.value!)
+    })
+  }
 }
 
 function setNetworkMode(field: NetworkDefault, value: string) {
+  if (formDisabled.value || !networkCustom.value || (value !== 'allow' && value !== 'deny')) return
   mutate((next) => {
     const network = (next.network ||= {})
-    const section = field === 'egress' ? (network.egress ||= {}) : (network.ingress ||= {})
-    const key = field === 'hostLoopback' ? 'hostLoopback' : 'default'
-    if (value === 'allow' || value === 'deny') (section as Record<string, NetworkAction>)[key] = value
-    else delete (section as Record<string, NetworkAction>)[key]
-    if (network.egress && Object.keys(network.egress).length === 0) delete network.egress
-    if (network.ingress && Object.keys(network.ingress).length === 0) delete network.ingress
-    if (Object.keys(network).length === 0) delete next.network
+    network[field] = value
+  })
+}
+
+function useNetworkPreset(mode: NetworkAction) {
+  if (formDisabled.value || networkRuleDraft.value) return
+  mutate((next) => {
+    next.network = { default: mode }
+  })
+}
+
+function networkRules(action: NetworkRuleList): NetworkRule[] {
+  const rules = displayedNetwork.value?.[action]
+  return Array.isArray(rules) ? rules : []
+}
+
+function networkPortsLabel(rule: NetworkRule): string {
+  return rule.protocol === 'icmp' ? '—' : rule.ports?.map(String).join(', ') || st('All ports')
+}
+
+function editNetworkRule(action: NetworkRuleList, index: number | null = null) {
+  if (formDisabled.value || !networkCustom.value || networkRuleDraft.value) return
+  const rule = index === null ? undefined : config.value.network?.[action]?.[index]
+  networkRuleDraft.value = {
+    action,
+    index,
+    to: rule?.to || '',
+    protocol: rule?.protocol || (index === null && action === 'allow' ? 'tcp' : 'any'),
+    ports: rule?.ports?.map(String).join(', ') || '',
+    except: rule?.except?.join(', ') || '',
+  }
+  networkRuleError.value = ''
+}
+
+function cancelNetworkRule() {
+  networkRuleDraft.value = null
+  networkRuleError.value = ''
+}
+
+function setNetworkRuleProtocol(value: string) {
+  if (!networkRuleDraft.value || !['tcp', 'udp', 'icmp', 'any'].includes(value)) return
+  networkRuleDraft.value.protocol = value as NetworkProtocol
+  if (value === 'icmp') networkRuleDraft.value.ports = ''
+  networkRuleError.value = ''
+}
+
+function applyNetworkRule(): boolean {
+  const draft = networkRuleDraft.value
+  if (!draft || editingDisabled.value || rawPending.value || networkPending.value) return false
+  try {
+    const rule: NetworkRule = { to: draft.to.trim() }
+    if (draft.protocol !== 'any') rule.protocol = draft.protocol
+    if (draft.ports.trim())
+      rule.ports = draft.ports.split(',').map((entry) => {
+        const value = entry.trim()
+        return /^(0|[1-9][0-9]*)$/.test(value) ? Number(value) : value
+      })
+    if (draft.except.trim()) rule.except = draft.except.split(',').map((entry) => entry.trim())
+    const next = clone(config.value)
+    const network = (next.network ||= {})
+    const rules = (network[draft.action] ||= [])
+    if (draft.index === null) rules.push(rule)
+    else rules[draft.index] = rule
+    const checked = parsePermissionConfig(next)
+    config.value = checked
+    cancelNetworkRule()
+    syncRaw()
+    error.value = ''
+    return true
+  } catch (reason) {
+    networkRuleError.value = permissionConfigErrorMessage(reason, st)
+    return false
+  }
+}
+
+function removeNetworkRule(action: NetworkRuleList, index: number) {
+  if (formDisabled.value || networkRuleDraft.value || !networkCustom.value) return
+  mutate((next) => {
+    const rules = next.network?.[action]
+    if (!rules) return
+    rules.splice(index, 1)
+    if (!rules.length) delete next.network![action]
   })
 }
 
 function applyNetworkJson(): boolean {
-  if (editingDisabled.value || rawPending.value) return false
+  if (editingDisabled.value || rawPending.value || networkRuleDraft.value) return false
   try {
     const next = clone(config.value)
-    const network = parseNetworkPermissionConfig(JSON.parse(networkJson.value))
-    if (Object.keys(network).length) next.network = network
-    else delete next.network
+    next.network = parseNetworkPermissionConfig(JSON.parse(networkJson.value))
     config.value = parsePermissionConfig(next)
     syncRaw()
+    error.value = ''
     return true
   } catch (reason) {
     networkJsonError.value = permissionConfigErrorMessage(reason, st)
@@ -528,20 +671,9 @@ function applyNetworkJson(): boolean {
 }
 
 function useNetworkExample() {
+  if (editingDisabled.value || rawPending.value || networkRuleDraft.value) return
   networkJson.value = JSON.stringify(
-    {
-      egress: {
-        default: 'deny',
-        allow: [
-          {
-            to: [{ cidr: '192.0.2.10/32' }, { cidr: '2001:db8::10/128' }],
-            ports: [{ protocol: 'tcp', port: 443 }],
-          },
-        ],
-        deny: [],
-      },
-      ingress: { default: 'deny', hostLoopback: 'deny' },
-    },
+    { default: 'deny', allow: [{ to: '192.0.2.10', protocol: 'tcp', ports: [443, '8000-8099'] }] },
     null,
     2,
   )
@@ -752,7 +884,7 @@ function addCommandRule() {
 }
 
 function applyRawJson(): boolean {
-  if (editingDisabled.value || networkPending.value) return false
+  if (editingDisabled.value || networkPending.value || networkRuleDraft.value) return false
   try {
     const parsed = JSON.parse(rawJson.value) as JsonValue
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
@@ -770,7 +902,13 @@ function applyRawJson(): boolean {
 const contextKey = computed(() =>
   JSON.stringify([selectedSource.value, activeSessionId.value, directory.currentDirectory]),
 )
-type PermissionDraft = { config: PermissionConfig; saved: PermissionConfig; raw: string; network: string }
+type PermissionDraft = {
+  config: PermissionConfig
+  saved: PermissionConfig
+  raw: string
+  network: string
+  networkRule: NetworkRuleDraft | null
+}
 const drafts = new Map<string, PermissionDraft>()
 let loadedContext = ''
 let loadGeneration = 0
@@ -784,14 +922,20 @@ function rememberDraft() {
       saved: clone(savedConfig.value),
       raw: rawJson.value,
       network: networkJson.value,
+      networkRule: clone(networkRuleDraft.value),
     })
   else drafts.delete(loadedContext)
 }
 
-async function readPolicy(source: PermissionSource, sessionId: number | null, signal: AbortSignal) {
+type PolicyRead = { policy: PermissionConfig; inherited?: unknown }
+async function readPolicy(
+  source: PermissionSource,
+  sessionId: number | null,
+  signal: AbortSignal,
+): Promise<PolicyRead> {
   if (source === 'global' || source === 'workspace') {
     const response = await apiJson<SettingsResponse>(`/api/v1/settings/layers/${source}?path=permission`, { signal })
-    return asConfig(response.value)
+    return { policy: asConfig(response.value), inherited: response.inherited_value }
   }
   if (sessionId) {
     const session = await apiJson<SessionStateResponse>(`/api/v1/sessions/${sessionId}/state`, { signal })
@@ -804,12 +948,16 @@ async function readPolicy(source: PermissionSource, sessionId: number | null, si
         : execution?.execution?.effective_permission ||
           execution?.effective_permission ||
           execution?.context?.effective_permission
-    const sessionPolicy = asConfig(value)
-    if (source === 'session' || Object.keys(sessionPolicy).length) return sessionPolicy
+    const inherited =
+      execution?.execution?.inherited_permission ||
+      execution?.inherited_permission ||
+      execution?.context?.inherited_permission
+    const policy = asConfig(value)
+    if (source === 'session' || Object.keys(policy).length) return { policy, inherited }
   }
-  if (source === 'session') return {}
+  if (source === 'session') return { policy: {} }
   const response = await apiJson<SettingsResponse>('/api/v1/settings?source=effective&path=permission', { signal })
-  return asConfig(response.value)
+  return { policy: asConfig(response.value) }
 }
 
 async function load() {
@@ -824,12 +972,16 @@ async function load() {
     rememberDraft()
     loadedContext = key
     const draft = drafts.get(key)
+    cancelNetworkRule()
+    inheritedNetwork.value = null
+    inheritedNetworkError.value = ''
     config.value = clone(draft?.config || {})
     savedConfig.value = clone(draft?.saved || {})
     syncRaw()
     if (draft) {
       rawJson.value = draft.raw
       networkJson.value = draft.network
+      networkRuleDraft.value = clone(draft.networkRule)
     }
     loaded.value = Boolean(draft)
     clearAllRuleSelections()
@@ -850,10 +1002,24 @@ async function load() {
         .sort((a, b) => a.name.localeCompare(b.name))
     }
     if (policy.status === 'rejected') throw policy.reason
+    inheritedNetwork.value = null
+    inheritedNetworkError.value = ''
+    if (source !== 'effective') {
+      try {
+        const parent = parsePermissionConfig(policy.value.inherited)
+        if (parent.network === undefined)
+          throw new Error(st('The inherited network policy could not be loaded. Refresh before customizing it.'))
+        inheritedNetwork.value = parent.network
+      } catch {
+        inheritedNetworkError.value = st(
+          'The inherited network policy could not be loaded. Refresh before customizing it.',
+        )
+      }
+    }
     // A refresh updates server data only when the editor has no pending work.
     if (!dirty.value || !loaded.value) {
-      config.value = clone(policy.value)
-      savedConfig.value = clone(policy.value)
+      config.value = clone(policy.value.policy)
+      savedConfig.value = clone(policy.value.policy)
       syncRaw()
     }
     loaded.value = true
@@ -873,6 +1039,7 @@ async function load() {
 
 function discard() {
   if (saving.value) return
+  cancelNetworkRule()
   config.value = clone(savedConfig.value)
   syncRaw()
   error.value = ''
@@ -883,6 +1050,7 @@ function discard() {
 
 async function save() {
   if (editingDisabled.value || !dirty.value) return
+  if (networkRuleDraft.value && !applyNetworkRule()) return
   if (networkPending.value && !applyNetworkJson()) return
   if (rawPending.value && !applyRawJson()) return
   const key = contextKey.value
@@ -944,6 +1112,7 @@ async function clearSource() {
     cancelText: st('Cancel'),
   })
   if (!confirmed || editingDisabled.value || key !== contextKey.value) return
+  cancelNetworkRule()
   config.value = {}
   syncRaw()
   error.value = ''
@@ -1202,78 +1371,286 @@ onBeforeUnmount(() => {
       </template>
       <template v-else-if="selectedSection === 'network'">
         <PermissionSettingsCard
-          :title="$st('Native network defaults')"
+          :title="$st('Network access')"
           :description="
-            $st('Rules are enforced directly by MXC. Unsupported platform policies are rejected when saving.')
+            $st('Custom network settings replace the parent policy as a whole. Missing values deny access.')
           "
           :icon="RiGlobalLine"
         >
-          <div class="policy-grid network-policies">
-            <div v-for="field in networkDefaults" :key="field.id" class="policy-item">
+          <div class="space-y-4">
+            <div v-if="canEdit" class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)] sm:items-center">
               <div>
-                <h3 class="text-sm font-medium">{{ field.label }}</h3>
-                <p class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ field.description }}</p>
+                <h3 class="text-sm font-medium">{{ $st('Network configuration') }}</h3>
+                <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {{ $st('Customizing starts with a copy of the inherited policy.') }}
+                </p>
               </div>
               <OptionPicker
-                :model-value="networkMode(field.id)"
-                :options="networkActionOptions"
-                :empty-label="$st('Inherit')"
-                :title="field.label"
-                :disabled="formDisabled"
-                @update:model-value="setNetworkMode(field.id, $event)"
+                :model-value="networkCustom ? 'custom' : 'inherit'"
+                :options="networkSourceOptions"
+                :include-empty="false"
+                :title="$st('Network configuration')"
+                :disabled="formDisabled || Boolean(networkRuleDraft)"
+                @update:model-value="setNetworkSource"
               />
             </div>
-          </div>
-        </PermissionSettingsCard>
-        <PermissionSettingsCard
-          :title="$st('Native network policy JSON')"
-          :description="
-            $st(
-              'Use IP CIDRs, excluded subnets, protocols and port ranges. Deny rules override allow rules. Domains and URLs are not supported.',
-            )
-          "
-          :icon="RiCodeSSlashLine"
-        >
-          <div class="space-y-3">
-            <p class="text-xs leading-relaxed text-muted-foreground">
-              {{
-                $st(
-                  'Omitted fields inherit. An empty allow or deny list replaces the inherited list. Unset defaults resolve to deny.',
-                )
-              }}
+            <p v-if="inheritedNetworkError && !networkCustom" class="text-xs text-destructive" role="alert">
+              {{ inheritedNetworkError }}
             </p>
-            <textarea
-              v-model="networkJson"
-              class="w-full rounded-lg border border-border bg-background p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-ring"
-              rows="22"
-              spellcheck="false"
-              :readonly="editingDisabled || rawPending"
-              :aria-label="$st('Native network policy JSON')"
-              :aria-invalid="Boolean(networkJsonError)"
-              @input="networkJsonError = ''"
-            />
-            <p v-if="networkJsonError" class="text-xs text-destructive" role="alert">{{ networkJsonError }}</p>
+            <p v-else-if="!networkCustom" class="rounded-lg bg-muted/30 p-3 text-sm text-muted-foreground">
+              {{ $st('The complete parent network policy is inherited. Customize it to make changes in this scope.') }}
+            </p>
             <div v-if="canEdit" class="flex flex-wrap gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                :disabled="editingDisabled || rawPending || !networkPending"
-                @click="applyNetworkJson"
+                :disabled="formDisabled || Boolean(networkRuleDraft)"
+                @click="useNetworkPreset('deny')"
+                >{{ $st('Block external network') }}</Button
               >
-                {{ $st('Apply JSON') }}
-              </Button>
-              <Button variant="ghost" size="sm" :disabled="editingDisabled || rawPending" @click="useNetworkExample">
-                {{ $st('Load CIDR example') }}
-              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                :disabled="formDisabled || Boolean(networkRuleDraft)"
+                @click="useNetworkPreset('allow')"
+                >{{ $st('Allow outbound by default') }}</Button
+              >
+              <p class="basis-full text-xs text-muted-foreground">
+                {{ $st('Presets replace the current network draft. Save to apply.') }}
+              </p>
             </div>
-            <p class="text-xs leading-relaxed text-muted-foreground">
-              {{
-                $st(
-                  'macOS does not support per-destination outbound rules. Linux requires inbound and host-loopback access to remain denied.',
-                )
-              }}
-            </p>
+            <div v-if="displayedNetwork" class="policy-item">
+              <div>
+                <h3 class="text-sm font-medium">{{ $st('Outbound default') }}</h3>
+                <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {{ $st('Action when no outbound rule matches.') }}
+                </p>
+              </div>
+              <OptionPicker
+                :model-value="networkMode('default')"
+                :options="networkActionOptions"
+                :include-empty="false"
+                :title="$st('Outbound default')"
+                :disabled="formDisabled || !networkCustom"
+                @update:model-value="setNetworkMode('default', $event)"
+              />
+            </div>
           </div>
+        </PermissionSettingsCard>
+
+        <PermissionSettingsCard
+          v-for="list in displayedNetwork ? networkRuleLists : []"
+          :key="list.action"
+          :title="list.title"
+          :description="list.description"
+          :count="networkRules(list.action).length"
+          :icon="list.action === 'allow' ? RiGlobalLine : RiLockLine"
+        >
+          <div v-if="networkRules(list.action).length" class="overflow-x-auto">
+            <table class="w-full min-w-[34rem] text-left text-xs">
+              <thead class="text-muted-foreground">
+                <tr>
+                  <th scope="col" class="pb-2 pr-3 font-medium">{{ $st('Destination') }}</th>
+                  <th scope="col" class="pb-2 pr-3 font-medium">{{ $st('Protocol') }}</th>
+                  <th scope="col" class="pb-2 pr-3 font-medium">{{ $st('Ports') }}</th>
+                  <th scope="col" class="pb-2 pr-3 font-medium">{{ $st('Excluded subnets') }}</th>
+                  <th v-if="canEdit && networkCustom" scope="col" class="relative pb-2 text-right font-medium">
+                    <span class="sr-only">{{ $st('Actions') }}</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(rule, index) in networkRules(list.action)"
+                  :key="index"
+                  class="border-t border-border/50 align-top"
+                >
+                  <td class="break-all py-3 pr-3 font-mono">
+                    {{ rule.to === '*' ? $st('All destinations') : rule.to }}
+                  </td>
+                  <td class="py-3 pr-3">
+                    {{ rule.protocol && rule.protocol !== 'any' ? rule.protocol.toUpperCase() : $st('Any protocol') }}
+                  </td>
+                  <td class="py-3 pr-3 font-mono">{{ networkPortsLabel(rule) }}</td>
+                  <td class="break-all py-3 pr-3 font-mono">{{ rule.except?.join(', ') || '—' }}</td>
+                  <td v-if="canEdit && networkCustom" class="py-2 text-right">
+                    <div class="flex justify-end gap-1">
+                      <IconButton
+                        :title="$st('Edit network rule')"
+                        :aria-label="$st('Edit network rule')"
+                        :disabled="formDisabled || Boolean(networkRuleDraft)"
+                        @click="editNetworkRule(list.action, index)"
+                        ><RiEditLine class="h-4 w-4"
+                      /></IconButton>
+                      <IconButton
+                        :title="$st('Remove network rule')"
+                        :aria-label="$st('Remove network rule')"
+                        :disabled="formDisabled || Boolean(networkRuleDraft)"
+                        @click="removeNetworkRule(list.action, index)"
+                        ><RiDeleteBinLine class="h-4 w-4"
+                      /></IconButton>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="py-2 text-sm text-muted-foreground">
+            {{ $st('No rules in this list.') }}
+          </p>
+          <form
+            v-if="networkRuleDraft && networkRuleDraft.action === list.action"
+            class="mt-3 space-y-3 rounded-lg border border-primary/25 bg-primary/5 p-3"
+            @submit.prevent="applyNetworkRule"
+          >
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_minmax(8rem,1fr)_minmax(0,2fr)]">
+              <label class="space-y-1.5 text-xs font-medium">
+                <span>{{ $st('Destination') }}</span>
+                <Input
+                  v-model="networkRuleDraft.to"
+                  class="h-9 font-mono"
+                  placeholder="192.0.2.10"
+                  :disabled="editingDisabled"
+                  :aria-label="$st('Destination')"
+                  @update:model-value="networkRuleError = ''"
+                />
+                <span class="block font-normal text-muted-foreground">{{
+                  $st('One IP address, CIDR, or * for all destinations.')
+                }}</span>
+              </label>
+              <label class="space-y-1.5 text-xs font-medium">
+                <span>{{ $st('Protocol') }}</span>
+                <OptionPicker
+                  :model-value="networkRuleDraft.protocol"
+                  :options="networkProtocolOptions"
+                  :include-empty="false"
+                  :title="$st('Protocol')"
+                  :disabled="editingDisabled"
+                  @update:model-value="setNetworkRuleProtocol"
+                />
+              </label>
+              <label class="space-y-1.5 text-xs font-medium">
+                <span>{{ $st('Ports') }}</span>
+                <Input
+                  v-model="networkRuleDraft.ports"
+                  class="h-9 font-mono"
+                  placeholder="443, 8000-8099"
+                  :disabled="editingDisabled || networkRuleDraft.protocol === 'icmp'"
+                  :aria-label="$st('Ports')"
+                  @update:model-value="networkRuleError = ''"
+                />
+                <span class="block font-normal text-muted-foreground">{{
+                  $st('Separate ports and ranges with commas. Leave blank for all ports.')
+                }}</span>
+              </label>
+            </div>
+            <details :open="Boolean(networkRuleDraft.except)" class="text-xs">
+              <summary class="cursor-pointer font-medium">{{ $st('Excluded subnets') }}</summary>
+              <label class="mt-2 block space-y-1.5">
+                <span>{{ $st('Exclude subnets from this rule only. Use a deny rule to block them everywhere.') }}</span>
+                <Input
+                  v-model="networkRuleDraft.except"
+                  class="h-9 font-mono"
+                  placeholder="10.20.10.0/24, 10.20.11.0/24"
+                  :disabled="editingDisabled"
+                  :aria-label="$st('Excluded subnets')"
+                  @update:model-value="networkRuleError = ''"
+                />
+              </label>
+            </details>
+            <p v-if="networkRuleError" class="text-xs text-destructive" role="alert">{{ networkRuleError }}</p>
+            <div class="flex gap-2">
+              <Button type="submit" variant="outline" size="sm" :disabled="editingDisabled">{{
+                $st('Apply rule')
+              }}</Button>
+              <Button type="button" variant="ghost" size="sm" :disabled="editingDisabled" @click="cancelNetworkRule">{{
+                $st('Cancel')
+              }}</Button>
+            </div>
+          </form>
+          <Button
+            v-else-if="canEdit && networkCustom"
+            variant="outline"
+            size="sm"
+            class="mt-3"
+            :disabled="formDisabled || Boolean(networkRuleDraft)"
+            @click="editNetworkRule(list.action)"
+            ><RiAddLine class="mr-1.5 h-4 w-4" />{{ $st('Add network rule') }}</Button
+          >
+        </PermissionSettingsCard>
+
+        <PermissionSettingsCard
+          v-if="displayedNetwork"
+          :title="$st('Advanced network settings')"
+          :icon="RiCodeSSlashLine"
+        >
+          <details>
+            <summary class="cursor-pointer text-sm font-medium">
+              {{ $st('Inbound connections and host loopback') }}
+            </summary>
+            <div class="policy-grid mt-3">
+              <div v-for="field in networkAdvancedDefaults" :key="field.id" class="policy-item">
+                <div>
+                  <h3 class="text-sm font-medium">{{ field.label }}</h3>
+                  <p class="mt-1 text-xs text-muted-foreground">{{ field.description }}</p>
+                </div>
+                <OptionPicker
+                  :model-value="networkMode(field.id)"
+                  :options="networkActionOptions"
+                  :include-empty="false"
+                  :title="field.label"
+                  :disabled="formDisabled || !networkCustom"
+                  @update:model-value="setNetworkMode(field.id, $event)"
+                />
+              </div>
+            </div>
+          </details>
+          <details v-if="networkCustom" class="mt-4">
+            <summary class="cursor-pointer text-sm font-medium">{{ $st('Network policy JSON') }}</summary>
+            <div class="mt-3 space-y-3">
+              <p class="text-xs leading-relaxed text-muted-foreground">
+                {{
+                  $st(
+                    'This object defines the complete network policy. Empty lists and omitted fields do not inherit parent rules.',
+                  )
+                }}
+              </p>
+              <textarea
+                v-model="networkJson"
+                class="w-full rounded-lg border border-border bg-background p-3 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-ring"
+                rows="16"
+                spellcheck="false"
+                :readonly="editingDisabled || rawPending || Boolean(networkRuleDraft)"
+                :aria-label="$st('Network policy JSON')"
+                :aria-invalid="Boolean(networkJsonError)"
+                @input="networkJsonError = ''"
+              />
+              <p v-if="networkJsonError" class="text-xs text-destructive" role="alert">{{ networkJsonError }}</p>
+              <div v-if="canEdit" class="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="editingDisabled || rawPending || Boolean(networkRuleDraft) || !networkPending"
+                  @click="applyNetworkJson"
+                  >{{ $st('Apply JSON') }}</Button
+                >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  :disabled="editingDisabled || rawPending || Boolean(networkRuleDraft)"
+                  @click="useNetworkExample"
+                  >{{ $st('Load CIDR example') }}</Button
+                >
+              </div>
+            </div>
+          </details>
+          <p class="mt-4 text-xs leading-relaxed text-muted-foreground">
+            {{
+              $st(
+                'macOS does not support per-destination outbound rules. Linux requires inbound and host-loopback access to remain denied.',
+              )
+            }}
+          </p>
         </PermissionSettingsCard>
       </template>
       <template v-else>
@@ -1660,7 +2037,7 @@ onBeforeUnmount(() => {
             spellcheck="false"
             class="w-full min-w-0 resize-y rounded-lg border border-input bg-background/40 p-3 font-mono text-xs leading-relaxed outline-none focus-visible:ring-1 focus-visible:ring-ring"
             :aria-label="$st('Raw PermissionConfig')"
-            :readonly="editingDisabled || networkPending"
+            :readonly="editingDisabled || networkPending || Boolean(networkRuleDraft)"
             :aria-invalid="Boolean(rawJsonError)"
           />
           <p v-if="rawJsonError" class="text-xs text-destructive" role="alert">{{ rawJsonError }}</p>
@@ -1804,9 +2181,6 @@ onBeforeUnmount(() => {
     padding-block-start: 0;
     border-inline-start: 1px solid oklch(var(--border) / 0.5);
     padding-inline-start: 2rem;
-  }
-  .network-policies {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .permission-rule {
     grid-template-columns: 1.25rem minmax(0, 1fr) minmax(15rem, 32%) 2rem;

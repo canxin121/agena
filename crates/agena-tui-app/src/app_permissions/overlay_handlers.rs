@@ -165,6 +165,11 @@ impl App {
         key: KeyEvent,
         dialog: &mut PermissionStudioOverlay,
     ) -> bool {
+        // A submitted editor is retained for a possible server rejection.
+        // Wait for that response before accepting a new edit or navigation.
+        if dialog.save_request.is_some() {
+            return false;
+        }
         if let Some(editor) = dialog.editor.as_mut() {
             match drive_editor_dialog_key(editor, key) {
                 EditorDialogKeyResult::Continue => {}
@@ -183,6 +188,19 @@ impl App {
             return false;
         }
 
+        if dialog.network_rule.is_some()
+            && dialog.page == crate::PermissionStudioPage::NetworkRules
+            && matches!(
+                resolve_tui_key(KeyContext::PermissionStudio, key),
+                Some(KeyAction::Back)
+            )
+        {
+            self.activate_permission_studio_network(
+                dialog,
+                crate::PermissionStudioNetworkAction::CancelRule,
+            );
+            return false;
+        }
         match resolve_tui_key(KeyContext::PermissionStudio, key) {
             Some(KeyAction::Back) => match dialog.pane_focus {
                 PermissionStudioPaneFocus::Navigation => true,
@@ -232,6 +250,13 @@ impl App {
             }
             Some(KeyAction::PermissionAdd) => {
                 self.open_permission_studio_add_current(dialog);
+                false
+            }
+            Some(KeyAction::PermissionSave) if dialog.network_rule.is_some() => {
+                self.activate_permission_studio_network(
+                    dialog,
+                    crate::PermissionStudioNetworkAction::SaveRule,
+                );
                 false
             }
             Some(KeyAction::PermissionRename)

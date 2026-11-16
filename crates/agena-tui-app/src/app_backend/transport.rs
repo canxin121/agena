@@ -196,6 +196,7 @@ struct RemoteBackend {
     /// connect and refreshed before settings-studio rebuilds; settings reads
     /// are synchronous in the TUI event loop.
     config_sources: tokio::sync::RwLock<Option<agena_api::resource::ConfigJsonSources>>,
+    permission_parents: tokio::sync::RwLock<HashMap<String, agena_domain::NetworkPermissionConfig>>,
     /// Authoritative runtime projection used for status and capability caches.
     runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
     /// Cached control projection for Agena's own HTTP MCP surface.
@@ -606,6 +607,7 @@ impl TuiBackend {
                 configured_provider_adapter_models: Default::default(),
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
+                permission_parents: Default::default(),
                 runtime_status: Default::default(),
                 mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
@@ -737,6 +739,7 @@ impl TuiBackend {
                 ),
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
+                permission_parents: Default::default(),
                 runtime_status: tokio::sync::RwLock::new(Some(runtime_status)),
                 mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
@@ -917,6 +920,40 @@ impl TuiBackend {
             .try_read()
             .ok()
             .and_then(|guard| guard.clone())
+    }
+
+    pub(crate) async fn refresh_permission_parent(&self, layer: &str) -> Result<()> {
+        let response = self
+            .client()
+            .settings_layer_value(layer, "permission")
+            .await?;
+        let inherited = response
+            .get("inherited_value")
+            .filter(|value| !value.is_null())
+            .context("server did not provide inherited permission configuration")?;
+        let permission: agena_domain::PermissionConfig = serde_json::from_value(inherited.clone())
+            .context("invalid inherited permission configuration")?;
+        let network = permission
+            .network
+            .context("server did not provide inherited network configuration")?;
+        self.inner
+            .permission_parents
+            .write()
+            .await
+            .insert(layer.to_string(), network);
+        Ok(())
+    }
+
+    pub(crate) fn inherited_network(
+        &self,
+        layer: &str,
+    ) -> Result<agena_domain::NetworkPermissionConfig> {
+        self.inner
+            .permission_parents
+            .try_read()
+            .ok()
+            .and_then(|parents| parents.get(layer).cloned())
+            .context("inherited network configuration has not been loaded from the server")
     }
 
     pub(crate) fn runtime_status(&self) -> Option<agena_api::resource::RuntimeStatusResponse> {

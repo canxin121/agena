@@ -464,6 +464,7 @@ pub struct App {
     pub(super) deferred_ui_completions: std::collections::VecDeque<UiCompletion>,
     pub(super) settings_runtime_snapshot_summary: Option<String>,
     pub(super) settings_session_permission: Option<(i64, SessionPermissionStudioState)>,
+    pub(super) permission_studio_load_request: Option<uuid::Uuid>,
     pub(super) session_selection_revision: u64,
     pub(super) launch: LaunchOptions,
     pub(super) math_renderer: Option<MathGraphicsRenderer>,

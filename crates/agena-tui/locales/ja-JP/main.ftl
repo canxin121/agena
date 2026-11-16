@@ -882,9 +882,9 @@ permission-studio-page-path-defaults = ファイルシステム / デフォル�
 permission-studio-page-path-rules = ファイルシステム / パスルール
 
 
-permission-studio-page-network-defaults = ネットワーク / ネイティブ既定値
+permission-studio-page-network-defaults = ネットワーク / ポリシー
 
-permission-studio-page-network-rules = ネットワーク / ネイティブルール
+permission-studio-page-network-rules = ネットワーク / ルール
 
 permission-studio-page-tools = ツール
 
@@ -908,9 +908,9 @@ permission-studio-nav-path-rules = パスルール
 
 permission-studio-nav-network = ネットワーク
 
-permission-studio-nav-network-defaults = ネイティブ既定値
+permission-studio-nav-network-defaults = ポリシー
 
-permission-studio-nav-network-rules = ネイティブルール
+permission-studio-nav-network-rules = ルール
 
 permission-studio-nav-tool-access = ツールアクセス
 
@@ -3291,8 +3291,78 @@ permission-studio-rule-path = パス
 permission-studio-path-duplicate = このパスのルールは既に存在します。
 permission-studio-rule-duplicate = このルールは既に存在します。
 
-permission-studio-network-json = ネイティブネットワークポリシー JSON
+permission-studio-network-json = 高度なネットワーク JSON
 
-permission-studio-network-json-help = MXC の egress と ingress に CIDR、except、プロトコル、ポート範囲を設定できます。拒否ルールが優先されます。省略したフィールドは継承され、[] は継承リストを空にします。
+permission-studio-network-json-help = default、allow、deny、inbound、hostLoopback で設定全体を編集します。ルールには to、protocol、ports、except を使用します。省略項目は拒否または空リストとなり、network を削除すると親の設定を継承します。
 
-permission-studio-network-invalid-action = ネットワーク動作は allow、deny、または未設定にしてください。
+permission-studio-network-invalid-action = ネットワークの動作は allow または deny です。
+
+permission-studio-network-source = 設定の取得元
+
+permission-studio-network-custom = カスタム
+
+permission-studio-network-inherited = 親の設定を継承
+
+permission-studio-network-offline = オフライン設定を使用
+
+permission-studio-network-outbound = 送信を既定で許可
+
+permission-studio-network-preset-help = ネットワーク設定全体を置き換えます。許可・拒否リストを空にし、受信とホストループバックを拒否します。
+
+permission-studio-network-advanced = 詳細設定
+
+permission-studio-network-collapse = 閉じる
+
+permission-studio-network-expand = 開く
+
+permission-studio-network-json-short = ネットワーク JSON 全体を編集
+
+permission-studio-network-rule-form = ネットワークルール
+
+permission-studio-network-action = 動作（Enter で切り替え）
+
+permission-studio-network-target = 宛先 IP / CIDR / *
+
+permission-studio-network-protocol = プロトコル
+
+permission-studio-network-ports = ポート
+
+permission-studio-network-except = 除外サブネット
+
+permission-studio-network-all-ports = すべてのポート
+
+permission-studio-network-save = ルールを保存
+
+permission-studio-network-cancel = キャンセル
+
+permission-studio-network-add-allow = 許可ルールを追加
+
+permission-studio-network-add-deny = 拒否ルールを追加
+
+permission-studio-network-saving = 権限を保存しています。お待ちください。
+
+permission-studio-network-save-or-cancel = 先に現在の編集を保存またはキャンセルしてください。
+
+permission-studio-network-inherit-title = 親のネットワーク設定を継承
+
+permission-studio-network-inherit-help = この階層のネットワーク設定全体を削除し、親の設定を継承します。
+
+permission-studio-network-target-help = IP、ネットワーク CIDR、または全宛先を表す * を入力します。
+
+permission-studio-network-protocol-help = tcp、udp、icmp、any から選択します。ICMP にポートはありません。
+
+permission-studio-network-ports-help = 1～65535 のポートをカンマで区切ります。例: 443, 8000-8099。空欄はすべてのポートです。
+
+permission-studio-network-except-help = 宛先 CIDR 内の除外サブネットをカンマで区切ります。空欄は除外なしです。
+
+permission-studio-network-defaults-footer = Tab パネル切替 · ↑/↓ 選択 · Enter 変更 · Esc 戻る
+
+permission-studio-network-rules-footer = Tab パネル切替 · Ctrl+N 追加 · ↑/↓ 選択 · Enter 編集 · Ctrl+D 削除 · Esc 戻る
+
+permission-studio-network-form-footer = ↑/↓ 項目選択 · Enter 編集 · Ctrl+S ルール保存 · Esc ルール取消
+
+permission-studio-network-column-setting = 設定
+
+permission-studio-network-column-rule = ルール / 項目
+
+permission-studio-network-column-value = 値

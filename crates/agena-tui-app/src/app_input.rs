@@ -311,6 +311,9 @@ impl App {
             }
         };
 
+        if close {
+            self.permission_studio_load_request = None;
+        }
         if !close {
             if self.current_route_is_main() {
                 self.current_route = route;

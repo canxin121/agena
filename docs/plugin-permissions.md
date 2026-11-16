@@ -33,32 +33,22 @@ cdylib ABI 版本为 2，`cancel(request_id)` 独立于 dispatch 队列。原生
 
 ### 原生 MXC 网络策略
 
-网络配置使用 `permission.network.egress` 和 `permission.network.ingress`。出站包含 `default`、`allow`、`deny`；规则使用数值 `cidr`、可选 `except`、`protocol`、`port` 与 `endPort`。动作只有 `allow` / `deny`，拒绝优先。旧的公网/私网/回环分类字段、域名规则与网络审批模式不再接受。
+网络配置使用扁平的 `permission.network`：`default`、`allow`、`deny` 描述出站，`inbound` 和 `hostLoopback` 是高级选项。规则直接填写 IP/CIDR、`protocol`、`ports` 和可选 `except`。动作只有 `allow` / `deny`，拒绝优先。
 
 ```json
 {
   "permission": {
     "network": {
-      "egress": {
-        "default": "deny",
-        "allow": [
-          {
-            "to": [{ "cidr": "192.0.2.10/32" }],
-            "ports": [{ "protocol": "tcp", "port": 443 }]
-          }
-        ],
-        "deny": []
-      },
-      "ingress": {
-        "default": "deny",
-        "hostLoopback": "deny"
-      }
+      "default": "deny",
+      "allow": [
+        { "to": "192.0.2.10", "protocol": "tcp", "ports": [443] }
+      ]
     }
   }
 }
 ```
 
-示例 IP 应换成实际目的地址。未提供字段继承，显式空数组覆盖并清空继承列表。非法字段、空目标选择器、错误 CIDR/排除子网、端口范围和当前平台不支持的配置都会在保存前报错。
+示例 IP 应换成实际目的地址。省略整个 `network` 才继承上层；出现该对象就完整替换当前层网络策略，缺省动作拒绝、缺省列表为空，`{}` 表示离线。非法字段、域名目标、错误 CIDR/排除子网、端口范围和当前平台不支持的配置都会在保存前报错。旧 `egress` / `ingress` 对象通过启动迁移保留原生效策略，公开保存接口只接收扁平结构。
 
 子进程工具的 `network: []` 选择离线，单独的 `network: ["*"]` 申请设置允许的完整原生范围；具体目标声明先解析为 IP，再与配置和全部权限上限取交集。`host:port` 使用 TCP，`udp://host:port` 使用 UDP，`icmp://host` 使用 ICMP；裸主机申请该目标内设置已允许的协议和端口。主机名声明不提供域名级隔离，DNS 依赖同样必须获准。
 
@@ -188,7 +178,7 @@ TLS 继续验证原始域名。
 
 Fake-IP 兼容仅适用于公网域名的 DNS 回答。直接填写 Fake-IP 地址、localhost、局域网域名、
 真实私有地址、回环和链路本地地址仍会被拒绝；IPv4-mapped IPv6 同样按实际 IPv4 判断。
-会话的网络 Deny、Ask、Auto 和用户拒绝继续先于连接执行。
+会话的网络拒绝和工具审批继续先于连接执行。
 
 直连或本机解析的普通 HTTP、API、HTML 搜索、MCP 元数据和终端图片请求会过滤不允许的地址，
 并把连接绑定到剩余地址；双栈 DNS 中不可用的私有回答不再阻断另一条可用路由，也不会进入连接器。
@@ -220,7 +210,7 @@ python3 scripts/probes/web_fake_ip.py \
 ```
 
 验证默认配置与已有显式网段配置下的多引擎真实结果、网页抓取、原生出站拒绝，以及 IP 字面量和回环地址
-仍被公共地址策略拒绝。资源设置使用原生 `egress` / `ingress`；审批由工具规则控制。
+仍被公共地址策略拒绝。资源设置使用扁平网络策略并编译为原生 MXC 规则；审批由工具规则控制。
 单个搜索引擎的验证码、限流或网络失败可以保留为部分结果诊断。
 追加 `--browser` 验证启用沙盒时浏览器渲染入口按当前能力返回拒绝。
 追加 `--proxy http://127.0.0.1:7890` 会检查显式代理和环境变量代理两个阶段：

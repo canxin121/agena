@@ -960,9 +960,9 @@ permission-studio-page-path-defaults = 檔案系統 / 預設區域
 permission-studio-page-path-rules = 檔案系統 / 路徑規則
 
 
-permission-studio-page-network-defaults = 網路 / 原生預設設定
+permission-studio-page-network-defaults = 網路 / 原則
 
-permission-studio-page-network-rules = 網路 / 原生規則
+permission-studio-page-network-rules = 網路 / 規則
 
 permission-studio-page-tools = 工具
 
@@ -986,9 +986,9 @@ permission-studio-nav-path-rules = 路徑規則
 
 permission-studio-nav-network = 網路
 
-permission-studio-nav-network-defaults = 原生預設設定
+permission-studio-nav-network-defaults = 原則
 
-permission-studio-nav-network-rules = 原生規則
+permission-studio-nav-network-rules = 規則
 
 permission-studio-nav-tool-access = 工具權限
 
@@ -3342,8 +3342,78 @@ permission-studio-rule-path = 路徑
 permission-studio-path-duplicate = 此路徑已有規則。
 permission-studio-rule-duplicate = 此規則已存在。
 
-permission-studio-network-json = 原生網路原則 JSON
+permission-studio-network-json = 進階網路 JSON
 
-permission-studio-network-json-help = 使用 MXC 的 egress 和 ingress 物件，可設定網段、except、通訊協定與連接埠範圍。拒絕規則優先。省略欄位表示繼承，[] 清空繼承的清單。
+permission-studio-network-json-help = 編輯包含 default、allow、deny、inbound、hostLoopback 的完整網路設定。規則使用 to、protocol、ports、except。省略欄位使用拒絕或空清單；刪除 network 才恢復繼承上層。
 
-permission-studio-network-invalid-action = 網路動作只能為 allow、deny 或未設定。
+permission-studio-network-invalid-action = 網路動作只能是 allow 或 deny。
+
+permission-studio-network-source = 設定來源
+
+permission-studio-network-custom = 自訂
+
+permission-studio-network-inherited = 繼承上層
+
+permission-studio-network-offline = 使用離線設定
+
+permission-studio-network-outbound = 預設允許傳出
+
+permission-studio-network-preset-help = 取代整份網路設定，清空允許和拒絕清單，並禁止傳入及主機回送。
+
+permission-studio-network-advanced = 進階設定
+
+permission-studio-network-collapse = 收合
+
+permission-studio-network-expand = 展開
+
+permission-studio-network-json-short = 編輯完整網路 JSON
+
+permission-studio-network-rule-form = 網路規則
+
+permission-studio-network-action = 動作（Enter 切換）
+
+permission-studio-network-target = 目標 IP / 網段 / *
+
+permission-studio-network-protocol = 通訊協定
+
+permission-studio-network-ports = 連接埠
+
+permission-studio-network-except = 排除子網路
+
+permission-studio-network-all-ports = 所有連接埠
+
+permission-studio-network-save = 儲存規則
+
+permission-studio-network-cancel = 取消
+
+permission-studio-network-add-allow = 新增允許規則
+
+permission-studio-network-add-deny = 新增拒絕規則
+
+permission-studio-network-saving = 正在儲存權限，請稍候。
+
+permission-studio-network-save-or-cancel = 請先儲存或取消目前的編輯。
+
+permission-studio-network-inherit-title = 繼承上層網路設定
+
+permission-studio-network-inherit-help = 刪除目前層級的整份網路設定，使用上層設定。
+
+permission-studio-network-target-help = 輸入 IP、網段 CIDR，或以 * 表示所有目標。
+
+permission-studio-network-protocol-help = 選擇 tcp、udp、icmp 或 any；ICMP 不使用連接埠。
+
+permission-studio-network-ports-help = 連接埠範圍為 1–65535，以逗號分隔，例如 443, 8000-8099。留空表示所有連接埠。
+
+permission-studio-network-except-help = 輸入目標網段內的排除子網路，以逗號分隔；留空表示不排除。
+
+permission-studio-network-defaults-footer = Tab 切換面板 · ↑/↓ 選取 · Enter 修改 · Esc 返回
+
+permission-studio-network-rules-footer = Tab 切換面板 · Ctrl+N 新增 · ↑/↓ 選取 · Enter 編輯 · Ctrl+D 刪除 · Esc 返回
+
+permission-studio-network-form-footer = ↑/↓ 選取欄位 · Enter 編輯 · Ctrl+S 儲存規則 · Esc 取消規則
+
+permission-studio-network-column-setting = 設定項目
+
+permission-studio-network-column-rule = 規則 / 欄位
+
+permission-studio-network-column-value = 值

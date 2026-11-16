@@ -332,7 +332,11 @@ impl App {
                         editor.input = Editor::from_text(input);
                     }
                 }
-                let mut permission = parent.permission.clone();
+                let mut permission = if target.is_network() {
+                    crate::permission_studio_custom_network(&parent)
+                } else {
+                    parent.permission.clone()
+                };
                 let result = apply_permission_studio_mode_input(
                     &self.i18n,
                     &mut permission,
@@ -356,6 +360,27 @@ impl App {
                         false
                     }
                 }
+            }
+            ChoiceOverlayAction::PermissionStudioNetworkProtocol => {
+                let value = choice_selection_value(&selection);
+                let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
+                    self.flash_error(self.i18n.text("flash-permission-studio-context-lost"));
+                    return true;
+                };
+                if matches!(value.as_str(), "tcp" | "udp" | "icmp" | "any")
+                    && let Some(draft) = parent.network_rule.as_mut()
+                {
+                    draft.protocol = value;
+                    crate::refresh_permission_studio_dialog(
+                        &self.i18n,
+                        &mut parent,
+                        None,
+                        None,
+                        Some(crate::PermissionStudioFocus::Items),
+                    );
+                }
+                self.restore_permission_studio_dialog(host, parent);
+                true
             }
             ChoiceOverlayAction::PermissionStudioAddEntries(kind) => {
                 let mut entries = dialog.presentation.checked_keys.clone();

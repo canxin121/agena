@@ -803,9 +803,9 @@ permission-studio-page-path-defaults = Système de fichiers / Zones par défaut
 permission-studio-page-path-rules = Système de fichiers / Règles de chemin
 
 
-permission-studio-page-network-defaults = Réseau / Valeurs natives
+permission-studio-page-network-defaults = Réseau / Politique
 
-permission-studio-page-network-rules = Réseau / Règles natives
+permission-studio-page-network-rules = Réseau / Règles
 
 permission-studio-page-tools = Outils
 
@@ -829,9 +829,9 @@ permission-studio-nav-path-rules = Règles de chemin
 
 permission-studio-nav-network = Réseau
 
-permission-studio-nav-network-defaults = Valeurs natives
+permission-studio-nav-network-defaults = Politique
 
-permission-studio-nav-network-rules = Règles natives
+permission-studio-nav-network-rules = Règles
 
 permission-studio-nav-tool-access = Accès aux outils
 
@@ -3290,8 +3290,78 @@ permission-studio-rule-path = Chemin
 permission-studio-path-duplicate = Une règle existe déjà pour ce chemin.
 permission-studio-rule-duplicate = Cette règle existe déjà.
 
-permission-studio-network-json = Politique réseau native en JSON
+permission-studio-network-json = JSON réseau avancé
 
-permission-studio-network-json-help = Utilisez les objets MXC egress et ingress avec CIDR, except, protocoles et plages de ports. Les refus sont prioritaires. Les champs omis sont hérités ; [] vide une liste héritée.
+permission-studio-network-json-help = Modifiez la politique complète avec default, allow, deny, inbound et hostLoopback. Les règles utilisent to, protocol, ports et except. Les champs absents valent deny ou une liste vide. Supprimez network pour hériter du parent.
 
-permission-studio-network-invalid-action = Les actions réseau doivent être allow, deny ou non définies.
+permission-studio-network-invalid-action = Les actions réseau doivent être allow ou deny.
+
+permission-studio-network-source = Source de configuration
+
+permission-studio-network-custom = Personnalisée
+
+permission-studio-network-inherited = Hériter du parent
+
+permission-studio-network-offline = Utiliser le mode hors ligne
+
+permission-studio-network-outbound = Autoriser les sorties par défaut
+
+permission-studio-network-preset-help = Remplacer toute la politique réseau. Vider les listes et refuser les entrées et la boucle locale de l’hôte.
+
+permission-studio-network-advanced = Paramètres avancés
+
+permission-studio-network-collapse = Réduire
+
+permission-studio-network-expand = Développer
+
+permission-studio-network-json-short = Modifier le JSON réseau complet
+
+permission-studio-network-rule-form = Règle réseau
+
+permission-studio-network-action = Action (Entrée pour changer)
+
+permission-studio-network-target = IP cible / CIDR / *
+
+permission-studio-network-protocol = Protocole
+
+permission-studio-network-ports = Ports
+
+permission-studio-network-except = Sous-réseaux exclus
+
+permission-studio-network-all-ports = Tous les ports
+
+permission-studio-network-save = Enregistrer la règle
+
+permission-studio-network-cancel = Annuler
+
+permission-studio-network-add-allow = Ajouter une autorisation
+
+permission-studio-network-add-deny = Ajouter un refus
+
+permission-studio-network-saving = Enregistrement des autorisations. Veuillez patienter.
+
+permission-studio-network-save-or-cancel = Enregistrez ou annulez la modification en cours.
+
+permission-studio-network-inherit-title = Hériter de la politique réseau du parent
+
+permission-studio-network-inherit-help = Supprimer toute la politique réseau de ce niveau et hériter de la configuration du parent.
+
+permission-studio-network-target-help = Saisissez une IP, un CIDR réseau ou * pour toutes les cibles.
+
+permission-studio-network-protocol-help = Choisissez tcp, udp, icmp ou any. ICMP n’utilise pas de ports.
+
+permission-studio-network-ports-help = Ports de 1 à 65535 séparés par des virgules : 443, 8000-8099. Vide signifie tous les ports.
+
+permission-studio-network-except-help = Saisissez les sous-réseaux exclus du CIDR cible, séparés par des virgules. Laissez vide pour aucun.
+
+permission-studio-network-defaults-footer = Tab panneaux · ↑/↓ choisir · Entrée modifier · Échap retour
+
+permission-studio-network-rules-footer = Tab panneaux · Ctrl+N ajouter · ↑/↓ choisir · Entrée modifier · Ctrl+D supprimer · Échap retour
+
+permission-studio-network-form-footer = ↑/↓ champ · Entrée modifier · Ctrl+S enregistrer la règle · Échap annuler
+
+permission-studio-network-column-setting = Paramètre
+
+permission-studio-network-column-rule = Règle / Champ
+
+permission-studio-network-column-value = Valeur

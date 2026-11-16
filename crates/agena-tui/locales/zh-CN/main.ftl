@@ -809,8 +809,8 @@ permission-studio-page-overview = 概览
 permission-studio-page-path = 路径
 permission-studio-page-path-defaults = 文件系统 / 默认区域
 permission-studio-page-path-rules = 文件系统 / 路径规则
-permission-studio-page-network-defaults = 网络 / 原生默认设置
-permission-studio-page-network-rules = 网络 / 原生规则
+permission-studio-page-network-defaults = 网络 / 策略
+permission-studio-page-network-rules = 网络 / 规则
 permission-studio-page-tools = 工具
 permission-studio-page-tool-tags = 工具权限 / 标签规则
 permission-studio-page-tool-names = 工具权限 / 名称规则
@@ -822,8 +822,8 @@ permission-studio-nav-filesystem = 文件系统
 permission-studio-nav-default-zones = 默认区域
 permission-studio-nav-path-rules = 路径规则
 permission-studio-nav-network = 网络
-permission-studio-nav-network-defaults = 原生默认设置
-permission-studio-nav-network-rules = 原生规则
+permission-studio-nav-network-defaults = 策略
+permission-studio-nav-network-rules = 规则
 permission-studio-nav-tool-access = 工具权限
 permission-studio-nav-name-rules = 名称规则
 permission-studio-nav-command-rules = 命令规则
@@ -2978,8 +2978,78 @@ permission-studio-rule-path = 路径
 permission-studio-path-duplicate = 此路径已有规则。
 permission-studio-rule-duplicate = 该规则已存在。
 
-permission-studio-network-json = 原生网络策略 JSON
+permission-studio-network-json = 高级网络 JSON
 
-permission-studio-network-json-help = 使用 MXC 的 egress 和 ingress 对象，可配置网段、except、协议与端口范围。拒绝规则优先。省略字段表示继承，[] 清空继承的列表。
+permission-studio-network-json-help = 编辑包含 default、allow、deny、inbound、hostLoopback 的完整网络配置。规则使用 to、protocol、ports、except。省略字段使用拒绝或空列表；删除 network 才恢复继承上层。
 
-permission-studio-network-invalid-action = 网络动作只能为 allow、deny 或未设置。
+permission-studio-network-invalid-action = 网络动作只能是 allow 或 deny。
+
+permission-studio-network-source = 配置来源
+
+permission-studio-network-custom = 自定义
+
+permission-studio-network-inherited = 继承上层
+
+permission-studio-network-offline = 使用断网配置
+
+permission-studio-network-outbound = 默认允许出站
+
+permission-studio-network-preset-help = 替换整份网络配置，清空允许和拒绝列表，并禁止入站及宿主回环。
+
+permission-studio-network-advanced = 高级设置
+
+permission-studio-network-collapse = 收起
+
+permission-studio-network-expand = 展开
+
+permission-studio-network-json-short = 编辑完整网络 JSON
+
+permission-studio-network-rule-form = 网络规则
+
+permission-studio-network-action = 动作（回车切换）
+
+permission-studio-network-target = 目标 IP / 网段 / *
+
+permission-studio-network-protocol = 协议
+
+permission-studio-network-ports = 端口
+
+permission-studio-network-except = 排除子网
+
+permission-studio-network-all-ports = 所有端口
+
+permission-studio-network-save = 保存规则
+
+permission-studio-network-cancel = 取消
+
+permission-studio-network-add-allow = 添加允许规则
+
+permission-studio-network-add-deny = 添加拒绝规则
+
+permission-studio-network-saving = 正在保存权限，请稍候。
+
+permission-studio-network-save-or-cancel = 请先保存或取消当前编辑。
+
+permission-studio-network-inherit-title = 继承上层网络配置
+
+permission-studio-network-inherit-help = 删除当前层的整份网络配置，使用上层配置。
+
+permission-studio-network-target-help = 输入 IP、网段 CIDR，或用 * 表示所有目标。
+
+permission-studio-network-protocol-help = 选择 tcp、udp、icmp 或 any；ICMP 不使用端口。
+
+permission-studio-network-ports-help = 端口范围为 1–65535，用逗号分隔，例如 443, 8000-8099。留空表示所有端口。
+
+permission-studio-network-except-help = 输入目标网段内的排除子网，以逗号分隔；留空表示不排除。
+
+permission-studio-network-defaults-footer = Tab 切换面板 · ↑/↓ 选择 · Enter 修改 · Esc 返回
+
+permission-studio-network-rules-footer = Tab 切换面板 · Ctrl+N 新增 · ↑/↓ 选择 · Enter 编辑 · Ctrl+D 删除 · Esc 返回
+
+permission-studio-network-form-footer = ↑/↓ 选择字段 · Enter 编辑 · Ctrl+S 保存规则 · Esc 取消规则
+
+permission-studio-network-column-setting = 设置项
+
+permission-studio-network-column-rule = 规则 / 字段
+
+permission-studio-network-column-value = 值

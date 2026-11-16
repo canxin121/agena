@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use agena_runtime_config::{ConfigEnvironment, RawConfig, SandboxConfig};
+use agena_runtime_config::{ConfigEnvironment, RawConfig};
 use serde_json::{Value, json};
 
 #[derive(Clone, Default)]
@@ -37,36 +37,82 @@ fn raw(value: Value) -> RawConfig {
 #[test]
 fn sandbox_defaults_preserve_isolation_and_direct_execution_checks() {
     let config = RawConfig::default().resolve().unwrap();
-    assert_eq!(config.sandbox, SandboxConfig::default());
+    assert!(config.sandbox);
     assert!(config.resource_guard);
-    // Like other optional top-level sections, null means no layer override.
-    assert_eq!(
-        raw(json!({"sandbox":null})).resolve().unwrap().sandbox,
-        SandboxConfig::default()
+    assert!(
+        serde_json::to_value(RawConfig::default())
+            .unwrap()
+            .get("sandbox")
+            .is_none()
     );
-    let partial = raw(json!({"sandbox":{"enabled":false}}));
-    let round_trip =
-        serde_json::from_value::<RawConfig>(serde_json::to_value(partial).unwrap()).unwrap();
-    assert!(!round_trip.resolve().unwrap().sandbox.enabled);
+    // Previously accepted null values remain an absent override.
+    let legacy_null = raw(json!({"sandbox":null}));
+    assert!(legacy_null.sandbox.is_none());
+    assert!(
+        serde_json::to_value(&legacy_null)
+            .unwrap()
+            .get("sandbox")
+            .is_none()
+    );
+    assert!(legacy_null.resolve().unwrap().sandbox);
     assert_eq!(
         serde_json::to_value(config).unwrap()["sandbox"],
-        json!({"enabled":true})
+        json!(true)
     );
 }
 
 #[test]
+fn sandbox_booleans_round_trip_and_false_overrides_the_parent() {
+    for enabled in [false, true] {
+        let config = raw(json!({"sandbox":enabled}));
+        assert_eq!(config.sandbox, Some(enabled));
+        let serialized = serde_json::to_value(config).unwrap();
+        assert_eq!(serialized["sandbox"], json!(enabled));
+        let round_trip: RawConfig = serde_json::from_value(serialized).unwrap();
+        assert_eq!(round_trip.resolve().unwrap().sandbox, enabled);
+        let mut parent = raw(json!({"sandbox":!enabled}));
+        parent.merge_project_from_with_keys(raw(json!({"sandbox":enabled})), Default::default());
+        assert_eq!(parent.resolve().unwrap().sandbox, enabled);
+    }
+}
+
+#[test]
+fn legacy_sandbox_layers_without_enabled_preserve_inheritance() {
+    for value in [
+        Value::Null,
+        json!({}),
+        json!({"resource_checks":false}),
+        json!({"command_hints":false}),
+        json!({"resource_checks":true,"command_hints":false}),
+    ] {
+        let overlay = raw(json!({"sandbox":value}));
+        assert!(overlay.sandbox.is_none());
+        assert!(
+            serde_json::to_value(&overlay)
+                .unwrap()
+                .get("sandbox")
+                .is_none()
+        );
+        for inherited in [false, true] {
+            let mut parent = raw(json!({"sandbox":inherited}));
+            parent.merge_project_from_with_keys(overlay.clone(), Default::default());
+            assert_eq!(parent.resolve().unwrap().sandbox, inherited);
+        }
+    }
+}
+
+#[test]
 fn sandbox_and_resource_guard_inherit_independently_and_false_is_an_override() {
-    let mut global = raw(json!({"sandbox":{"enabled":false}, "resource_guard":false}));
-    global
-        .merge_project_from_with_keys(raw(json!({"sandbox":{"enabled":true}})), Default::default());
+    let mut global = raw(json!({"sandbox":false, "resource_guard":false}));
+    global.merge_project_from_with_keys(raw(json!({"sandbox":true})), Default::default());
     let resolved = global.resolve().unwrap();
-    assert!(resolved.sandbox.enabled);
+    assert!(resolved.sandbox);
     assert!(!resolved.resource_guard);
 
-    let mut global = raw(json!({"sandbox":{"enabled":false}, "resource_guard":false}));
+    let mut global = raw(json!({"sandbox":false, "resource_guard":false}));
     global.merge_project_from_with_keys(raw(json!({"resource_guard":true})), Default::default());
     let resolved = global.resolve().unwrap();
-    assert!(!resolved.sandbox.enabled);
+    assert!(!resolved.sandbox);
     assert!(resolved.resource_guard);
 }
 
@@ -82,7 +128,6 @@ fn sandbox_settings_reject_unknown_fields_and_non_boolean_values() {
         json!({"enable":true}),
         json!([]),
         json!([false, true, true]),
-        json!(false),
         json!(0),
         json!("disabled"),
     ] {
@@ -94,11 +139,11 @@ fn sandbox_settings_reject_unknown_fields_and_non_boolean_values() {
 fn environment_disable_is_visible_in_resolved_settings() {
     for variable in ["AGENA_SANDBOX", "AGENA_SHELL_SANDBOX"] {
         for value in ["disabled", "false", "0", "off", " Disabled "] {
-            let mut config = raw(json!({"sandbox":{"enabled":true}, "resource_guard":false}));
+            let mut config = raw(json!({"sandbox":true, "resource_guard":false}));
             config
                 .merge_from(RawConfig::from_env(&Environment::new(&[(variable, value)])).unwrap());
             let resolved = config.resolve().unwrap();
-            assert!(!resolved.sandbox.enabled);
+            assert!(!resolved.sandbox);
             assert!(!resolved.resource_guard);
         }
     }
@@ -112,16 +157,15 @@ fn environment_cannot_force_enable_and_primary_variable_wins_over_alias() {
     ]);
     let overlay = RawConfig::from_env(&env).unwrap();
     assert!(overlay.sandbox.is_none());
-    let mut config = raw(json!({"sandbox":{"enabled":false}}));
+    let mut config = raw(json!({"sandbox":false}));
     config.merge_from(overlay);
-    assert!(!config.resolve().unwrap().sandbox.enabled);
+    assert!(!config.resolve().unwrap().sandbox);
     assert!(
         RawConfig::from_env(&env)
             .unwrap()
             .resolve()
             .unwrap()
             .sandbox
-            .enabled
     );
 }
 
@@ -130,13 +174,13 @@ fn raw_resolution_preserves_external_defaults_for_contextual_validation() {
     for mode in ["readonly", "readwrite"] {
         let mut value = json!({"permission":{"path":{"external":mode}}});
         let resolved = raw(value.clone()).resolve().unwrap();
-        assert!(resolved.sandbox.enabled);
+        assert!(resolved.sandbox);
         assert_eq!(
             serde_json::to_value(resolved.permission).unwrap()["path"]["external"],
             mode
         );
-        value["sandbox"] = json!({"enabled":false});
-        assert!(!raw(value).resolve().unwrap().sandbox.enabled);
+        value["sandbox"] = json!(false);
+        assert!(!raw(value).resolve().unwrap().sandbox);
     }
 }
 
@@ -161,7 +205,7 @@ fn layered_settings_support_writable_overrides_in_a_readonly_workspace() {
         )
     };
     validate(&edited).unwrap();
-    edited["sandbox"] = json!({"enabled":false});
+    edited["sandbox"] = json!(false);
     validate(&edited).unwrap();
     assert_eq!(std::fs::read_to_string(&global).unwrap(), "{}\n");
     assert!(!workspace.exists());
@@ -218,13 +262,9 @@ fn har_global_permission_request_is_saved_read_back_and_reloaded_in_each_mode() 
 
     for (initial, environment, expected_sandbox) in [
         (json!({}), Environment::default(), true),
+        (json!({"sandbox":false}), Environment::default(), false),
         (
-            json!({"sandbox":{"enabled":false}}),
-            Environment::default(),
-            false,
-        ),
-        (
-            json!({"sandbox":{"enabled":true}}),
+            json!({"sandbox":true}),
             Environment::new(&[("AGENA_SANDBOX", "disabled")]),
             false,
         ),
@@ -278,7 +318,7 @@ fn har_global_permission_request_is_saved_read_back_and_reloaded_in_each_mode() 
             loader.load(&load).unwrap(),
             loader.load_global(&load).unwrap(),
         ] {
-            assert_eq!(resolution.config.sandbox.enabled, expected_sandbox);
+            assert_eq!(resolution.config.sandbox, expected_sandbox);
             let permission = serde_json::to_value(resolution.config.permission).unwrap();
             assert_eq!(permission["path"]["workspace"], "readwrite");
             assert_eq!(permission["path"]["external"], "readonly");

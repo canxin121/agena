@@ -12,9 +12,7 @@ Agena 默认使用 `mxc-sdk` 的原生进程沙盒执行模型触发的本地工
 
 ```json
 {
-  "sandbox": {
-    "enabled": true
-  },
+  "sandbox": true,
   "resource_guard": true,
   "permission": {
     "path": {
@@ -36,18 +34,16 @@ Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → �
 
 ```json
 {
-  "sandbox": {
-    "enabled": true
-  },
+  "sandbox": true,
   "resource_guard": true
 }
 ```
 
-两个开关均默认为 `true`，只接受 JSON 布尔值。`sandbox` 只包含原生隔离设置；`resource_guard` 是独立的顶层字段。
+`sandbox` 和 `resource_guard` 是两个独立的顶层布尔开关，均默认为 `true`。新配置直接使用 `true` 或 `false`，删除当前层字段即可恢复继承。
 
 | 配置 | 策略与行为 |
 | --- | --- |
-| `sandbox.enabled` | 原生沙盒：通过 MXC 约束 Shell、PTY 和托管子进程的文件系统与网络访问 |
+| `sandbox` | 原生沙盒：通过 MXC 约束 Shell、PTY 和托管子进程的文件系统与网络访问 |
 | `resource_guard` | 资源预检：在未使用 MXC 时，统一检查工具声明的 `reads`、`writes`、`network`，并根据命令分析提示补齐遗漏声明 |
 
 资源预检发生在调用前，依赖工具声明和命令分析。它适合直接执行时做基础检查；原生沙盒还会约束进程随后实际发生的 I/O。
@@ -65,7 +61,7 @@ Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → �
 
 ```json
 {
-  "sandbox": { "enabled": false },
+  "sandbox": false,
   "resource_guard": true
 }
 ```
@@ -74,7 +70,7 @@ Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → �
 
 ```json
 {
-  "sandbox": { "enabled": false },
+  "sandbox": false,
   "resource_guard": false
 }
 ```
@@ -82,6 +78,8 @@ Web 的“权限与安全 → 沙盒与资源预检”和 TUI 的“设置 → �
 工具审批，以及文件发布、宿主 HTTP 等操作对真实资源的授权继续生效。MXC 启动失败仍返回错误，不会自动以直接执行方式重试；需要直接执行时显式关闭沙盒。
 
 ### 旧配置兼容
+
+旧的 `"sandbox": { "enabled": true }` 会规范化为 `"sandbox": true`，`false` 同样保留。没有 `enabled` 的旧对象和旧的 `sandbox: null` 不产生当前层覆盖，继续继承上层值。
 
 读取旧配置时，`sandbox.resource_checks` 映射到顶层 `resource_guard`。旧 `sandbox.command_hints` 合并到同一预检策略，不再提供单独开关；只有该旧字段时不会产生新的覆盖值。这样，旧的 `resource_checks: false` 会继续关闭预检，旧的 `resource_checks: true` 会统一启用声明检查和命令提示。
 
@@ -96,7 +94,7 @@ AGENA_SANDBOX=disabled agena server --workspace /path/to/project
 AGENA_SANDBOX=disabled agena server start --workspace /path/to/project
 ```
 
-`false`、`0`、`off` 也表示关闭。未设置或设置为 `enabled` 时遵循配置的 `sandbox.enabled`，不会重新开启已在设置中关闭的沙盒。兼容旧的 `AGENA_SHELL_SANDBOX=disabled`；存在 `AGENA_SANDBOX` 时以它为准。环境在进程启动时捕获，修改后需要重启服务；工具 `env` 中的同名值不能改变运行模式。
+`false`、`0`、`off` 也表示关闭。未设置或设置为 `enabled` 时遵循配置的 `sandbox` 布尔值，不会重新开启已在设置中关闭的沙盒。兼容旧的 `AGENA_SHELL_SANDBOX=disabled`；存在 `AGENA_SANDBOX` 时以它为准。环境在进程启动时捕获，修改后需要重启服务；工具 `env` 中的同名值不能改变运行模式。
 
 `agena mcp-server` 是常驻服务的 stdio 桥接客户端，工具实际在服务端执行。桥接调用与 HTTP `/mcp` 调用在服务端为本次执行关闭沙盒，无须额外环境变量；这类调用按 `resource_guard` 决定是否启用资源预检。这个受信任标记跟随调用执行器与宿主回调，不改变普通会话的模式，也不会复用另一模式下的 LSP、MCP 子连接或插件进程。
 

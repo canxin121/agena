@@ -83,7 +83,7 @@ pub(super) fn build_or_prepare_session_manager(
         prompts: build_config.prompts.clone(),
         auto_title: build_config.auto_title.clone(),
         permission: build_config.permission.clone(),
-        sandbox_enabled: build_config.sandbox.enabled,
+        sandbox_enabled: build_config.sandbox,
         auto_compaction: build_config.auto_compaction,
         max_concurrent_tools: build_config.max_concurrent_tools,
         max_turns: build_config.max_turns,
@@ -94,7 +94,7 @@ pub(super) fn build_or_prepare_session_manager(
         prompts: global_build_config.prompts.clone(),
         auto_title: global_build_config.auto_title.clone(),
         permission: global_build_config.permission.clone(),
-        sandbox_enabled: global_build_config.sandbox.enabled,
+        sandbox_enabled: global_build_config.sandbox,
         auto_compaction: global_build_config.auto_compaction,
         max_concurrent_tools: global_build_config.max_concurrent_tools,
         max_turns: global_build_config.max_turns,
@@ -315,7 +315,7 @@ pub(super) fn build_tool_executor(
         scheduler,
         lsp_registry,
     )
-    .with_execution_settings(sandbox.enabled, resource_guard)
+    .with_execution_settings(sandbox, resource_guard)
     .with_permission_inspector(permission_inspector);
     if let Some(registry) = monitor_registry {
         executor = executor.with_monitor_registry(registry);

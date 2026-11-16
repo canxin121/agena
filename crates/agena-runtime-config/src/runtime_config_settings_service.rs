@@ -194,7 +194,7 @@ pub fn read_runtime_file_setting(
     let config_path = config_path.into();
     let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
     let revision = document_revision(&document);
-    crate::normalize_resource_guard_document(&mut document)
+    crate::normalize_execution_settings_document(&mut document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let value = get_json_path(&document, input.target.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
@@ -247,7 +247,7 @@ pub fn list_runtime_file_settings(
     let config_path = config_path.into();
     let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
     let revision = document_revision(&document);
-    crate::normalize_resource_guard_document(&mut document)
+    crate::normalize_execution_settings_document(&mut document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let items = list_json_path(&document, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
@@ -277,7 +277,7 @@ pub fn set_runtime_file_setting(
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
         verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
-        crate::normalize_resource_guard_document(&mut document)
+        crate::normalize_execution_settings_document(&mut document)
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         let previous = get_json_path(&document, Some(input.path.as_str()))?;
         let created = previous.is_null();
@@ -308,7 +308,7 @@ pub fn delete_runtime_file_setting(
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
         verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
-        crate::normalize_resource_guard_document(&mut document)
+        crate::normalize_execution_settings_document(&mut document)
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         let deleted = remove_runtime_json_path(&mut document, &segments)?;
         finish_runtime_settings_edit(
@@ -341,7 +341,7 @@ pub fn patch_runtime_file_settings(
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
         verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
-        crate::normalize_resource_guard_document(&mut document)
+        crate::normalize_execution_settings_document(&mut document)
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         let created = input
             .target
@@ -415,7 +415,7 @@ fn finish_runtime_settings_edit(
     };
     let before_revision = document_revision(&before);
     let mut previous_document = before;
-    crate::normalize_resource_guard_document(&mut previous_document)
+    crate::normalize_execution_settings_document(&mut previous_document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let previous = get_json_path(&previous_document, path.as_deref())?;
     let current = get_json_path(&document, path.as_deref())?;
@@ -453,7 +453,7 @@ fn finish_runtime_settings_edit(
 pub(crate) fn normalize_settings_document(
     document: &mut JsonValue,
 ) -> Result<(), RuntimeConfigSettingsError> {
-    crate::normalize_resource_guard_document(document)
+    crate::normalize_execution_settings_document(document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let Some(value) = document.get("permission").filter(|value| !value.is_null()) else {
         return Ok(());

@@ -27,7 +27,7 @@ pub mod runtime_configuration_service;
 pub mod config_environment;
 pub mod config_paths;
 
-pub use config::raw::normalize_resource_guard_document;
+pub use config::raw::normalize_execution_settings_document;
 pub use config::{
     ConfigLoader, RawConfig, RawConfigFile, RawTracingConfig, RawUiConfig, apply_config_override,
     delete_layered_file_setting, list_file_settings, list_json_path, parse_settings_path,

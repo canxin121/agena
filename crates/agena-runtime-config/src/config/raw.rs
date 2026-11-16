@@ -102,11 +102,7 @@ pub fn validate_config_text(path: &Path, text: &str) -> Result<(), ConfigError> 
     let resolved = config.resolve()?;
     // A standalone document has no owning workspace. Its templates remain
     // inactive while active host paths and the global native policy are checked.
-    validate_permission_config_in_workspace(
-        &resolved.permission,
-        Path::new(""),
-        resolved.sandbox.enabled,
-    )
+    validate_permission_config_in_workspace(&resolved.permission, Path::new(""), resolved.sandbox)
 }
 
 pub fn validate_layered_config_text(
@@ -150,11 +146,7 @@ pub fn validate_layered_config_text(
             parent
         }
     };
-    validate_permission_config_in_workspace(
-        &resolved.permission,
-        workspace_root,
-        resolved.sandbox.enabled,
-    )
+    validate_permission_config_in_workspace(&resolved.permission, workspace_root, resolved.sandbox)
 }
 
 /// Validate real filesystem identities after layering, while the owning
@@ -274,7 +266,8 @@ pub struct RawConfig {
     pub tracing: Option<RawTracingConfig>,
     pub ui: Option<RawUiConfig>,
     pub runtime: Option<RawRuntimeConfig>,
-    pub sandbox: Option<RawSandboxConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_guard: Option<bool>,
     pub session: Option<RawSessionConfig>,
@@ -286,9 +279,9 @@ pub struct RawConfig {
     pub providers: RawProvidersConfig,
 }
 
-/// Project legacy direct-execution settings onto the single resource guard.
+/// Normalize execution switches to top-level booleans, accepting legacy objects.
 /// This changes only the in-memory document; readers retain the original revision.
-pub fn normalize_resource_guard_document(document: &mut Value) -> Result<(), String> {
+pub fn normalize_execution_settings_document(document: &mut Value) -> Result<(), String> {
     let Some(root) = document.as_object_mut() else {
         return Ok(());
     };
@@ -301,28 +294,32 @@ pub fn normalize_resource_guard_document(document: &mut Value) -> Result<(), Str
         })
         .transpose()?;
     let mut legacy_guard = None;
-    let mut has_legacy = false;
-    if let Some(value) = root.get("sandbox").filter(|value| !value.is_null()) {
-        let sandbox = value
-            .as_object()
-            .ok_or_else(|| "sandbox must be an object".to_owned())?;
-        for (name, value) in sandbox {
-            if !matches!(
-                name.as_str(),
-                "enabled" | "resource_checks" | "command_hints"
-            ) {
-                return Err(format!(
-                    "unknown sandbox setting {name:?}; use sandbox.enabled or resource_guard"
-                ));
+    let sandbox = match root.get("sandbox") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(enabled)) => Some(*enabled),
+        Some(Value::Object(legacy)) => {
+            for (name, value) in legacy {
+                if !matches!(
+                    name.as_str(),
+                    "enabled" | "resource_checks" | "command_hints"
+                ) {
+                    return Err(format!(
+                        "unknown legacy sandbox setting {name:?}; use the sandbox and resource_guard booleans"
+                    ));
+                }
+                if !value.is_boolean() {
+                    return Err(format!("sandbox.{name} must be a boolean"));
+                }
             }
-            if !value.is_boolean() {
-                return Err(format!("sandbox.{name} must be a boolean"));
-            }
+            legacy_guard = legacy.get("resource_checks").and_then(Value::as_bool);
+            legacy.get("enabled").and_then(Value::as_bool)
         }
-        legacy_guard = sandbox.get("resource_checks").and_then(Value::as_bool);
-        has_legacy =
-            sandbox.contains_key("resource_checks") || sandbox.contains_key("command_hints");
-    }
+        Some(_) => {
+            return Err(
+                "sandbox must be a boolean; legacy objects are accepted only for migration".into(),
+            );
+        }
+    };
     if resource_guard
         .zip(legacy_guard)
         .is_some_and(|(current, legacy)| current != legacy)
@@ -332,14 +329,11 @@ pub fn normalize_resource_guard_document(document: &mut Value) -> Result<(), Str
     if let Some(legacy) = legacy_guard {
         root.insert("resource_guard".into(), Value::Bool(legacy));
     }
-    if has_legacy {
-        let sandbox = root
-            .get_mut("sandbox")
-            .and_then(Value::as_object_mut)
-            .expect("validated sandbox");
-        sandbox.remove("resource_checks");
-        sandbox.remove("command_hints");
-        if sandbox.is_empty() {
+    match sandbox {
+        Some(enabled) => {
+            root.insert("sandbox".into(), Value::Bool(enabled));
+        }
+        None => {
             root.remove("sandbox");
         }
     }
@@ -357,8 +351,7 @@ impl<'de> Deserialize<'de> for RawConfig {
             tracing: Option<RawTracingConfig>,
             ui: Option<RawUiConfig>,
             runtime: Option<RawRuntimeConfig>,
-            #[serde(deserialize_with = "deserialize_optional_sandbox")]
-            sandbox: Option<RawSandboxConfig>,
+            sandbox: Option<bool>,
             resource_guard: Option<bool>,
             session: Option<RawSessionConfig>,
             prompts: Option<crate::PromptScopeConfig>,
@@ -367,7 +360,7 @@ impl<'de> Deserialize<'de> for RawConfig {
             providers: RawProvidersConfig,
         }
         let mut document = Value::deserialize(deserializer)?;
-        normalize_resource_guard_document(&mut document).map_err(serde::de::Error::custom)?;
+        normalize_execution_settings_document(&mut document).map_err(serde::de::Error::custom)?;
         let input = Input::deserialize(document).map_err(serde::de::Error::custom)?;
         Ok(Self {
             tracing: input.tracing,
@@ -389,7 +382,7 @@ impl RawConfig {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_option_struct(&mut self.sandbox, overlay.sandbox);
+        merge_option(&mut self.sandbox, overlay.sandbox);
         merge_option(&mut self.resource_guard, overlay.resource_guard);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
@@ -408,7 +401,7 @@ impl RawConfig {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
         merge_option_struct(&mut self.runtime, overlay.runtime);
-        merge_option_struct(&mut self.sandbox, overlay.sandbox);
+        merge_option(&mut self.sandbox, overlay.sandbox);
         merge_option(&mut self.resource_guard, overlay.resource_guard);
         merge_option_struct(&mut self.session, overlay.session);
         merge_option_struct(&mut self.permission, overlay.permission);
@@ -477,10 +470,7 @@ impl RawConfig {
                     "disabled" | "false" | "0" | "off"
                 )
             })
-            .map(|_| RawSandboxConfig {
-                enabled: Some(false),
-                ..Default::default()
-            });
+            .map(|_| false);
 
         let compaction_auto = env
             .var("AGENA_SESSION_COMPACTION_AUTO")
@@ -546,7 +536,7 @@ impl RawConfig {
             preferences: raw_ui.preferences,
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
-        let sandbox = crate::SandboxConfig::from_raw(self.sandbox.unwrap_or_default());
+        let sandbox = self.sandbox.unwrap_or(true);
         let resource_guard = self.resource_guard.unwrap_or(true);
         if let Some(prompts) = &self.prompts {
             prompts.validate().map_err(ConfigError::Validation)?;
@@ -832,54 +822,6 @@ fn preference_map_merge(
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
-/// Optional fields preserve inheritance between global and workspace settings.
-pub struct RawSandboxConfig {
-    #[merge(strategy = option_override)]
-    #[serde(
-        deserialize_with = "deserialize_present_bool",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub enabled: Option<bool>,
-}
-
-/// Optional sections use null as absence throughout RawConfig. A present
-/// sandbox value must otherwise be an object, never a struct-like sequence.
-fn deserialize_optional_sandbox<'de, D>(
-    deserializer: D,
-) -> Result<Option<RawSandboxConfig>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Value::deserialize(deserializer)?;
-    if value.is_null() {
-        return Ok(None);
-    }
-    if !value.is_object() {
-        return Err(serde::de::Error::custom("sandbox must be an object"));
-    }
-    serde_path_to_error::deserialize(value)
-        .map(Some)
-        .map_err(serde::de::Error::custom)
-}
-
-/// Missing fields inherit; a present value must be a JSON boolean.
-fn deserialize_present_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    bool::deserialize(deserializer).map(Some)
-}
-
-impl crate::SandboxConfig {
-    fn from_raw(raw: RawSandboxConfig) -> Self {
-        Self {
-            enabled: raw.enabled.unwrap_or(true),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
-#[serde(default, deny_unknown_fields)]
 /// Raw runtime configuration.
 pub struct RawRuntimeConfig {
     #[merge(strategy = option_struct_merge)]
@@ -1097,7 +1039,6 @@ impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
     RawRuntimeConfig,
-    RawSandboxConfig,
     RawRuntimeProvidersConfig,
     RawProviderClientVersionSettings,
     RawSessionConfig,

@@ -46,7 +46,7 @@ fn empty_raw_config_resolves_to_a_writable_project_and_outbound_network() {
         assert_eq!(permission["path"]["external"], "deny");
         assert_eq!(permission["network"], json!({"default":"allow"}));
         assert_eq!(permission["tools"]["default"], "allow");
-        assert!(resolved.sandbox.enabled);
+        assert!(resolved.sandbox);
         assert!(resolved.resource_guard);
     }
 }

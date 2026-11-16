@@ -1,13 +1,9 @@
 import type { RuntimeSettingsLayer, RuntimeSettingsReadBundle } from './runtimeSettings'
 
-export const SANDBOX_SETTING_KEYS = ['enabled', 'resource_guard'] as const
+export const SANDBOX_SETTING_KEYS = ['sandbox', 'resource_guard'] as const
 export type SandboxSettingKey = (typeof SANDBOX_SETTING_KEYS)[number]
 export type SandboxSettings = Record<SandboxSettingKey, boolean>
 export type SandboxSettingSources = Record<SandboxSettingKey, RuntimeSettingsReadBundle>
-export const SANDBOX_SETTING_PATHS: Record<SandboxSettingKey, string> = {
-  enabled: 'sandbox.enabled',
-  resource_guard: 'resource_guard',
-}
 
 function explicitBoolean(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
@@ -46,9 +42,9 @@ export function sandboxEffectiveSettings(sources: SandboxSettingSources | null):
 export function sandboxExecutionState(sources: SandboxSettingSources | null) {
   const effective = sandboxEffectiveSettings(sources)
   return {
-    enabled: effective.enabled,
-    resourceGuard: !effective.enabled && effective.resource_guard,
-    resourceGuardStandby: effective.enabled && effective.resource_guard,
-    environmentDisabled: !effective.enabled && sandboxLayerSettings(sources, 'workspace').enabled,
+    sandbox: effective.sandbox,
+    resourceGuard: !effective.sandbox && effective.resource_guard,
+    resourceGuardStandby: effective.sandbox && effective.resource_guard,
+    environmentDisabled: !effective.sandbox && sandboxLayerSettings(sources, 'workspace').sandbox,
   }
 }

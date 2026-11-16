@@ -5,10 +5,8 @@ use super::{
 };
 use crate::ui_text;
 
-fn execution_boolean(source: &JsonValue, path: &str) -> Option<bool> {
-    path.split('.')
-        .try_fold(source, |value, key| value.get(key))?
-        .as_bool()
+fn execution_boolean(source: &JsonValue, key: &str) -> Option<bool> {
+    source.get(key)?.as_bool()
 }
 
 pub(crate) fn settings_studio_sandbox_items(
@@ -25,12 +23,12 @@ pub(crate) fn settings_studio_sandbox_items(
     let effective = |key: &str| {
         execution_boolean(&sources.effective, key).unwrap_or_else(|| configured(key, true))
     };
-    let isolated = effective("sandbox.enabled");
+    let isolated = effective("sandbox");
     let resource_guard = !isolated && effective("resource_guard");
-    let environment_disabled = !isolated && configured("sandbox.enabled", true);
+    let environment_disabled = !isolated && configured("sandbox", true);
     let fields = [
         (
-            "sandbox.enabled",
+            "sandbox",
             "settings-sandbox-enabled-label",
             "settings-sandbox-enabled-description",
             isolated,
@@ -55,7 +53,7 @@ pub(crate) fn settings_studio_sandbox_items(
                 &agena_tui::fl_args!("label" => ui_text::t(i18n, label_key)),
             );
             let mut description = ui_text::t(i18n, description_key);
-            let inactive_reason = if key == "sandbox.enabled" && environment_disabled {
+            let inactive_reason = if key == "sandbox" && environment_disabled {
                 Some("settings-sandbox-environment-disabled")
             } else if key == "resource_guard" && isolated && effective("resource_guard") {
                 Some("settings-sandbox-inactive-isolated")
@@ -157,7 +155,7 @@ mod tests {
             assert_eq!(
                 field.path,
                 if index % 2 == 0 {
-                    "sandbox.enabled"
+                    "sandbox"
                 } else {
                     "resource_guard"
                 }
@@ -180,7 +178,7 @@ mod tests {
             &sources(
                 json!({"resource_guard":false}),
                 json!({}),
-                json!({"sandbox":{"enabled":true},"resource_guard":false}),
+                json!({"sandbox":true,"resource_guard":false}),
             ),
         );
         assert!(items[1].value.starts_with("false"));
@@ -191,9 +189,9 @@ mod tests {
     #[test]
     fn sandbox_fields_keep_each_layer_editable_when_overridden() {
         let state = sources(
-            json!({"sandbox":{"enabled":false},"resource_guard":false}),
+            json!({"sandbox":false,"resource_guard":false}),
             json!({"resource_guard":true}),
-            json!({"sandbox":{"enabled":false},"resource_guard":true}),
+            json!({"sandbox":false,"resource_guard":true}),
         );
         let items = settings_studio_sandbox_items(&I18n::english(), &state);
         assert!(items[1].value.starts_with("false"));
@@ -205,9 +203,9 @@ mod tests {
     #[test]
     fn sandbox_fields_explain_explicit_environment_override_without_changing_guard() {
         let state = sources(
-            json!({"sandbox":{"enabled":true},"resource_guard":false}),
+            json!({"sandbox":true,"resource_guard":false}),
             json!({}),
-            json!({"sandbox":{"enabled":false},"resource_guard":false}),
+            json!({"sandbox":false,"resource_guard":false}),
         );
         let items = settings_studio_sandbox_items(&I18n::english(), &state);
         assert!(items[0].value.starts_with("true"));

@@ -47,7 +47,7 @@ impl App {
                     })
                     .collect(),
             ),
-            "sandbox.enabled" | "resource_guard" => Some(boolean_choice_items(
+            "sandbox" | "resource_guard" => Some(boolean_choice_items(
                 crate::settings_field_display_description(&self.i18n, field).as_str(),
             )),
             "session.compaction.auto" => Some(boolean_choice_items(
@@ -88,7 +88,7 @@ impl App {
             | "tracing.filter"
             | "tracing.database"
             | "tracing.adapter"
-            | "sandbox.enabled"
+            | "sandbox"
             | "resource_guard"
             | "session.compaction.auto"
             | "ui.transcript.activity.default_expanded" => {

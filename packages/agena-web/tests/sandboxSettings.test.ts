@@ -6,10 +6,10 @@ import * as vue from 'vue'
 import * as settings from '../src/lib/sandboxSettings'
 import type { RuntimeSettingsLayer, RuntimeSettingsReadBundle } from '../src/lib/runtimeSettings'
 
-type Policy = { sandbox?: { enabled?: boolean }; resource_guard?: boolean }
+type Policy = { sandbox?: boolean; resource_guard?: boolean }
 function sources(global: Policy = {}, workspace: Policy = {}, effective: Policy = {}): settings.SandboxSettingSources {
   const bundle = (key: settings.SandboxSettingKey): RuntimeSettingsReadBundle => {
-    const value = (policy: Policy) => key === 'enabled' ? policy.sandbox?.enabled : policy.resource_guard
+    const value = (policy: Policy) => policy[key]
     return {
       global: { value: value(global) },
       workspace: { value: value(workspace) },
@@ -17,32 +17,32 @@ function sources(global: Policy = {}, workspace: Policy = {}, effective: Policy 
       file: { value: value(global) },
     }
   }
-  return { enabled: bundle('enabled'), resource_guard: bundle('resource_guard') }
+  return { sandbox: bundle('sandbox'), resource_guard: bundle('resource_guard') }
 }
 
 describe('independent sandbox and resource preflight settings', () => {
   test('both preferences default to true and resource preflight waits while MXC is enabled', () => {
-    expect(settings.sandboxLayerSettings(null, 'global')).toEqual({ enabled: true, resource_guard: true })
+    expect(settings.sandboxLayerSettings(null, 'global')).toEqual({ sandbox: true, resource_guard: true })
     expect(settings.sandboxExecutionState(sources())).toEqual({
-      enabled: true,
+      sandbox: true,
       resourceGuard: false,
       resourceGuardStandby: true,
       environmentDisabled: false,
     })
-    expect(settings.SANDBOX_SETTING_PATHS).toEqual({ enabled: 'sandbox.enabled', resource_guard: 'resource_guard' })
+    expect(settings.SANDBOX_SETTING_KEYS).toEqual(['sandbox', 'resource_guard'])
   })
 
   test('each setting inherits independently while global editing ignores workspace overrides', () => {
     const bundle = sources(
-      { sandbox: { enabled: false }, resource_guard: false },
+      { sandbox: false, resource_guard: false },
       { resource_guard: true },
     )
-    expect(settings.sandboxLayerSettings(bundle, 'global')).toEqual({ enabled: false, resource_guard: false })
-    expect(settings.sandboxLayerSettings(bundle, 'workspace')).toEqual({ enabled: false, resource_guard: true })
-    expect(settings.sandboxLayerOverride(bundle, 'workspace', 'enabled')).toBeUndefined()
+    expect(settings.sandboxLayerSettings(bundle, 'global')).toEqual({ sandbox: false, resource_guard: false })
+    expect(settings.sandboxLayerSettings(bundle, 'workspace')).toEqual({ sandbox: false, resource_guard: true })
+    expect(settings.sandboxLayerOverride(bundle, 'workspace', 'sandbox')).toBeUndefined()
     expect(settings.sandboxLayerOverride(bundle, 'workspace', 'resource_guard')).toBe(true)
     expect(settings.sandboxExecutionState(bundle)).toEqual({
-      enabled: false,
+      sandbox: false,
       resourceGuard: true,
       resourceGuardStandby: false,
       environmentDisabled: false,
@@ -50,9 +50,9 @@ describe('independent sandbox and resource preflight settings', () => {
   })
 
   test('turning off preflight preserves its own preference across sandbox changes', () => {
-    const bundle = sources({ sandbox: { enabled: true }, resource_guard: false })
+    const bundle = sources({ sandbox: true, resource_guard: false })
     expect(settings.sandboxExecutionState(bundle).resourceGuard).toBe(false)
-    bundle.enabled.global.value = false
+    bundle.sandbox.global.value = false
     expect(settings.sandboxExecutionState(bundle).resourceGuard).toBe(false)
     expect(settings.sandboxLayerSettings(bundle, 'global').resource_guard).toBe(false)
     bundle.resource_guard.global.value = true
@@ -61,13 +61,13 @@ describe('independent sandbox and resource preflight settings', () => {
 
   test('an explicit environment disable changes activity without changing saved preferences', () => {
     const bundle = sources(
-      { sandbox: { enabled: true }, resource_guard: true },
+      { sandbox: true, resource_guard: true },
       {},
-      { sandbox: { enabled: false }, resource_guard: true },
+      { sandbox: false, resource_guard: true },
     )
-    expect(settings.sandboxLayerSettings(bundle, 'global').enabled).toBe(true)
+    expect(settings.sandboxLayerSettings(bundle, 'global').sandbox).toBe(true)
     expect(settings.sandboxExecutionState(bundle)).toEqual({
-      enabled: false,
+      sandbox: false,
       resourceGuard: true,
       resourceGuardStandby: false,
       environmentDisabled: true,
@@ -75,7 +75,7 @@ describe('independent sandbox and resource preflight settings', () => {
   })
 
   test('a persisted disable is not mislabeled as an environment override', () => {
-    const bundle = sources({ sandbox: { enabled: true } }, { sandbox: { enabled: false } }, { sandbox: { enabled: false } })
+    const bundle = sources({ sandbox: true }, { sandbox: false }, { sandbox: false })
     expect(settings.sandboxExecutionState(bundle).environmentDisabled).toBe(false)
   })
 })
@@ -98,7 +98,7 @@ async function editor(bundle = sources(), layer: RuntimeSettingsLayer = 'global'
   const writes: Array<{ path: string; value?: boolean; layer: RuntimeSettingsLayer }> = []
   let failure = ''
   const keyForPath = (path: string) => {
-    const key = settings.SANDBOX_SETTING_KEYS.find((key) => settings.SANDBOX_SETTING_PATHS[key] === path)
+    const key = settings.SANDBOX_SETTING_KEYS.find((key) => key === path)
     if (!key) throw new Error('Unexpected settings path: ' + path)
     return key
   }
@@ -148,10 +148,10 @@ async function editor(bundle = sources(), layer: RuntimeSettingsLayer = 'global'
 describe('execution safeguards editor persistence', () => {
   test('loads both canonical paths and shows two separate controls', async () => {
     const { panel, reads, writes } = await editor()
-    expect(reads).toEqual(['sandbox.enabled', 'resource_guard'])
-    expect(panel.fields.value.map((field: { key: string }) => field.key)).toEqual(['enabled', 'resource_guard'])
+    expect(reads).toEqual(['sandbox', 'resource_guard'])
+    expect(panel.fields.value.map((field: { key: string }) => field.key)).toEqual(['sandbox', 'resource_guard'])
     expect(panel.fields.value.map((field: { label: string }) => field.label)).toEqual(['Native sandbox', 'Resource preflight'])
-    expect(panel.configured.value).toEqual({ enabled: true, resource_guard: true })
+    expect(panel.configured.value).toEqual({ sandbox: true, resource_guard: true })
     expect(panel.fields.value[1].active).toBe(false)
     expect(panel.fields.value[1].status).toContain('On standby')
     expect(writes).toHaveLength(0)
@@ -161,11 +161,11 @@ describe('execution safeguards editor persistence', () => {
     const { panel, writes } = await editor(sources(), layer)
     await panel.save('resource_guard', false)
     expect(writes).toEqual([{ path: 'resource_guard', value: false, layer }])
-    expect(panel.configured.value.enabled).toBe(true)
+    expect(panel.configured.value.sandbox).toBe(true)
     expect(panel.configured.value.resource_guard).toBe(false)
     expect(panel.fields.value[1].status).toBe('')
-    await panel.save('enabled', false)
-    expect(writes[1]).toEqual({ path: 'sandbox.enabled', value: false, layer })
+    await panel.save('sandbox', false)
+    expect(writes[1]).toEqual({ path: 'sandbox', value: false, layer })
     expect(panel.execution.value.resourceGuard).toBe(false)
     await panel.save('resource_guard', true)
     expect(panel.execution.value.resourceGuard).toBe(true)
@@ -173,22 +173,35 @@ describe('execution safeguards editor persistence', () => {
 
   test('reset deletes only the selected field and restores its parent value', async () => {
     const { panel, writes } = await editor(
-      sources({ sandbox: { enabled: false }, resource_guard: false }, { resource_guard: true }),
+      sources({ sandbox: false, resource_guard: false }, { resource_guard: true }),
       'workspace',
     )
-    expect(panel.configured.value).toEqual({ enabled: false, resource_guard: true })
+    expect(panel.configured.value).toEqual({ sandbox: false, resource_guard: true })
     await panel.save('resource_guard', undefined)
     expect(writes).toEqual([{ path: 'resource_guard', layer: 'workspace' }])
-    expect(panel.configured.value).toEqual({ enabled: false, resource_guard: false })
+    expect(panel.configured.value).toEqual({ sandbox: false, resource_guard: false })
     expect(settings.sandboxLayerOverride(panel.sources.value, 'workspace', 'resource_guard')).toBeUndefined()
   })
 
   test('resetting the global preference restores its built-in true default', async () => {
-    const { panel, writes } = await editor(sources({ sandbox: { enabled: false }, resource_guard: false }))
+    const { panel, writes } = await editor(sources({ sandbox: false, resource_guard: false }))
     await panel.save('resource_guard', undefined)
     expect(writes).toEqual([{ path: 'resource_guard', layer: 'global' }])
-    expect(panel.configured.value).toEqual({ enabled: false, resource_guard: true })
+    expect(panel.configured.value).toEqual({ sandbox: false, resource_guard: true })
     expect(panel.execution.value.resourceGuard).toBe(true)
+  })
+
+  test.each(['global', 'workspace'] as const)('resetting sandbox in %s deletes the root flag and keeps resource guard', async (layer) => {
+    const bundle = layer === 'global'
+      ? sources({ sandbox: false, resource_guard: false })
+      : sources({ sandbox: true, resource_guard: false }, { sandbox: false })
+    const { panel, writes } = await editor(bundle, layer)
+    expect(panel.configured.value).toEqual({ sandbox: false, resource_guard: false })
+    await panel.save('sandbox', undefined)
+    expect(writes).toEqual([{ path: 'sandbox', layer }])
+    expect(panel.configured.value).toEqual({ sandbox: true, resource_guard: false })
+    expect(settings.sandboxLayerOverride(panel.sources.value, layer, 'sandbox')).toBeUndefined()
+    expect(panel.execution.value.resourceGuard).toBe(false)
   })
 
   test('a rejected save restores the displayed preference without changing the other control', async () => {
@@ -197,7 +210,7 @@ describe('execution safeguards editor persistence', () => {
     await panel.save('resource_guard', false)
     expect(writes).toHaveLength(0)
     expect(panel.error.value).toBe('settings rejected')
-    expect(panel.configured.value).toEqual({ enabled: true, resource_guard: true })
+    expect(panel.configured.value).toEqual({ sandbox: true, resource_guard: true })
     expect(panel.pendingEdit.value).toBeNull()
   })
 })

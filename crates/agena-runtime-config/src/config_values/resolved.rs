@@ -229,7 +229,7 @@ pub struct ResolvedConfig {
     pub tracing: RuntimeTracingConfiguration,
     pub ui: UiConfig,
     pub runtime: RuntimeConfig,
-    pub sandbox: super::SandboxConfig,
+    pub sandbox: bool,
     /// Resource declarations and command hints used only without MXC isolation.
     pub resource_guard: bool,
     pub session: SessionConfig,

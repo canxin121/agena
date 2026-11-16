@@ -13,7 +13,6 @@ import {
   type RuntimeSettingsLayer,
 } from '@/lib/runtimeSettings'
 import {
-  SANDBOX_SETTING_PATHS,
   sandboxExecutionState,
   sandboxLayerOverride,
   sandboxLayerSettings,
@@ -42,10 +41,10 @@ let disposed = false
 
 const fields = computed(() => [
   {
-    key: 'enabled' as const,
+    key: 'sandbox' as const,
     label: st('Native sandbox'),
     description: st('Run agent tools with MXC filesystem and network isolation.'),
-    active: execution.value.enabled,
+    active: execution.value.sandbox,
     status: '',
   },
   {
@@ -68,12 +67,12 @@ async function refresh() {
   loading.value = true
   error.value = ''
   try {
-    const [enabled, resourceGuard] = await Promise.all([
-      readRuntimeSettingSources(SANDBOX_SETTING_PATHS.enabled, controller.signal),
-      readRuntimeSettingSources(SANDBOX_SETTING_PATHS.resource_guard, controller.signal),
+    const [sandbox, resourceGuard] = await Promise.all([
+      readRuntimeSettingSources('sandbox', controller.signal),
+      readRuntimeSettingSources('resource_guard', controller.signal),
     ])
     if (!controller.signal.aborted && sequence === readSequence) {
-      sources.value = { enabled, resource_guard: resourceGuard }
+      sources.value = { sandbox, resource_guard: resourceGuard }
     }
   } catch (reason) {
     if (!controller.signal.aborted && sequence === readSequence) {
@@ -98,9 +97,8 @@ async function save(key: SandboxSettingKey, value: boolean | undefined) {
     value: value ?? (target === 'workspace' ? sandboxLayerSettings(sources.value, 'global')[key] : true),
   }
   try {
-    const path = SANDBOX_SETTING_PATHS[key]
-    if (value === undefined) await deleteRuntimeSetting(path, { reload: true }, target)
-    else await setRuntimeSetting(path, value, { reload: true }, target)
+    if (value === undefined) await deleteRuntimeSetting(key, { reload: true }, target)
+    else await setRuntimeSetting(key, value, { reload: true }, target)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
     pendingEdit.value = null
@@ -144,7 +142,7 @@ defineExpose({ refresh })
       </p>
       <template v-else>
         <p class="text-sm font-medium" aria-live="polite">
-          {{ execution.enabled ? st('MXC sandbox enabled') : st('Direct execution') }}
+          {{ execution.sandbox ? st('MXC sandbox enabled') : st('Direct execution') }}
         </p>
         <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
           {{ st('Saved preferences remain available when execution modes change.') }}

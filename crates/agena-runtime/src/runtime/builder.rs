@@ -2399,7 +2399,7 @@ impl AgenaRuntime {
             None,
             None,
         )
-        .with_execution_settings(snapshot.sandbox_config().enabled, snapshot.resource_guard())
+        .with_execution_settings(snapshot.sandbox_enabled(), snapshot.resource_guard())
     }
 
     pub fn workspace_root(&self) -> &Path {

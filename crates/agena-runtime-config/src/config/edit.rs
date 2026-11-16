@@ -50,7 +50,8 @@ pub fn read_file_setting(
     let config_path = config_path.into();
     let (config_found, mut file_value) = read_or_create_doc(&config_path)?;
     let revision = crate::runtime_config_settings_service::document_revision(&file_value);
-    crate::normalize_resource_guard_document(&mut file_value).map_err(ConfigError::Validation)?;
+    crate::normalize_execution_settings_document(&mut file_value)
+        .map_err(ConfigError::Validation)?;
     let value = get_json_path(&file_value, input.target.path.as_deref())?;
     Ok(ConfigSettingsReadResponse {
         revision: Some(revision),
@@ -70,7 +71,8 @@ pub fn list_file_settings(
     let config_path = config_path.into();
     let (config_found, mut file_value) = read_or_create_doc(&config_path)?;
     let revision = crate::runtime_config_settings_service::document_revision(&file_value);
-    crate::normalize_resource_guard_document(&mut file_value).map_err(ConfigError::Validation)?;
+    crate::normalize_execution_settings_document(&mut file_value)
+        .map_err(ConfigError::Validation)?;
     let items = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
         revision: Some(revision),
@@ -137,7 +139,7 @@ fn set_file_setting_impl(
             ));
         }
         let before = doc.clone();
-        crate::normalize_resource_guard_document(&mut doc).map_err(ConfigError::Validation)?;
+        crate::normalize_execution_settings_document(&mut doc).map_err(ConfigError::Validation)?;
         let previous = get_json_path(&doc, Some(input.path.as_str()))?;
         let created = previous.is_null();
         set_json_path(&mut doc, &segments, input.value)?;
@@ -214,7 +216,7 @@ fn delete_file_setting_impl(
             ));
         }
         let before = doc.clone();
-        crate::normalize_resource_guard_document(&mut doc).map_err(ConfigError::Validation)?;
+        crate::normalize_execution_settings_document(&mut doc).map_err(ConfigError::Validation)?;
         let deleted = remove_json_path(&mut doc, &segments)?;
         finish_edit(
             config_path,
@@ -291,7 +293,7 @@ fn patch_file_settings_impl(
             ));
         }
         let before = doc.clone();
-        crate::normalize_resource_guard_document(&mut doc).map_err(ConfigError::Validation)?;
+        crate::normalize_execution_settings_document(&mut doc).map_err(ConfigError::Validation)?;
         let created = match input.target.path.as_deref() {
             Some(path) => get_json_path(&doc, Some(path))?.is_null(),
             None => false,
@@ -381,7 +383,7 @@ fn finish_edit(
     }
     let before_revision = crate::runtime_config_settings_service::document_revision(&before);
     let mut previous_document = before;
-    crate::normalize_resource_guard_document(&mut previous_document)
+    crate::normalize_execution_settings_document(&mut previous_document)
         .map_err(ConfigError::Validation)?;
     let previous = get_json_path(&previous_document, path.as_deref())?;
     let current = get_json_path(&doc, path.as_deref())?;

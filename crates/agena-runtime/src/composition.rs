@@ -73,7 +73,7 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) prompts: agena_runtime_config::PromptLayersConfig,
     pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
-    pub(crate) sandbox: agena_runtime_config::SandboxConfig,
+    pub(crate) sandbox: bool,
     pub(crate) resource_guard: bool,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
     pub(crate) max_concurrent_tools: usize,
@@ -129,7 +129,7 @@ pub(crate) fn session_build_config_from_resolved(
 
 /// Typed inputs for tool-executor construction.
 pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Session> {
-    pub(crate) sandbox: agena_runtime_config::SandboxConfig,
+    pub(crate) sandbox: bool,
     pub(crate) resource_guard: bool,
     pub(crate) plugins: Plugins,
     pub(crate) lsp_registry: Lsp,

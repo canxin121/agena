@@ -30,9 +30,7 @@
     },
     "auxiliary_model": null
   },
-  "sandbox": {
-    "enabled": true
-  },
+  "sandbox": true,
   "resource_guard": true,
   "prompts": {
     "mode": "append",

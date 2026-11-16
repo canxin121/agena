@@ -5,9 +5,9 @@ use agena_runtime_config::{
     ConfigSettingsGetInput, ConfigSettingsLayer, ConfigSettingsListInput, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsSetInput, RawConfig, delete_layered_file_setting,
     delete_runtime_file_setting, list_file_settings, list_runtime_file_settings,
-    normalize_resource_guard_document, patch_layered_file_settings, patch_runtime_file_settings,
-    read_file_setting, read_runtime_file_setting, set_layered_file_setting,
-    set_runtime_file_setting,
+    normalize_execution_settings_document, patch_layered_file_settings,
+    patch_runtime_file_settings, read_file_setting, read_runtime_file_setting,
+    set_layered_file_setting, set_runtime_file_setting,
 };
 use serde_json::{Value, json};
 
@@ -53,9 +53,9 @@ fn legacy_resource_checks_control_the_guard_without_combining_command_hints() {
             assert_eq!(config.resource_guard, Some(checks));
             let canonical = serde_json::to_value(&config).unwrap();
             assert_eq!(canonical["resource_guard"], checks);
-            assert_eq!(canonical["sandbox"], json!({"enabled":false}));
+            assert_eq!(canonical["sandbox"], json!(false));
             let resolved = config.resolve().unwrap();
-            assert!(!resolved.sandbox.enabled);
+            assert!(!resolved.sandbox);
             assert_eq!(resolved.resource_guard, checks);
         }
     }
@@ -100,11 +100,8 @@ fn matching_new_and_legacy_values_normalize_and_conflicts_are_rejected() {
         let mut document = json!({"resource_guard":value,"sandbox":{
             "enabled":true,"resource_checks":value,"command_hints":!value
         }});
-        normalize_resource_guard_document(&mut document).unwrap();
-        assert_eq!(
-            document,
-            json!({"resource_guard":value,"sandbox":{"enabled":true}})
-        );
+        normalize_execution_settings_document(&mut document).unwrap();
+        assert_eq!(document, json!({"resource_guard":value,"sandbox":true}));
         let error = serde_json::from_value::<RawConfig>(json!({
             "resource_guard":value,"sandbox":{"resource_checks":!value}
         }))
@@ -118,31 +115,52 @@ fn matching_new_and_legacy_values_normalize_and_conflicts_are_rejected() {
 }
 
 #[test]
-fn invalid_guard_values_cannot_be_loaded_or_saved_without_validation() {
-    for value in [Value::Null, json!("false"), json!(0), json!([]), json!({})] {
-        let error = serde_json::from_value::<RawConfig>(json!({"resource_guard":value.clone()}))
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("resource_guard"), "{error}");
-        for runtime in [false, true] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("agena.json");
-            let before = b"{}\n";
-            fs::write(&path, before).unwrap();
-            let result = set(
-                runtime,
-                &path,
-                ConfigSettingsSetInput {
-                    path: "resource_guard".into(),
-                    value: value.clone(),
-                    options: ConfigSettingsEditOptions {
-                        validate: false,
-                        ..Default::default()
+fn invalid_execution_switch_values_cannot_be_loaded_or_saved_without_validation() {
+    for (field, values) in [
+        (
+            "resource_guard",
+            vec![Value::Null, json!("false"), json!(0), json!([]), json!({})],
+        ),
+        (
+            "sandbox",
+            vec![
+                json!("false"),
+                json!(0),
+                json!([]),
+                json!({"enabled":null}),
+                json!({"resource_checks":null}),
+                json!({"command_hints":[]}),
+                json!({"unknown":true}),
+            ],
+        ),
+    ] {
+        for value in values {
+            let mut document = json!({});
+            document[field] = value.clone();
+            let error = serde_json::from_value::<RawConfig>(document)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{error}");
+            for runtime in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("agena.json");
+                let before = b"{}\n";
+                fs::write(&path, before).unwrap();
+                let result = set(
+                    runtime,
+                    &path,
+                    ConfigSettingsSetInput {
+                        path: field.into(),
+                        value: value.clone(),
+                        options: ConfigSettingsEditOptions {
+                            validate: false,
+                            ..Default::default()
+                        },
                     },
-                },
-            );
-            assert!(result.is_err(), "{value}");
-            assert_eq!(fs::read(&path).unwrap(), before);
+                );
+                assert!(result.is_err(), "{field}: {value}");
+                assert_eq!(fs::read(&path).unwrap(), before);
+            }
         }
     }
 }
@@ -160,14 +178,13 @@ fn raw_file_and_scalar_projections_are_canonical_without_changing_the_revision()
         fs::write(&path, before).unwrap();
         let document = read(runtime, &path, None);
         let canonical = json!({
-            "sandbox":{"enabled":false},"resource_guard":false,"ui":{"locale":"zh-CN"}
+            "sandbox":false,"resource_guard":false,"ui":{"locale":"zh-CN"}
         });
         assert_eq!(document.value, canonical);
         for (target, expected) in [
             ("", canonical),
             ("resource_guard", json!(false)),
-            ("sandbox.enabled", json!(false)),
-            ("sandbox", json!({"enabled":false})),
+            ("sandbox", json!(false)),
         ] {
             let response = read(runtime, &path, Some(target));
             assert_eq!(response.value, expected);
@@ -224,10 +241,7 @@ fn editing_a_legacy_file_preserves_cas_and_dry_run_and_writes_only_canonical_fie
         assert_eq!(saved.before_revision, dry_run.before_revision);
         assert_eq!(saved.after_revision, dry_run.after_revision);
         let canonical: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(
-            canonical,
-            json!({"sandbox":{"enabled":false},"resource_guard":true})
-        );
+        assert_eq!(canonical, json!({"sandbox":false,"resource_guard":true}));
         assert!(raw(canonical).resolve().unwrap().resource_guard);
         let saved_bytes = fs::read(&path).unwrap();
         assert!(
@@ -302,7 +316,114 @@ fn deleting_the_guard_from_a_legacy_file_restores_inheritance() {
         assert_eq!(response.previous, json!(false));
         assert!(response.current.is_null());
         let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(document, json!({"sandbox":{"enabled":false}}));
+        assert_eq!(document, json!({"sandbox":false}));
         assert!(raw(document).resolve().unwrap().resource_guard);
+    }
+}
+
+#[test]
+fn sandbox_boolean_save_and_delete_migrate_the_legacy_document() {
+    for runtime in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("agena.json");
+        fs::write(
+            &path,
+            r#"{"sandbox":{"enabled":false,"resource_checks":false}}"#,
+        )
+        .unwrap();
+        let original = read(runtime, &path, None);
+        assert_eq!(
+            original.value,
+            json!({"sandbox":false,"resource_guard":false})
+        );
+        let saved = set(
+            runtime,
+            &path,
+            ConfigSettingsSetInput {
+                path: "sandbox".into(),
+                value: json!(true),
+                options: ConfigSettingsEditOptions {
+                    expected_revision: original.revision,
+                    validate: false,
+                    ..Default::default()
+                },
+            },
+        )
+        .unwrap();
+        assert!(saved.changed);
+        assert!(!saved.created);
+        assert_eq!(saved.previous, json!(false));
+        assert_eq!(saved.current, json!(true));
+        let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(document, json!({"sandbox":true,"resource_guard":false}));
+        let input = ConfigSettingsDeleteInput {
+            path: "sandbox".into(),
+            options: ConfigSettingsEditOptions {
+                expected_revision: Some(saved.after_revision),
+                validate: false,
+                ..Default::default()
+            },
+        };
+        let deleted = if runtime {
+            delete_runtime_file_setting(&path, input, None).unwrap()
+        } else {
+            delete_layered_file_setting(
+                &path,
+                directory.path().join("workspace/.agena/agena.json"),
+                ConfigSettingsLayer::Global,
+                input,
+            )
+            .unwrap()
+        };
+        assert!(deleted.deleted && deleted.changed);
+        assert_eq!(deleted.previous, json!(true));
+        assert!(deleted.current.is_null());
+        let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(document, json!({"resource_guard":false}));
+        assert!(raw(document).resolve().unwrap().sandbox);
+    }
+}
+
+#[test]
+fn null_and_partial_legacy_sandbox_values_do_not_create_a_saved_override() {
+    for value in [
+        Value::Null,
+        json!({}),
+        json!({"resource_checks":false}),
+        json!({"command_hints":false}),
+    ] {
+        for runtime in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("agena.json");
+            let before = json!({"sandbox":value.clone()}).to_string();
+            fs::write(&path, &before).unwrap();
+            let original = read(runtime, &path, None);
+            assert!(original.value.get("sandbox").is_none());
+            assert!(read(runtime, &path, Some("sandbox")).value.is_null());
+            assert_eq!(fs::read_to_string(&path).unwrap(), before);
+            let guard = value
+                .get("resource_checks")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            set(
+                runtime,
+                &path,
+                ConfigSettingsSetInput {
+                    path: "resource_guard".into(),
+                    value: json!(guard),
+                    options: ConfigSettingsEditOptions {
+                        expected_revision: original.revision,
+                        validate: false,
+                        ..Default::default()
+                    },
+                },
+            )
+            .unwrap();
+            let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!(document, json!({"resource_guard":guard}));
+            let config = raw(document);
+            assert!(config.sandbox.is_none());
+            assert!(config.resolve().unwrap().sandbox);
+        }
     }
 }

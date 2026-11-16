@@ -155,6 +155,7 @@
   "By model": "Por modelo",
   "By provider": "Por proveedor",
   "By session": "Por sesión",
+  "CIDR at {field} has nonzero host bits; use the network address for the selected prefix.": "El CIDR en {field} tiene bits de host distintos de cero; usa la dirección de red correspondiente al prefijo seleccionado.",
   "Cache hit rate": "Tasa de aciertos de caché",
   "Cache read": "Lectura de caché",
   "Cache read tokens": "Tokens de lectura de caché",

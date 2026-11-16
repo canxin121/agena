@@ -206,6 +206,38 @@ describe('sandbox-compatible permission configuration', () => {
 })
 
 describe('native MXC network configuration', () => {
+  test.each([
+    ['permission.network', null],
+    ['permission.network.egress', { egress: null }],
+    ['permission.network.ingress', { ingress: null }],
+    ['permission.network.egress.default', { egress: { default: null } }],
+    ['permission.network.egress.allow', { egress: { allow: null } }],
+    ['permission.network.egress.deny', { egress: { deny: null } }],
+    ['permission.network.ingress.default', { ingress: { default: null } }],
+    ['permission.network.ingress.hostLoopback', { ingress: { hostLoopback: null } }],
+    ['permission.network.egress.allow[0].to', { egress: { allow: [{ to: null }] } }],
+    ['permission.network.egress.allow[0].ports', { egress: { allow: [{ ports: null }] } }],
+    [
+      'permission.network.egress.allow[0].to[0].except',
+      { egress: { allow: [{ to: [{ cidr: '192.0.2.0/24', except: null }] }] } },
+    ],
+    ['permission.network.egress.allow[0].ports[0].protocol', { egress: { allow: [{ ports: [{ protocol: null }] }] } }],
+    ['permission.network.egress.allow[0].ports[0].port', { egress: { allow: [{ ports: [{ port: null }] }] } }],
+    ['permission.network.egress.allow[0].ports[0].endPort', { egress: { allow: [{ ports: [{ endPort: null }] }] } }],
+  ])('rejects explicit null instead of inheriting or widening %s', (field, network) => {
+    expect(() => parsePermissionConfig({ network })).toThrow(field as string)
+  })
+
+  test.each([
+    { egress: { allow: [{ to: [{ cidr: '192.0.2.7/24' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '2001:db8::1/64' }] }] } },
+    { egress: { allow: [{ to: [{ cidr: '::ffff:192.0.2.7/120' }] }] } },
+    { egress: { deny: [{ to: [{ cidr: '192.0.2.0/24', except: ['192.0.2.129/25'] }] }] } },
+    { egress: { deny: [{ to: [{ cidr: '2001:db8::/32', except: ['2001:db8::1/64'] }] }] } },
+  ])('rejects nonzero CIDR host bits before native compilation: %p', (network) => {
+    expect(() => parseNetworkPermissionConfig(network)).toThrow('network address')
+  })
+
   test('preserves complex policies and explicit empty override lists', () => {
     const network = {
       egress: {

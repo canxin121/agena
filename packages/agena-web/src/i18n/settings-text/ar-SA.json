@@ -155,6 +155,7 @@
   "By model": "حسب النموذج",
   "By provider": "بواسطة المزود",
   "By session": "بالجلسة",
+  "CIDR at {field} has nonzero host bits; use the network address for the selected prefix.": "يحتوي CIDR في {field} على بتات مضيف غير صفرية؛ استخدم عنوان الشبكة المطابق للبادئة المحددة.",
   "Cache hit rate": "معدل إصابة الذاكرة المؤقتة",
   "Cache read": "قراءة الذاكرة المؤقتة",
   "Cache read tokens": "رموز قراءة الذاكرة المؤقتة",

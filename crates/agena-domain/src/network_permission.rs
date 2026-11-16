@@ -26,31 +26,59 @@ pub enum NetworkProtocol {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkPermissionConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub egress: Option<NetworkEgressConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub ingress: Option<NetworkIngressConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkEgressConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub default: Option<NetworkAction>,
     /// Explicit arrays replace inherited arrays; [] clears inherited rules.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub allow: Option<Vec<NetworkRuleConfig>>,
     /// Denies take precedence over allows, independent of array order.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub deny: Option<Vec<NetworkRuleConfig>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkIngressConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub default: Option<NetworkAction>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub host_loopback: Option<NetworkAction>,
 }
 
@@ -58,10 +86,18 @@ pub struct NetworkIngressConfig {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkRuleConfig {
     /// Omitted destinations match both IP families. An explicit list is nonempty.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub to: Option<Vec<NetworkPeerConfig>>,
     /// Omitted selectors match all protocols and ports. An explicit list is nonempty.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub ports: Option<Vec<NetworkPortConfig>>,
 }
 
@@ -77,12 +113,53 @@ pub struct NetworkPeerConfig {
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct NetworkPortConfig {
     /// Omitted protocol matches any protocol.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub protocol: Option<NetworkProtocol>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub port: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
     pub end_port: Option<u16>,
+}
+
+// MXC distinguishes omitted fields from explicit null. Keep Option for config
+// inheritance, but require every authored value to deserialize as its real type.
+fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+pub(crate) fn deserialize_network<'de, D>(
+    deserializer: D,
+) -> Result<Option<NetworkPermissionConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_path_to_error::deserialize::<_, NetworkPermissionConfig>(deserializer)
+        .map(Some)
+        .map_err(|error| {
+            let path = error.path().to_string();
+            let field = if path == "." {
+                "permission.network".to_string()
+            } else {
+                format!("permission.network.{path}")
+            };
+            serde::de::Error::custom(format!("{field}: {}", error.inner()))
+        })
 }
 
 impl NetworkPermissionConfig {
@@ -416,9 +493,16 @@ fn parse_cidr(value: &str, field: &str) -> Result<IpNet, String> {
             "{field} must be an explicit IPv4 or IPv6 CIDR; use /32 or /128 for one address"
         ));
     }
-    value
-        .parse()
-        .map_err(|_| format!("{field} must be a valid IPv4 or IPv6 CIDR"))
+    let network = value
+        .parse::<IpNet>()
+        .map_err(|_| format!("{field} must be a valid IPv4 or IPv6 CIDR"))?;
+    if network.addr() != network.network() {
+        return Err(format!(
+            "{field} must use a network address with zero host bits; use {} instead of {value}",
+            network.trunc()
+        ));
+    }
+    Ok(network)
 }
 
 #[cfg(test)]
@@ -448,6 +532,138 @@ mod tests {
         let policy: NetworkPermissionConfig = serde_json::from_value(value.clone()).unwrap();
         policy.validate().unwrap();
         assert_eq!(serde_json::to_value(&policy).unwrap(), value);
+    }
+
+    #[test]
+    fn native_network_rejects_explicit_null_with_field_paths() {
+        for (network, field) in [
+            (json!(null), "permission.network"),
+            (json!({"egress":null}), "permission.network.egress"),
+            (json!({"ingress":null}), "permission.network.ingress"),
+            (
+                json!({"egress":{"default":null}}),
+                "permission.network.egress.default",
+            ),
+            (
+                json!({"egress":{"allow":null}}),
+                "permission.network.egress.allow",
+            ),
+            (
+                json!({"egress":{"deny":null}}),
+                "permission.network.egress.deny",
+            ),
+            (
+                json!({"ingress":{"default":null}}),
+                "permission.network.ingress.default",
+            ),
+            (
+                json!({"ingress":{"hostLoopback":null}}),
+                "permission.network.ingress.hostLoopback",
+            ),
+            (
+                json!({"egress":{"allow":[{"to":null}]}}),
+                "permission.network.egress.allow[0].to",
+            ),
+            (
+                json!({"egress":{"deny":[{"ports":null}]}}),
+                "permission.network.egress.deny[0].ports",
+            ),
+            (
+                json!({"egress":{"allow":[{"ports":[{"protocol":null}]}]}}),
+                "permission.network.egress.allow[0].ports[0].protocol",
+            ),
+            (
+                json!({"egress":{"allow":[{"ports":[{"port":null}]}]}}),
+                "permission.network.egress.allow[0].ports[0].port",
+            ),
+            (
+                json!({"egress":{"allow":[{"ports":[{"endPort":null}]}]}}),
+                "permission.network.egress.allow[0].ports[0].endPort",
+            ),
+        ] {
+            let error = serde_json::from_value::<crate::PermissionConfig>(json!({
+                "network":network
+            }))
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(&format!("{field}:")), "{error}");
+            assert!(error.contains("null"), "{error}");
+        }
+    }
+
+    #[test]
+    fn omitted_native_fields_keep_inheritance_and_wildcards() {
+        let original: crate::PermissionConfig = serde_json::from_value(json!({
+            "network":{
+                "egress":{
+                    "default":"deny",
+                    "allow":[{"to":[{"cidr":"192.0.2.0/24"}]}],
+                    "deny":[{"to":[{"cidr":"192.0.2.128/25"}]}]
+                },
+                "ingress":{"default":"deny","hostLoopback":"deny"}
+            }
+        }))
+        .unwrap();
+        for overlay in [
+            json!({}),
+            json!({"network":{}}),
+            json!({"network":{"egress":{},"ingress":{}}}),
+        ] {
+            let mut merged = original.clone();
+            merged.merge_from(serde_json::from_value(overlay).unwrap());
+            assert_eq!(merged, original);
+        }
+
+        let value = json!({"egress":{"allow":[{}, {"ports":[{}]}]}});
+        let policy: NetworkPermissionConfig = serde_json::from_value(value.clone()).unwrap();
+        policy.validate().unwrap();
+        assert_eq!(serde_json::to_value(&policy).unwrap(), value);
+        let resolved = policy.resolved();
+        let rules = resolved.egress.unwrap().allow.unwrap();
+        assert!(rules[0].to.is_none());
+        assert!(rules[0].ports.is_none());
+        assert!(rules[1].to.is_none());
+        assert_eq!(
+            rules[1].ports.as_ref().unwrap(),
+            &[NetworkPortConfig::default()]
+        );
+    }
+
+    #[test]
+    fn native_network_rejects_non_network_cidrs_with_canonical_suggestions() {
+        for (rule, field, canonical) in [
+            (
+                json!({"to":[{"cidr":"192.0.2.7/24"}]}),
+                "permission.network.egress.allow[0].to[0].cidr",
+                "192.0.2.0/24",
+            ),
+            (
+                json!({"to":[{"cidr":"2001:db8::7/64"}]}),
+                "permission.network.egress.allow[0].to[0].cidr",
+                "2001:db8::/64",
+            ),
+            (
+                json!({"to":[{"cidr":"192.0.2.0/24","except":["192.0.2.129/25"]}]}),
+                "permission.network.egress.allow[0].to[0].except[0]",
+                "192.0.2.128/25",
+            ),
+            (
+                json!({"to":[{"cidr":"2001:db8::/32","except":["2001:db8:1::7/48"]}]}),
+                "permission.network.egress.allow[0].to[0].except[0]",
+                "2001:db8:1::/48",
+            ),
+        ] {
+            let policy: NetworkPermissionConfig = serde_json::from_value(json!({
+                "egress":{"allow":[rule]}
+            }))
+            .unwrap();
+            let error = policy.validate().unwrap_err();
+            assert!(error.contains(field), "{error}");
+            assert!(
+                error.contains(&format!("use {canonical} instead")),
+                "{error}"
+            );
+        }
     }
 
     #[test]
@@ -613,7 +829,7 @@ mod tests {
 
     #[test]
     fn linux_rejects_ipv6_ranges_straddling_mapped_addresses() {
-        for cidr in ["::/0", "::/80", "::ffff:0:0/95"] {
+        for cidr in ["::/0", "::/80", "::fffe:0:0/95"] {
             let policy: NetworkPermissionConfig = serde_json::from_value(json!({
                 "egress":{"allow":[{"to":[{"cidr":cidr}]}]}
             }))

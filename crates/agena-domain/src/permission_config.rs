@@ -17,7 +17,11 @@ use crate::{
 pub struct PermissionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathPermissionConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::network_permission::deserialize_network"
+    )]
     pub network: Option<NetworkPermissionConfig>,
     #[serde(
         default,

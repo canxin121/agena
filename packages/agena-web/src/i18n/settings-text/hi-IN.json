@@ -155,6 +155,7 @@
   "By model": "मॉडल द्वारा",
   "By provider": "प्रदाता द्वारा",
   "By session": "सत्र के अनुसार",
+  "CIDR at {field} has nonzero host bits; use the network address for the selected prefix.": "{field} के CIDR में होस्ट बिट शून्य नहीं हैं; चुने गए प्रीफ़िक्स का नेटवर्क पता इस्तेमाल करें।",
   "Cache hit rate": "कैश हिट दर",
   "Cache read": "कैश पढ़ें",
   "Cache read tokens": "कैश पढ़े गए टोकन",

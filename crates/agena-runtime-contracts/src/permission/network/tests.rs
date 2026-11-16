@@ -506,7 +506,7 @@ fn policy_matrix() -> Vec<NetworkPermissionConfig> {
             "default":"deny",
             "allow":[
                 {
-                    "to":[{"cidr":"10.20.1.9/16","except":["10.20.64.0/18"]}],
+                    "to":[{"cidr":"10.20.0.0/16","except":["10.20.64.0/18"]}],
                     "ports":[{"protocol":"any","port":1005,"endPort":1015}]
                 },
                 {

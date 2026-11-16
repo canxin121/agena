@@ -73,6 +73,65 @@ fn dry_run_still_rejects_unsupported_permissions_without_creating_a_file() {
     assert!(!path.exists());
 }
 
+#[test]
+fn native_network_nulls_and_noncanonical_cidrs_never_replace_saved_settings() {
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global.json");
+    let workspace = root.path().join("workspace/.agena/agena.json");
+    let before = br#"{"permission":{"network":{"egress":{"default":"allow"}}}}"#;
+    fs::write(&global, before).unwrap();
+    fs::create_dir_all(workspace.parent().unwrap()).unwrap();
+    fs::write(&workspace, before).unwrap();
+
+    for (network, field) in [
+        (json!(null), "permission.network"),
+        (json!({"egress":null}), "permission.network.egress"),
+        (
+            json!({"egress":{"allow":null}}),
+            "permission.network.egress.allow",
+        ),
+        (
+            json!({"egress":{"allow":[{"to":null}]}}),
+            "permission.network.egress.allow[0].to",
+        ),
+        (
+            json!({"egress":{"allow":[{"ports":[{"port":null}]}]}}),
+            "permission.network.egress.allow[0].ports[0].port",
+        ),
+        (
+            json!({"egress":{"allow":[{"to":[{"cidr":"192.0.2.7/24"}]}]}}),
+            "permission.network.egress.allow[0].to[0].cidr",
+        ),
+        (
+            json!({"egress":{"deny":[{"to":[{"cidr":"2001:db8::/32","except":["2001:db8::1/64"]}]}]}}),
+            "permission.network.egress.deny[0].to[0].except[0]",
+        ),
+    ] {
+        for path in ["permission", "permission.network"] {
+            let mut update = input(if path == "permission" {
+                json!({"network":network.clone()})
+            } else {
+                network.clone()
+            });
+            update.path = path.into();
+            let error = set_runtime_file_setting(&global, update.clone(), None).unwrap_err();
+            assert!(error.diagnostic().contains(field), "{error}");
+            assert_eq!(fs::read(&global).unwrap(), before);
+
+            let error = set_layered_file_setting(
+                &global,
+                &workspace,
+                ConfigSettingsLayer::Workspace,
+                update,
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains(field), "{error}");
+            assert_eq!(fs::read(&workspace).unwrap(), before);
+            assert_eq!(fs::read(&global).unwrap(), before);
+        }
+    }
+}
+
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn explicit_empty_native_arrays_are_saved_and_clear_inherited_rules() {

@@ -155,6 +155,7 @@
   "By model": "按模型",
   "By provider": "按服务商",
   "By session": "按会话",
+  "CIDR at {field} has nonzero host bits; use the network address for the selected prefix.": "{field} 的 CIDR 主机位必须为零，请填写该前缀对应的网段地址。",
   "Cache hit rate": "缓存命中率",
   "Cache read": "缓存读取",
   "Cache read tokens": "缓存读取 Token",

@@ -95,6 +95,9 @@ describe('native network permission editor', () => {
     '{"egress":',
     JSON.stringify({ internet: 'allow' }),
     JSON.stringify({ egress: { allow: [{ ports: [{ protocol: 'icmp', port: 443 }] }] } }),
+    JSON.stringify({ egress: { allow: [{ to: null }] } }),
+    JSON.stringify({ egress: { allow: [{ ports: [{ port: null }] }] } }),
+    JSON.stringify({ egress: { allow: [{ to: [{ cidr: '192.0.2.7/24' }] }] } }),
   ])('invalid network draft never reaches persistence: %s', async (draft) => {
     const { panel, writes } = await editor({ network: { egress: { default: 'deny' } } })
     const original = structuredClone(vue.toRaw(panel.savedConfig.value))

@@ -227,7 +227,14 @@ function networkCidr(value: unknown, field: string) {
     throw new PermissionConfigError('Expected an IP CIDR at {field}; domains and URLs are not supported.', { field })
   }
   const prefix = Number(parts[1])
-  return { value, ...ip, prefix, network: (ip.address >> BigInt(ip.bits - prefix)) << BigInt(ip.bits - prefix) }
+  const network = (ip.address >> BigInt(ip.bits - prefix)) << BigInt(ip.bits - prefix)
+  if (ip.address !== network) {
+    throw new PermissionConfigError(
+      'CIDR at {field} has nonzero host bits; use the network address for the selected prefix.',
+      { field },
+    )
+  }
+  return { value, ...ip, prefix, network }
 }
 
 function networkRules(value: unknown, field: string): NetworkRule[] {

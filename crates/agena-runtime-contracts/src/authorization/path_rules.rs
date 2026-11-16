@@ -289,8 +289,7 @@ mod tests {
         validate_permission_config(&config).unwrap();
         serde_json::to_value(&config).unwrap();
         let principal = principal(&config);
-        // Do not place this fake workspace in <tmp>: that is an intentional
-        // explicit readwrite grant, not the workspace/external fallback.
+        // Keep both paths on the same volume without depending on real files.
         let executable = std::env::current_exe().unwrap();
         let volume = executable.ancestors().last().unwrap();
         let root = volume.join("agena-default-policy-workspace");
@@ -300,7 +299,7 @@ mod tests {
         ));
         assert!(matches!(
             principal.authorize_path_access(AccessKind::Write, &root, &root.join("src/main.rs")),
-            PermissionDecision::Deny { .. }
+            PermissionDecision::Allow
         ));
         assert!(matches!(
             principal.authorize_path_access(

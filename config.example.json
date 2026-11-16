@@ -30,6 +30,11 @@
     },
     "auxiliary_model": null
   },
+  "sandbox": {
+    "enabled": true,
+    "resource_checks": true,
+    "command_hints": true
+  },
   "prompts": {
     "mode": "append",
     "order": ["house-style"],
@@ -93,22 +98,11 @@
   },
   "permission": {
     "path": {
-      "workspace": {
-        "read": "allow",
-        "write": "auto"
-      },
-      "external": {
-        "read": "auto",
-        "write": "auto"
-      }
+      "workspace": "readwrite",
+      "external": "deny"
     },
     "network": {
-      "internet": "auto",
-      "private": "auto",
-      "loopback": "auto",
-      "rules": {
-        "github.com": "allow"
-      }
+      "default": "allow"
     }
   }
 }

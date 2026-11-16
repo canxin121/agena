@@ -35,6 +35,11 @@
     },
     "auxiliary_model": null
   },
+  "sandbox": {
+    "enabled": true,
+    "resource_checks": true,
+    "command_hints": true
+  },
   "prompts": {
     "mode": "append",
     "order": ["house-style"],
@@ -76,44 +81,53 @@
   },
   "permission": {
     "path": {
-      "workspace": {
-        "read": "allow",
-        "write": "auto"
-      },
-      "external": {
-        "read": "auto",
-        "write": "auto"
-      },
+      "workspace": "readwrite",
+      "external": "deny",
       "rules": {
-        "<cwd>/.env*": {
-          "read": "auto",
-          "write": "deny"
-        },
-        "<cwd>/secrets/**": {
-          "read": "deny",
-          "write": "deny"
-        }
+        "<state>": "readwrite"
       }
     },
     "network": {
-      "internet": "auto",
-      "private": "auto",
-      "loopback": "auto",
-      "rules": {
-        "github.com:443": "allow",
-        "api.github.com": "allow",
-        "*.corp.local": "auto",
-        "*.corp.local:8443": "allow",
-        "10.0.0.0/8": "deny",
-        "172.16.0.0/12:*": "auto",
-        "fd00::/8": "deny",
-        "[::1]:3000": "auto"
-      }
+      "default": "allow",
+      "allow": [],
+      "deny": [],
+      "inbound": "deny",
+      "hostLoopback": "deny"
     },
     "tools": {
+      "default": "allow",
       "names": {
-        "agena.shell.run": "auto",
-        "agena.fs.apply_patch": "auto"
+        "agena.interaction.ask": "allow",
+        "agena.web.search": "allow",
+        "agena.web.fetch": "allow"
+      },
+      "rules": {
+        "agena.shell.exec": {
+          "no-op": "allow",
+          "routine": "allow",
+          "dangerous": "deny"
+        },
+        "agena.shell.spawn": {
+          "no-op": "allow",
+          "routine": "allow",
+          "dangerous": "deny"
+        },
+        "agena.shell.watch": {
+          "no-op": "allow",
+          "routine": "allow",
+          "dangerous": "deny"
+        },
+        "agena.shell.open": {
+          "no-op": "allow",
+          "routine": "allow",
+          "dangerous": "deny"
+        },
+        "agena.shell.write": {
+          "dangerous": "deny"
+        },
+        "*": {
+          "read-only": "allow"
+        }
       }
     }
   },

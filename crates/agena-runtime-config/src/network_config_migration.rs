@@ -95,6 +95,8 @@ pub fn migrate_network_config_files(
 ) -> Result<NetworkConfigMigration, ConfigError> {
     crate::with_config_file_write_lock(|| {
         let mut pending = Vec::new();
+        // Legacy directional overrides inherited an offline root. Keep that
+        // historical policy even if new, unconfigured projects allow outbound.
         let global = read_layer(
             global_path,
             &NetworkPermissionConfig::offline(),
@@ -206,6 +208,30 @@ mod tests {
                 .migrated_files
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn legacy_partial_policy_keeps_the_historical_offline_root() {
+        for in_workspace in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let global = root.path().join("global.json");
+            let workspace = root.path().join("workspace.json");
+            let authored = if in_workspace { &workspace } else { &global };
+            fs::write(authored, r#"{"permission":{"network":{"egress":{}}}}"#).unwrap();
+            let result = migrate_network_config_files(&global, &workspace).unwrap();
+            assert_eq!(result.effective, NetworkPermissionConfig::offline());
+            assert_eq!(result.migrated_files, vec![authored.clone()]);
+            let saved: Value = serde_json::from_slice(&fs::read(authored).unwrap()).unwrap();
+            assert_eq!(saved["permission"]["network"], json!({"default":"deny"}));
+            let resolved = serde_json::from_value::<crate::RawConfig>(saved)
+                .unwrap()
+                .resolve()
+                .unwrap();
+            assert_eq!(
+                resolved.permission.network.unwrap(),
+                NetworkPermissionConfig::offline()
+            );
+        }
     }
 
     #[test]

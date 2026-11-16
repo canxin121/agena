@@ -2,7 +2,7 @@ use std::fs;
 
 use agena_runtime_config::{
     ConfigEnvironment, ConfigSettingsEditOptions, ConfigSettingsLayer, ConfigSettingsSetInput,
-    RuntimeConfigSettingsError, set_layered_file_setting, set_runtime_file_setting,
+    RawConfig, RuntimeConfigSettingsError, set_layered_file_setting, set_runtime_file_setting,
     validate_layered_config_text,
 };
 use serde_json::{Value, json};
@@ -27,6 +27,93 @@ fn input(value: Value) -> ConfigSettingsSetInput {
             validate: false,
             ..Default::default()
         },
+    }
+}
+
+#[test]
+fn empty_raw_config_resolves_to_a_writable_project_and_outbound_network() {
+    for document in [
+        json!({}),
+        json!({"permission":{}}),
+        json!({"permission":{"path":{}}}),
+    ] {
+        let resolved = serde_json::from_value::<RawConfig>(document)
+            .unwrap()
+            .resolve()
+            .unwrap();
+        let permission = serde_json::to_value(&resolved.permission).unwrap();
+        assert_eq!(permission["path"]["workspace"], "readwrite");
+        assert_eq!(permission["path"]["external"], "deny");
+        assert_eq!(permission["network"], json!({"default":"allow"}));
+        assert_eq!(permission["tools"]["default"], "allow");
+        assert!(resolved.sandbox.enabled);
+        assert!(resolved.sandbox.resource_checks);
+        assert!(resolved.sandbox.command_hints);
+    }
+}
+
+#[test]
+fn partial_permission_overlay_keeps_unset_resource_defaults() {
+    let resolved = serde_json::from_value::<RawConfig>(json!({"permission":{
+        "path":{"rules":{"<workspace>/secrets":"deny"}},
+        "tools":{"names":{"agena.shell.exec":"ask"}}
+    }}))
+    .unwrap()
+    .resolve()
+    .unwrap();
+    let permission = serde_json::to_value(resolved.permission).unwrap();
+    assert_eq!(permission["path"]["workspace"], "readwrite");
+    assert_eq!(permission["path"]["external"], "deny");
+    assert_eq!(permission["path"]["rules"]["<workspace>/secrets"], "deny");
+    assert_eq!(permission["network"], json!({"default":"allow"}));
+    assert_eq!(permission["tools"]["names"]["agena.shell.exec"], "ask");
+}
+
+#[test]
+fn project_overrides_preserve_explicit_parent_readonly_deny_and_offline_rules() {
+    for mode in ["readonly", "deny"] {
+        for network in [json!({}), json!({"default":"deny"})] {
+            let mut global = serde_json::from_value::<RawConfig>(json!({"permission":{
+                "path":{"workspace":mode},
+                "network":network
+            }}))
+            .unwrap();
+            let project = serde_json::from_value::<RawConfig>(json!({"permission":{
+                "tools":{"default":"ask"}
+            }}))
+            .unwrap();
+            global.merge_project_from_with_keys(project, Default::default());
+            let permission = serde_json::to_value(global.resolve().unwrap().permission).unwrap();
+            assert_eq!(permission["path"]["workspace"], mode);
+            assert_eq!(permission["path"]["external"], "deny");
+            assert_eq!(permission["network"], json!({"default":"deny"}));
+            assert_eq!(permission["tools"]["default"], "ask");
+        }
+    }
+}
+
+#[test]
+fn shipped_defaults_can_be_saved_in_global_and_workspace_layers() {
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global.json");
+    let workspace = root.path().join("workspace/.agena/agena.json");
+    let permission =
+        serde_json::to_value(agena_domain::PermissionConfig::global_default()).unwrap();
+    for (layer, path) in [
+        (ConfigSettingsLayer::Global, &global),
+        (ConfigSettingsLayer::Workspace, &workspace),
+    ] {
+        set_layered_file_setting(&global, &workspace, layer, input(permission.clone())).unwrap();
+        let text = fs::read_to_string(path).unwrap();
+        validate_layered_config_text(&global, &workspace, layer, &text, &EmptyEnvironment).unwrap();
+        let resolved = serde_json::from_str::<RawConfig>(&text)
+            .unwrap()
+            .resolve()
+            .unwrap();
+        let saved = serde_json::to_value(resolved.permission).unwrap();
+        assert_eq!(saved["path"]["workspace"], "readwrite");
+        assert_eq!(saved["path"]["external"], "deny");
+        assert_eq!(saved["network"], json!({"default":"allow"}));
     }
 }
 
@@ -213,7 +300,7 @@ fn network_editor_reads_the_complete_parent_before_the_selected_layer() {
     )
     .unwrap();
     assert_eq!(response.value, parent);
-    assert_eq!(response.inherited_value, Some(json!({"default":"deny"})));
+    assert_eq!(response.inherited_value, Some(json!({"default":"allow"})));
 }
 
 #[test]
@@ -232,7 +319,30 @@ fn missing_network_layer_exposes_defaults_without_creating_files() {
     .unwrap();
     assert!(!response.config_found);
     assert!(response.value.is_null());
-    assert_eq!(response.inherited_value, Some(json!({"default":"deny"})));
+    assert_eq!(response.inherited_value, Some(json!({"default":"allow"})));
+    assert!(!global.exists());
+    assert!(!workspace.exists());
+}
+
+#[test]
+fn missing_path_layer_exposes_writable_project_defaults_without_creating_files() {
+    let root = tempfile::tempdir().unwrap();
+    let global = root.path().join("global.json");
+    let workspace = root.path().join("workspace.json");
+    let mut query = agena_runtime_config::ConfigSettingsGetInput::default();
+    query.target.path = Some("permission.path".into());
+    let response = agena_runtime_config::read_runtime_layer_setting(
+        &global,
+        &workspace,
+        ConfigSettingsLayer::Workspace,
+        query,
+    )
+    .unwrap();
+    assert!(!response.config_found);
+    assert!(response.value.is_null());
+    let inherited = response.inherited_value.unwrap();
+    assert_eq!(inherited["workspace"], "readwrite");
+    assert_eq!(inherited["external"], "deny");
     assert!(!global.exists());
     assert!(!workspace.exists());
 }

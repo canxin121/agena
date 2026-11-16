@@ -183,6 +183,14 @@ the installation directory. Existing project paths, network rules, approval
 rules, configuration, and data are preserved. System preparation does not
 change tool approval settings to allow everything.
 
+With no saved permission overrides, project sessions can read and write their
+workspace and make outbound network connections. MXC remains enabled, external
+business paths require explicit permission, and inbound connections and host
+loopback remain denied. Existing explicit read-only, deny, and offline settings
+keep their meaning. Web and TUI show the effective inherited modes; resetting a
+scope restores its inherited settings. The shipped `config.example.json` and
+`config.full.json` use this native permission format.
+
 Network settings now use the flat `permission.network` fields `default`,
 `allow`, `deny`, `inbound`, and `hostLoopback`. On startup, recognized directional
 `egress` / `ingress` settings are resolved using their former inheritance rules

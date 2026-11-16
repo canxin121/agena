@@ -116,15 +116,15 @@ impl PermissionConfig {
         let deny = PermissionMode::Deny;
         Self {
             path: Some(PathPermissionConfig {
-                // Resource defaults are concrete. Broader access must be
-                // granted explicitly; ask/auto remains a tool/task decision.
-                workspace: Some(PathAccessModes::from_mode(PathPermissionMode::Readonly)),
+                // The project is writable by default; external paths still
+                // require an explicit grant. Approval remains a tool decision.
+                workspace: Some(PathAccessModes::from_mode(PathPermissionMode::Readwrite)),
                 external: Some(PathAccessModes::from_mode(PathPermissionMode::Deny)),
                 // Shared OS temporary roots cannot be safely mounted into one
                 // sandbox. Each worker receives its own private temporary area.
                 rules: IndexMap::from([(RUNTIME_STATE_PATH.to_string(), allow_rw())]),
             }),
-            network: Some(NetworkPermissionConfig::offline()),
+            network: Some(NetworkPermissionConfig::allow_all()),
             tools: Some(ToolPermissionConfig {
                 // Ordinary execution tools default to Allow: their effects are
                 // already constrained by the path, network, and shell-command
@@ -257,5 +257,65 @@ fn merge_tool_section(
         (Some(current), Some(overlay)) => current.merge_from(overlay),
         (None, Some(overlay)) => *current = Some(overlay),
         (_, None) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NetworkAction;
+    use serde_json::json;
+
+    #[test]
+    fn shipped_defaults_allow_project_writes_and_portable_outbound_network() {
+        let config = PermissionConfig::global_default();
+        let value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["path"]["workspace"], "readwrite");
+        assert_eq!(value["path"]["external"], "deny");
+        assert_eq!(value["path"]["rules"][RUNTIME_STATE_PATH], "readwrite");
+        assert_eq!(value["network"], json!({"default":"allow"}));
+        assert_eq!(value["tools"]["default"], "allow");
+        for tool in [
+            "agena.shell.exec",
+            "agena.shell.spawn",
+            "agena.shell.watch",
+            "agena.shell.open",
+            "agena.shell.write",
+        ] {
+            assert_eq!(
+                value["tools"]["rules"][tool][COMMAND_CLASS_DANGEROUS],
+                "deny"
+            );
+        }
+        let network = config.network.unwrap();
+        for platform in ["linux", "macos", "windows"] {
+            network.validate_for_platform(platform).unwrap();
+        }
+        let ingress = network.resolved().ingress.unwrap();
+        assert_eq!(ingress.default, Some(NetworkAction::Deny));
+        assert_eq!(ingress.host_loopback, Some(NetworkAction::Deny));
+    }
+
+    #[test]
+    fn empty_permission_is_an_overlay_and_explicit_restrictions_remain_effective() {
+        assert_eq!(
+            serde_json::to_value(PermissionConfig::default()).unwrap(),
+            json!({})
+        );
+        for mode in ["readonly", "deny"] {
+            for network in [json!({}), json!({"default":"deny"})] {
+                let overlay: PermissionConfig = serde_json::from_value(json!({
+                    "path":{"workspace":mode},
+                    "network":network
+                }))
+                .unwrap();
+                let mut config = PermissionConfig::global_default();
+                config.merge_from(overlay);
+                let value = serde_json::to_value(&config).unwrap();
+                assert_eq!(value["path"]["workspace"], mode);
+                assert_eq!(value["path"]["external"], "deny");
+                assert_eq!(config.network.unwrap(), NetworkPermissionConfig::offline());
+            }
+        }
     }
 }

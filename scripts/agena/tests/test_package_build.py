@@ -151,9 +151,32 @@ class PackageBuildTests(unittest.TestCase):
     def test_real_installer_reinstall_source_uses_same_native_cache(self):
         install = self.root / 'installed application'
         data = self.root / 'instance data'
-        env = self.env | {'HOME': str(self.root / 'home')}
+        home = self.root / 'home'
+        temporary = self.root / 'tmp'
+        workspace = self.root / 'workspace'
+        for directory in [home, temporary, workspace]:
+            directory.mkdir()
+        # Keep the installer/package flow real, with host preparation isolated
+        # by the same mocks as the offline installer storage contracts.
+        original = (SCRIPTS / 'install.sh').read_text()
+        before, embedded = original.split('# BEGIN AGENA HOST SETUP', 1)
+        _, after = embedded.split('# END AGENA HOST SETUP', 1)
+        mocks = installer_fixture.SETUP_MOCKS + (
+            f"\nagena_setup_target_triple() {{ printf '%s' '{HOST}'; }}\n"
+        )
+        installer = self.root / 'install.sh'
+        installer.write_text(before + mocks + after)
+        env = {name: self.env[name] for name in [
+            'PATH', 'AGENA_WEB_DIST_PREBUILT', 'TEST_CHECKOUT',
+            'TEST_CARGO_CALLS', 'TEST_BINARY', 'TEST_SANDBOX_ROOT', 'TEST_CALLS_PATH',
+        ]}
+        env.update(HOME=str(home), TMPDIR=str(temporary),
+                   TEST_SETUP_AUDIT_PATH=str(self.root / 'setup.tsv'),
+                   TEST_PROBE_AUDIT_PATH=str(self.root / 'probe.tsv'),
+                   TEST_ORDER_AUDIT_PATH=str(self.root / 'order.tsv'),
+                   TEST_PRIVACY_AUDIT_PATH=str(self.root / 'privacy.tsv'))
         for action in ['install', 'reinstall', 'reinstall']:
-            command = ['bash', str(SCRIPTS / 'install.sh'), action, '--source', str(self.checkout),
+            command = ['bash', str(installer), action, '--source', str(self.checkout),
                        '--install-dir', str(install), '--data-dir', str(data),
                        '--workspace', str(self.root / 'workspace'), '--service-mode', 'detached', '--no-path-update']
             result = subprocess.run(command, cwd=self.root, env=env, text=True,

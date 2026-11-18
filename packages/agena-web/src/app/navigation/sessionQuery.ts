@@ -1,4 +1,5 @@
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
+import { isConversationSettingsPath } from './mainTabs'
 
 const SESSION_QUERY_KEY = 'sessionId' as const
 
@@ -40,6 +41,17 @@ export function readSessionIdFromFullPath(fullPath: string): string {
   return readSessionIdFromQuery({
     sessionId: params.getAll(SESSION_QUERY_KEY),
   })
+}
+
+/** Only conversation routes can update the client's selected conversation. */
+export function readConversationSessionId(route: { path: string; fullPath: string; query: ReadQueryLike }): string {
+  const path = String(route.path || '')
+    .trim()
+    .toLowerCase()
+  const conversationRoute =
+    path === '/' || path === '/chat' || path.startsWith('/chat/') || isConversationSettingsPath(path)
+  if (!conversationRoute) return ''
+  return readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
 }
 
 export function patchSessionIdInQuery(query: WriteQueryLike, sessionId: string): LocationQueryRaw {

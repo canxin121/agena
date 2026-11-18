@@ -156,13 +156,17 @@ async function navigate(to: RouteLocationRaw, replace = false): Promise<unknown>
   const mainTab = mainTabFromPath(resolved.path)
   const query = normalizeQuery(resolved.query)
 
-  ui.setWorkspaceWindowMainTab(targetId, mainTab)
-  ui.setWorkspaceWindowRoutePath(targetId, resolved.path)
-  ui.setWorkspaceWindowRouteQuery(targetId, query)
-  ui.setWorkspaceWindowRouteHash(targetId, resolved.hash)
+  if (!isFocused.value) {
+    ui.setWorkspaceWindowMainTab(targetId, mainTab)
+    ui.setWorkspaceWindowRoutePath(targetId, resolved.path)
+    ui.setWorkspaceWindowRouteQuery(targetId, query)
+    ui.setWorkspaceWindowRouteHash(targetId, resolved.hash)
+    return undefined
+  }
 
-  if (!isFocused.value) return undefined
-
+  // Keep the pane on its current route while global navigation guards run.
+  // MainLayout commits successful shell routes to the owning window; cancelled
+  // or superseded navigation must never change the pane's route or page props.
   const shellLocation = {
     path: resolved.path,
     query: {

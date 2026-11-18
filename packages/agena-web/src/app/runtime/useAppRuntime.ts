@@ -20,7 +20,7 @@ import { subscribeAppBroadcast } from '@/lib/appBroadcast'
 import { installKeyboardInsets } from '@/lib/keyboardInsets'
 import { installKeyboardTapFix } from '@/lib/keyboardTapFix'
 import { installKeyboardShortcuts } from '@/app/runtime/installKeyboardShortcuts'
-import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { readConversationSessionId } from '@/app/navigation/sessionQuery'
 
 export function useAppRuntime() {
   const route = useRoute()
@@ -239,9 +239,10 @@ export function useAppRuntime() {
   }
 
   async function ensureSelectedSessionFromQuery() {
-    // /bot owns its binding through the canonical endpoint, never a URL query.
-    if (route.path === '/bot') return
-    const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+    // Settings and resource-page URLs do not open a conversation. Resolve
+    // route ownership before a legacy sessionId can change the shared record.
+    // Bot bindings select their conversation through the canonical endpoint.
+    const sid = readConversationSessionId(route)
 
     // If the URL includes a session id, treat it as an explicit deep link.
     if (sid && !ui.sessionQueryEnabled) {

@@ -191,7 +191,8 @@ impl Application {
                 session_kernel.ok_or_else(|| {
                     ApplicationError::internal("runtime session kernel is unavailable")
                 })?,
-            ),
+            )
+            .with_session_commands(execution_commands.clone()),
             notifications: Arc::new(
                 agena_runtime_notifications::store::InMemoryNotificationStore::new(512),
             ),

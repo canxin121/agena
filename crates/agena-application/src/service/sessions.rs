@@ -128,7 +128,7 @@ impl ApplicationService {
         request: SessionCreateRequest,
     ) -> ApplicationResult<SessionResource> {
         self.ensure_workspace_exists(request.workspace_id).await?;
-        let configuration = agena_storage::kernel::SessionConfiguration {
+        let mut configuration = agena_storage::kernel::SessionConfiguration {
             prompts: request.session.prompts.unwrap_or_default(),
             title_state: if request.session.auto_title {
                 agena_storage::kernel::SessionTitleState::automatic()
@@ -147,6 +147,26 @@ impl ApplicationService {
             },
             ..Default::default()
         };
+        if let Some(parent) = configuration.parent_session_id {
+            let inherited = self
+                .session_kernel
+                .reader
+                .configuration(parent)
+                .await
+                .map_err(crate::kernel_error)?;
+            configuration.profile = inherited.profile.clone();
+            configuration.permission = inherited.permission.clone();
+            configuration.permission_ceiling = inherited.permission_ceiling.clone();
+            configuration.permission_ceiling_layers = inherited.permission_ceiling_layers.clone();
+        }
+        configuration = self
+            .prepare_session_profile(
+                Some(request.workspace_id),
+                configuration,
+                request.session.profile,
+                true,
+            )
+            .await?;
         let created = self
             .session_kernel
             .sessions
@@ -173,17 +193,41 @@ impl ApplicationService {
             && request.pinned.is_none()
             && request.auto_title.is_none()
             && request.prompts.is_none()
+            && request.profile.is_none()
         {
             return Err(ApplicationError::bad_request(
-                "Include title, favorite, pinned, auto_title, or prompts in a session update.",
+                "Include title, favorite, pinned, auto_title, prompts, or profile in a session update.",
             ));
         }
+        // Profile validation and the eventual write use one metadata revision;
+        // a concurrent update cannot overwrite the policy we just validated.
+        let expected_version = if request.profile.is_some() {
+            let session = crate::kernel_session_id(session_id)?;
+            let snapshot = self
+                .session_kernel
+                .reader
+                .control_snapshot(session, 1)
+                .await
+                .map_err(crate::kernel_error)?;
+            self.prepare_session_profile(
+                snapshot.metadata.workspace_id,
+                snapshot.configuration.clone(),
+                request.profile.clone(),
+                false,
+            )
+            .await?;
+            Some(snapshot.metadata.metadata_version.get())
+        } else {
+            None
+        };
         self.session_kernel
             .sessions
             .update_metadata(
                 RequestId::new(),
                 crate::kernel_session_id(session_id)?,
                 MetadataChange {
+                    expected_version,
+                    profile: request.profile,
                     title: request.title,
                     favorite: request.favorite,
                     pinned: request.pinned,

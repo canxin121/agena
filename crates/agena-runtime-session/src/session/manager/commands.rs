@@ -9,6 +9,71 @@ use agena_domain::{
 };
 
 impl SessionManager {
+    pub async fn prepare_session_profile(
+        &self,
+        workspace_id: Option<i64>,
+        mut configuration: SessionConfiguration,
+        requested: Option<String>,
+        use_default: bool,
+    ) -> Result<SessionConfiguration, AppError> {
+        let state = if workspace_id.is_some() {
+            self.state.load_full()
+        } else {
+            self.global_state.load_full()
+        };
+        if let Some(name) = requested {
+            configuration.profile = (!name.is_empty()).then_some(name);
+        } else if use_default && configuration.parent_session_id.is_none() {
+            configuration.profile = state.config.default_profile.clone();
+        }
+        // Resolution fails closed when a saved profile was removed or renamed.
+        state
+            .config
+            .resolve_profile(configuration.profile.as_deref())
+            .map_err(AppError::Config)?;
+        self.validate_session_permission_configuration(workspace_id, &configuration)
+            .await?;
+        Ok(configuration)
+    }
+
+    /// Change the selected profile atomically without replacing independent
+    /// session prompt/permission/model overrides. This also repairs missing profiles.
+    pub async fn set_session_profile(
+        &self,
+        id: i64,
+        profile: Option<String>,
+    ) -> Result<(), AppError> {
+        let session = session_id(id)?;
+        let snapshot = self
+            .kernel()
+            .reader
+            .control_snapshot(session, 1)
+            .await
+            .map_err(kernel_error)?;
+        let selected = profile.unwrap_or_default();
+        self.prepare_session_profile(
+            snapshot.metadata.workspace_id,
+            snapshot.configuration.clone(),
+            Some(selected.clone()),
+            false,
+        )
+        .await?;
+        self.kernel()
+            .sessions
+            .update_metadata(
+                RequestId::new(),
+                session,
+                MetadataChange {
+                    expected_version: Some(snapshot.metadata.metadata_version.get()),
+                    profile: Some(selected),
+                    ..Default::default()
+                },
+            )
+            .await
+            .map_err(kernel_error)?;
+        Ok(())
+    }
+
     pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
         let manager = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -51,8 +116,11 @@ impl SessionManager {
                 .map_err(kernel_error)?;
             configuration.permission = inherited.permission.clone();
             configuration.permission_ceiling = inherited.permission_ceiling.clone();
+            configuration.permission_ceiling_layers = inherited.permission_ceiling_layers.clone();
+            configuration.profile = inherited.profile.clone();
         }
-        self.validate_session_permission_configuration(Some(workspace), &configuration)
+        configuration = self
+            .prepare_session_profile(Some(workspace), configuration, request.profile, true)
             .await?;
         let command = RequestId::new();
         let metadata = persist(|| {
@@ -66,20 +134,6 @@ impl SessionManager {
         .await
         .map_err(kernel_error)?
         .value;
-        if let Some(model) = state
-            .providers
-            .resolve_default_model_selection(&state.config.default_selection)?
-        {
-            self.kernel()
-                .sessions
-                .update_selection(
-                    RequestId::new(),
-                    metadata.id,
-                    SelectionChange::Model(Some(model)),
-                )
-                .await
-                .map_err(kernel_error)?;
-        }
         let patch = state
             .executor
             .plugin_manager()
@@ -104,7 +158,10 @@ impl SessionManager {
                     .map_err(kernel_error)?;
             }
             if let Some(message) = patch.initial_user_message {
-                if let Ok(options) = self.options_for_selection(&state.config.default_selection) {
+                if let Ok(options) = self
+                    .options_for_session(metadata.id, &ExecutionSelection::default())
+                    .await
+                {
                     self.submit(crate::SessionUserRunRequest::new(
                         metadata.id.get(),
                         options,
@@ -156,8 +213,50 @@ impl SessionManager {
         options: SessionRunOptions,
     ) -> Result<(), AppError> {
         self.ensure_model_fits_session(id, &options.model).await?;
-        self.update_session_selection(id, options).await
+        self.persist_submission_selection(id, options).await
     }
+    pub async fn clear_session_selection(&self, id: i64) -> Result<(), AppError> {
+        self.require_writable_bot_history(id).await?;
+        let session = session_id(id)?;
+        let snapshot = self
+            .kernel()
+            .reader
+            .control_snapshot(session, 1)
+            .await
+            .map_err(kernel_error)?;
+        let state = self.state_for_session(session).await?;
+        let selection = state
+            .config
+            .session_selection(
+                snapshot.configuration.profile.as_deref(),
+                &ExecutionSelection::default(),
+            )
+            .map_err(AppError::Config)?;
+        if let Some(model) = state
+            .providers
+            .resolve_default_model_selection(&selection)?
+        {
+            self.ensure_model_fits_session(id, &model).await?;
+        }
+        self.kernel()
+            .sessions
+            .patch_selection(
+                RequestId::new(),
+                session,
+                snapshot.metadata.metadata_version.get(),
+                vec![
+                    SelectionChange::Model(None),
+                    SelectionChange::ThinkingMode(None),
+                    SelectionChange::SpeedMode(None),
+                    SelectionChange::Verbosity(None),
+                    SelectionChange::ParallelToolCalls(None),
+                ],
+            )
+            .await
+            .map_err(kernel_error)?;
+        Ok(())
+    }
+
     pub async fn update_session_selection(
         &self,
         id: i64,
@@ -185,6 +284,75 @@ impl SessionManager {
         }
         Ok(())
     }
+    /// Persist only the fields the user selected, never a resolved profile or
+    /// provider fallback. Complete internal selections retain their old contract.
+    pub(super) async fn persist_submission_selection(
+        &self,
+        id: i64,
+        options: SessionRunOptions,
+    ) -> Result<(), AppError> {
+        let Some(selection) = options.selection_override.as_ref() else {
+            return self.update_session_selection(id, options).await;
+        };
+        let mut changes = Vec::new();
+        let explicit_route = selection.provider.is_some()
+            || selection.adapter.is_some()
+            || selection.model.is_some();
+        if explicit_route {
+            // Public run requests carry complete ModelRef values; delegated
+            // requests can change just a provider, adapter, or model. Persist
+            // their resolved route without pinning mode-only inherited routes.
+            let model = selection
+                .model_ref()
+                .map_err(|error| AppError::Config(error.to_string()))?
+                .unwrap_or_else(|| options.model.clone());
+            changes.push(SelectionChange::Model(Some(model)));
+            // A newly selected route resets the previous route's mode choices.
+            // Keep only explicit mode inputs, matching ExecutionSelection cascade.
+            changes.push(SelectionChange::ThinkingMode(
+                selection.thinking_mode.clone(),
+            ));
+            changes.push(SelectionChange::SpeedMode(selection.speed_mode.clone()));
+            changes.push(SelectionChange::Verbosity(selection.verbosity.clone()));
+            changes.push(SelectionChange::ParallelToolCalls(
+                selection.parallel_tool_calls,
+            ));
+        } else {
+            if let Some(value) = &selection.thinking_mode {
+                changes.push(SelectionChange::ThinkingMode(Some(value.clone())));
+            }
+            if let Some(value) = &selection.speed_mode {
+                changes.push(SelectionChange::SpeedMode(Some(value.clone())));
+            }
+            if let Some(value) = &selection.verbosity {
+                changes.push(SelectionChange::Verbosity(Some(value.clone())));
+            }
+            if let Some(value) = selection.parallel_tool_calls {
+                changes.push(SelectionChange::ParallelToolCalls(Some(value)));
+            }
+        }
+        if !changes.is_empty() {
+            let session = session_id(id)?;
+            let metadata = self
+                .kernel()
+                .reader
+                .metadata(session)
+                .await
+                .map_err(kernel_error)?;
+            self.kernel()
+                .sessions
+                .patch_selection(
+                    RequestId::new(),
+                    session,
+                    metadata.metadata_version.get(),
+                    changes,
+                )
+                .await
+                .map_err(kernel_error)?;
+        }
+        Ok(())
+    }
+
     /// Refuse a switch the conversation provably cannot fit.
     ///
     /// Every other difference between routes degrades gracefully — history
@@ -438,7 +606,7 @@ impl SessionManager {
         persist(|| self.kernel().sessions.clear(command, session, kernel_mode))
             .await
             .map_err(kernel_error)?;
-        self.schedule_memory(session);
+        self.schedule_memory(session, None);
         self.get_session(id).await
     }
     pub async fn delete_session(&self, id: i64) -> Result<(), AppError> {
@@ -1023,6 +1191,24 @@ fn command_error(error: AppError) -> SessionExecutionCommandError {
 }
 #[async_trait::async_trait]
 impl SessionExecutionCommandService for SessionManager {
+    async fn prepare_session_profile(
+        &self,
+        workspace_id: Option<i64>,
+        configuration: SessionConfiguration,
+        requested: Option<String>,
+        use_default: bool,
+    ) -> Result<SessionConfiguration, SessionExecutionCommandError> {
+        SessionManager::prepare_session_profile(
+            self,
+            workspace_id,
+            configuration,
+            requested,
+            use_default,
+        )
+        .await
+        .map_err(command_error)
+    }
+
     async fn list_bots(
         &self,
         include_archived: bool,
@@ -1288,6 +1474,15 @@ impl SessionExecutionCommandService for SessionManager {
             .map_err(command_error)?;
         Ok(SessionExecutionCommandOutcome::completed(id))
     }
+    async fn clear_session_selection(
+        &self,
+        id: i64,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
+        SessionManager::clear_session_selection(self, id)
+            .await
+            .map_err(command_error)?;
+        Ok(SessionExecutionCommandOutcome::completed(id))
+    }
     async fn update_session_selection(
         &self,
         id: i64,
@@ -1311,6 +1506,16 @@ impl SessionExecutionCommandService for SessionManager {
 }
 #[async_trait::async_trait]
 impl crate::SessionExecutionControl for SessionManager {
+    async fn selected_execution_selection(
+        &self,
+        id: i64,
+    ) -> Result<ExecutionSelection, crate::SessionExecutionControlError> {
+        self.get_session(id)
+            .await
+            .map(|session| session.execution.selection)
+            .map_err(|error| crate::SessionExecutionControlError::internal_error(&error))
+    }
+
     async fn execution_attempt(
         &self,
         id: i64,
@@ -1454,3 +1659,6 @@ pub(super) fn validate_answers(
 mod permission_tests;
 #[cfg(test)]
 mod queue_tests;
+
+#[cfg(test)]
+mod profile_tests;

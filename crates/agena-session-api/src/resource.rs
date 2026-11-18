@@ -575,6 +575,8 @@ pub struct SessionAutomationResource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// The session prompt layer: inline fragments that apply to this session.
     #[serde(
         default,
@@ -595,6 +597,9 @@ pub struct SessionExecutionContextResource {
     pub effective_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub permission_ceiling: PermissionConfigResource,
+    /// Additional inherited delegation boundaries; every layer applies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_ceiling_layers: Vec<PermissionConfigResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

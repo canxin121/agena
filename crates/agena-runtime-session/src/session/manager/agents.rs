@@ -150,7 +150,7 @@ impl SessionManager {
                     continue;
                 }
                 if let Some(parent) = configuration.parent_session_id {
-                    let payload = serde_json::json!({"kind":"agent_result","name":agent.name,"agent_id":summary.id.get(),"status":"interrupted","text":format!("Agent '{}' was interrupted before its result was delivered. Use agent.followup with explicit recovery instructions.",agent.name)});
+                    let payload = serde_json::json!({"kind":"agent_result","message_id":agent.origin_message_id.map(EntryId::get),"name":agent.name,"agent_id":summary.id.get(),"status":"interrupted","text":format!("Agent '{}' was interrupted before its result was delivered. Use agent.followup with explicit recovery instructions.",agent.name)});
                     let key = format!(
                         "agent-recovered:{}:{}",
                         summary.id.get(),
@@ -252,20 +252,44 @@ impl SessionManager {
         denials.extend(agent_child_capability_denials());
         let state = self.state_for_session(session_id(parent.id)?).await?;
         let selected = request.selection;
+        let explicit_selection = ExecutionSelection {
+            provider: selected.provider,
+            adapter: selected.adapter,
+            model: selected.model,
+            thinking_mode: selected.thinking_mode,
+            speed_mode: selected.speed_mode,
+            verbosity: selected.verbosity,
+            parallel_tool_calls: selected.parallel_tool_calls,
+            ..Default::default()
+        };
+        let parent_configuration = self
+            .kernel()
+            .reader
+            .configuration(session_id(parent.id)?)
+            .await
+            .map_err(kernel_error)?;
+        let parent_metadata = self
+            .kernel()
+            .reader
+            .metadata(session_id(parent.id)?)
+            .await
+            .map_err(kernel_error)?;
         let selection = parent
             .execution
             .selection
-            .overlay_with_cascade(&ExecutionSelection {
-                provider: selected.provider,
-                adapter: selected.adapter,
-                model: selected.model,
-                thinking_mode: selected.thinking_mode,
-                speed_mode: selected.speed_mode,
-                verbosity: selected.verbosity,
-                parallel_tool_calls: selected.parallel_tool_calls,
-                ..Default::default()
-            });
+            .overlay_with_cascade(&explicit_selection);
         let mut options = self.options_for_selection_with_state(&selection, &state)?;
+        options.selection_override = if parent.execution.profile.is_some() {
+            Some(
+                parent_metadata
+                    .selection
+                    .clone()
+                    .unwrap_or_default()
+                    .overlay_with_cascade(&explicit_selection),
+            )
+        } else {
+            None
+        };
         let references = resolve_agent_command_references(
             &state.executor.plugin_manager().command_catalog(),
             &request.commands,
@@ -283,6 +307,22 @@ impl SessionManager {
                     .map_err(kernel_error)?
                     .message_id,
             ),
+            None if parent.execution.channel_authority.is_some() => {
+                let parent_id = session_id(parent.id)?;
+                let execution = self.running_execution(parent_id).await?.ok_or_else(|| {
+                    AppError::Config(
+                        "channel agent launch requires an active originating execution".into(),
+                    )
+                })?;
+                Some(
+                    self.kernel()
+                        .reader
+                        .execution(parent_id, execution)
+                        .await
+                        .map_err(kernel_error)?
+                        .message_id,
+                )
+            }
             None => self.latest_origin_message(session_id(parent.id)?).await?,
         };
         let preparation = self.agent_preparation.lock().await;
@@ -341,6 +381,7 @@ impl SessionManager {
             .timestamp_millis()
             .max(previous.unwrap_or(i64::MIN).saturating_add(1));
         let agent = SessionAgentConfiguration {
+            origin_message_id: origin,
             name: name.clone(),
             status: AgentStatus::Running,
             started_at_ms: Some(now),
@@ -360,11 +401,19 @@ impl SessionManager {
                     .configuration(id)
                     .await
                     .map_err(kernel_error)?;
+                let mut previous = (*previous).clone();
                 if previous.channel_authority != parent.execution.channel_authority {
                     return Err(AppError::Config(
                         "a child from a different channel authority cannot be reused".into(),
                     ));
                 }
+                previous.permission_ceiling_layers =
+                    super::permission_config::delegated_permission_ceiling_layers(
+                        &parent_configuration,
+                        &parent.execution.effective_permission,
+                        &previous.permission_ceiling,
+                        previous.permission_ceiling_layers,
+                    )?;
                 self.validate_session_permission_configuration(parent.workspace_id, &previous)
                     .await?;
                 denials.extend(previous.capability_denied_tool_names.iter().cloned());
@@ -372,6 +421,7 @@ impl SessionManager {
                     agent: Some(Some(agent.clone())),
                     message_queue_paused: Some(false),
                     capability_denied_tool_names: Some(denials.clone()),
+                    permission_ceiling_layers: Some(previous.permission_ceiling_layers),
                     ..Default::default()
                 };
                 let command = RequestId::new();
@@ -386,18 +436,31 @@ impl SessionManager {
             }
             None => {
                 let command = RequestId::new();
+                let permission_ceiling = if parent.execution.permission_ceiling.is_empty() {
+                    parent.execution.effective_permission.clone()
+                } else {
+                    parent.execution.permission_ceiling.clone()
+                };
+                let permission_ceiling_layers =
+                    super::permission_config::delegated_permission_ceiling_layers(
+                        &parent_configuration,
+                        &parent.execution.effective_permission,
+                        &permission_ceiling,
+                        Vec::new(),
+                    )?;
                 let configuration = SessionConfiguration {
                     parent_session_id: Some(session_id(parent.id)?),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
-                    permission: parent.execution.effective_permission.clone(),
-                    // Delegation must retain a stricter inherited ceiling.
-                    // Capturing only the mutable effective policy can erase a
-                    // deny that exists exclusively in the parent's boundary.
-                    permission_ceiling: if parent.execution.permission_ceiling.is_empty() {
-                        parent.execution.effective_permission.clone()
+                    profile: parent.execution.profile.clone(),
+                    permission: if parent.execution.profile.is_some() {
+                        parent_configuration.permission.clone()
                     } else {
-                        parent.execution.permission_ceiling.clone()
+                        parent.execution.effective_permission.clone()
                     },
+                    // Freeze both the current effective policy and every
+                    // inherited boundary as independent intersections.
+                    permission_ceiling,
+                    permission_ceiling_layers,
                     channel_authority: parent.execution.channel_authority.clone(),
                     capability_denied_tool_names: denials.clone(),
                     effective_workspace_root: parent.execution.effective_workspace_root.clone(),
@@ -454,7 +517,7 @@ impl SessionManager {
             })
             .await
             .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
-        self.update_session_selection(child.get(), options.clone())
+        self.persist_submission_selection(child.get(), options.clone())
             .await?;
         self.prepare_options(child, &mut options).await?;
         let activity = match launch {
@@ -675,10 +738,7 @@ impl SessionManager {
                 .max(agent.started_at_ms.unwrap_or(i64::MIN).saturating_add(1));
             // Resolve fallible routing reads before publishing Running. Once
             // committed, return its settlement identity without another await.
-            let origin = match configuration.parent_session_id {
-                Some(parent) => self.latest_origin_message(parent).await?,
-                None => None,
-            };
+            let origin = agent.origin_message_id;
             agent.status = AgentStatus::Running;
             agent.started_at_ms = Some(started);
             agent.finished_at_ms = None;
@@ -858,6 +918,7 @@ impl SessionManager {
             .map(|a| a.limits.clone())
             .unwrap_or_default();
         let agent = SessionAgentConfiguration {
+            origin_message_id: origin,
             name: name.clone(),
             status,
             started_at_ms: Some(started),
@@ -938,6 +999,7 @@ impl SessionManager {
             .map(|a| a.limits.clone())
             .unwrap_or_default();
         let agent = SessionAgentConfiguration {
+            origin_message_id: pending.origin,
             name: pending.name.clone(),
             status: AgentStatus::Failed,
             started_at_ms: Some(pending.started),

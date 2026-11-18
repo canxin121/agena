@@ -159,15 +159,18 @@ impl<P: Plugin> PluginDispatcher<P> {
             method::HOOK_TOOL_INVOKE => {
                 let i: ToolInvokeInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
+                    caller: i.caller.clone(),
                     session_id: Some(i.session_id),
                     call_id: Some(i.call_id),
                     workspace_root: Some(i.workspace_root.clone()),
                     tool_name: Some(i.tool_name.clone()),
-                    ..crate::host_api::HostCallbackContext::default()
+                    ..crate::host_api::current_host_callback_context().unwrap_or_default()
                 };
-                let output =
-                    crate::host_api::run_in_host_callback_context(ctx, plugin.tool_invoke(i))
-                        .await?;
+                let output = crate::host_api::run_in_isolated_host_callback_context(
+                    ctx,
+                    plugin.tool_invoke(i),
+                )
+                .await?;
                 ok_json(&output)
             }
             method::COMMAND_INVOKE => {
@@ -504,13 +507,14 @@ impl<P: Plugin> PluginDispatcher<P> {
             // including cancellation triggered by a closed terminal receiver.
             let _lifetime = lifetime;
             let ctx = crate::host_api::HostCallbackContext {
+                caller: input.caller.clone(),
                 session_id: Some(input.session_id),
                 call_id: Some(input.call_id),
                 workspace_root: Some(input.workspace_root.clone()),
                 tool_name: Some(input.tool_name.clone()),
                 ..inherited_context.unwrap_or_default()
             };
-            let invoke = crate::host_api::run_in_host_callback_context(
+            let invoke = crate::host_api::run_in_isolated_host_callback_context(
                 ctx,
                 plugin.tool_invoke_stream(input, sink),
             );
@@ -558,6 +562,58 @@ mod cancellation_tests {
     use super::*;
     use crate::{CancellationToken, PluginManifest, ToolInvokeOutput};
 
+    struct CallerProbe;
+
+    #[async_trait::async_trait]
+    impl Plugin for CallerProbe {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest::new("test", "caller-probe", "1.0.0")
+        }
+
+        async fn tool_invoke(&self, input: ToolInvokeInput) -> Result<ToolInvokeOutput> {
+            assert_eq!(input.context().caller, input.caller.as_ref());
+            assert_eq!(
+                crate::host_api::current_host_callback_context()
+                    .unwrap()
+                    .caller,
+                input.caller
+            );
+            Ok(ToolInvokeOutput::text("identity preserved"))
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_metadata_survives_normal_and_streaming_dispatch_without_ambient_leaks() {
+        let dispatcher = Arc::new(PluginDispatcher::new(CallerProbe));
+        let sender = |actor: &str| crate::CallerIdentity {
+            platform: "telegram".into(),
+            actor: actor.into(),
+            group_ids: vec![format!("group-{actor}")],
+            ..Default::default()
+        };
+        let ambient = crate::host_api::HostCallbackContext {
+            caller: Some(sender("owner")),
+            ..Default::default()
+        };
+        crate::host_api::run_in_isolated_host_callback_context(ambient, async {
+            for caller in [Some(sender("alice")), Some(sender("bob")), None] {
+                let mut input = invocation();
+                input.caller = caller;
+                input.input = serde_json::json!({"caller": {"actor": "owner"}});
+                dispatcher
+                    .dispatch(
+                        method::HOOK_TOOL_INVOKE,
+                        serde_json::to_value(&input).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                let stream = dispatcher.dispatch_stream(input);
+                stream.end.await.unwrap().unwrap();
+            }
+        })
+        .await;
+    }
+
     struct WaitingPlugin {
         started: tokio::sync::mpsc::UnboundedSender<CancellationToken>,
     }
@@ -576,6 +632,7 @@ mod cancellation_tests {
 
     fn invocation() -> ToolInvokeInput {
         ToolInvokeInput {
+            caller: None,
             tool_name: "wait".into(),
             session_id: 1,
             call_id: 2,

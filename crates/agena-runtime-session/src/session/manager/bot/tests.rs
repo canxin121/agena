@@ -165,6 +165,12 @@ async fn operator_and_target_guards_reject_subagents_side_conversations_and_chan
         .workspace_id
         .expect("ordinary project workspace");
     let channel = agena_domain::ChannelAuthority {
+        platform: String::new(),
+        group_ids: Vec::new(),
+        profile_ids: Vec::new(),
+        profile_fingerprint: String::new(),
+        permission_overlay: Default::default(),
+        source_workspace_root: None,
         source_admin: false,
         binding_id: "bot-guard-channel".into(),
         epoch: 1,
@@ -189,6 +195,7 @@ async fn operator_and_target_guards_reject_subagents_side_conversations_and_chan
             parent_session_id: Some(ordinary),
             relation_kind: agena_domain::SessionRelationKind::Subagent,
             agent: Some(SessionAgentConfiguration {
+                origin_message_id: None,
                 name: "guard_probe".into(),
                 status: agena_domain::AgentStatus::Created,
                 started_at_ms: None,
@@ -1061,6 +1068,7 @@ async fn checked_delete_refuses_active_subagent_even_when_parent_is_idle() {
                 parent_session_id: Some(target),
                 relation_kind: agena_domain::SessionRelationKind::Subagent,
                 agent: Some(SessionAgentConfiguration {
+                    origin_message_id: None,
                     name: "active_probe".into(),
                     status: agena_domain::AgentStatus::Created,
                     started_at_ms: None,

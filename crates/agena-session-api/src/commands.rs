@@ -123,6 +123,9 @@ pub struct ResolveWorkspaceParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for creating a session inside a workspace.
 pub struct CreateSessionParams {
+    /// Named agent profile; an empty string opts out of the configured default.
+    #[serde(default)]
+    pub profile: Option<String>,
     pub workspace_id: i64,
     pub title: String,
     /// Treat the initial title as a placeholder eligible for automatic naming.

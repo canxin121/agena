@@ -118,7 +118,7 @@ impl SessionManager {
                 .await;
             manager.schedule_title(run.session);
             if matches!(result, Ok(DriveExit::Settled)) {
-                manager.schedule_memory(run.session);
+                manager.schedule_memory(run.session, Some(run.execution));
             }
         });
         Ok(result)
@@ -204,7 +204,7 @@ impl SessionManager {
                     .prepare_user_media(session, &options.model, document, send_id)
                     .await?;
                 manager
-                    .update_session_selection(session.get(), options.clone())
+                    .persist_submission_selection(session.get(), options.clone())
                     .await?;
                 let receipt = persist(|| {
                     manager.kernel().sessions.send_with_blobs_as(
@@ -466,7 +466,7 @@ impl SessionManager {
             let mut follow_ups=0usize;let mut stop_follow_ups=0usize;let mut compactions=0usize;let mut proactive_suppressed=false;
             let mut stop_hook_active = false;
             let mut recent_tools=std::collections::VecDeque::<String>::new();
-            let max_turns=match state.config.max_turns{Some(0)=>usize::MAX,Some(max)=>max,None=>DEFAULT_MAX_MODEL_TURNS};let mut provider_calls=0usize;
+            let max_turns=match self.execution_context_with_state(control.session, &state).await?.max_turns{Some(0)=>usize::MAX,Some(max)=>max,None=>DEFAULT_MAX_MODEL_TURNS};let mut provider_calls=0usize;
             'turns: loop {
             while provider_calls<max_turns {
                 if control.cancel.is_cancelled(){return Err(AppError::Cancelled);}
@@ -488,13 +488,13 @@ impl SessionManager {
                     },Err(error)=>return Err(kernel_error(error)),
                 };
                 let facts=round.prompt().await.map_err(kernel_error)?;
-                let context=self.execution_context_with_state(control.session,&state).await?;
+                let context=self.execution_context_for_execution(control.session,&state,Some(control.execution)).await?;
                 let executor=state.executor.for_session_context_async(&context).await.with_cancellation_token(Some(control.cancel.clone()));
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let request_layer=super::session_prompt::request_system_layer(options.system.as_deref());
-                let prompt_inputs=super::session_prompt::PromptInputs{session:&context.prompts,request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
+                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,session:&context.prompts,request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
                 let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
                 let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty());
                 system_text.push_str(&self.agent_roster(control.session).await?);
@@ -1351,7 +1351,17 @@ impl SessionManager {
         selection: &ExecutionSelection,
     ) -> Result<SessionRunOptions, AppError> {
         let state = self.state_for_session(session).await?;
-        self.options_for_selection_with_state(selection, &state)
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .map_err(kernel_error)?;
+        let selection = state
+            .config
+            .session_selection(configuration.profile.as_deref(), selection)
+            .map_err(AppError::Config)?;
+        self.options_for_selection_with_state(&selection, &state)
     }
 
     /// Run options for a session's own persisted selection.
@@ -1361,7 +1371,8 @@ impl SessionManager {
     /// do, instead of inventing a model or falling back to a global default.
     pub async fn session_run_options(&self, id: i64) -> Result<SessionRunOptions, AppError> {
         let session = self.get_session(id).await?;
-        self.options_for_selection(&session.execution.selection)
+        let state = self.state_for_session(session_id(id)?).await?;
+        self.options_for_selection_with_state(&session.execution.selection, &state)
     }
 
     pub(super) fn options_for_selection(
@@ -1386,6 +1397,7 @@ impl SessionManager {
                 AppError::Config("select a provider and model before continuing".into())
             })?;
         Ok(SessionRunOptions {
+            selection_override: Some(ExecutionSelection::default()),
             model,
             thinking_mode: selection.thinking_mode,
             speed_mode: selection.speed_mode,
@@ -1690,6 +1702,7 @@ impl SessionManager {
         let native = state.providers.native_compaction_enabled(&options.model)?;
         let request_layer = super::session_prompt::request_system_layer(options.system.as_deref());
         let prompt_inputs = super::session_prompt::PromptInputs {
+            profile: &context.profile_prompts,
             session: &context.prompts,
             request_layer: request_layer.as_ref(),
             model: &options.model,
@@ -1942,7 +1955,7 @@ impl SessionManager {
         })
         .await
         .map_err(kernel_error)?;
-        self.schedule_memory(control.session);
+        self.schedule_memory(control.session, Some(control.execution));
         Ok(true)
     }
     pub(super) async fn classify_permission(
@@ -1963,6 +1976,7 @@ impl SessionManager {
                 .ok()??
         };
         let options = SessionRunOptions {
+            selection_override: None,
             model: model.clone(),
             thinking_mode: None,
             speed_mode: None,

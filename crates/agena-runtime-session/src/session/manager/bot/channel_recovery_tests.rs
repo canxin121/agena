@@ -36,6 +36,12 @@ async fn fixture() -> (
     owner.surface = agena_domain::SessionSurface::Direct;
     owner.scope_key = Some("old-epoch-1".into());
     let old = ChannelAuthority {
+        platform: String::new(),
+        group_ids: Vec::new(),
+        profile_ids: Vec::new(),
+        profile_fingerprint: String::new(),
+        permission_overlay: Default::default(),
+        source_workspace_root: None,
         binding_id: "reviewed-telegram".into(),
         epoch: 1,
         actor: "alice".into(),

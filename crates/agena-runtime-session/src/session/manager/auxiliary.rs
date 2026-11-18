@@ -64,6 +64,7 @@ impl SessionManager {
             .resolve_default_model_selection(selection)?
             .ok_or_else(|| AppError::Config("select a model for auxiliary tasks".into()))?;
         let mut options = SessionRunOptions {
+            selection_override: None,
             model,
             thinking_mode: selection.thinking_mode.clone(),
             speed_mode: selection.speed_mode.clone(),

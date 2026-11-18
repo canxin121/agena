@@ -119,7 +119,10 @@ impl PromptLayersConfig {
         let (dir, saved) = match scope {
             PromptScope::Global => (&self.global_dir, &self.global.library),
             PromptScope::Workspace => (&self.workspace_dir, &self.workspace.library),
-            PromptScope::Model | PromptScope::Session | PromptScope::Request => {
+            PromptScope::Model
+            | PromptScope::Profile
+            | PromptScope::Session
+            | PromptScope::Request => {
                 return Ok(FragmentLibrary::default());
             }
         };

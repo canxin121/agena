@@ -209,14 +209,20 @@ export type ChannelAuthority = {
   epoch: number
   expires_at_ms: number
   grant: ChannelGrant
+  group_ids?: string[]
   identity: ChannelIdentity
   memory_workspace_root: string
+  permission_overlay?: JsonValue
+  platform?: string
   private_paths: string[]
+  profile_fingerprint?: string
+  profile_ids?: string[]
   resource: string
   revoked?: boolean
   role: ChannelRole
   session_mode: ChannelSessionMode
   source_admin?: boolean
+  source_workspace_root?: string | null
   thread?: string | null
 }
 
@@ -645,7 +651,9 @@ export type UiStateKind = 'boolean' | 'number' | 'text' | 'choice' | 'selection'
 /** The sender of one message. `display_name` is presentation only and must never be consulted for authorization: a user can rename themselves on most platforms. */
 export type MessageAuthor = {
   kind: AuthorKind
+  channel_authority?: ChannelAuthority
   display_name?: string | null
+  group_ids?: string[]
   id: string
 }
 

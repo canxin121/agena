@@ -253,6 +253,7 @@ pub enum PromptScope {
     Global,
     Workspace,
     Model,
+    Profile,
     Session,
     Request,
 }
@@ -263,6 +264,7 @@ impl PromptScope {
             Self::Global => "global",
             Self::Workspace => "workspace",
             Self::Model => "model",
+            Self::Profile => "profile",
             Self::Session => "session",
             Self::Request => "request",
         }

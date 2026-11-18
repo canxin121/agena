@@ -375,6 +375,7 @@ async fn assert_inproc_origin_completion(streaming: bool, outcome: &'static str)
                     let completion = current_plugin_call_completion().unwrap();
                     origin_tx.send(completion.clone()).unwrap();
                     let input = ToolInvokeInput {
+                        caller: None,
                         tool_name: outcome.into(),
                         session_id: 17,
                         call_id: 71,

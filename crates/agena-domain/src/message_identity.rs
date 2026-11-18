@@ -244,6 +244,13 @@ pub struct MessageAuthor {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     pub kind: AuthorKind,
+    /// Host-resolved group IDs, rendered alongside the verified sender.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub group_ids: Vec<String>,
+    /// Immutable host-issued authority of this input. This is persisted with
+    /// its execution's user entry, never supplied as model tool arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_authority: Option<crate::ChannelAuthority>,
 }
 
 impl MessageAuthor {
@@ -252,6 +259,8 @@ impl MessageAuthor {
             id: "instance_operator".into(),
             display_name: None,
             kind: AuthorKind::InstanceOperator,
+            group_ids: Vec::new(),
+            channel_authority: None,
         }
     }
 
@@ -264,6 +273,8 @@ impl MessageAuthor {
             id: actor.into(),
             display_name,
             kind: AuthorKind::ChannelMember { role },
+            group_ids: Vec::new(),
+            channel_authority: None,
         }
     }
 
@@ -272,6 +283,8 @@ impl MessageAuthor {
             id: format!("system:{}", system_slug(source)),
             display_name: None,
             kind: AuthorKind::System { source },
+            group_ids: Vec::new(),
+            channel_authority: None,
         }
     }
 

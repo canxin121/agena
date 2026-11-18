@@ -965,6 +965,7 @@ mod cancellation_tests {
                 method: method::HOOK_TOOL_INVOKE.into(),
                 params: Some(
                     serde_json::to_value(crate::ToolInvokeInput {
+                        caller: None,
                         tool_name: "wait".into(),
                         session_id: 1,
                         call_id: id,

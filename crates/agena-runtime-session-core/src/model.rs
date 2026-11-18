@@ -65,9 +65,17 @@ pub struct SessionExecutionContext {
     pub conversation: Option<SessionConversation>,
     #[serde(default)]
     pub prompts: agena_prompt_layers::PromptLayer,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub profile_prompts: Vec<agena_prompt_layers::PromptLayer>,
+    #[serde(default)]
+    pub max_turns: Option<usize>,
     pub selection: ExecutionSelection,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_ceiling_layers: Vec<PermissionConfig>,
     #[serde(default)]
     pub channel_authority: Option<agena_domain::ChannelAuthority>,
     #[serde(skip)]
@@ -104,6 +112,9 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     }
     fn permission_ceiling(&self) -> &PermissionConfig {
         &self.permission_ceiling
+    }
+    fn permission_ceiling_layers(&self) -> &[PermissionConfig] {
+        &self.permission_ceiling_layers
     }
     fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
         &self.capability_denied_tool_names

@@ -202,6 +202,7 @@ async fn oversized_compaction_prefix_fails_with_budget_error_without_changing_co
         .unwrap()
         .value;
     let options = SessionRunOptions {
+        selection_override: None,
         model: ModelRef::new("compaction-budget-test", "tiny"),
         thinking_mode: None,
         speed_mode: None,
@@ -609,6 +610,7 @@ async fn manual_compaction_has_one_run_lifecycle_and_its_own_compaction_hooks() 
         .supervise(
             execution,
             SessionRunOptions {
+                selection_override: None,
                 model: ModelRef::new("compaction-budget-test", "tiny"),
                 thinking_mode: None,
                 speed_mode: None,

@@ -11,7 +11,7 @@ use agena_storage::{
 };
 use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use tokio::time::Instant;
 
 const PROMPT: &str = include_str!("memory_prompt.txt");
@@ -24,8 +24,12 @@ const MAX_SUMMARY_BYTES: usize = 16 * 1024;
 #[derive(Default)]
 pub(super) struct MemoryWork {
     running: bool,
-    pending: bool,
+    pending: VecDeque<MemoryRequest>,
     requested_at: Option<Instant>,
+}
+
+struct MemoryRequest {
+    execution: Option<ExecutionId>,
     not_before: Option<Instant>,
     retries: u8,
 }
@@ -172,15 +176,24 @@ impl SessionManager {
         let _ = self.memory_preferences.set(repository);
     }
 
-    pub(super) fn schedule_memory(&self, session: SessionId) {
+    pub(super) fn schedule_memory(&self, session: SessionId, execution: Option<ExecutionId>) {
         if self.shutdown.is_cancelled() || self.memory_preferences.get().is_none() {
             return;
         }
         let dispatch = self.session_dispatch(session);
         let mut work = dispatch.memory.lock().unwrap_or_else(|p| p.into_inner());
-        work.pending = true;
+        if !work
+            .pending
+            .iter()
+            .any(|request| request.execution == execution)
+        {
+            work.pending.push_back(MemoryRequest {
+                execution,
+                not_before: None,
+                retries: 0,
+            });
+        }
         work.requested_at = Some(Instant::now());
-        work.retries = 0;
         if work.running {
             drop(work);
             dispatch.memory_changed.notify_one();
@@ -189,22 +202,19 @@ impl SessionManager {
         work.running = true;
         drop(work);
         let manager = self.clone();
-        // Shutdown cancels debounce and model work; the tracker also includes
-        // the final bounded storage commit in the runtime's drain boundary.
         self.control_tasks.spawn(async move {
             let mut worker = Worker { dispatch, active: true };
             loop {
-                let Ok(state) = manager.state_for_session(session).await else {
-                    return;
-                };
-                let Some(config) = MaintenanceConfig::for_state(&state) else {
-                    return;
-                };
+                let Ok(state) = manager.state_for_session(session).await else { return; };
+                let Some(config) = MaintenanceConfig::for_state(&state) else { return; };
                 let deadline = {
                     let work = worker.dispatch.memory.lock().unwrap_or_else(|p| p.into_inner());
                     let idle = work.requested_at.unwrap_or_else(Instant::now)
                         + Duration::from_secs(config.idle_seconds);
-                    work.not_before.map_or(idle, |retry| idle.max(retry))
+                    let ready = work.pending.iter()
+                        .map(|request| request.not_before.unwrap_or_else(Instant::now))
+                        .min().unwrap_or_else(Instant::now);
+                    idle.max(ready)
                 };
                 tokio::select! {
                     biased;
@@ -212,26 +222,24 @@ impl SessionManager {
                     _ = worker.dispatch.memory_changed.notified() => continue,
                     _ = tokio::time::sleep_until(deadline) => {},
                 }
-                {
+                let mut request = {
                     let mut work = worker.dispatch.memory.lock().unwrap_or_else(|p| p.into_inner());
                     if work.requested_at.is_some_and(|at| at + Duration::from_secs(config.idle_seconds) > Instant::now()) {
                         continue;
                     }
-                    if work.not_before.is_some_and(|at| at > Instant::now()) {
+                    let Some(index) = work.pending.iter().position(|request| request.not_before.is_none_or(|at| at <= Instant::now())) else {
                         continue;
-                    }
-                    work.pending = false;
-                    work.not_before = None;
-                }
-                let result = std::panic::AssertUnwindSafe(manager.maintain_memory(session))
-                    .catch_unwind()
-                    .await;
+                    };
+                    work.pending.remove(index).expect("pending memory request")
+                };
+                let result = std::panic::AssertUnwindSafe(manager.maintain_memory_for_execution(session, request.execution))
+                    .catch_unwind().await;
                 let mut work = worker.dispatch.memory.lock().unwrap_or_else(|p| p.into_inner());
                 let delay = match result {
                     Ok(Ok(MaintenanceOutcome::Complete)) => None,
                     Ok(Ok(MaintenanceOutcome::Defer(delay))) => Some(delay),
-                    Ok(Ok(MaintenanceOutcome::Retry)) if work.retries < 2 => {
-                        work.retries += 1;
+                    Ok(Ok(MaintenanceOutcome::Retry)) if request.retries < 2 => {
+                        request.retries += 1;
                         Some(Duration::from_secs(5))
                     },
                     Ok(Ok(MaintenanceOutcome::Retry)) => {
@@ -248,10 +256,10 @@ impl SessionManager {
                     },
                 };
                 if let Some(delay) = delay {
-                    work.pending = true;
-                    work.not_before = Some(Instant::now() + delay);
+                    request.not_before = Some(Instant::now() + delay);
+                    work.pending.push_back(request);
                 }
-                if !work.pending || manager.shutdown.is_cancelled() {
+                if work.pending.is_empty() || manager.shutdown.is_cancelled() {
                     work.running = false;
                     worker.active = false;
                     return;
@@ -263,8 +271,16 @@ impl SessionManager {
     async fn memory_target(
         &self,
         session: SessionId,
+        execution: Option<ExecutionId>,
         state: &ExecutionState,
-    ) -> Result<Option<(MemoryStore, ToolExecutor)>, AppError> {
+    ) -> Result<
+        Option<(
+            MemoryStore,
+            ToolExecutor,
+            Option<agena_domain::ChannelAuthority>,
+        )>,
+        AppError,
+    > {
         if self.shutdown.is_cancelled() || MaintenanceConfig::for_state(state).is_none() {
             return Ok(None);
         }
@@ -281,11 +297,6 @@ impl SessionManager {
         // a foreground user's workspace memory.
         if control.configuration.relation_kind.is_subagent()
             || control.configuration.conversation.is_some()
-            || control
-                .configuration
-                .channel_authority
-                .as_ref()
-                .is_some_and(|authority| !authority.allows_private_memory())
             || control
                 .configuration
                 .capability_denied_tool_names
@@ -305,7 +316,16 @@ impl SessionManager {
         {
             return Ok(None);
         }
-        let context = self.execution_context_with_state(session, state).await?;
+        let context = self
+            .execution_context_for_execution(session, state, execution)
+            .await?;
+        if context
+            .channel_authority
+            .as_ref()
+            .is_some_and(|authority| !authority.allows_private_memory())
+        {
+            return Ok(None);
+        }
         // Fork/rewind membership retains its inherited prefix permanently even
         // after it leaves the bounded recent window. Do not relabel that
         // history with this session ID and evade a parent source suppression.
@@ -366,7 +386,11 @@ impl SessionManager {
                 return Ok(None);
             }
         }
-        Ok(Some((MemoryStore::for_workspace(&root), executor)))
+        Ok(Some((
+            MemoryStore::for_workspace(&root),
+            executor,
+            context.channel_authority,
+        )))
     }
 
     async fn memory_paths_allowed(
@@ -413,6 +437,7 @@ impl SessionManager {
     async fn prepare_memory_store(
         &self,
         session: SessionId,
+        execution: Option<ExecutionId>,
         state: &Arc<ExecutionState>,
         store: &MemoryStore,
         executor: &ToolExecutor,
@@ -440,7 +465,8 @@ impl SessionManager {
         if !Arc::ptr_eq(state, &self.state_for_session(session).await?) {
             return Ok(false);
         }
-        let Some((current, executor)) = self.memory_target(session, state).await? else {
+        let Some((current, executor, _)) = self.memory_target(session, execution, state).await?
+        else {
             return Ok(false);
         };
         if current.dir() != store.dir()
@@ -480,12 +506,23 @@ impl SessionManager {
             .map_err(|e| AppError::Internal(e.to_string()))
     }
 
+    #[cfg(test)]
     async fn maintain_memory(&self, session: SessionId) -> Result<MaintenanceOutcome, AppError> {
+        self.maintain_memory_for_execution(session, None).await
+    }
+
+    async fn maintain_memory_for_execution(
+        &self,
+        session: SessionId,
+        execution: Option<ExecutionId>,
+    ) -> Result<MaintenanceOutcome, AppError> {
         let state = self.state_for_session(session).await?;
         let Some(config) = MaintenanceConfig::for_state(&state) else {
             return Ok(MaintenanceOutcome::Complete);
         };
-        let Some((store, executor)) = self.memory_target(session, &state).await? else {
+        let Some((store, executor, authority)) =
+            self.memory_target(session, execution, &state).await?
+        else {
             return Ok(MaintenanceOutcome::Complete);
         };
         let control = self
@@ -495,14 +532,16 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
         if control.summary.running_executions > 0 || control.summary.queued_executions > 0 {
-            return Ok(MaintenanceOutcome::Complete);
+            return Ok(MaintenanceOutcome::Defer(Duration::from_secs(
+                config.idle_seconds,
+            )));
         }
         let messages = control.summary.user_message_count;
         let selection = control.metadata.selection.clone();
         drop(control);
 
         if !self
-            .prepare_memory_store(session, &state, &store, &executor)
+            .prepare_memory_store(session, execution, &state, &store, &executor)
             .await?
             || self.memory_source_is_suppressed(session, &store).await?
         {
@@ -515,12 +554,19 @@ impl SessionManager {
 
         // Compaction has already paid for this semantic projection. Preserve it
         // for the same session without another model call or a global promotion.
-        match self
-            .persist_memory_checkpoint(session, &state, &store, &executor)
-            .await?
-        {
-            MaintenanceOutcome::Complete => {}
-            retry => return Ok(retry),
+        // Room compaction contains several speakers; only actor-filtered
+        // evidence below may enter a shared conversation's private store.
+        if !authority.as_ref().is_some_and(|authority| {
+            authority.session_mode == agena_domain::ChannelSessionMode::PerConversation
+                && !authority.source_admin
+        }) {
+            match self
+                .persist_memory_checkpoint(session, execution, &state, &store, &executor)
+                .await?
+            {
+                MaintenanceOutcome::Complete => {}
+                retry => return Ok(retry),
+            }
         }
         if messages < config.min_user_messages {
             return Ok(MaintenanceOutcome::Complete);
@@ -540,9 +586,24 @@ impl SessionManager {
         {
             return Ok(MaintenanceOutcome::Complete);
         }
-        let Some(context) = self.memory_evidence(session, previous.as_ref()).await? else {
+        let Some(context) = self
+            .memory_evidence(session, previous.as_ref(), authority.as_ref())
+            .await?
+        else {
             return Ok(MaintenanceOutcome::Complete);
         };
+        let messages = if authority.is_some() {
+            context
+                .evidence
+                .iter()
+                .filter(|source| source.kind == EvidenceKind::User)
+                .count() as u64
+        } else {
+            messages
+        };
+        if messages < config.min_user_messages {
+            return Ok(MaintenanceOutcome::Complete);
+        }
         if previous.as_ref().is_some_and(|record| {
             record.metadata.source.as_ref().is_some_and(|source| {
                 source.session_id == session.get()
@@ -595,6 +656,10 @@ impl SessionManager {
         let prompt = serde_json::json!({
             "session_id": session.get(),
             "historical_episode": true,
+            "memory_owner": authority.as_ref().map(|authority| serde_json::json!({
+                "platform": authority.platform, "identity": authority.identity,
+                "actor": authority.actor, "resource": authority.resource,
+            })),
             "previous_episode": previous.as_ref().map(|record| truncate(&record.body, 12 * 1024)),
             "evidence": context.evidence,
         })
@@ -613,7 +678,7 @@ impl SessionManager {
             return Ok(MaintenanceOutcome::Complete);
         };
         if !self
-            .memory_commit_allowed(session, &state, &store, &name)
+            .memory_commit_allowed(session, execution, &state, &store, &name)
             .await?
             || !self.memory_evidence_current(session, &context).await?
         {
@@ -650,6 +715,7 @@ impl SessionManager {
     async fn memory_commit_allowed(
         &self,
         session: SessionId,
+        execution: Option<ExecutionId>,
         state: &Arc<ExecutionState>,
         store: &MemoryStore,
         name: &str,
@@ -659,7 +725,8 @@ impl SessionManager {
         {
             return Ok(false);
         }
-        let Some((current, executor)) = self.memory_target(session, state).await? else {
+        let Some((current, executor, _)) = self.memory_target(session, execution, state).await?
+        else {
             return Ok(false);
         };
         if current.dir() != store.dir() {
@@ -674,6 +741,7 @@ impl SessionManager {
     async fn persist_memory_checkpoint(
         &self,
         session: SessionId,
+        execution: Option<ExecutionId>,
         state: &Arc<ExecutionState>,
         store: &MemoryStore,
         executor: &ToolExecutor,
@@ -764,7 +832,7 @@ impl SessionManager {
         }
         drop(current);
         if !self
-            .memory_commit_allowed(session, state, store, &name)
+            .memory_commit_allowed(session, execution, state, store, &name)
             .await?
         {
             return Ok(MaintenanceOutcome::Complete);
@@ -805,6 +873,7 @@ impl SessionManager {
         &self,
         session: SessionId,
         previous: Option<&MemoryRecord>,
+        authority: Option<&agena_domain::ChannelAuthority>,
     ) -> Result<Option<EpisodeContext>, AppError> {
         let page = self
             .kernel()
@@ -825,6 +894,12 @@ impl SessionManager {
         for entry in entries.iter().rev() {
             if remaining < 256 || evidence.len() >= MAX_EVIDENCE - 12 {
                 break;
+            }
+            if !self
+                .memory_entry_belongs_to_actor(session, entry, authority)
+                .await?
+            {
+                continue;
             }
             if let Some(item) = self
                 .read_memory_evidence(session, entry, remaining.min(3072))
@@ -865,6 +940,12 @@ impl SessionManager {
                 Err(KernelError::NotFound(_)) => continue,
                 Err(error) => return Err(kernel_error(error)),
             };
+            if !self
+                .memory_entry_belongs_to_actor(session, &entry, authority)
+                .await?
+            {
+                continue;
+            }
             if let Some(item) = self
                 .read_memory_evidence(session, &entry, remaining.min(2048))
                 .await?
@@ -892,6 +973,46 @@ impl SessionManager {
             watermark,
             membership,
         }))
+    }
+
+    async fn memory_entry_belongs_to_actor(
+        &self,
+        session: SessionId,
+        entry: &EntryView,
+        authority: Option<&agena_domain::ChannelAuthority>,
+    ) -> Result<bool, AppError> {
+        let Some(authority) = authority else {
+            return Ok(true);
+        };
+        let message = if entry.id == entry.message_id {
+            entry.clone()
+        } else {
+            let message = self
+                .kernel()
+                .reader
+                .entry(session, entry.message_id)
+                .await
+                .map_err(kernel_error)?;
+            (*message).clone()
+        };
+        let EntryPayload::User { author, .. } = &message.payload else {
+            return Ok(false);
+        };
+        let Some(author) = author else {
+            return Ok(authority.session_mode == agena_domain::ChannelSessionMode::PerActor);
+        };
+        let Some(source) = author.channel_authority.as_ref() else {
+            return Ok(
+                authority.session_mode == agena_domain::ChannelSessionMode::PerActor
+                    && author.id == authority.actor,
+            );
+        };
+        Ok(author.id == authority.actor
+            && source.actor == authority.actor
+            && source.binding_id == authority.binding_id
+            && source.identity == authority.identity
+            && source.resource == authority.resource
+            && source.thread == authority.thread)
     }
 
     async fn read_memory_evidence(

@@ -417,7 +417,8 @@ impl HostHandle {
         let privileged = context.session_id.is_some()
             || context.call_id.is_some()
             || context.workspace_root.is_some()
-            || context.tool_name.is_some();
+            || context.tool_name.is_some()
+            || context.caller.is_some();
         let Some(token) = context.authority_token.as_deref() else {
             if privileged {
                 return Err(PluginError::from_kind(
@@ -455,6 +456,10 @@ impl HostHandle {
             || context.call_id != record.context.call_id
             || context.workspace_root != record.context.workspace_root
             || context.tool_name != record.context.tool_name
+            || context
+                .caller
+                .as_ref()
+                .is_some_and(|caller| Some(caller) != record.context.caller.as_ref())
         {
             return Err(PluginError::from_kind(
                 PluginErrorKind::PolicyDenied,

@@ -673,6 +673,7 @@ impl AppError {
                 if [
                     "session.permission:",
                     "session.permission_ceiling:",
+                    "session.permission_ceiling_layers[",
                     "effective session.permission:",
                 ]
                 .iter()

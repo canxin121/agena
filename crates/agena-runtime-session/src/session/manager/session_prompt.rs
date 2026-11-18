@@ -15,6 +15,7 @@ use super::{ExecutionState, SessionManager};
 
 /// Everything needed to resolve one request's additional instructions.
 pub(super) struct PromptInputs<'a> {
+    pub profile: &'a [PromptLayer],
     pub session: &'a PromptLayer,
     pub request_layer: Option<&'a PromptLayer>,
     pub model: &'a ModelRef,
@@ -168,10 +169,27 @@ fn resolve_prompt_layers(
     for layer in &workspace_model_layers {
         sources.push(LayerSource::new(PromptScope::Model, layer, &shared_library));
     }
+    // Each inherited profile layer sees definitions from its ancestors; a
+    // child cannot retroactively satisfy a missing reference in its parent.
+    let mut profile_library = shared_library.clone();
+    let profile_libraries = inputs
+        .profile
+        .iter()
+        .map(|layer| {
+            let library = profile_library.clone();
+            for fragment in &layer.inline {
+                profile_library.insert(fragment.id.clone(), fragment.clone());
+            }
+            library
+        })
+        .collect::<Vec<_>>();
+    for (layer, library) in inputs.profile.iter().zip(&profile_libraries) {
+        sources.push(LayerSource::new(PromptScope::Profile, layer, library));
+    }
     sources.push(LayerSource::new(
         PromptScope::Session,
         inputs.session,
-        &shared_library,
+        &profile_library,
     ));
     sources.push(LayerSource::new(
         PromptScope::Request,

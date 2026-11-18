@@ -252,6 +252,7 @@ async fn excludes_deleted_temporary_and_subagent_activity_but_keeps_regular_chil
             parent_session_id: Some(parent),
             relation_kind: SessionRelationKind::Subagent,
             agent: Some(SessionAgentConfiguration {
+                origin_message_id: None,
                 name: "worker".into(),
                 status: AgentStatus::Running,
                 started_at_ms: Some(1),

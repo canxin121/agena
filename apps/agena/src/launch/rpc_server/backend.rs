@@ -209,11 +209,12 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         let auto_title = params.auto_title.unwrap_or(params.title.is_none());
         let session = self
             .client
-            .create_session_with_auto_title(
+            .create_session_with_profile(
                 self.workspace_id,
                 params.title.unwrap_or_else(|| "IDE session".to_owned()),
                 params.parent_session_id,
                 auto_title,
+                params.profile,
             )
             .await
             .map_err(client_backend_error)?;

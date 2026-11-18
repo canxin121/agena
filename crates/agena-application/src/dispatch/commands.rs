@@ -65,6 +65,7 @@ pub async fn dispatch_command(
             auto_title,
             parent_id,
             prompts,
+            profile,
         }) => {
             let session = state
                 .service()
@@ -75,6 +76,7 @@ pub async fn dispatch_command(
                         parent_id,
                         auto_title,
                         prompts,
+                        profile,
                     },
                 })
                 .await?;
@@ -208,6 +210,7 @@ pub async fn dispatch_command(
                         pinned: None,
                         auto_title: None,
                         prompts: None,
+                        profile: None,
                     },
                 )
                 .await?;

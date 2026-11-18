@@ -1155,6 +1155,12 @@ mod tests {
             scope_key: format!("{resource}-{session}"),
             session_id: session,
             authority: ChannelAuthority {
+                platform: String::new(),
+                group_ids: Vec::new(),
+                profile_ids: Vec::new(),
+                profile_fingerprint: String::new(),
+                permission_overlay: Default::default(),
+                source_workspace_root: None,
                 source_admin: false,
                 binding_id: binding.to_string(),
                 epoch: 1,

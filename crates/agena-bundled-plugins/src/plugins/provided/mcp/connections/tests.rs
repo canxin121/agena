@@ -105,6 +105,7 @@ async fn reload_queue_failure_reports_saved_state_without_losing_the_persisted_c
         Plugin::tool_invoke(
             &plugin,
             ToolInvokeInput {
+                caller: None,
                 tool_name: "connections.create".into(),
                 session_id: 1,
                 call_id: 2,

@@ -121,17 +121,20 @@ impl SessionManager {
                 let workspace = r.workspace_id.expect("validated workspace");
                 self.bot_workspace(workspace).await?;
                 let title = required_text(&r.title, "title", 512)?;
-                self.validate_session_permission_configuration(
-                    Some(workspace),
-                    &SessionConfiguration::default(),
-                )
-                .await?;
+                let configuration = self
+                    .prepare_session_profile(
+                        Some(workspace),
+                        SessionConfiguration::default(),
+                        None,
+                        true,
+                    )
+                    .await?;
                 let session = persist(|| {
                     self.kernel().sessions.create_configured(
                         command,
                         workspace,
                         title.into(),
-                        SessionConfiguration::default(),
+                        configuration.clone(),
                     )
                 })
                 .await

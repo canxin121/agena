@@ -1464,7 +1464,11 @@ impl AgenaCli {
         &self,
         command: SessionsCommand,
     ) -> Result<(), AppError> {
-        let server = ServerSessionClient::connect(self, None).await?;
+        let workspace = match command.command.as_ref() {
+            Some(SessionsSubcommand::Create(args)) => args.workspace.as_deref(),
+            _ => None,
+        };
+        let server = ServerSessionClient::connect(self, workspace).await?;
         let output = match command
             .command
             .unwrap_or(SessionsSubcommand::List(SessionListArgs {
@@ -1493,6 +1497,44 @@ impl AgenaCli {
                     .await
                     .map_err(|error| client_error("failed to export session from server", error))?;
                 return Ok(());
+            }
+            SessionsSubcommand::Create(args) => {
+                let session = server
+                    .client
+                    .create_session_with_profile(
+                        server.workspace_id,
+                        args.title,
+                        args.parent,
+                        false,
+                        args.profile,
+                    )
+                    .await
+                    .map_err(|error| {
+                        client_error("failed to create session through server", error)
+                    })?;
+                let state = server
+                    .client
+                    .get_session_state(session.id)
+                    .await
+                    .map_err(|error| {
+                        client_error("failed to read created session from server", error)
+                    })?;
+                render_serialized(args.format, &state)
+            }
+            SessionsSubcommand::Update(args) => {
+                server
+                    .client
+                    .set_session_profile(args.session_id, Some(args.profile))
+                    .await
+                    .map_err(|error| client_error("failed to update session profile", error))?;
+                let state = server
+                    .client
+                    .get_session_state(args.session_id)
+                    .await
+                    .map_err(|error| {
+                        client_error("failed to read updated session from server", error)
+                    })?;
+                render_serialized(args.format, &state)
             }
             SessionsSubcommand::Import(args) => {
                 let source: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match args.path {
@@ -1649,6 +1691,7 @@ impl AgenaCli {
             args.workspace.as_deref(),
             args.prompt.as_str(),
             title,
+            args.profile.as_deref(),
             args.model.as_deref(),
             args.temperature,
             args.max_output_tokens,
@@ -1666,6 +1709,7 @@ impl AgenaCli {
             args.workspace.as_deref(),
             prompt.as_str(),
             format!("Review changes against {}", args.base),
+            args.profile.as_deref(),
             args.model.as_deref(),
             args.temperature,
             args.max_output_tokens,
@@ -1680,6 +1724,7 @@ impl AgenaCli {
         workspace: Option<&Path>,
         prompt: &str,
         title: String,
+        profile: Option<&str>,
         model: Option<&str>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
@@ -1691,7 +1736,13 @@ impl AgenaCli {
             .await?;
         let session = server
             .client
-            .create_session_with_auto_title(server.workspace_id, title, None, true)
+            .create_session_with_profile(
+                server.workspace_id,
+                title,
+                None,
+                true,
+                profile.map(str::to_owned),
+            )
             .await
             .map_err(|error| client_error("failed to create session through server", error))?;
         let mut execution = server

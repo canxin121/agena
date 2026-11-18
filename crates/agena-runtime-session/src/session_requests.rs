@@ -11,6 +11,8 @@ pub struct SessionQueuedMessageEditRequest {
 #[derive(Debug, Clone)]
 /// Request to create a session.
 pub struct SessionCreateRequest {
+    /// None inherits the parent or configured default; empty opts out.
+    pub profile: Option<String>,
     pub title: String,
     pub auto_title: bool,
     pub parent_session_id: Option<i64>,
@@ -20,6 +22,9 @@ pub struct SessionCreateRequest {
 #[derive(Debug, Clone)]
 /// Options of a session run.
 pub struct SessionRunOptions {
+    /// Raw explicit request changes before resolving profile/provider defaults.
+    /// Some(empty) inherits without pinning; None is a complete internal selection.
+    pub selection_override: Option<agena_domain::ExecutionSelection>,
     pub model: agena_domain::ModelRef,
     pub thinking_mode: Option<String>,
     pub speed_mode: Option<String>,

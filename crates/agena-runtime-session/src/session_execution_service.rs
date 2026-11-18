@@ -78,6 +78,16 @@ impl std::error::Error for SessionExecutionCommandError {}
 #[async_trait]
 /// Service that accepts session execution commands.
 pub trait SessionExecutionCommandService: Send + Sync {
+    /// Resolve a new or explicitly changed profile and validate the same
+    /// effective policy used by execution before any session state is written.
+    async fn prepare_session_profile(
+        &self,
+        workspace_id: Option<i64>,
+        configuration: agena_storage::kernel::SessionConfiguration,
+        requested: Option<String>,
+        use_default: bool,
+    ) -> Result<agena_storage::kernel::SessionConfiguration, SessionExecutionCommandError>;
+
     async fn ensure_bot_session(&self) -> Result<i64, SessionExecutionCommandError>;
     async fn list_bots(
         &self,
@@ -189,6 +199,12 @@ pub trait SessionExecutionCommandService: Send + Sync {
         &self,
         session_id: i64,
         request_id: String,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
+
+    /// Clear explicit model/mode overrides and resume profile inheritance.
+    async fn clear_session_selection(
+        &self,
+        session_id: i64,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
     async fn update_session_selection(

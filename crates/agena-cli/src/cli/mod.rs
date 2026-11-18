@@ -20,6 +20,8 @@ use async_trait::async_trait;
 
 mod cli_auth_helpers;
 mod cli_permissions;
+#[cfg(test)]
+mod cli_profile_tests;
 mod cli_prompts;
 mod cli_run;
 mod cli_runtime_helpers;
@@ -1123,6 +1125,10 @@ pub enum MemorySubcommand {
 /// Sessions subcommands.
 pub enum SessionsSubcommand {
     List(SessionListArgs),
+    /// Create a session, optionally choosing a named agent profile.
+    Create(SessionCreateArgs),
+    /// Change or clear an existing session's named agent profile.
+    Update(SessionUpdateArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -1130,6 +1136,32 @@ pub enum SessionsSubcommand {
     Import(SessionImportArgs),
     /// Print every session sharing the given tree root, in (depth, id) order.
     Tree(SessionTreeArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionCreateArgs {
+    #[arg(long = "workspace")]
+    pub workspace: Option<PathBuf>,
+    #[arg(long, default_value = "New session")]
+    pub title: String,
+    #[arg(long)]
+    pub parent: Option<i64>,
+    /// Named agent profile. An empty value starts without a profile.
+    #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
+    pub profile: Option<String>,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionUpdateArgs {
+    pub session_id: i64,
+    /// Select a named agent profile; pass --profile="" to clear it.
+    /// Existing sessions change only when this option is explicitly supplied.
+    #[arg(long, value_name = "NAME")]
+    pub profile: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1530,6 +1562,9 @@ pub struct DebugSessionArgs {
 pub struct ExecArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
+    /// Named agent profile for the new session. Empty disables the default.
+    #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
+    pub profile: Option<String>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -1570,6 +1605,9 @@ pub struct TuiArgs {
 pub struct ReviewArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
+    /// Named agent profile for the new review session.
+    #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
+    pub profile: Option<String>,
     #[arg(long, default_value = "main")]
     pub base: String,
     #[arg(long)]

@@ -201,23 +201,41 @@ impl SessionManager {
         } else {
             self.state.load_full()
         };
+        let profile = state
+            .config
+            .resolve_profile(configuration.profile.as_deref())
+            .map_err(AppError::Config)?;
         let selection = state
             .config
-            .default_selection
-            .overlay_with_cascade(&metadata.selection.clone().unwrap_or_default());
-        let context = ToolContext {
+            .session_selection(
+                configuration.profile.as_deref(),
+                &metadata.selection.clone().unwrap_or_default(),
+            )
+            .map_err(AppError::Config)?;
+        let mut context = ToolContext {
             global: metadata.workspace_id.is_none(),
             owner: configuration.owner.clone(),
             scope_session_id: Some(id),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
+            profile: configuration.profile.clone(),
+            profile_prompts: profile
+                .as_ref()
+                .map(|p| p.prompts.clone())
+                .unwrap_or_default(),
+            max_turns: profile
+                .as_ref()
+                .and_then(|p| p.max_turns)
+                .or(state.config.max_turns),
             selection,
             effective_permission: state
                 .config
-                .permission
+                .inherited_permission(configuration.profile.as_deref())
+                .map_err(AppError::Config)?
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
+            permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
             channel_authority: configuration.channel_authority.clone(),
             channel_verifier: self.channel_verifier.get().cloned(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
@@ -228,6 +246,15 @@ impl SessionManager {
                 )
                 .await?,
         };
+        context.channel_authority = self
+            .channel_authority_for_execution(
+                session,
+                self.running_execution(session).await?,
+                configuration.channel_authority.as_ref(),
+                configuration.relation_kind == agena_domain::SessionRelationKind::Subagent,
+            )
+            .await?;
+        Self::apply_channel_execution_context(&mut context);
         let agent = configuration.agent.as_ref();
         Ok(Session {
             id,
@@ -293,7 +320,13 @@ impl SessionManager {
             .flatten()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
+        let profile = state
+            .config
+            .resolve_profile(configuration.profile.as_deref())
+            .map_err(AppError::Config)?;
+        let profile_prompts = profile.map(|p| p.prompts).unwrap_or_default();
         let inputs = super::session_prompt::PromptInputs {
+            profile: &profile_prompts,
             session: &configuration.prompts,
             request_layer: None,
             model,
@@ -306,17 +339,333 @@ impl SessionManager {
             AppError::Internal(format!("prompt layers could not be resolved: {error}"))
         })
     }
+    /// A shared transcript has one claimed execution. Queued input and a
+    /// later speaker must never supply identity to the current tool callback.
+    pub(super) async fn running_execution(
+        &self,
+        session: SessionId,
+    ) -> Result<Option<ExecutionId>, AppError> {
+        let mut after = None;
+        let mut running = None;
+        loop {
+            let page = self
+                .kernel()
+                .reader
+                .active_executions(session, after, 128)
+                .await
+                .map_err(kernel_error)?;
+            for execution in &page.executions {
+                if execution.phase == ExecutionPhase::Running {
+                    if running.replace(execution.id).is_some() {
+                        return Err(AppError::Config(
+                            "ambiguous channel execution identity".into(),
+                        ));
+                    }
+                }
+            }
+            if !page.has_more {
+                return Ok(running);
+            }
+            after = page.next;
+            if after.is_none() {
+                return Err(AppError::Config(
+                    "incomplete active execution snapshot".into(),
+                ));
+            }
+        }
+    }
+
+    pub(super) async fn channel_authority_for_execution(
+        &self,
+        session: SessionId,
+        execution: Option<ExecutionId>,
+        baseline: Option<&agena_domain::ChannelAuthority>,
+        delegated: bool,
+    ) -> Result<Option<agena_domain::ChannelAuthority>, AppError> {
+        self.channel_authority_for_execution_inner(session, execution, baseline, delegated, 0)
+            .await
+    }
+
+    async fn channel_authority_for_execution_inner(
+        &self,
+        session: SessionId,
+        execution: Option<ExecutionId>,
+        baseline: Option<&agena_domain::ChannelAuthority>,
+        delegated: bool,
+        depth: usize,
+    ) -> Result<Option<agena_domain::ChannelAuthority>, AppError> {
+        if depth > 16 {
+            return Err(AppError::Config(
+                "channel continuation origin is too deep".into(),
+            ));
+        }
+        let Some(baseline) = baseline else {
+            return Ok(None);
+        };
+        let shared = baseline.session_mode == agena_domain::ChannelSessionMode::PerConversation
+            && baseline.actor != "@service"
+            && !baseline.source_admin
+            && !delegated;
+        if let Some(execution) = execution {
+            let input = self
+                .kernel()
+                .reader
+                .execution(session, execution)
+                .await
+                .map_err(kernel_error)?;
+            let entry = self
+                .kernel()
+                .reader
+                .entry(session, input.message_id)
+                .await
+                .map_err(kernel_error)?;
+            let mut authority = Self::message_channel_authority(&entry)?;
+            if shared
+                && (input.purpose == ExecutionPurpose::Continuation || input.generation.get() > 1)
+            {
+                let receipt = self
+                    .kernel()
+                    .reader
+                    .resumed_delivery(session, execution, input.generation)
+                    .await
+                    .map_err(kernel_error)?;
+                if let Some(receipt) = receipt.as_ref()
+                    && receipt
+                        .payload
+                        .get("kind")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("agent_result")
+                {
+                    let child = receipt
+                        .payload
+                        .get("agent_id")
+                        .and_then(serde_json::Value::as_i64)
+                        .ok_or_else(|| {
+                            AppError::Config("agent continuation has no child identity".into())
+                        })?;
+                    let child = session_id(child)?;
+                    let child_config = self
+                        .kernel()
+                        .reader
+                        .configuration(child)
+                        .await
+                        .map_err(kernel_error)?;
+                    if child_config.parent_session_id != Some(session)
+                        || child_config.relation_kind != agena_domain::SessionRelationKind::Subagent
+                    {
+                        return Err(AppError::Config(
+                            "continuation is not from this parent's delegated agent".into(),
+                        ));
+                    }
+                    let origin = child_config
+                        .agent
+                        .as_ref()
+                        .and_then(|agent| agent.origin_message_id)
+                        .ok_or_else(|| {
+                            AppError::Config(
+                                "agent continuation has no persisted launch origin".into(),
+                            )
+                        })?;
+                    if receipt
+                        .payload
+                        .get("message_id")
+                        .and_then(serde_json::Value::as_i64)
+                        != Some(origin.get())
+                    {
+                        return Err(AppError::Config(
+                            "agent continuation changed its launch origin".into(),
+                        ));
+                    }
+                    let child_authority =
+                        child_config.channel_authority.as_ref().ok_or_else(|| {
+                            AppError::Config(
+                                "agent continuation has no inherited channel authority".into(),
+                            )
+                        })?;
+                    let origin_entry = self
+                        .kernel()
+                        .reader
+                        .entry(session, origin)
+                        .await
+                        .map_err(kernel_error)?;
+                    let origin_authority = match Self::message_channel_authority(&origin_entry)? {
+                        Some(authority) => Some(authority),
+                        None if origin_entry.execution_id != execution => {
+                            Box::pin(self.channel_authority_for_execution_inner(
+                                session,
+                                Some(origin_entry.execution_id),
+                                Some(baseline),
+                                false,
+                                depth + 1,
+                            ))
+                            .await?
+                        }
+                        None => None,
+                    };
+                    if origin_authority.as_ref() != Some(child_authority) {
+                        return Err(AppError::Config(
+                            "agent continuation caller differs from its verified launch input"
+                                .into(),
+                        ));
+                    }
+                    authority = Some(child_authority.clone());
+                }
+            }
+            if let Some(authority) = authority {
+                Self::validate_channel_execution_scope(baseline, &authority, shared)?;
+                return Ok(Some(authority));
+            }
+            if shared && input.purpose != ExecutionPurpose::Compaction {
+                return Err(AppError::Config(
+                    "shared channel input has no verified sender authority".into(),
+                ));
+            }
+        }
+        let mut authority = baseline.clone();
+        if shared {
+            // Legacy shared sessions stored their first speaker. Treat that
+            // record only as a room boundary while retaining its transcript.
+            authority.actor = "@shared".into();
+            authority.role = agena_domain::ChannelRole::Member;
+            authority.group_ids.clear();
+            authority.profile_ids.clear();
+            authority.profile_fingerprint.clear();
+            authority.permission_overlay = Default::default();
+            authority.expires_at_ms = 0;
+        }
+        Ok(Some(authority))
+    }
+
+    fn message_channel_authority(
+        entry: &EntryView,
+    ) -> Result<Option<agena_domain::ChannelAuthority>, AppError> {
+        if let EntryPayload::User {
+            author: Some(author),
+            ..
+        } = &entry.payload
+            && let Some(authority) = &author.channel_authority
+        {
+            if author.id != authority.actor
+                || author.group_ids != authority.group_ids
+                || !matches!(&author.kind, agena_domain::AuthorKind::ChannelMember { role } if *role == authority.role)
+            {
+                return Err(AppError::Config(
+                    "message author differs from its verified execution identity".into(),
+                ));
+            }
+            return Ok(Some(authority.clone()));
+        }
+        Ok(None)
+    }
+
+    fn validate_channel_execution_scope(
+        baseline: &agena_domain::ChannelAuthority,
+        authority: &agena_domain::ChannelAuthority,
+        shared: bool,
+    ) -> Result<(), AppError> {
+        if authority.binding_id != baseline.binding_id
+            || authority.identity != baseline.identity
+            || authority.resource != baseline.resource
+            || authority.thread != baseline.thread
+            || authority.kind != baseline.kind
+            || authority.epoch != baseline.epoch
+            || authority.session_mode != baseline.session_mode
+            || authority.source_admin != baseline.source_admin
+            || (!baseline.platform.is_empty() && authority.platform != baseline.platform)
+            || (!shared && authority.actor != baseline.actor)
+        {
+            return Err(AppError::Config(
+                "execution identity does not belong to this channel scope".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn apply_channel_execution_context(context: &mut ToolContext) {
+        let Some(authority) = context.channel_authority.as_ref() else {
+            return;
+        };
+        context.effective_permission = context
+            .effective_permission
+            .merged_with(&authority.permission_overlay);
+        if authority.source_admin || authority.grant.source_workspace {
+            if let Some(root) = &authority.source_workspace_root {
+                context.effective_workspace_root = Some(root.clone());
+            }
+        } else {
+            context.effective_workspace_root = Some(authority.memory_workspace_root.clone());
+        }
+    }
+
+    /// Read the persisted sender for one exact execution, including after restart.
+    pub async fn channel_execution_authority(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+    ) -> Result<Option<agena_domain::ChannelAuthority>, AppError> {
+        let session = session_id(id)?;
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .map_err(kernel_error)?;
+        self.channel_authority_for_execution(
+            session,
+            Some(execution),
+            configuration.channel_authority.as_ref(),
+            configuration.relation_kind == agena_domain::SessionRelationKind::Subagent,
+        )
+        .await
+    }
+
+    pub async fn verify_channel_execution(
+        &self,
+        id: i64,
+        execution: ExecutionId,
+    ) -> Result<Option<agena_domain::ChannelAuthority>, AppError> {
+        let authority = self.channel_execution_authority(id, execution).await?;
+        if let Some(authority) = &authority {
+            self.channel_verifier
+                .get()
+                .ok_or_else(|| AppError::Config("channel authorization unavailable".into()))?
+                .authorize(authority)
+                .await
+                .map_err(AppError::Config)?;
+        }
+        Ok(authority)
+    }
+
     pub(super) async fn execution_context_with_state(
         &self,
         id: SessionId,
         state: &ExecutionState,
+    ) -> Result<ToolContext, AppError> {
+        let execution = self.running_execution(id).await?;
+        self.execution_context_for_execution(id, state, execution)
+            .await
+    }
+
+    pub(super) async fn execution_context_for_execution(
+        &self,
+        id: SessionId,
+        state: &ExecutionState,
+        execution: Option<ExecutionId>,
     ) -> Result<ToolContext, AppError> {
         let (metadata, configuration) = tokio::try_join!(
             self.kernel().reader.metadata(id),
             self.kernel().reader.configuration(id)
         )
         .map_err(kernel_error)?;
-        if let Some(authority) = &configuration.channel_authority {
+        let authority = self
+            .channel_authority_for_execution(
+                id,
+                execution,
+                configuration.channel_authority.as_ref(),
+                configuration.relation_kind == agena_domain::SessionRelationKind::Subagent,
+            )
+            .await?;
+        if let Some(authority) = &authority {
             self.channel_verifier
                 .get()
                 .ok_or_else(|| {
@@ -326,23 +675,41 @@ impl SessionManager {
                 .await
                 .map_err(AppError::Config)?;
         }
-        Ok(ToolContext {
+        let mut context = ToolContext {
             global: metadata.workspace_id.is_none(),
             owner: configuration.owner.clone(),
             scope_session_id: Some(id.get()),
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
+            profile: configuration.profile.clone(),
+            profile_prompts: state
+                .config
+                .resolve_profile(configuration.profile.as_deref())
+                .map_err(AppError::Config)?
+                .map(|p| p.prompts)
+                .unwrap_or_default(),
+            max_turns: state
+                .config
+                .resolve_profile(configuration.profile.as_deref())
+                .map_err(AppError::Config)?
+                .and_then(|p| p.max_turns)
+                .or(state.config.max_turns),
             selection: state
                 .config
-                .default_selection
-                .overlay_with_cascade(&metadata.selection.clone().unwrap_or_default()),
+                .session_selection(
+                    configuration.profile.as_deref(),
+                    &metadata.selection.clone().unwrap_or_default(),
+                )
+                .map_err(AppError::Config)?,
             effective_permission: state
                 .config
-                .permission
+                .inherited_permission(configuration.profile.as_deref())
+                .map_err(AppError::Config)?
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
-            channel_authority: configuration.channel_authority.clone(),
+            permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
+            channel_authority: authority,
             channel_verifier: self.channel_verifier.get().cloned(),
             capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
             effective_workspace_root: self
@@ -351,7 +718,9 @@ impl SessionManager {
                     configuration.effective_workspace_root.as_deref(),
                 )
                 .await?,
-        })
+        };
+        Self::apply_channel_execution_context(&mut context);
+        Ok(context)
     }
     pub async fn list_session_summaries(
         &self,
@@ -1017,21 +1386,30 @@ impl SessionQueryService for SessionManager {
         let configuration = &snapshot.configuration;
         let selection = state
             .config
-            .default_selection
-            .overlay_with_cascade(&snapshot.metadata.selection.clone().unwrap_or_default());
+            .session_selection(
+                configuration.profile.as_deref(),
+                &snapshot.metadata.selection.clone().unwrap_or_default(),
+            )
+            .map_err(|error| query_error(AppError::Config(error)))?;
         let agent = configuration.agent.as_ref();
         Ok(SessionExecutionContext {
+            profile: configuration.profile.clone(),
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
             workflow_state: workflow_from_snapshot(snapshot),
             agent_id: crate::identity::AGENA_AGENT_ID.into(),
             selected_permission: configuration.permission.clone(),
-            inherited_permission: state.config.permission.clone(),
+            inherited_permission: state
+                .config
+                .inherited_permission(configuration.profile.as_deref())
+                .map_err(|error| query_error(AppError::Config(error)))?,
             effective_permission: state
                 .config
-                .permission
+                .inherited_permission(configuration.profile.as_deref())
+                .map_err(|error| query_error(AppError::Config(error)))?
                 .merged_with(&configuration.permission),
             permission_ceiling: configuration.permission_ceiling.clone(),
+            permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
             model_provider_id: selection.provider,
             model_adapter_id: selection.adapter,
             model_id: selection.model,

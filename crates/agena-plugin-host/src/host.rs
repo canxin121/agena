@@ -649,6 +649,7 @@ fn tool_hook_context(
     workspace_root: Option<String>,
 ) -> HostCallbackContext {
     HostCallbackContext {
+        caller: None,
         plugin_id: Some(plugin.key().to_string()),
         session_id,
         call_id,

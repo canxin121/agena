@@ -99,10 +99,20 @@ impl RawProjectMergeKeys {
 
 pub fn validate_config_text(path: &Path, text: &str) -> Result<(), ConfigError> {
     let (config, _) = parse_raw_config_text(path, text)?;
-    let resolved = config.resolve()?;
+    let global_prompts = config.prompts.clone().unwrap_or_default();
+    let mut resolved = config.resolve()?;
+    resolved.prompts = crate::PromptLayersConfig {
+        global: global_prompts,
+        global_dir: path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("prompts"),
+        ..Default::default()
+    };
     // A standalone document has no owning workspace. Its templates remain
     // inactive while active host paths and the global native policy are checked.
-    validate_permission_config_in_workspace(&resolved.permission, Path::new(""), resolved.sandbox)
+    validate_permission_config_in_workspace(&resolved.permission, Path::new(""), resolved.sandbox)?;
+    crate::agent_profiles::validate_agent_profiles_in_workspace(&resolved, Path::new(""))
 }
 
 pub fn validate_layered_config_text(
@@ -132,10 +142,19 @@ pub fn validate_layered_config_text(
         ),
     };
 
+    if workspace.access_control.is_some() {
+        return Err(ConfigError::Validation(
+            "access_control is instance-owned; edit it in global settings, not a workspace file"
+                .into(),
+        ));
+    }
+    validate_global_agent_profile_scope(&global, global_path, env, &[])?;
+    let global_prompts = global.prompts.clone().unwrap_or_default();
+    let workspace_prompts = workspace.prompts.clone().unwrap_or_default();
     let mut merged = global;
     merged.merge_project_from_with_keys(workspace, workspace_merge_keys);
     merged.merge_from(RawConfig::from_env(env)?);
-    let resolved = merged.resolve()?;
+    let mut resolved = merged.resolve()?;
     let workspace_root = if workspace_path.as_os_str().is_empty() {
         Path::new("")
     } else {
@@ -146,12 +165,64 @@ pub fn validate_layered_config_text(
             parent
         }
     };
-    validate_permission_config_in_workspace(&resolved.permission, workspace_root, resolved.sandbox)
+    resolved.prompts = crate::PromptLayersConfig {
+        global: global_prompts,
+        workspace: workspace_prompts,
+        global_dir: global_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("prompts"),
+        workspace_dir: if workspace_path.as_os_str().is_empty() {
+            Default::default()
+        } else {
+            workspace_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("prompts")
+        },
+    };
+    validate_permission_config_in_workspace(
+        &resolved.permission,
+        workspace_root,
+        resolved.sandbox,
+    )?;
+    crate::agent_profiles::validate_agent_profiles_in_workspace(&resolved, workspace_root)
+}
+
+/// Ensure global profile definitions work independently of project overlays.
+pub(super) fn validate_global_agent_profile_scope(
+    global: &RawConfig,
+    path: &Path,
+    env: &dyn ConfigEnvironment,
+    overrides: &[crate::ConfigOverride],
+) -> Result<(), ConfigError> {
+    if global.profiles.is_empty() && global.default_profile.as_deref().is_none_or(str::is_empty) {
+        return Ok(());
+    }
+    // Global sessions load this catalog independently of any project. A
+    // workspace must not accidentally make an invalid global profile appear
+    // valid during a settings save, only for activation to fail afterwards.
+    let mut raw = global.clone();
+    raw.merge_from(RawConfig::from_env(env)?);
+    for item in overrides {
+        crate::apply_config_override(item, &mut raw);
+    }
+    let prompts = raw.prompts.clone().unwrap_or_default();
+    let mut resolved = raw.resolve()?;
+    resolved.prompts = crate::PromptLayersConfig {
+        global: prompts,
+        global_dir: path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("prompts"),
+        ..Default::default()
+    };
+    crate::agent_profiles::validate_agent_profiles_in_workspace(&resolved, Path::new(""))
 }
 
 /// Validate real filesystem identities after layering, while the owning
 /// workspace and platform capabilities are still available.
-pub(super) fn validate_permission_config_in_workspace(
+pub(crate) fn validate_permission_config_in_workspace(
     permission: &agena_domain::PermissionConfig,
     workspace_root: &Path,
     sandbox_enabled: bool,
@@ -271,10 +342,18 @@ pub struct RawConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_guard: Option<bool>,
     pub session: Option<RawSessionConfig>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, crate::AgentProfileConfig>,
+    /// Empty string explicitly disables an inherited default profile.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_profile: Option<String>,
     /// This file's prompt layer: global in the global file, workspace in the
     /// project file. The loader keeps both layers separate.
     pub prompts: Option<crate::PromptScopeConfig>,
     pub permission: Option<agena_domain::PermissionConfig>,
+    /// Instance-owned identity and permission directory. Project layers cannot
+    /// replace it, even when their ordinary execution permissions are editable.
+    pub access_control: Option<agena_domain::AccessControlConfig>,
     pub plugins: Option<PluginConfig>,
     pub providers: RawProvidersConfig,
 }
@@ -354,8 +433,11 @@ impl<'de> Deserialize<'de> for RawConfig {
             sandbox: Option<bool>,
             resource_guard: Option<bool>,
             session: Option<RawSessionConfig>,
+            profiles: BTreeMap<String, crate::AgentProfileConfig>,
+            default_profile: Option<String>,
             prompts: Option<crate::PromptScopeConfig>,
             permission: Option<agena_domain::PermissionConfig>,
+            access_control: Option<agena_domain::AccessControlConfig>,
             plugins: Option<PluginConfig>,
             providers: RawProvidersConfig,
         }
@@ -369,8 +451,11 @@ impl<'de> Deserialize<'de> for RawConfig {
             sandbox: input.sandbox,
             resource_guard: input.resource_guard,
             session: input.session,
+            profiles: input.profiles,
+            default_profile: input.default_profile,
             prompts: input.prompts,
             permission: input.permission,
+            access_control: input.access_control,
             plugins: input.plugins,
             providers: input.providers,
         })
@@ -385,7 +470,10 @@ impl RawConfig {
         merge_option(&mut self.sandbox, overlay.sandbox);
         merge_option(&mut self.resource_guard, overlay.resource_guard);
         merge_option_struct(&mut self.session, overlay.session);
+        self.profiles.extend(overlay.profiles);
+        merge_option(&mut self.default_profile, overlay.default_profile);
         merge_option_struct(&mut self.permission, overlay.permission);
+        merge_option(&mut self.access_control, overlay.access_control);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         self.providers.merge_from(overlay.providers);
     }
@@ -404,6 +492,8 @@ impl RawConfig {
         merge_option(&mut self.sandbox, overlay.sandbox);
         merge_option(&mut self.resource_guard, overlay.resource_guard);
         merge_option_struct(&mut self.session, overlay.session);
+        self.profiles.extend(overlay.profiles);
+        merge_option(&mut self.default_profile, overlay.default_profile);
         merge_option_struct(&mut self.permission, overlay.permission);
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
         self.providers.merge_project_from(overlay.providers);
@@ -416,7 +506,10 @@ impl RawConfig {
             && self.sandbox.is_none()
             && self.resource_guard.is_none()
             && self.session.is_none()
+            && self.profiles.is_empty()
+            && self.default_profile.is_none()
             && self.permission.is_none()
+            && self.access_control.is_none()
             && self.plugins.is_none()
             && self.providers.is_empty()
     }
@@ -503,8 +596,11 @@ impl RawConfig {
             sandbox,
             resource_guard: None,
             session,
+            profiles: BTreeMap::new(),
+            default_profile: None,
             prompts: None,
             permission: None,
+            access_control: None,
             plugins: None,
             providers: RawProvidersConfig::default(),
         })
@@ -572,10 +668,24 @@ impl RawConfig {
             &providers,
         )?;
         validate_permission_config("permission", &permission)?;
+        let access_control = self.access_control.unwrap_or_default();
+        access_control.validate().map_err(ConfigError::Validation)?;
+        for (id, profile) in &access_control.profiles {
+            validate_permission_config(
+                &format!("access_control.profiles.{id}.permission"),
+                &profile.permission,
+            )?;
+        }
+        for (index, user) in access_control.users.iter().enumerate() {
+            validate_permission_config(
+                &format!("access_control.users.{index}.overrides"),
+                &user.overrides,
+            )?;
+        }
         // Native filesystem compilation needs the actual execution scope.
         // ConfigLoader and settings validators bind it after all layers resolve.
 
-        Ok(ResolvedConfig {
+        let resolved = ResolvedConfig {
             default_selection,
             tracing,
             ui,
@@ -583,15 +693,20 @@ impl RawConfig {
             sandbox,
             resource_guard,
             session,
+            profiles: self.profiles,
+            default_profile: self.default_profile.filter(|name| !name.is_empty()),
             prompts: crate::PromptLayersConfig::default(),
             permission,
+            access_control,
             plugins,
             providers,
-        })
+        };
+        crate::agent_profiles::validate_agent_profiles(&resolved)?;
+        Ok(resolved)
     }
 }
 
-fn resolve_model_selection(
+pub(crate) fn resolve_model_selection(
     path: &str,
     explicit_selection: Option<&agena_domain::ModelSelectionConfig>,
     providers: &BTreeMap<String, ResolvedProviderConfig>,

@@ -597,6 +597,12 @@ pub trait KernelBackend: Send + Sync {
     ) -> Result<ReadView<Vec<OwnedToolMetadata>>>;
     fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch>;
     async fn delivery(&self, session: SessionId, id: CommandId) -> Result<ReadView<DeliveryView>>;
+    async fn resumed_delivery(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<Option<DeliveryView>>>;
     async fn pending_deliveries(
         &self,
         session: SessionId,

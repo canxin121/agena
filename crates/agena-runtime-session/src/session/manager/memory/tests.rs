@@ -372,7 +372,7 @@ async fn idle_worker_coalesces_and_persists_source_backed_episode() {
     let fixture = Fixture::new(true, 3, Default::default()).await;
     fixture.seed().await;
     for _ in 0..8 {
-        fixture.manager.schedule_memory(fixture.session);
+        fixture.manager.schedule_memory(fixture.session, None);
     }
     fixture.wait_worker().await;
     assert_eq!(fixture.control.calls.load(Ordering::SeqCst), 1);
@@ -662,7 +662,7 @@ async fn older_cited_decisions_are_rehydrated_outside_the_recent_message_window(
         .unwrap();
     let context = fixture
         .manager
-        .memory_evidence(fixture.session, Some(&previous))
+        .memory_evidence(fixture.session, Some(&previous), None)
         .await
         .unwrap()
         .unwrap();
@@ -789,7 +789,7 @@ async fn memory_tool_echo_is_not_evidence_and_forget_suppresses_extraction() {
     assert_eq!(fixture.control.calls.load(Ordering::SeqCst), 0);
     let evidence = fixture
         .manager
-        .memory_evidence(fixture.session, None)
+        .memory_evidence(fixture.session, None, None)
         .await
         .unwrap()
         .unwrap();
@@ -839,7 +839,7 @@ async fn cooldown_retains_the_final_turn_until_eligible_without_another_event() 
             .unwrap(),
         MaintenanceOutcome::Defer(_)
     ));
-    fixture.manager.schedule_memory(fixture.session);
+    fixture.manager.schedule_memory(fixture.session, None);
     fixture.wait_worker().await;
     assert_eq!(fixture.control.calls.load(Ordering::SeqCst), 2);
     assert_eq!(
@@ -861,7 +861,7 @@ async fn unrelated_memory_mutation_retries_fresh_evidence_without_losing_episode
     let fixture = Fixture::new(true, 1, Default::default()).await;
     fixture.seed().await;
     fixture.control.pause.store(true, Ordering::SeqCst);
-    fixture.manager.schedule_memory(fixture.session);
+    fixture.manager.schedule_memory(fixture.session, None);
     tokio::time::timeout(Duration::from_secs(8), fixture.control.started.notified())
         .await
         .unwrap();
@@ -951,6 +951,12 @@ async fn private_channel_learning_uses_its_authorized_store_and_rechecks_revocat
         ));
         let private_store = MemoryStore::for_workspace(&private_root);
         let authority = agena_domain::ChannelAuthority {
+            platform: String::new(),
+            group_ids: Vec::new(),
+            profile_ids: Vec::new(),
+            profile_fingerprint: String::new(),
+            permission_overlay: Default::default(),
+            source_workspace_root: None,
             source_admin: false,
             binding_id: "memory-channel-test".into(),
             epoch: 1,
@@ -963,7 +969,7 @@ async fn private_channel_learning_uses_its_authorized_store_and_rechecks_revocat
             resource: "private-conversation".into(),
             kind: agena_domain::ConversationKind::Direct,
             thread: None,
-            session_mode: agena_domain::ChannelSessionMode::PerConversation,
+            session_mode: agena_domain::ChannelSessionMode::PerActor,
             grant: agena_domain::ChannelGrant {
                 private_memory: enabled,
                 ..Default::default()
@@ -1026,7 +1032,7 @@ async fn private_channel_learning_uses_its_authorized_store_and_rechecks_revocat
 async fn shutdown_cancels_pending_idle_maintenance_without_a_model_call() {
     let fixture = Fixture::new(true, 1, Default::default()).await;
     fixture.seed().await;
-    fixture.manager.schedule_memory(fixture.session);
+    fixture.manager.schedule_memory(fixture.session, None);
     fixture.manager.shutdown().await.unwrap();
     assert_eq!(fixture.control.calls.load(Ordering::SeqCst), 0);
     assert!(!fixture.store.dir().exists());
@@ -1415,7 +1421,7 @@ async fn inherited_fork_and_rewind_history_cannot_relabel_a_forgotten_source() {
         assert!(
             fixture
                 .manager
-                .memory_evidence(fixture.session, None)
+                .memory_evidence(fixture.session, None, None)
                 .await
                 .unwrap()
                 .is_none(),
@@ -1500,4 +1506,166 @@ async fn independent_children_and_empty_rewinds_keep_own_learning_available() {
             fixture.session.get()
         );
     }
+}
+
+async fn sender_message(
+    fixture: &Fixture,
+    authority: &agena_domain::ChannelAuthority,
+    text: &str,
+) -> ExecutionId {
+    let mut author =
+        agena_domain::MessageAuthor::channel_member(&authority.actor, authority.role, None);
+    author.group_ids = authority.group_ids.clone();
+    author.channel_authority = Some(authority.clone());
+    let execution = fixture
+        .manager
+        .kernel()
+        .sessions
+        .send_with_blobs_as(
+            RequestId::new(),
+            fixture.session,
+            ComposerDocument(vec![ComposerNode::Text { text: text.into() }]),
+            &[],
+            Some(author),
+            None,
+        )
+        .await
+        .unwrap()
+        .value;
+    let attempt = fixture
+        .manager
+        .kernel()
+        .executor
+        .claim_next(RequestId::new(), fixture.session, execution.id)
+        .await
+        .unwrap()
+        .value;
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    execution.id
+}
+
+#[tokio::test]
+async fn shared_room_memory_keeps_each_finished_sender_and_filters_other_speakers() {
+    let private_root =
+        std::env::temp_dir().join(format!("agena-memory-shared-{}", uuid::Uuid::new_v4()));
+    let baseline = agena_domain::ChannelAuthority {
+        platform: "test.chat".into(),
+        group_ids: Vec::new(),
+        profile_ids: Vec::new(),
+        profile_fingerprint: String::new(),
+        permission_overlay: Default::default(),
+        source_workspace_root: None,
+        source_admin: false,
+        binding_id: "memory-shared-test".into(),
+        epoch: 1,
+        actor: "@shared".into(),
+        role: agena_domain::ChannelRole::Member,
+        identity: agena_domain::ChannelIdentity {
+            tenant: "tenant".into(),
+            account: "bot".into(),
+        },
+        resource: "room".into(),
+        kind: agena_domain::ConversationKind::Group,
+        thread: None,
+        session_mode: agena_domain::ChannelSessionMode::PerConversation,
+        grant: Default::default(),
+        expires_at_ms: i64::MAX,
+        memory_workspace_root: private_root.join("shared"),
+        private_paths: Default::default(),
+        revoked: false,
+    };
+    let fixture = Fixture::new(
+        true,
+        3,
+        SessionConfiguration {
+            channel_authority: Some(baseline.clone()),
+            ..Default::default()
+        },
+    )
+    .await;
+    let active = Arc::new(AtomicBool::new(true));
+    fixture
+        .manager
+        .install_channel_verifier(Arc::new(MemoryChannelVerifier(active.clone())));
+    let mut alice = baseline.clone();
+    alice.actor = "alice".into();
+    alice.grant.private_memory = true;
+    alice.memory_workspace_root = private_root.join("alice");
+    let alice_store = MemoryStore::for_workspace(&alice.memory_workspace_root);
+    alice.private_paths = [alice_store.dir().to_path_buf()].into_iter().collect();
+    let mut bob = alice.clone();
+    bob.actor = "bob".into();
+    bob.memory_workspace_root = private_root.join("bob");
+    let bob_store = MemoryStore::for_workspace(&bob.memory_workspace_root);
+    bob.private_paths = [bob_store.dir().to_path_buf()].into_iter().collect();
+    let mut alice_execution = None;
+    let mut bob_execution = None;
+    for step in 0..3 {
+        alice_execution = Some(
+            sender_message(
+                &fixture,
+                &alice,
+                &format!("Alice PostgreSQL decision {step}"),
+            )
+            .await,
+        );
+        bob_execution =
+            Some(sender_message(&fixture, &bob, &format!("Bob tea preference {step}")).await);
+    }
+    fixture
+        .manager
+        .schedule_memory(fixture.session, alice_execution);
+    fixture
+        .manager
+        .schedule_memory(fixture.session, bob_execution);
+    fixture
+        .manager
+        .schedule_memory(fixture.session, alice_execution);
+    fixture.wait_worker().await;
+    assert_eq!(fixture.control.calls.load(Ordering::SeqCst), 2);
+    let alice_before = alice_store.get(&fixture.episode_name()).unwrap();
+    assert!(bob_store.get(&fixture.episode_name()).is_ok());
+    assert!(
+        !fixture.store.dir().exists(),
+        "channel memory must not reach the source workspace"
+    );
+    assert!(
+        !MemoryStore::for_workspace(&baseline.memory_workspace_root)
+            .dir()
+            .exists()
+    );
+    let requests = fixture.control.requests.lock().unwrap();
+    for (actor, own, other) in [("alice", "Alice", "Bob"), ("bob", "Bob", "Alice")] {
+        let request = requests
+            .iter()
+            .find(|request| request["memory_owner"]["actor"] == actor)
+            .unwrap();
+        let evidence = request["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 3);
+        for entry in evidence {
+            let text = entry["text"].as_str().unwrap();
+            assert!(text.contains(own));
+            assert!(!text.contains(other));
+        }
+    }
+    drop(requests);
+    let next = sender_message(&fixture, &alice, "Alice changed the migration decision").await;
+    active.store(false, Ordering::SeqCst);
+    assert!(
+        fixture
+            .manager
+            .maintain_memory_for_execution(fixture.session, Some(next))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        alice_store.get(&fixture.episode_name()).unwrap().sha256,
+        alice_before.sha256
+    );
+    assert_eq!(fixture.control.calls.load(Ordering::SeqCst), 2);
+    fixture.manager.shutdown().await.unwrap();
+    let _ = std::fs::remove_dir_all(private_root);
 }

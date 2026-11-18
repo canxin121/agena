@@ -71,6 +71,7 @@ fn fixture(
 
 fn input(value: serde_json::Value) -> ToolInvokeInput {
     ToolInvokeInput {
+        caller: None,
         tool_name: "run".into(),
         session_id: 1,
         call_id: 1,

@@ -41,6 +41,9 @@ pub struct SessionListQuery {
 #[derive(Debug, Clone, Deserialize)]
 /// Request to create a session in the session hierarchy.
 pub struct SessionHierarchyRequest {
+    /// Named agent profile; an empty string opts out of the configured default.
+    #[serde(default)]
+    pub profile: Option<String>,
     pub title: String,
     #[serde(default)]
     pub auto_title: bool,

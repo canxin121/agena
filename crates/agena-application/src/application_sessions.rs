@@ -793,6 +793,23 @@ impl Application {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource, ApplicationError> {
+        if options.model.is_none()
+            && options.thinking_mode.is_none()
+            && options.speed_mode.is_none()
+            && options.verbosity.is_none()
+        {
+            let outcome = self
+                .session_execution_services()?
+                .commands
+                .clear_session_selection(session_id)
+                .await
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
+            return session_command_resource(
+                outcome,
+                self.session_execution_resource(outcome.session_id),
+            )
+            .await;
+        }
         let options =
             crate::session::resolve_session_run_options(self, session_id, options).await?;
         let outcome = self
@@ -847,6 +864,7 @@ impl Application {
                     parent_id,
                     auto_title: false,
                     prompts: None,
+                    profile: None,
                 },
             })
             .await
@@ -888,6 +906,7 @@ impl Application {
                     pinned: None,
                     auto_title: None,
                     prompts: None,
+                    profile: None,
                 },
             )
             .await

@@ -755,6 +755,7 @@ async fn status_keeps_subagent_states_native_execution_and_input_pages() {
                 parent_session_id: Some(session),
                 relation_kind: agena_domain::SessionRelationKind::Subagent,
                 agent: Some(SessionAgentConfiguration {
+                    origin_message_id: None,
                     name: format!("agent_{index}"),
                     status: agena_domain::AgentStatus::Created,
                     started_at_ms: None,

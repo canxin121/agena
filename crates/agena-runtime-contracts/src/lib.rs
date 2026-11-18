@@ -63,6 +63,9 @@ pub trait ToolSessionContext {
     fn effective_workspace_root(&self) -> Option<&std::path::Path>;
     fn effective_permission(&self) -> &authorization::PermissionConfig;
     fn permission_ceiling(&self) -> &authorization::PermissionConfig;
+    fn permission_ceiling_layers(&self) -> &[authorization::PermissionConfig] {
+        &[]
+    }
     fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String>;
     fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
         None

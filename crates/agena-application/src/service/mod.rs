@@ -105,6 +105,7 @@ pub struct ApplicationService {
     workspace_catalog_revision: Arc<std::sync::atomic::AtomicU64>,
     permission_rule_repository: Arc<dyn PermissionRuleRepository>,
     session_kernel: agena_storage::kernel::SessionKernel,
+    session_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
 }
 
 impl ApplicationService {
@@ -152,6 +153,34 @@ impl ApplicationService {
             workspace_catalog_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             permission_rule_repository,
             session_kernel,
+            session_commands: None,
+        }
+    }
+
+    pub fn with_session_commands(
+        mut self,
+        commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
+    ) -> Self {
+        self.session_commands = commands;
+        self
+    }
+
+    async fn prepare_session_profile(
+        &self,
+        workspace_id: Option<i64>,
+        configuration: agena_storage::kernel::SessionConfiguration,
+        requested: Option<String>,
+        use_default: bool,
+    ) -> ApplicationResult<agena_storage::kernel::SessionConfiguration> {
+        match &self.session_commands {
+            Some(commands) => commands
+                .prepare_session_profile(workspace_id, configuration, requested, use_default)
+                .await
+                .map_err(|error| ApplicationError::bad_request_error(&error)),
+            None if requested.is_some() || configuration.profile.is_some() => Err(
+                ApplicationError::service_unavailable("session profile service not initialised"),
+            ),
+            None => Ok(configuration),
         }
     }
 

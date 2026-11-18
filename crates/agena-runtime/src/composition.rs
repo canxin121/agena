@@ -71,8 +71,12 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) default_selection: agena_domain::ExecutionSelection,
     pub(crate) auxiliary_selection: agena_domain::ExecutionSelection,
     pub(crate) prompts: agena_runtime_config::PromptLayersConfig,
+    pub(crate) profiles:
+        std::collections::BTreeMap<String, agena_runtime_config::AgentProfileConfig>,
+    pub(crate) default_profile: Option<String>,
     pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
+    pub(crate) access_control: agena_domain::AccessControlConfig,
     pub(crate) sandbox: bool,
     pub(crate) resource_guard: bool,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
@@ -111,8 +115,11 @@ pub(crate) fn session_build_config_from_resolved(
             })
             .unwrap_or_default(),
         prompts: config.prompts.clone(),
+        profiles: config.profiles.clone(),
+        default_profile: config.default_profile.clone(),
         auto_title: config.session.auto_title.clone(),
         permission: config.permission.clone(),
+        access_control: config.access_control.clone(),
         sandbox: config.sandbox,
         resource_guard: config.resource_guard,
         auto_compaction: agena_domain::SessionAutoCompactionConfig {

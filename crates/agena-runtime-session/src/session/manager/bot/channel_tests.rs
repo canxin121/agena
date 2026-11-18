@@ -64,6 +64,12 @@ async fn channel(
     owner.surface = kind.into();
     owner.scope_key = Some(format!("channel-{}", kind.as_str()));
     let authority = agena_domain::ChannelAuthority {
+        platform: String::new(),
+        group_ids: Vec::new(),
+        profile_ids: Vec::new(),
+        profile_fingerprint: String::new(),
+        permission_overlay: Default::default(),
+        source_workspace_root: None,
         source_admin: false,
         binding_id: "bot-management-channel".into(),
         epoch: 1,
@@ -111,6 +117,20 @@ async fn live_channel_tool(
     source: SessionId,
     text: &str,
 ) -> (AttemptHandle, RoundHandle, ToolHandle, EntryId) {
+    let mut author = agena_domain::MessageAuthor::channel_member(
+        "member",
+        agena_domain::ChannelRole::Member,
+        Some("External participant".into()),
+    );
+    author.channel_authority = manager
+        .kernel()
+        .reader
+        .configuration(source)
+        .await
+        .unwrap()
+        .channel_authority
+        .clone();
+    author.group_ids = author.channel_authority.as_ref().unwrap().group_ids.clone();
     let queued = manager
         .kernel()
         .sessions
@@ -119,11 +139,7 @@ async fn live_channel_tool(
             source,
             ComposerDocument(vec![ComposerNode::Text { text: text.into() }]),
             &[],
-            Some(agena_domain::MessageAuthor::channel_member(
-                "member",
-                agena_domain::ChannelRole::Member,
-                Some("External participant".into()),
-            )),
+            Some(author),
             None,
         )
         .await
@@ -471,4 +487,552 @@ async fn bot_owned_derived_conversations_do_not_require_a_local_global_root() {
             ordinary.get()
         );
     }
+}
+
+#[tokio::test]
+async fn shared_channel_binds_tools_groups_and_memory_to_claimed_sender() {
+    let (manager, _) = super::tests::fixture().await;
+    let verifier = Arc::new(ChannelVerifier::default());
+    manager.install_channel_verifier(verifier.clone());
+    let bot = manager.ensure_bot_session().await.unwrap();
+    let template = channel(&manager, bot, agena_domain::ConversationKind::Group).await;
+    let metadata = manager.kernel().reader.metadata(template).await.unwrap();
+    let mut configuration = (*manager
+        .kernel()
+        .reader
+        .configuration(template)
+        .await
+        .unwrap())
+    .clone();
+    if let Some(owner) = &mut configuration.owner {
+        owner.scope_key = Some("shared-execution-identity-regression".into());
+    }
+    let baseline = configuration.channel_authority.as_mut().unwrap();
+    baseline.actor = "@shared".into();
+    baseline.platform = "telegram".into();
+    baseline.grant.private_memory = true;
+    let baseline = baseline.clone();
+    let session = manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            metadata.workspace_id.unwrap(),
+            "Shared room".into(),
+            configuration,
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let mut alice = baseline.clone();
+    alice.actor = "alice".into();
+    alice.group_ids = vec!["maintainers".into()];
+    alice.memory_workspace_root = baseline.memory_workspace_root.join("alice");
+    let mut bob = baseline.clone();
+    bob.actor = "bob".into();
+    bob.group_ids = vec!["guests".into()];
+    bob.grant = Default::default();
+    bob.memory_workspace_root = baseline.memory_workspace_root.join("bob");
+    let mut executions = Vec::new();
+    for authority in [&alice, &bob] {
+        let mut author =
+            agena_domain::MessageAuthor::channel_member(&authority.actor, authority.role, None);
+        author.group_ids = authority.group_ids.clone();
+        author.channel_authority = Some(authority.clone());
+        executions.push(
+            manager
+                .kernel()
+                .sessions
+                .send_with_blobs_as(
+                    RequestId::new(),
+                    session,
+                    ComposerDocument(vec![ComposerNode::Text {
+                        text: "Inspect this room".into(),
+                    }]),
+                    &[],
+                    Some(author),
+                    None,
+                )
+                .await
+                .unwrap()
+                .value,
+        );
+    }
+    let state = manager.state.load_full();
+    let first = manager
+        .kernel()
+        .executor
+        .claim_next(RequestId::new(), session, executions[0].id)
+        .await
+        .unwrap()
+        .value;
+    // Bob is queued, but all implicit session callbacks still belong to Alice.
+    let context = manager
+        .execution_context_with_state(session, &state)
+        .await
+        .unwrap();
+    assert_eq!(context.channel_authority.as_ref(), Some(&alice));
+    assert_eq!(
+        context.effective_workspace_root.as_ref(),
+        Some(&alice.memory_workspace_root)
+    );
+    let current = manager.get_session(session.get()).await.unwrap();
+    assert_eq!(current.execution.channel_authority.as_ref(), Some(&alice));
+    assert!(alice.allows_private_memory());
+    assert!(alice.allows_tool("agena.bot.sessions", chrono::Utc::now().timestamp_millis()));
+    let child = manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            metadata.workspace_id.unwrap(),
+            "Delegated room task".into(),
+            SessionConfiguration {
+                parent_session_id: Some(session),
+                relation_kind: agena_domain::SessionRelationKind::Subagent,
+                channel_authority: Some(alice.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let delegated = manager
+        .kernel()
+        .sessions
+        .send_with_blobs_as(
+            RequestId::new(),
+            child,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Delegated task".into(),
+            }]),
+            &[],
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .value;
+    let child_context = manager
+        .execution_context_for_execution(child, &state, Some(delegated.id))
+        .await
+        .unwrap();
+    assert_eq!(child_context.channel_authority.as_ref(), Some(&alice));
+    assert_eq!(
+        child_context.effective_workspace_root.as_ref(),
+        Some(&alice.memory_workspace_root)
+    );
+    verifier.revoked.store(true, Ordering::SeqCst);
+    assert!(
+        manager
+            .execution_context_for_execution(child, &state, Some(delegated.id))
+            .await
+            .is_err()
+    );
+    assert!(
+        manager
+            .execution_context_for_execution(session, &state, Some(executions[0].id))
+            .await
+            .is_err()
+    );
+    verifier.revoked.store(false, Ordering::SeqCst);
+    manager
+        .kernel()
+        .sessions
+        .cancel_owned(RequestId::new(), child, delegated.id)
+        .await
+        .unwrap();
+    let round = first
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    first
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    let idle = manager.get_session(session.get()).await.unwrap();
+    let idle_authority = idle.execution.channel_authority.as_ref().unwrap();
+    assert_eq!(idle_authority.actor, "@shared");
+    assert!(!idle_authority.allows_private_memory());
+    assert!(
+        !idle_authority.allows_tool("agena.bot.sessions", chrono::Utc::now().timestamp_millis())
+    );
+    let second = manager
+        .kernel()
+        .executor
+        .claim_next(RequestId::new(), session, executions[1].id)
+        .await
+        .unwrap()
+        .value;
+    let context = manager
+        .execution_context_with_state(session, &state)
+        .await
+        .unwrap();
+    assert_eq!(context.channel_authority.as_ref(), Some(&bob));
+    assert_eq!(
+        context.effective_workspace_root.as_ref(),
+        Some(&bob.memory_workspace_root)
+    );
+    assert!(!bob.allows_private_memory());
+    assert!(!bob.allows_tool("agena.bot.sessions", chrono::Utc::now().timestamp_millis()));
+    // The first sender is durable even while a different user owns the room.
+    assert_eq!(
+        manager
+            .channel_execution_authority(session.get(), executions[0].id)
+            .await
+            .unwrap(),
+        Some(alice)
+    );
+    let round = second
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    second
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    let mut spoof = agena_domain::MessageAuthor::channel_member("mallory", bob.role, None);
+    spoof.group_ids = bob.group_ids.clone();
+    spoof.channel_authority = Some(bob);
+    let input = manager
+        .kernel()
+        .sessions
+        .send_with_blobs_as(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Use Bob's identity".into(),
+            }]),
+            &[],
+            Some(spoof),
+            None,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        manager
+            .channel_execution_authority(session.get(), input.id)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn legacy_shared_session_retains_history_without_first_speaker_authority() {
+    let (manager, _) = super::tests::fixture().await;
+    manager.install_channel_verifier(Arc::new(ChannelVerifier::default()));
+    let bot = manager.ensure_bot_session().await.unwrap();
+    let session = channel(&manager, bot, agena_domain::ConversationKind::Group).await;
+    let stored = manager
+        .kernel()
+        .reader
+        .configuration(session)
+        .await
+        .unwrap();
+    let first = stored.channel_authority.as_ref().unwrap();
+    assert_eq!(first.actor, "member");
+    let mut next = first.clone();
+    next.actor = "new-speaker".into();
+    next.group_ids = vec!["readers".into()];
+    next.grant = Default::default();
+    next.memory_workspace_root = first.memory_workspace_root.join("new-speaker");
+    let old_input = manager
+        .kernel()
+        .sessions
+        .send_with_blobs_as(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Historical unscoped input".into(),
+            }]),
+            &[],
+            Some(agena_domain::MessageAuthor::channel_member(
+                "member", first.role, None,
+            )),
+            None,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        manager
+            .channel_execution_authority(session.get(), old_input.id)
+            .await
+            .is_err()
+    );
+    let mut author = agena_domain::MessageAuthor::channel_member(&next.actor, next.role, None);
+    author.group_ids = next.group_ids.clone();
+    author.channel_authority = Some(next.clone());
+    let input = manager
+        .kernel()
+        .sessions
+        .send_with_blobs_as(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "New verified input".into(),
+            }]),
+            &[],
+            Some(author),
+            None,
+        )
+        .await
+        .unwrap()
+        .value;
+    let context = manager
+        .execution_context_for_execution(session, &manager.state.load_full(), Some(input.id))
+        .await
+        .unwrap();
+    assert_eq!(context.scope_session_id, Some(session.get()));
+    assert_eq!(context.channel_authority.as_ref(), Some(&next));
+    assert!(
+        !context
+            .channel_authority
+            .as_ref()
+            .unwrap()
+            .allows_tool("agena.bot.sessions", chrono::Utc::now().timestamp_millis())
+    );
+    assert_eq!(
+        context.effective_workspace_root.as_ref(),
+        Some(&next.memory_workspace_root)
+    );
+    assert!(
+        manager
+            .kernel()
+            .reader
+            .entry(session, old_input.message_id)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .unwrap()
+            .channel_authority
+            .as_ref()
+            .unwrap()
+            .actor,
+        "member"
+    );
+    assert_eq!(
+        manager
+            .get_session(session.get())
+            .await
+            .unwrap()
+            .execution
+            .channel_authority
+            .unwrap()
+            .actor,
+        "@shared"
+    );
+}
+
+#[tokio::test]
+async fn shared_channel_child_continuation_keeps_alice_after_bob_speaks() {
+    let (manager, _) = super::tests::fixture().await;
+    manager.install_channel_verifier(Arc::new(ChannelVerifier::default()));
+    let bot = manager.ensure_bot_session().await.unwrap();
+    let session = channel(&manager, bot, agena_domain::ConversationKind::Group).await;
+    let metadata = manager.kernel().reader.metadata(session).await.unwrap();
+    let baseline = manager
+        .kernel()
+        .reader
+        .configuration(session)
+        .await
+        .unwrap()
+        .channel_authority
+        .clone()
+        .unwrap();
+    let mut alice = baseline.clone();
+    alice.actor = "alice".into();
+    alice.group_ids = vec!["maintainers".into()];
+    alice.memory_workspace_root = baseline.memory_workspace_root.join("alice");
+    let mut bob = baseline;
+    bob.actor = "bob".into();
+    bob.group_ids = vec!["guests".into()];
+    bob.grant = Default::default();
+    bob.memory_workspace_root = alice.memory_workspace_root.with_file_name("bob");
+    let mut inputs = Vec::new();
+    for authority in [&alice, &bob] {
+        let mut author =
+            agena_domain::MessageAuthor::channel_member(&authority.actor, authority.role, None);
+        author.group_ids = authority.group_ids.clone();
+        author.channel_authority = Some(authority.clone());
+        let input = manager
+            .kernel()
+            .sessions
+            .send_with_blobs_as(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: format!("Message from {}", authority.actor),
+                }]),
+                &[],
+                Some(author),
+                None,
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = manager
+            .kernel()
+            .executor
+            .claim_next(RequestId::new(), session, input.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        inputs.push(input);
+    }
+    let mut agent = SessionAgentConfiguration {
+        origin_message_id: Some(inputs[0].message_id),
+        name: "alice_worker".into(),
+        status: agena_domain::AgentStatus::Running,
+        started_at_ms: Some(1000),
+        finished_at_ms: None,
+        failure: None,
+        limits: Default::default(),
+    };
+    let child = manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            metadata.workspace_id.unwrap(),
+            "Alice's asynchronous task".into(),
+            SessionConfiguration {
+                parent_session_id: Some(session),
+                relation_kind: agena_domain::SessionRelationKind::Subagent,
+                agent: Some(agent.clone()),
+                channel_authority: Some(alice.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    // A control anchor makes the eventual wake a new notice-backed execution.
+    // Without a durable origin a manual continuation has no external caller.
+    let manual = manager
+        .kernel()
+        .sessions
+        .start_control_execution(
+            RequestId::new(),
+            session,
+            ControlExecutionPurpose::Continuation,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        manager
+            .channel_execution_authority(session.get(), manual.id)
+            .await
+            .is_err()
+    );
+    manager
+        .kernel()
+        .sessions
+        .cancel_owned(RequestId::new(), session, manual.id)
+        .await
+        .unwrap();
+    agent.status = agena_domain::AgentStatus::Completed;
+    agent.finished_at_ms = Some(2000);
+    manager.kernel().sessions.finish_agent(
+        RequestId::new(), child, agent, "alice-worker-result".into(),
+        json!({"kind":"agent_result","agent_id":child.get(),"message_id":inputs[0].message_id.get(),"name":"alice_worker","text":"Alice's result"}),
+    ).await.unwrap();
+    let deliveries = manager
+        .kernel()
+        .reader
+        .pending_deliveries(session, None, 10)
+        .await
+        .unwrap();
+    let delivery = deliveries
+        .iter()
+        .find(|delivery| delivery.business_key == "alice-worker-result")
+        .unwrap();
+    let resumed = manager
+        .kernel()
+        .executor
+        .resume_delivery(
+            RequestId::new(),
+            session,
+            delivery.id,
+            inputs[0].message_id,
+            "Alice's result".into(),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(resumed.purpose, ExecutionPurpose::Continuation);
+    assert_ne!(resumed.message_id, inputs[0].message_id);
+    let state = manager.state.load_full();
+    let resumed_context = manager
+        .execution_context_for_execution(session, &state, Some(resumed.id))
+        .await
+        .unwrap();
+    assert_eq!(resumed_context.channel_authority.as_ref(), Some(&alice));
+    assert_eq!(
+        resumed_context.effective_workspace_root.as_ref(),
+        Some(&alice.memory_workspace_root)
+    );
+    assert_ne!(resumed_context.channel_authority.as_ref(), Some(&bob));
+    // Reading again from the durable kernel needs no in-memory RunControl.
+    assert_eq!(
+        manager
+            .channel_execution_authority(session.get(), resumed.id)
+            .await
+            .unwrap(),
+        Some(alice)
+    );
+    manager
+        .kernel()
+        .sessions
+        .cancel_owned(RequestId::new(), session, resumed.id)
+        .await
+        .unwrap();
+    let forged = manager.kernel().executor.deliver(
+        RequestId::new(), session, "forged-worker-origin".into(),
+        json!({"kind":"agent_result","agent_id":child.get(),"message_id":inputs[1].message_id.get(),"text":"Wrong origin"}),
+    ).await.unwrap().value;
+    let forged_run = manager
+        .kernel()
+        .executor
+        .resume_delivery(
+            RequestId::new(),
+            session,
+            forged.id,
+            inputs[1].message_id,
+            "Wrong origin".into(),
+        )
+        .await
+        .unwrap()
+        .value;
+    assert!(
+        manager
+            .channel_execution_authority(session.get(), forged_run.id)
+            .await
+            .is_err()
+    );
 }

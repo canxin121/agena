@@ -193,6 +193,37 @@ pub struct ToolDefinitionPatch {
 
 // ── tool.invoke (custom plugin tools) ─────────────────────────────────────
 
+/// Host-resolved sender identity for one execution. This is metadata, never a
+/// model-supplied tool argument; host callbacks bind it to their authority token.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CallerIdentity {
+    pub platform: String,
+    pub tenant: String,
+    pub account: String,
+    pub actor: String,
+    #[serde(default)]
+    pub group_ids: Vec<String>,
+    pub resource: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
+    pub role: String,
+}
+
+impl From<&agena_domain::ChannelAuthority> for CallerIdentity {
+    fn from(authority: &agena_domain::ChannelAuthority) -> Self {
+        Self {
+            platform: authority.platform.clone(),
+            tenant: authority.identity.tenant.clone(),
+            account: authority.identity.account.clone(),
+            actor: authority.actor.clone(),
+            group_ids: authority.group_ids.clone(),
+            resource: authority.resource.clone(),
+            thread: authority.thread.clone(),
+            role: authority.role.as_str().to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of the tool invoke hook.
 pub struct ToolInvokeInput {
@@ -200,6 +231,8 @@ pub struct ToolInvokeInput {
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<CallerIdentity>,
     pub input: serde_json::Value,
 }
 
@@ -210,6 +243,7 @@ pub struct ToolInvokeContext<'a> {
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: &'a str,
+    pub caller: Option<&'a CallerIdentity>,
     /// Invocation-scoped cancellation, also available to spawned child work.
     pub cancellation: crate::CancellationToken,
 }
@@ -228,6 +262,7 @@ impl ToolInvokeInput {
             session_id: self.session_id,
             call_id: self.call_id,
             workspace_root: self.workspace_root.as_str(),
+            caller: self.caller.as_ref(),
             cancellation: crate::current_cancellation_token().unwrap_or_default(),
         }
     }

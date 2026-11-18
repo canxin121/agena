@@ -198,6 +198,7 @@ async fn plan_autorun_dispatches_fresh_stops_without_the_generic_continuation_ca
         .unwrap()
         .value;
     let options = SessionRunOptions {
+        selection_override: None,
         model: ModelRef::new("plain-text-test", "plain-text"),
         thinking_mode: None,
         speed_mode: None,
@@ -305,6 +306,7 @@ async fn model_turn_budget_exhaustion_still_dispatches_the_stop_hook() {
         .unwrap()
         .value;
     let options = SessionRunOptions {
+        selection_override: None,
         model: ModelRef::new("plain-text-test", "plain-text"),
         thinking_mode: None,
         speed_mode: None,

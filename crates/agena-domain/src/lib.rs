@@ -23,6 +23,7 @@
 //! behavior beyond validation helpers.
 
 mod access;
+mod access_control;
 mod activity;
 mod activity_kind;
 mod attachment;
@@ -101,6 +102,10 @@ pub mod activity_view;
 pub mod mcp_connections;
 pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
+pub use access_control::{
+    AccessControlConfig, PermissionConversationBinding, PermissionProfile, PermissionUserBinding,
+    PermissionUserGroup, ResolvedAccessControl,
+};
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
     CommandReferenceActivity, ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity,

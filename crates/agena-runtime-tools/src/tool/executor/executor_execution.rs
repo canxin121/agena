@@ -281,13 +281,17 @@ impl ToolExecutor {
             ));
         }
         let writer = context.output.clone();
+        let mut callback_context =
+            agena_plugin_host::sdk::host_api::current_host_callback_context().unwrap_or_default();
+        callback_context.sandbox_enabled = Some(executor.sandbox_enabled());
+        callback_context.caller = executor
+            .channel_authority
+            .as_ref()
+            .map(agena_plugin_host::sdk::CallerIdentity::from);
         let mut result = agena_process::sandbox::scope_enabled(
             executor.sandbox_enabled(),
-            agena_plugin_host::sdk::host_api::run_in_host_callback_context(
-                agena_plugin_host::sdk::host_api::HostCallbackContext {
-                    sandbox_enabled: Some(executor.sandbox_enabled()),
-                    ..Default::default()
-                },
+            agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+                callback_context,
                 executor.execute_invocation_inner(invocation, context),
             ),
         )
@@ -483,6 +487,10 @@ impl ToolExecutor {
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    caller: self
+                        .channel_authority
+                        .as_ref()
+                        .map(agena_plugin_host::sdk::CallerIdentity::from),
                     input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
                 },
             );
@@ -552,17 +560,23 @@ impl ToolExecutor {
                 .await;
         }
 
-        let response = Box::pin(self.plugins.invoke_tool(
-            &resolution,
-            PluginToolInvokeInput {
-                tool_name: resolution.tool_name().to_string(),
-                session_id,
-                call_id,
-                workspace_root: self.workspace_root.to_string_lossy().to_string(),
-                input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
-            },
-            self.cancellation_token.clone(),
-        ))
+        let response = Box::pin(
+            self.plugins.invoke_tool(
+                &resolution,
+                PluginToolInvokeInput {
+                    tool_name: resolution.tool_name().to_string(),
+                    session_id,
+                    call_id,
+                    workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    caller: self
+                        .channel_authority
+                        .as_ref()
+                        .map(agena_plugin_host::sdk::CallerIdentity::from),
+                    input: resolved_plugin_invocation_input_value(&resolution, &plugin_invocation),
+                },
+                self.cancellation_token.clone(),
+            ),
+        )
         .await
         .map_err(|err| self.plugin_error_or_cancelled(err))?;
         self.ensure_not_cancelled()?;

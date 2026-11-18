@@ -22,8 +22,14 @@ pub struct SessionConfiguration {
     pub conversation: Option<SessionConversation>,
     /// Session-scoped prompt layer: inline fragments for this session only.
     pub prompts: agena_prompt_layers::PromptLayer,
+    /// Named agent configuration; absent on legacy sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     pub permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
+    /// Additional immutable delegation boundaries, intersected at execution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permission_ceiling_layers: Vec<PermissionConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_authority: Option<agena_domain::ChannelAuthority>,
     /// Bot ownership. `None` is an ordinary project conversation; `Some`
@@ -76,6 +82,9 @@ pub struct AutomaticTitleUpdate {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionAgentConfiguration {
+    /// Verified parent input that launched this exact agent run.
+    #[serde(default)]
+    pub origin_message_id: Option<EntryId>,
     pub name: String,
     pub status: AgentStatus,
     pub started_at_ms: Option<i64>,
@@ -99,8 +108,12 @@ pub struct SessionConfigurationChange {
     pub relation_kind: Option<SessionRelationKind>,
     pub conversation: Option<Option<SessionConversation>>,
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
+    /// Outer absence keeps the selection; inner absence clears it.
+    pub profile: Option<Option<String>>,
     pub permission: Option<PermissionConfig>,
     pub permission_ceiling: Option<PermissionConfig>,
+    /// Existing layers are immutable; callers may append stricter boundaries.
+    pub permission_ceiling_layers: Option<Vec<PermissionConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel_authority: Option<agena_domain::ChannelAuthority>,
     pub owner: Option<Option<agena_domain::SessionOwner>>,
@@ -849,6 +862,18 @@ impl KernelReader {
         id: agena_domain::CommandId,
     ) -> Result<ReadView<DeliveryView>> {
         self.0.backend.delivery(session, id).await
+    }
+    /// The durable receipt that created this exact continuation attempt.
+    pub async fn resumed_delivery(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<Option<DeliveryView>>> {
+        self.0
+            .backend
+            .resumed_delivery(session, execution, generation)
+            .await
     }
     pub async fn pending_deliveries(
         &self,

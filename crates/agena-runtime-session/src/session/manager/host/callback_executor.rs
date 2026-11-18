@@ -55,7 +55,13 @@ impl SessionManager {
                 Some((_, control)) => control.state.clone(),
                 None => self.state_for_session(key).await?,
             };
-            let context = self.execution_context_with_state(key, &state).await?;
+            let context = match live.as_ref() {
+                Some((_, control)) => {
+                    self.execution_context_for_execution(key, &state, Some(control.execution))
+                        .await?
+                }
+                None => self.execution_context_with_state(key, &state).await?,
+            };
             let cancel = live
                 .as_ref()
                 .map(|(_, control)| control.cancel.clone())

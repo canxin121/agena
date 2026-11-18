@@ -176,6 +176,7 @@ async fn browser_gate_prevents_launcher_render_and_action_execution() {
     assert_eq!(error.kind, PluginErrorKind::HostUnavailable);
     assert!(error.to_string().contains("render_js=false"));
     let context = ToolInvokeContext {
+        caller: None,
         tool_name: "browser_click",
         session_id: 42,
         call_id: 1,

@@ -33,6 +33,7 @@ pub struct SessionPresentation {
 #[derive(Debug, Clone)]
 /// Execution context of a session.
 pub struct SessionExecutionContext {
+    pub profile: Option<String>,
     pub conversation: Option<agena_domain::SessionConversation>,
     pub prompts: agena_prompt_layers::PromptLayer,
     pub workflow_state: WorkflowState,
@@ -41,6 +42,7 @@ pub struct SessionExecutionContext {
     pub inherited_permission: PermissionConfig,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
+    pub permission_ceiling_layers: Vec<PermissionConfig>,
     pub model_provider_id: Option<String>,
     pub model_adapter_id: Option<String>,
     pub model_id: Option<String>,

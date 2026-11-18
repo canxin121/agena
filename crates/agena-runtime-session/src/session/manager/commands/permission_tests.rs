@@ -427,7 +427,7 @@ async fn global_session_validates_host_paths_and_preserves_inherited_state_templ
         ),
         (
             paths(&[
-                (&alias, PathPermissionMode::Readonly),
+                (&alias, PathPermissionMode::Deny),
                 (&child, PathPermissionMode::Readwrite),
             ]),
             "conflicts",
@@ -458,6 +458,24 @@ async fn global_session_validates_host_paths_and_preserves_inherited_state_templ
             version
         );
     }
+    let writable_child = paths(&[
+        (&target_text, PathPermissionMode::Readonly),
+        (&child, PathPermissionMode::Readwrite),
+    ]);
+    manager
+        .set_session_permission(session.get(), writable_child.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .unwrap()
+            .permission,
+        writable_child
+    );
     let invalid_ceiling = SessionConfiguration {
         permission_ceiling: paths(&[("<tmp>", PathPermissionMode::Readonly)]),
         ..Default::default()
@@ -697,6 +715,7 @@ async fn session_creation_rejects_invalid_effective_rules_before_inserting() {
         .unwrap();
     let error = manager
         .create_session(SessionCreateRequest {
+            profile: None,
             title: "Rejected configuration".into(),
             auto_title: false,
             parent_session_id: None,

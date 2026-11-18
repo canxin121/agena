@@ -157,6 +157,7 @@ impl Fixture {
                     parent_session_id: Some(parent),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     agent: Some(SessionAgentConfiguration {
+                        origin_message_id: None,
                         name: "worker".into(),
                         status: AgentStatus::Completed,
                         started_at_ms: Some(1),
@@ -228,6 +229,7 @@ impl Fixture {
             Default::default(),
         );
         let options = SessionRunOptions {
+            selection_override: None,
             model: ModelRef::new("agent-lifecycle-test", "probe"),
             thinking_mode: None,
             speed_mode: None,
@@ -716,5 +718,276 @@ async fn denied_subagent_launch_settles_failed_without_running_a_model() {
         events.iter().any(|event| event == "subagent.stop:failed"),
         "rejected launch must produce a terminal observation: {events:?}"
     );
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn delegated_profile_keeps_the_parent_permission_ceiling() {
+    let mut fixture = Fixture::new(Default::default()).await;
+    let mut state = (*fixture.manager.state.load_full()).clone();
+    state.config.sandbox_enabled = false;
+    state.config.profiles.insert(
+        "builder".into(),
+        agena_runtime_config::AgentProfileConfig {
+            model: Some(agena_domain::ModelSelectionConfig {
+                provider: Some("agent-lifecycle-test".into()),
+                model: Some("probe".into()),
+                ..Default::default()
+            }),
+            permission: serde_json::from_value(
+                serde_json::json!({"path":{"workspace":"readwrite","external":"deny"}}),
+            )
+            .unwrap(),
+            ..Default::default()
+        },
+    );
+    fixture.manager.state.store(Arc::new(state));
+    fixture
+        .manager
+        .set_session_profile(fixture.parent.get(), Some("builder".into()))
+        .await
+        .unwrap();
+    let ceiling: agena_domain::PermissionConfig = serde_json::from_value(
+        serde_json::json!({"path":{"workspace":"readonly","external":"deny"}}),
+    )
+    .unwrap();
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .configure(
+            RequestId::new(),
+            fixture.parent,
+            SessionConfigurationChange {
+                permission_ceiling: Some(ceiling.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let child = fixture
+        .manager
+        .spawn_agent(
+            fixture.parent.get(),
+            None,
+            AgentSpawnRequest {
+                name: "profile_worker".into(),
+                prompt: "Inspect the project".into(),
+                commands: vec![],
+                selection: None,
+                timeout_ms: None,
+                max_tokens: None,
+                max_cost_microusd: None,
+            },
+        )
+        .await
+        .unwrap();
+    fixture.child = SessionId::try_from(child.agent_id).unwrap();
+    fixture.wait_provider().await;
+    let saved = fixture
+        .manager
+        .kernel()
+        .reader
+        .configuration(fixture.child)
+        .await
+        .unwrap();
+    assert_eq!(saved.profile.as_deref(), Some("builder"));
+    assert_eq!(saved.permission_ceiling, ceiling);
+    assert!(
+        saved.permission.is_empty(),
+        "inherited profile permissions must not become explicit child overrides"
+    );
+    assert!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .metadata(fixture.child)
+            .await
+            .unwrap()
+            .selection
+            .is_none(),
+        "inherited model must not become an explicit child override"
+    );
+    let context = fixture
+        .manager
+        .execution_context_value(fixture.child)
+        .await
+        .unwrap();
+    let executor = fixture
+        .manager
+        .tool_executor()
+        .for_session_context_async(&context)
+        .await;
+    assert!(matches!(
+        executor
+            .path_permission_check(
+                agena_domain::AccessKind::Write,
+                "/agent-lifecycle-tests/file.rs"
+            )
+            .decision,
+        agena_domain::PermissionDecision::Deny { .. }
+    ));
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn delegated_profile_freezes_parent_permissions_under_a_wider_ceiling() {
+    let mut fixture = Fixture::new(Default::default()).await;
+    let mut state = (*fixture.manager.state.load_full()).clone();
+    state.config.sandbox_enabled = false;
+    state.config.profiles.insert(
+        "review".into(),
+        agena_runtime_config::AgentProfileConfig {
+            model: Some(agena_domain::ModelSelectionConfig {
+                provider: Some("agent-lifecycle-test".into()),
+                model: Some("probe".into()),
+                ..Default::default()
+            }),
+            permission: serde_json::from_value(
+                serde_json::json!({"path":{"workspace":"readonly","external":"deny"}}),
+            )
+            .unwrap(),
+            ..Default::default()
+        },
+    );
+    let mut builder = state.config.profiles["review"].clone();
+    builder.permission = serde_json::from_value(
+        serde_json::json!({"path":{"workspace":"readwrite","external":"deny"}}),
+    )
+    .unwrap();
+    state.config.profiles.insert("builder".into(), builder);
+    fixture.manager.state.store(Arc::new(state));
+    fixture
+        .manager
+        .set_session_profile(fixture.parent.get(), Some("review".into()))
+        .await
+        .unwrap();
+    let ceiling: agena_domain::PermissionConfig = serde_json::from_value(
+        serde_json::json!({"path":{"workspace":"readwrite","external":"deny"}}),
+    )
+    .unwrap();
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .configure(
+            RequestId::new(),
+            fixture.parent,
+            SessionConfigurationChange {
+                permission_ceiling: Some(ceiling.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let child = fixture
+        .manager
+        .spawn_agent(
+            fixture.parent.get(),
+            None,
+            AgentSpawnRequest {
+                name: "profile_worker".into(),
+                prompt: "Inspect the project".into(),
+                commands: vec![],
+                selection: None,
+                timeout_ms: None,
+                max_tokens: None,
+                max_cost_microusd: None,
+            },
+        )
+        .await
+        .unwrap();
+    fixture.child = SessionId::try_from(child.agent_id).unwrap();
+    fixture.wait_provider().await;
+    let saved = fixture
+        .manager
+        .kernel()
+        .reader
+        .configuration(fixture.child)
+        .await
+        .unwrap();
+    assert_eq!(saved.profile.as_deref(), Some("review"));
+    assert_eq!(saved.permission_ceiling_layers.len(), 1);
+    assert_eq!(saved.permission_ceiling, ceiling);
+    assert!(
+        saved.permission.is_empty(),
+        "inherited profile permissions must not become explicit child overrides"
+    );
+    assert!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .metadata(fixture.child)
+            .await
+            .unwrap()
+            .selection
+            .is_none(),
+        "inherited model must not become an explicit child override"
+    );
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
+    fixture
+        .manager
+        .set_session_profile(fixture.child.get(), Some("builder".into()))
+        .await
+        .unwrap();
+    let context = fixture
+        .manager
+        .execution_context_value(fixture.child)
+        .await
+        .unwrap();
+    let executor = fixture
+        .manager
+        .tool_executor()
+        .for_session_context_async(&context)
+        .await;
+    assert_eq!(context.profile.as_deref(), Some("builder"));
+    assert!(matches!(
+        executor
+            .path_permission_check(
+                agena_domain::AccessKind::Read,
+                "/agent-lifecycle-tests/file.rs"
+            )
+            .decision,
+        agena_domain::PermissionDecision::Allow
+    ));
+    assert!(matches!(
+        executor
+            .path_permission_check(
+                agena_domain::AccessKind::Write,
+                "/agent-lifecycle-tests/file.rs"
+            )
+            .decision,
+        agena_domain::PermissionDecision::Deny { .. }
+    ));
+    // Reusing the same child retains the boundary without duplicating it.
+    let reused = fixture
+        .manager
+        .followup_agent(
+            fixture.parent.get(),
+            None,
+            agena_plugin_host::sdk::host_api::AgentMessageRequest {
+                target: "profile_worker".into(),
+                message: "Inspect again".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(reused.agent_id, fixture.child.get());
+    fixture.wait_provider().await;
+    let saved = fixture
+        .manager
+        .kernel()
+        .reader
+        .configuration(fixture.child)
+        .await
+        .unwrap();
+    assert_eq!(saved.permission_ceiling_layers.len(), 1);
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
     fixture.close().await;
 }

@@ -20,6 +20,19 @@ pub(super) fn normalize_configuration_permissions(
                 .map_err(|reason| invalid(format!("{field}: {reason}")))?;
         }
     }
+    for (index, permission) in configuration
+        .permission_ceiling_layers
+        .iter_mut()
+        .enumerate()
+    {
+        if let Some(path) = permission.path.as_mut() {
+            path.normalize_rules().map_err(|reason| {
+                invalid(format!(
+                    "session.permission_ceiling_layers[{index}]: {reason}"
+                ))
+            })?;
+        }
+    }
     Ok(())
 }
 
@@ -41,6 +54,29 @@ pub(super) async fn configuration(
             .ok_or_else(|| storage("invalid session relation"))?;
     Ok(config)
 }
+/// Changing identity and policy waits until the current run and its queued
+/// requests finish. Checking in the transaction closes the validation/write race.
+pub(super) async fn validate_profile_change(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    old: &Option<String>,
+    new: &Option<String>,
+) -> Result<()> {
+    if old == new {
+        return Ok(());
+    }
+    if let Some(name) = new {
+        agena_prompt_layers::FragmentId::parse(name)
+            .map_err(|error| invalid(format!("invalid agent profile: {error}")))?;
+    }
+    let busy: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_attempts WHERE session_id=? AND phase IN ('queued','running')) OR EXISTS(SELECT 1 FROM agena_interactions WHERE session_id=? AND decision_json IS NULL)")
+        .bind(session.get()).bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    if busy {
+        return Err(KernelError::Conflict("finish or stop the current run and clear its queued requests before changing the agent profile".into()));
+    }
+    Ok(())
+}
+
 async fn configure(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -127,6 +163,10 @@ async fn configure(
     if let Some(value) = &change.prompts {
         next.prompts = value.clone();
     }
+    if let Some(value) = &change.profile {
+        validate_profile_change(connection, session, &original.profile, value).await?;
+        next.profile = value.clone();
+    }
     if let Some(owner) = &change.owner {
         if original.owner.is_some() || owner.is_none() {
             // Ownership is assigned once, when the conversation is created.
@@ -163,6 +203,22 @@ async fn configure(
             ));
         }
         next.permission_ceiling = value.clone();
+    }
+    if let Some(value) = &change.permission_ceiling_layers {
+        if value.len() < original.permission_ceiling_layers.len() {
+            return Err(KernelError::Conflict(
+                "delegated permission ceiling layers cannot be removed".into(),
+            ));
+        }
+        for (existing, replacement) in original.permission_ceiling_layers.iter().zip(value) {
+            // Serialize to preserve ordered permission rule precedence.
+            if encode(existing)? != encode(replacement)? {
+                return Err(KernelError::Conflict(
+                    "delegated permission ceiling layers are immutable".into(),
+                ));
+            }
+        }
+        next.permission_ceiling_layers = value.clone();
     }
     if let Some(authority) = &change.channel_authority {
         if original
@@ -224,6 +280,8 @@ async fn configure(
         }
         if let (Some(old), Some(new)) = (&original.agent, value)
             && (old.name != new.name
+                || (old.started_at_ms == new.started_at_ms
+                    && old.origin_message_id != new.origin_message_id)
                 || (old.status.is_terminal()
                     && old != new
                     && !(new.status == agena_domain::AgentStatus::Running
@@ -1332,8 +1390,10 @@ pub(super) async fn apply(
                     relation_kind: Some(config.relation_kind),
                     conversation: Some(config.conversation.clone()),
                     prompts: Some(config.prompts.clone()),
+                    profile: Some(config.profile.clone()),
                     permission: Some(config.permission.clone()),
                     permission_ceiling: Some(config.permission_ceiling.clone()),
+                    permission_ceiling_layers: Some(config.permission_ceiling_layers.clone()),
                     channel_authority: config.channel_authority.clone(),
                     owner: Some(config.owner.clone()),
                     capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),
@@ -2050,6 +2110,43 @@ pub(super) async fn read_delivery(
         .map_err(storage)?;
     reads::metadata(&mut tx, session).await?;
     let value = delivery(&mut tx, session, id).await?;
+    tx.rollback().await.map_err(storage)?;
+    let bytes = modeled_read_bytes(&value)?;
+    backend.wrap_read(session, value, bytes)
+}
+
+pub(super) async fn resumed_delivery(
+    backend: &Backend,
+    session: SessionId,
+    execution: ExecutionId,
+    generation: AttemptGeneration,
+) -> Result<ReadView<Option<DeliveryView>>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .content_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    reads::execution(&mut tx, session, execution).await?;
+    let ids: Vec<String> = sqlx::query_scalar(
+        "SELECT id FROM agena_deliveries WHERE session_id=? AND resume_execution_id=? AND resume_generation=? AND state='consumed' LIMIT 2"
+    ).bind(session.get()).bind(execution.to_string()).bind(generation.get())
+        .fetch_all(&mut *tx).await.map_err(storage)?;
+    if ids.len() > 1 {
+        return Err(KernelError::Conflict(
+            "ambiguous continuation delivery origin".into(),
+        ));
+    }
+    let value = match ids.first() {
+        Some(id) => Some(delivery(&mut tx, session, id.parse().map_err(storage)?).await?),
+        None => None,
+    };
     tx.rollback().await.map_err(storage)?;
     let bytes = modeled_read_bytes(&value)?;
     backend.wrap_read(session, value, bytes)

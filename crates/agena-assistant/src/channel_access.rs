@@ -130,7 +130,8 @@ impl IntegrationBinding {
         let Some(p) = &self.spec.channel_policy else {
             return false;
         };
-        if a.identity != p.identity
+        if (!a.platform.is_empty() && a.platform != self.spec.provider)
+            || a.identity != p.identity
             || !p.serves(a.kind)
             || !self.spec.resource.matches(&a.resource)
             || a.session_mode != p.session_mode_for(&a.actor, now)
@@ -147,15 +148,17 @@ impl IntegrationBinding {
             return false;
         }
         if a.actor == "@service" {
-            return p.allow_automated_reports && a.grant == p.service_grant;
+            return p.allow_automated_reports
+                && (a.grant == p.service_grant || !a.profile_fingerprint.is_empty());
         }
         if a.actor == "@shared" {
             // Shared rooms are the default for groups; the speaker is the
             // room, and capabilities are the binding's single grant.
             return a.role == ChannelRole::Member && a.grant == p.grant;
         }
-        p.member(&a.actor, now)
-            .is_ok_and(|(role, _)| role == a.role && a.grant == p.grant)
+        p.member(&a.actor, now).is_ok_and(|(role, _)| {
+            role == a.role && (a.grant == p.grant || !a.profile_fingerprint.is_empty())
+        })
     }
     pub fn authorizes_output(&self, route: &ChannelOutputRoute, now: i64) -> bool {
         if self.state != BindingState::Enabled

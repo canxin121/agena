@@ -2,6 +2,70 @@ use super::*;
 use crate::sdk::host_api::{PathPermissionQuery, PermissionQuery};
 use serde_json::json;
 
+#[tokio::test]
+async fn callback_authority_binds_sender_and_groups_to_one_execution() {
+    let handle = HostHandle::new(Arc::new(PermissionHost::default()));
+    let plugin: PluginKey = "test.permissions".parse().unwrap();
+    handle.begin_plugin_instance(plugin.clone());
+    let caller = crate::sdk::CallerIdentity {
+        platform: "telegram".into(),
+        tenant: "default".into(),
+        account: "bot-a".into(),
+        actor: "alice".into(),
+        group_ids: vec!["members".into()],
+        resource: "group-1".into(),
+        thread: Some("topic-2".into()),
+        role: "member".into(),
+    };
+    let (authorized, lease) = handle.issue_callback_authority(
+        &plugin,
+        HostCallbackContext {
+            caller: Some(caller.clone()),
+            ..context()
+        },
+    );
+    let validate =
+        |context| handle.validated_callback_context(Some(plugin.to_string()), Some(context));
+    assert_eq!(
+        validate(authorized.clone()).unwrap().caller,
+        Some(caller.clone())
+    );
+
+    // Older SDKs omit caller metadata; the live token still restores the
+    // host's full identity instead of accepting a plugin-selected identity.
+    let mut legacy = authorized.clone();
+    legacy.caller = None;
+    assert_eq!(validate(legacy).unwrap().caller, Some(caller.clone()));
+
+    for field in ["actor", "groups", "role"] {
+        let mut forged = authorized.clone();
+        let sender = forged.caller.as_mut().unwrap();
+        match field {
+            "actor" => sender.actor = "owner".into(),
+            "groups" => sender.group_ids.push("administrators".into()),
+            _ => sender.role = "admin".into(),
+        }
+        assert_eq!(
+            validate(forged).unwrap_err().kind,
+            PluginErrorKind::PolicyDenied
+        );
+    }
+    assert_eq!(
+        validate(HostCallbackContext {
+            caller: Some(caller),
+            ..Default::default()
+        })
+        .unwrap_err()
+        .kind,
+        PluginErrorKind::PolicyDenied,
+    );
+    drop(lease);
+    assert_eq!(
+        validate(authorized).unwrap_err().kind,
+        PluginErrorKind::PolicyDenied
+    );
+}
+
 #[derive(Default)]
 struct PermissionHost {
     queries: std::sync::atomic::AtomicUsize,

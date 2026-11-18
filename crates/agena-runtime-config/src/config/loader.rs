@@ -75,7 +75,21 @@ where
             RawConfigFile::read(&project_config_path)?
         };
         let env_overlay = RawConfig::from_env(&self.env)?;
+        if project_file_state.config.access_control.is_some() {
+            return Err(ConfigError::Validation(
+                "access_control is instance-owned; edit it in global settings, not a workspace file".into(),
+            ));
+        }
         let environment_applied = !env_overlay.is_empty();
+
+        if !global {
+            super::raw::validate_global_agent_profile_scope(
+                &file_state.config,
+                &config_path,
+                &self.env,
+                &request.overrides,
+            )?;
+        }
 
         // Prompt layers stay separate per file: the global file owns the global
         // layer, the project file owns the workspace layer, so they compose
@@ -129,6 +143,7 @@ where
         // file must fail here instead of silently dropping instructions.
         config.prompts.validate()?;
         config.prompts.check_libraries()?;
+        crate::agent_profiles::validate_agent_profiles_in_workspace(&config, &workspace_root)?;
         Ok(ConfigResolution {
             config,
             meta: crate::ConfigResolutionMeta::from_layer_presence(

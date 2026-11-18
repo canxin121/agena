@@ -813,7 +813,15 @@ fn sender_label(author: &agena_domain::MessageAuthor) -> String {
     } else {
         format!("{name} [id:{}]", author.id)
     };
-    format!("{identity} ({})", author_kind_label(&author.kind))
+    let groups = if author.group_ids.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " [groups:{}]",
+            serde_json::to_string(&author.group_ids).unwrap_or_default()
+        )
+    };
+    format!("{identity} ({}){groups}", author_kind_label(&author.kind))
 }
 
 fn author_kind_label(kind: &agena_domain::AuthorKind) -> String {
@@ -1159,6 +1167,20 @@ mod message_source_tests {
         assert_eq!(
             message_source_line(Some(&author), Some(&origin)).unwrap(),
             "source: chat:telegram/bot-1 conversation chat-9 (broadcast); sender: Ann [id:u-7] (channel_member:member)"
+        );
+    }
+
+    #[test]
+    fn sender_groups_are_structured_host_metadata_in_the_prompt() {
+        let mut author =
+            MessageAuthor::channel_member("u-7", ChannelRole::Member, Some("Ann".into()));
+        author.group_ids = vec!["reviewers".into(), "developers".into()];
+        let restored: MessageAuthor =
+            serde_json::from_value(serde_json::to_value(&author).unwrap()).unwrap();
+        assert_eq!(restored.group_ids, author.group_ids);
+        assert_eq!(
+            sender_label(&restored),
+            "Ann [id:u-7] (channel_member:member) [groups:[\"reviewers\",\"developers\"]]"
         );
     }
 }

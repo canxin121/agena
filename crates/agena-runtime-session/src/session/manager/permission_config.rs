@@ -24,8 +24,12 @@ impl SessionManager {
             (Some(id), None) => Some(self.workspace_root_by_id(id).await?),
             (None, _) => None,
         };
+        let inherited = state
+            .config
+            .inherited_permission(configuration.profile.as_deref())
+            .map_err(AppError::Config)?;
         validate_configuration_permissions(
-            &state.config.permission,
+            &inherited,
             configuration,
             workspace.as_deref(),
             state.config.sandbox_enabled,
@@ -59,16 +63,43 @@ impl SessionManager {
     ) -> Result<SessionImportValidator, AppError> {
         let workspace = self.workspace_root_by_id(workspace_id).await?;
         let state = self.state.load_full();
-        let base = state.config.permission.clone();
+        let config = state.config.clone();
         let sandbox_enabled = state.config.sandbox_enabled;
         Ok(Arc::new(move |configuration| {
             let root = configuration
                 .effective_workspace_root
                 .as_deref()
                 .unwrap_or(&workspace);
+            let base = config.inherited_permission(configuration.profile.as_deref())?;
             validate_configuration_permissions(&base, configuration, Some(root), sandbox_enabled)
         }))
     }
+}
+
+/// Keep each delegation boundary independent: permission overlays cannot
+/// represent the intersection of ordered path, tool and network policies.
+pub(super) fn delegated_permission_ceiling_layers(
+    parent: &SessionConfiguration,
+    effective: &PermissionConfig,
+    primary: &PermissionConfig,
+    mut layers: Vec<PermissionConfig>,
+) -> Result<Vec<PermissionConfig>, AppError> {
+    let mut seen = std::collections::BTreeSet::new();
+    seen.insert(serde_json::to_vec(primary)?);
+    for layer in &layers {
+        seen.insert(serde_json::to_vec(layer)?);
+    }
+    for ceiling in std::iter::once(&parent.permission_ceiling)
+        .chain(parent.permission_ceiling_layers.iter())
+        .chain(std::iter::once(effective))
+    {
+        // Preserve ordered rule precedence when deduplicating. Each child
+        // extends one parent chain, so storage grows linearly with delegation.
+        if !ceiling.is_empty() && seen.insert(serde_json::to_vec(ceiling)?) {
+            layers.push(ceiling.clone());
+        }
+    }
+    Ok(layers)
 }
 
 fn validate_configuration_permissions(
@@ -88,10 +119,15 @@ fn validate_configuration_permissions(
     ] {
         validate_for_scope(permission, workspace).map_err(|reason| format!("{field}: {reason}"))?;
     }
+    for (index, ceiling) in configuration.permission_ceiling_layers.iter().enumerate() {
+        validate_for_scope(ceiling, workspace)
+            .map_err(|reason| format!("session.permission_ceiling_layers[{index}]: {reason}"))?;
+    }
     if workspace.is_none() {
         validate_global_scope_overrides(
             &configuration.permission,
             &configuration.permission_ceiling,
+            &configuration.permission_ceiling_layers,
         )
         .map_err(|reason| format!("session.permission: {reason}"))?;
     }
@@ -108,7 +144,12 @@ fn validate_configuration_permissions(
         )
         .try_apply_permission_config(&effective)
         .and_then(|principal| {
-            principal.try_apply_permission_ceiling(&configuration.permission_ceiling)
+            let mut principal =
+                principal.try_apply_permission_ceiling(&configuration.permission_ceiling)?;
+            for ceiling in &configuration.permission_ceiling_layers {
+                principal = principal.try_apply_permission_ceiling(ceiling)?;
+            }
+            Ok(principal)
         })
         .map_err(|error| format!("session sandbox permission: {error}"))?;
         principal
@@ -155,6 +196,7 @@ fn inactive_global_alias(pattern: &str) -> Option<&'static str> {
 fn validate_global_scope_overrides(
     permission: &PermissionConfig,
     ceiling: &PermissionConfig,
+    ceiling_layers: &[PermissionConfig],
 ) -> Result<(), String> {
     let Some(path) = &permission.path else {
         return Ok(());
@@ -167,15 +209,19 @@ fn validate_global_scope_overrides(
         // Delegated and managed global sessions copy the parent's effective
         // policy together with its immutable ceiling. Preserve those templates,
         // while rejecting a newly authored rule that could never take effect.
-        let inherited = ceiling.path.as_ref().is_some_and(|path| {
-            path.rules
-                .iter()
-                .any(|(inherited_pattern, inherited_mode)| {
-                    inherited_mode == mode
-                        && agena_domain::canonical_permission_path(inherited_pattern)
-                            .is_ok_and(|inherited| inherited == canonical)
+        let inherited = std::iter::once(ceiling)
+            .chain(ceiling_layers)
+            .any(|ceiling| {
+                ceiling.path.as_ref().is_some_and(|path| {
+                    path.rules
+                        .iter()
+                        .any(|(inherited_pattern, inherited_mode)| {
+                            inherited_mode == mode
+                                && agena_domain::canonical_permission_path(inherited_pattern)
+                                    .is_ok_and(|inherited| inherited == canonical)
+                        })
                 })
-        });
+            });
         if !inherited {
             return Err(format!(
                 "global sessions have no {alias}; {pattern:?} requires an owning workspace; use an absolute path, <home>, or a task-specific <tmp> directory"

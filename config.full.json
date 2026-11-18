@@ -64,6 +64,56 @@
       }
     ]
   },
+  "default_profile": null,
+  "profiles": {
+    "developer": {
+      "title": "Developer",
+      "description": "Implement and verify changes in the current workspace.",
+      "prompts": {
+        "order": [
+          "profile-development"
+        ],
+        "inline": [
+          {
+            "id": "profile-development",
+            "title": "Development workflow",
+            "body": "Inspect the existing implementation, make focused changes, and verify the resulting behavior."
+          }
+        ]
+      },
+      "permission": {
+        "path": {
+          "workspace": "readwrite",
+          "external": "deny"
+        }
+      }
+    },
+    "reviewer": {
+      "title": "Reviewer",
+      "description": "Inspect code and explain actionable findings.",
+      "extends": "developer",
+      "prompts": {
+        "mode": "replace",
+        "order": [
+          "profile-review"
+        ],
+        "inline": [
+          {
+            "id": "profile-review",
+            "title": "Review workflow",
+            "body": "Review correctness, regressions, and missing tests. Cite the relevant files and explain the impact of each finding."
+          }
+        ]
+      },
+      "permission": {
+        "path": {
+          "workspace": "readonly",
+          "external": "deny"
+        }
+      },
+      "max_turns": 40
+    }
+  },
   "session": {
     "compaction": {
       "auto": true,

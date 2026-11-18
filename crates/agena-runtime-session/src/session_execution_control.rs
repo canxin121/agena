@@ -57,6 +57,20 @@ pub struct SessionExecutionAttempt {
 #[async_trait]
 /// Control interface for session execution.
 pub trait SessionExecutionControl: Send + Sync {
+    /// Fully inherited routing defaults, including the selected agent profile.
+    async fn selected_execution_selection(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::ExecutionSelection, SessionExecutionControlError> {
+        let mut selection = agena_domain::ExecutionSelection::default();
+        if let Some(model) = self.selected_model(session_id).await? {
+            selection.provider = Some(model.provider_id.to_string());
+            selection.adapter = model.adapter_id.map(|id| id.to_string());
+            selection.model = Some(model.model_id.to_string());
+        }
+        Ok(selection)
+    }
+
     /// Read an exact attempt, including its historical durable phase after a
     /// retry. Absence is distinct from a completed or recovered attempt.
     async fn execution_attempt(

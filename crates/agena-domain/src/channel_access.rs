@@ -482,6 +482,19 @@ impl SessionChannelScope {
 #[serde(deny_unknown_fields)]
 pub struct ChannelAuthority {
     pub binding_id: String,
+    /// Host-owned platform and user-group identity for this execution.
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default)]
+    pub group_ids: Vec<String>,
+    #[serde(default)]
+    pub profile_ids: Vec<String>,
+    /// Fingerprint of the selected global access-control configuration.
+    #[serde(default)]
+    pub profile_fingerprint: String,
+    #[serde(default)]
+    #[schemars(with = "serde_json::Value")]
+    pub permission_overlay: crate::PermissionConfig,
     pub epoch: i64,
     pub actor: String,
     pub role: ChannelRole,
@@ -497,6 +510,9 @@ pub struct ChannelAuthority {
     /// 0 means no expiry. Finite membership expiries still bound the token.
     pub expires_at_ms: i64,
     pub memory_workspace_root: PathBuf,
+    /// Original Bot workspace; consulted only when the live grant permits it.
+    #[serde(default)]
+    pub source_workspace_root: Option<PathBuf>,
     pub private_paths: BTreeSet<PathBuf>,
     #[serde(default)]
     pub revoked: bool,
@@ -514,6 +530,11 @@ impl ChannelAuthority {
     ) -> Self {
         Self {
             binding_id: scope.binding_id.clone(),
+            platform: String::new(),
+            group_ids: Vec::new(),
+            profile_ids: Vec::new(),
+            profile_fingerprint: String::new(),
+            permission_overlay: Default::default(),
             epoch,
             actor: actor.into(),
             role,
@@ -529,6 +550,7 @@ impl ChannelAuthority {
             source_admin: false,
             expires_at_ms,
             memory_workspace_root: scope.memory_workspace_root.clone(),
+            source_workspace_root: None,
             private_paths: scope.private_paths.clone(),
             revoked: false,
         }
@@ -551,21 +573,30 @@ impl ChannelAuthority {
         !self.revoked && (self.expires_at_ms == 0 || now < self.expires_at_ms)
     }
     pub fn allows_tool(&self, canonical: &str, now: i64) -> bool {
-        self.active_at(now) && (self.source_admin || self.grant.allowed_tools().contains(canonical))
+        self.actor != "@shared"
+            && self.active_at(now)
+            && (self.source_admin || self.grant.allowed_tools().contains(canonical))
     }
     pub fn allows_mcp_tool(&self, server: &str, tool: &str, now: i64) -> bool {
-        self.active_at(now) && (self.source_admin || self.grant.allows_mcp_tool(server, tool))
+        self.actor != "@shared"
+            && self.active_at(now)
+            && (self.source_admin || self.grant.allows_mcp_tool(server, tool))
     }
     pub fn allows_private_memory(&self) -> bool {
-        self.source_admin || self.grant.private_memory
+        self.actor != "@shared" && (self.source_admin || self.grant.private_memory)
     }
     pub fn permission_fence(&self) -> crate::PermissionConfig {
         if self.source_admin {
             return crate::PermissionConfig::default();
         }
+        let granted_paths = if self.grant.source_workspace {
+            self.source_workspace_root.iter().cloned().collect()
+        } else {
+            BTreeSet::new()
+        };
         permission_fence(
             &self.private_paths,
-            &BTreeSet::new(),
+            &granted_paths,
             &self.grant.network_hosts,
         )
     }

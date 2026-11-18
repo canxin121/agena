@@ -143,6 +143,7 @@ async fn related_sessions_project_their_own_tool_and_interaction_workflow() {
                         agent: relation_kind
                             .is_subagent()
                             .then(|| SessionAgentConfiguration {
+                                origin_message_id: None,
                                 name: "workflow_probe".into(),
                                 status: AgentStatus::Created,
                                 started_at_ms: None,

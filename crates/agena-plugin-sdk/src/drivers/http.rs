@@ -856,6 +856,7 @@ mod cancellation_tests {
 
     fn invocation() -> serde_json::Value {
         serde_json::to_value(ToolInvokeInput {
+            caller: None,
             tool_name: "wait".into(),
             session_id: 1,
             call_id: 2,

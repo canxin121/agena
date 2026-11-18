@@ -609,6 +609,14 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<DeliveryView>> {
         lifecycle::read_delivery(self, session, id).await
     }
+    async fn resumed_delivery(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<ReadView<Option<DeliveryView>>> {
+        lifecycle::resumed_delivery(self, session, execution, generation).await
+    }
     async fn pending_deliveries(
         &self,
         session: SessionId,

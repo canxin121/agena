@@ -11,6 +11,7 @@
 //! LSP and MCP plugin configuration live in [`lsp_config`] and
 //! [`mcp_config`].
 
+pub mod agent_profiles;
 pub mod config;
 pub mod config_error;
 mod config_file;
@@ -27,6 +28,10 @@ pub mod runtime_configuration_service;
 pub mod config_environment;
 pub mod config_paths;
 
+pub use agent_profiles::{
+    AgentProfileConfig, ResolvedAgentProfile, check_agent_profile_libraries, resolve_agent_profile,
+    validate_agent_profile_name,
+};
 pub use config::raw::normalize_execution_settings_document;
 pub use config::{
     ConfigLoader, RawConfig, RawConfigFile, RawTracingConfig, RawUiConfig, apply_config_override,

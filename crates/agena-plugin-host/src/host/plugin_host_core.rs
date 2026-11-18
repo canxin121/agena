@@ -903,6 +903,7 @@ impl PluginHost {
         let invoke = Box::pin(self._host_handle.run_in_authorized_callback_context(
             &plugin_key,
             HostCallbackContext {
+                caller: input.caller.clone(),
                 session_id: Some(session_id),
                 call_id: Some(call_id),
                 workspace_root: Some(workspace_root),
@@ -1105,13 +1106,14 @@ impl PluginHost {
         let mut input = input;
         input.tool_name = registered_tool.tool_name().to_string();
 
-        let context = tool_hook_context(
+        let mut context = tool_hook_context(
             &plugin,
             &input.tool_name,
             Some(input.session_id),
             Some(input.call_id),
             Some(input.workspace_root.clone()),
         );
+        context.caller = input.caller.clone();
         let (context, callback_authority) = self
             ._host_handle
             .issue_callback_authority(&plugin.key(), context);

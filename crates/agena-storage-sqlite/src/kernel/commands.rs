@@ -66,6 +66,7 @@ pub(super) async fn apply(
                     || change.pinned.is_some()
                     || change.auto_title.is_some()
                     || change.prompts.is_some()
+                    || change.profile.is_some()
                 {
                     return Err(invalid(
                         "automatic title cannot be combined with manual metadata",
@@ -139,6 +140,17 @@ pub(super) async fn apply(
             }
             if let Some(value) = &change.prompts {
                 config.prompts.clone_from(value);
+            }
+            if let Some(value) = &change.profile {
+                let selected = (!value.is_empty()).then(|| value.clone());
+                lifecycle::validate_profile_change(
+                    connection,
+                    *session,
+                    &config.profile,
+                    &selected,
+                )
+                .await?;
+                config.profile = selected;
             }
             if metadata != original || config != original_config {
                 let configuration = encode(&config)?;

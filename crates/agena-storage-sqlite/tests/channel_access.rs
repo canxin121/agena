@@ -82,6 +82,12 @@ fn event(id: &str, actor: &str) -> ExternalEvent {
 }
 fn authority(b: &IntegrationBinding) -> ChannelAuthority {
     ChannelAuthority {
+        platform: String::new(),
+        group_ids: Vec::new(),
+        profile_ids: Vec::new(),
+        profile_fingerprint: String::new(),
+        permission_overlay: Default::default(),
+        source_workspace_root: None,
         source_admin: false,
         binding_id: b.id.to_string(),
         epoch: b.epoch,

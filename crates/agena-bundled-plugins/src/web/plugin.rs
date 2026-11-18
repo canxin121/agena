@@ -125,6 +125,7 @@ mod global_browser_owner_tests {
     #[test]
     fn global_browser_owner_has_no_workspace() {
         let context = ToolInvokeContext {
+            caller: None,
             tool_name: "browser",
             session_id: 42,
             call_id: 1,
@@ -135,6 +136,7 @@ mod global_browser_owner_tests {
         assert!(owner.workspace.as_os_str().is_empty());
         assert_eq!(owner.session_id, Some(42));
         let other = ToolInvokeContext {
+            caller: None,
             tool_name: "browser",
             session_id: 43,
             call_id: 1,

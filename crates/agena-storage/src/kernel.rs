@@ -202,6 +202,9 @@ pub struct MetadataChange {
     /// Absent leaves the session layer unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
+    /// Empty string clears the named agent profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Explicitly resume or lock automatic naming. Enabling resets its schedule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_title: Option<bool>,

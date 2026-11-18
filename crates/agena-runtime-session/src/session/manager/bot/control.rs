@@ -340,11 +340,20 @@ impl SessionManager {
             .metadata(session_id(target)?)
             .await
             .map_err(control_error)?;
-        let state = self.state.load_full();
+        let state = self.state_for_session(session_id(target)?).await?;
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session_id(target)?)
+            .await
+            .map_err(control_error)?;
         let effective = state
             .config
-            .default_selection
-            .overlay_with_cascade(&metadata.selection.clone().unwrap_or_default());
+            .session_selection(
+                configuration.profile.as_deref(),
+                &metadata.selection.clone().unwrap_or_default(),
+            )
+            .map_err(AppError::Config)?;
         // Read only registered configured/cached routes; the public catalog
         // and default strings are never used to invent selectable models.
         let mut inventory = state.providers.selection_model_inventory();
@@ -380,7 +389,7 @@ impl SessionManager {
             inventory.len(),
         )?;
         let mut resolved = self
-            .options_for_selection(&metadata.selection.clone().unwrap_or_default())
+            .options_for_selection_with_state(&effective, &state)
             .ok();
         if let Some(options) = &mut resolved {
             self.apply_model_mode_requests(options)?;

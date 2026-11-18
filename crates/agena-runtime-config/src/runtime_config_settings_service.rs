@@ -455,27 +455,63 @@ pub(crate) fn normalize_settings_document(
 ) -> Result<(), RuntimeConfigSettingsError> {
     crate::normalize_execution_settings_document(document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
-    let Some(value) = document.get("permission").filter(|value| !value.is_null()) else {
-        return Ok(());
-    };
-    let mut permission: agena_domain::PermissionConfig =
-        serde_path_to_error::deserialize(value.clone()).map_err(|error| {
-            RuntimeConfigSettingsError::invalid_input(format!(
-                "permission.{}: {}",
-                error.path(),
-                error.inner()
-            ))
-        })?;
-    if let Some(paths) = &mut permission.path {
-        paths
-            .normalize_rules()
-            .map_err(RuntimeConfigSettingsError::invalid_input)?;
+    if let Some(value) = document.get("permission").filter(|value| !value.is_null()) {
+        let mut permission: agena_domain::PermissionConfig =
+            serde_path_to_error::deserialize(value.clone()).map_err(|error| {
+                RuntimeConfigSettingsError::invalid_input(format!(
+                    "permission.{}: {}",
+                    error.path(),
+                    error.inner()
+                ))
+            })?;
+        normalize_permission_config(&mut permission, "permission")?;
+        document["permission"] = serde_json::to_value(permission)
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
     }
-    agena_runtime_contracts::authorization::validate_permission_config(&permission)
-        .map_err(|error| RuntimeConfigSettingsError::invalid_input(error.to_string()))?;
-    let canonical = serde_json::to_value(permission)
-        .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
-    document["permission"] = canonical;
+    if let Some(value) = document
+        .get("access_control")
+        .filter(|value| !value.is_null())
+    {
+        let mut access_control: agena_domain::AccessControlConfig =
+            serde_path_to_error::deserialize(value.clone()).map_err(|error| {
+                RuntimeConfigSettingsError::invalid_input(format!(
+                    "access_control.{}: {}",
+                    error.path(),
+                    error.inner()
+                ))
+            })?;
+        for (id, profile) in &mut access_control.profiles {
+            normalize_permission_config(
+                &mut profile.permission,
+                &format!("access_control.profiles.{id}.permission"),
+            )?;
+        }
+        for (index, user) in access_control.users.iter_mut().enumerate() {
+            normalize_permission_config(
+                &mut user.overrides,
+                &format!("access_control.users.{index}.overrides"),
+            )?;
+        }
+        access_control
+            .validate()
+            .map_err(RuntimeConfigSettingsError::invalid_input)?;
+        document["access_control"] = serde_json::to_value(access_control)
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+    }
+    Ok(())
+}
+
+fn normalize_permission_config(
+    permission: &mut agena_domain::PermissionConfig,
+    field: &str,
+) -> Result<(), RuntimeConfigSettingsError> {
+    if let Some(paths) = &mut permission.path {
+        paths.normalize_rules().map_err(|error| {
+            RuntimeConfigSettingsError::invalid_input(format!("{field}: {error}"))
+        })?;
+    }
+    agena_runtime_contracts::authorization::validate_permission_config(permission)
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input(format!("{field}: {error}")))?;
     Ok(())
 }
 

@@ -750,6 +750,7 @@ mod count_generation_tests {
         assert_eq!(schema["properties"]["entries"]["minItems"], 1);
         assert_eq!(schema["properties"]["entries"]["x-agena-non-empty"], true);
         let invoke = |input| crate::ToolInvokeInput {
+            caller: None,
             tool_name: "count".to_owned(),
             session_id: 1,
             call_id: 1,

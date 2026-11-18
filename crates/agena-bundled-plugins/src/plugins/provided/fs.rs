@@ -1404,6 +1404,7 @@ mod global_path_tests {
     #[test]
     fn global_paths_are_validated_before_permission_queries() {
         let global = ToolInvokeContext {
+            caller: None,
             tool_name: "test",
             session_id: 1,
             call_id: 1,

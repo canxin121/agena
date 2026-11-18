@@ -46,6 +46,41 @@ impl agena_runtime_contracts::ChannelAccessVerifier for ChannelVerifier {
         if !binding.authorizes_scope(authority, Utc::now().timestamp_millis()) {
             return Err("channel access revoked, expired or changed; no tool or execution is authorized by this old session".into());
         }
+        if authority.actor != "@shared" {
+            let policy = binding
+                .spec
+                .channel_policy
+                .as_ref()
+                .ok_or_else(|| "channel policy unavailable".to_owned())?;
+            let base_grant = if authority.actor == "@service" {
+                &policy.service_grant
+            } else {
+                &policy.grant
+            };
+            let resolved = service
+                .manager()
+                .map_err(|error| error.to_string())?
+                .access_control_config()
+                .resolve(
+                    &binding.spec.provider,
+                    &authority.identity,
+                    &authority.resource,
+                    &authority.actor,
+                    &agena_domain::PermissionConfig::default(),
+                    base_grant,
+                )?;
+            if resolved.fingerprint != authority.profile_fingerprint
+                || resolved.grant != authority.grant
+                || resolved.group_ids != authority.group_ids
+                || resolved.profile_ids != authority.profile_ids
+                || resolved.permission != authority.permission_overlay
+            {
+                return Err(
+                    "access-control profile or user membership changed; submit a new message"
+                        .into(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -77,6 +112,7 @@ fn compatible_channel_recovery(
     binding: &IntegrationBinding,
     previous: &ChannelSessionRecord,
     now: i64,
+    access_control: &agena_domain::AccessControlConfig,
 ) -> Result<ChannelSessionRecord> {
     let policy = binding
         .spec
@@ -102,7 +138,29 @@ fn compatible_channel_recovery(
             (role, &policy.grant, expiry)
         }
     };
-    if old.grant != *grant
+    let resolved = if old.actor == "@shared" {
+        None
+    } else {
+        Some(
+            access_control
+                .resolve(
+                    &binding.spec.provider,
+                    &policy.identity,
+                    &old.resource,
+                    &old.actor,
+                    &agena_domain::PermissionConfig::default(),
+                    grant,
+                )
+                .map_err(runtime_error)?,
+        )
+    };
+    let expected_grant = resolved.as_ref().map(|r| &r.grant).unwrap_or(grant);
+    if old.grant != *expected_grant
+        || resolved.as_ref().is_some_and(|r| {
+            r.fingerprint != old.profile_fingerprint
+                || r.group_ids != old.group_ids
+                || r.permission != old.permission_overlay
+        })
         || old.identity != policy.identity
         || old.session_mode != policy.session_mode_for(&old.actor, now)
         || old.source_admin != policy.is_source_administrator(&old.actor, now)
@@ -172,109 +230,141 @@ impl AssistantRuntime {
         let policy = b.spec.channel_policy.as_ref().ok_or(Error::Invalid(
             "channel permissions must be reviewed before use",
         ))?;
-        let (principal, role, grant, expiry) = if actor == "@service" {
+        let (role, base_grant, expiry) = if actor == "@service" {
             if !policy.allow_automated_reports {
                 return Err(Error::Invalid("automated channel reports are not enabled"));
             }
-            (
-                actor.to_owned(),
-                ChannelRole::Operator,
-                policy.service_grant.clone(),
-                None,
-            )
+            (ChannelRole::Operator, policy.service_grant.clone(), None)
         } else {
             let (role, expiry) = policy.member(actor, now).map_err(Error::Invalid)?;
-            (actor.to_owned(), role, policy.grant.clone(), expiry)
+            (role, policy.grant.clone(), expiry)
         };
         let source_admin = policy.is_source_administrator(actor, now);
         let session_mode = policy.session_mode_for(actor, now);
-        // Ordinary members may share a room; source administrators never read
-        // that shared transcript with their wider tool authority.
         let (privacy_key, scope_key) = channel_scope_keys(
             b,
             resource,
-            &principal,
+            actor,
             kind,
             thread.as_deref(),
             session_mode,
             source_admin,
         )?;
         let manager = self.manager()?;
-        if let Some(record) = self.integrations.channel_session(b.id, &scope_key).await? {
-            if !b.authorizes_scope(&record.authority, now) {
-                return Err(Error::Conflict(
-                    "channel scope has expired or lost its role",
-                ));
-            }
-            // The user may have deleted this conversation through ordinary
-            // session management. A deleted session is a tombstone, so the
-            // cached scope would address it forever and every later message
-            // would fail; drop the record and let the create path below mint a
-            // fresh conversation under the same authority.
-            if !manager
-                .session_exists(record.session_id)
-                .await
-                .map_err(runtime_error)?
-            {
-                self.integrations
-                    .forget_channel_session(b.id, &scope_key)
-                    .await?;
-            } else {
-                return Ok(record);
-            }
-        }
-        // A shared transcript must never imply shared private memory. The
-        // conversation directory holds what the room may see; each speaker's
-        // memory lives under a per-speaker key so one member cannot read
-        // another's remembered preferences.
+        let resolved = manager
+            .access_control_config()
+            .resolve(
+                &b.spec.provider,
+                &policy.identity,
+                resource,
+                actor,
+                &agena_domain::PermissionConfig::default(),
+                &base_grant,
+            )
+            .map_err(runtime_error)?;
         let private_root = agena_storage_layout::StorageLayout::current()
             .root()
             .join("channel-scopes")
             .join(b.id.to_string())
             .join(&privacy_key);
+        // Preserve existing numeric/user-id memory directories. Only an
+        // unsafe path component needs a stable opaque directory name.
+        let speaker_key = if actor.is_empty()
+            || matches!(actor, "." | "..")
+            || actor.contains('/')
+            || actor.contains('\\')
+        {
+            hash(&actor)?
+        } else {
+            actor.to_owned()
+        };
         let speaker_root = agena_storage_layout::StorageLayout::current()
             .root()
             .join("channel-speakers")
             .join(b.id.to_string())
             .join(&privacy_key)
-            .join(&principal);
+            .join(speaker_key);
         let memory = agena_storage::MemoryDir::from_workspace(&speaker_root);
         let mut private_paths = BTreeSet::from([private_root.clone(), speaker_root.clone()]);
-        if source_admin || grant.private_memory {
+        if source_admin || resolved.grant.private_memory {
             private_paths.insert(memory.path().to_path_buf());
             private_paths.insert(memory.index_dir());
         }
         let authority = ChannelAuthority {
             binding_id: b.id.to_string(),
+            platform: b.spec.provider.clone(),
+            group_ids: resolved.group_ids,
+            profile_ids: resolved.profile_ids,
+            profile_fingerprint: resolved.fingerprint,
+            permission_overlay: resolved.permission,
             epoch: b.epoch,
-            actor: principal,
+            actor: actor.to_owned(),
             role,
             identity: policy.identity.clone(),
             resource: resource.to_owned(),
             kind,
             thread,
             session_mode,
-            grant,
+            grant: resolved.grant,
             source_admin,
             expires_at_ms: b.spec.authority_expires_at(expiry),
-            memory_workspace_root: speaker_root,
+            memory_workspace_root: speaker_root.clone(),
+            source_workspace_root: manager
+                .session_workspace_root_optional(b.source_session_id)
+                .await
+                .map_err(runtime_error)?,
             private_paths,
             revoked: false,
         };
-        let _ = &authority.scope();
+        let directory = speaker_root;
+        tokio::task::spawn_blocking(move || agena_storage_layout::secure_directory(&directory))
+            .await
+            .map_err(runtime_error)?
+            .map_err(runtime_error)?;
+        if let Some(mut record) = self.integrations.channel_session(b.id, &scope_key).await? {
+            if manager
+                .session_exists(record.session_id)
+                .await
+                .map_err(runtime_error)?
+            {
+                // A cached transcript is shared; its first sender is never
+                // evidence for the next execution's identity or permissions.
+                record.authority = authority;
+                return Ok(record);
+            }
+            self.integrations
+                .forget_channel_session(b.id, &scope_key)
+                .await?;
+        }
+        let mut baseline = authority.clone();
+        if session_mode == ChannelSessionMode::PerConversation && actor != "@service" {
+            baseline.actor = "@shared".into();
+            baseline.role = ChannelRole::Member;
+            baseline.group_ids.clear();
+            baseline.profile_ids.clear();
+            baseline.profile_fingerprint.clear();
+            baseline.permission_overlay = Default::default();
+            baseline.grant = policy.grant.clone();
+            baseline.expires_at_ms = b.spec.authority_expires_at(None);
+            baseline.memory_workspace_root = private_root.clone();
+            baseline.private_paths = BTreeSet::from([private_root]);
+        }
         let session_id = manager
-            .ensure_channel_session(b.source_session_id, &scope_key, authority.clone())
+            .ensure_channel_session(b.source_session_id, &scope_key, baseline.clone())
             .await
             .map_err(runtime_error)?;
-        self.integrations
+        let mut record = self
+            .integrations
             .save_channel_session(ChannelSessionRecord {
                 binding_id: b.id,
                 scope_key,
                 session_id,
-                authority,
+                authority: baseline,
                 created_at_ms: now,
             })
-            .await
+            .await?;
+        record.authority = authority;
+        Ok(record)
     }
     pub(super) async fn ensure_report_session(
         &self,
@@ -385,7 +475,12 @@ impl AssistantRuntime {
             {
                 continue;
             }
-            let current = compatible_channel_recovery(&binding, &record, now)?;
+            let current = compatible_channel_recovery(
+                &binding,
+                &record,
+                now,
+                &manager.access_control_config(),
+            )?;
             if !scope_keys.insert(current.scope_key.clone()) {
                 return Err(Error::Conflict(
                     "multiple historical conversations claim the same channel scope; select the conversation to restore before reviewing",
@@ -636,6 +731,12 @@ mod tests {
         binding.epoch = 4;
         binding.revision = 5;
         let authority = ChannelAuthority {
+            platform: String::new(),
+            group_ids: Vec::new(),
+            profile_ids: Vec::new(),
+            profile_fingerprint: String::new(),
+            permission_overlay: Default::default(),
+            source_workspace_root: None,
             binding_id: binding.id.to_string(),
             epoch: 1,
             actor: "42".into(),
@@ -664,7 +765,8 @@ mod tests {
     #[test]
     fn compatible_recovery_preserves_original_scope_and_session_when_only_role_and_epoch_change() {
         let (binding, previous) = recovery_fixture();
-        let current = compatible_channel_recovery(&binding, &previous, 2000).unwrap();
+        let current =
+            compatible_channel_recovery(&binding, &previous, 2000, &Default::default()).unwrap();
         assert_eq!(current.session_id, 11);
         assert_eq!(current.created_at_ms, previous.created_at_ms);
         assert_eq!(current.authority.epoch, 4);
@@ -729,7 +831,10 @@ mod tests {
         for change in changes {
             let (mut binding, previous) = recovery_fixture();
             change(&mut binding);
-            assert!(compatible_channel_recovery(&binding, &previous, 2000).is_err());
+            assert!(
+                compatible_channel_recovery(&binding, &previous, 2000, &Default::default())
+                    .is_err()
+            );
         }
     }
 

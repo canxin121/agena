@@ -1279,13 +1279,41 @@ impl AgenaClient {
         parent_id: Option<i64>,
         auto_title: bool,
     ) -> Result<SessionResource, ClientError> {
+        self.create_session_with_profile(workspace_id, title, parent_id, auto_title, None)
+            .await
+    }
+
+    /// Create a session with a named agent profile. An empty profile opts out
+    /// of the configured default; omission inherits the parent or default.
+    pub async fn create_session_with_profile(
+        &self,
+        workspace_id: i64,
+        title: impl Into<String>,
+        parent_id: Option<i64>,
+        auto_title: bool,
+        profile: Option<String>,
+    ) -> Result<SessionResource, ClientError> {
         let body = serde_json::json!({
             "workspace_id": workspace_id,
             "title": title.into(),
             "parent_id": parent_id,
             "auto_title": auto_title,
+            "profile": profile,
         });
         self.post_json("/api/v1/sessions", body).await
+    }
+
+    /// Select a named agent profile; None clears the saved selection.
+    pub async fn set_session_profile(
+        &self,
+        session_id: i64,
+        profile: Option<String>,
+    ) -> Result<SessionResource, ClientError> {
+        self.put_json(
+            &format!("/api/v1/sessions/{session_id}"),
+            serde_json::json!({ "profile": profile.unwrap_or_default() }),
+        )
+        .await
     }
 
     /// Update the durable favorite marker without changing the session title

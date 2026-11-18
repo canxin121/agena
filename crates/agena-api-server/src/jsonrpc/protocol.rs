@@ -93,6 +93,8 @@ pub mod method {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Params of the create-session method.
 pub struct CreateSessionParams {
+    #[serde(default)]
+    pub profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Defaults to automatic naming when no explicit title was supplied.

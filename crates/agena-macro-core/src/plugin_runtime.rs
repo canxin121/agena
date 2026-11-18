@@ -32,6 +32,7 @@ pub fn expand_plugin_layer_tool_invoke(
                 session_id: __session_id,
                 call_id: __call_id,
                 workspace_root: __workspace_root,
+                caller: __caller,
                 input: __input,
             } = input;
             let __context = ::agena_plugin_sdk::ToolInvokeContext {
@@ -39,6 +40,7 @@ pub fn expand_plugin_layer_tool_invoke(
                 session_id: __session_id,
                 call_id: __call_id,
                 workspace_root: __workspace_root.as_str(),
+                caller: __caller.as_ref(),
                 cancellation: ::agena_plugin_sdk::current_cancellation_token().unwrap_or_default(),
             };
             match __tool_name.as_str() {
@@ -213,6 +215,7 @@ pub fn expand_plugin_layer_tool_stream(
                 session_id: __session_id,
                 call_id: __call_id,
                 workspace_root: __workspace_root,
+                caller: __caller,
                 input: __input,
             } = input;
             let __context = ::agena_plugin_sdk::ToolInvokeContext {
@@ -220,6 +223,7 @@ pub fn expand_plugin_layer_tool_stream(
                 session_id: __session_id,
                 call_id: __call_id,
                 workspace_root: __workspace_root.as_str(),
+                caller: __caller.as_ref(),
                 cancellation: ::agena_plugin_sdk::current_cancellation_token().unwrap_or_default(),
             };
             match __tool_name.as_str() {
@@ -233,6 +237,7 @@ pub fn expand_plugin_layer_tool_stream(
                 session_id: __session_id,
                 call_id: __call_id,
                 workspace_root: __workspace_root,
+                caller: __caller,
                 input: __input,
             };
             let __result = self.tool_invoke(input).await?;

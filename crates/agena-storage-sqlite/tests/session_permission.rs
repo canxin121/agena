@@ -52,10 +52,6 @@ async fn invalid_permission_changes_roll_back_configuration_and_metadata() {
             ("<workspace>/secret", PathPermissionMode::Deny),
             ("<workspace>/secret/key", PathPermissionMode::Readwrite),
         ]),
-        paths(&[
-            ("<workspace>/readonly", PathPermissionMode::Readonly),
-            ("<workspace>/readonly/write", PathPermissionMode::Readwrite),
-        ]),
     ] {
         for ceiling in [false, true] {
             let change = SessionConfigurationChange {
@@ -88,6 +84,48 @@ async fn invalid_permission_changes_roll_back_configuration_and_metadata() {
             );
         }
     }
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn writable_children_of_readonly_paths_round_trip_in_permissions_and_ceilings() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/permission-tests")
+        .await
+        .unwrap();
+    let session = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Path overrides".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    // Specific writable children are supported overrides of readonly paths;
+    // only explicit deny boundaries and invalid paths belong in the test above.
+    let permission = paths(&[
+        ("<workspace>/readonly", PathPermissionMode::Readonly),
+        ("<workspace>/readonly/write", PathPermissionMode::Readwrite),
+    ]);
+    runtime
+        .ports
+        .sessions
+        .configure(
+            RequestId::new(),
+            session,
+            SessionConfigurationChange {
+                permission: Some(permission.clone()),
+                permission_ceiling: Some(permission.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let stored = runtime.ports.reader.configuration(session).await.unwrap();
+    assert_eq!(stored.permission, permission);
+    assert_eq!(stored.permission_ceiling, permission);
     runtime.ports.clone().shutdown().await.unwrap();
 }
 

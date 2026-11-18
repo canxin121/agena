@@ -280,6 +280,17 @@ impl SessionManager {
             } else {
                 original.permission_ceiling.clone()
             },
+            permission_ceiling_layers:
+                super::permission_config::delegated_permission_ceiling_layers(
+                    &original,
+                    &source.execution.effective_permission,
+                    if original.permission_ceiling.is_empty() {
+                        &source.execution.effective_permission
+                    } else {
+                        &original.permission_ceiling
+                    },
+                    Vec::new(),
+                )?,
             capability_denied_tool_names: denied,
             channel_authority: Some(authority),
             owner,

@@ -7,6 +7,12 @@ use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
 
 fn authority() -> ChannelAuthority {
     ChannelAuthority {
+        platform: String::new(),
+        group_ids: Vec::new(),
+        profile_ids: Vec::new(),
+        profile_fingerprint: String::new(),
+        permission_overlay: Default::default(),
+        source_workspace_root: None,
         binding_id: "reviewed-channel".into(),
         epoch: 1,
         actor: "alice".into(),

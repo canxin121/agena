@@ -810,11 +810,13 @@ impl AssistantRuntime {
                     // Identity travels as structured fields on the entry; the
                     // prompt layer renders it. Nothing is concatenated into
                     // the user's own text.
-                    let author = agena_domain::MessageAuthor::channel_member(
+                    let mut author = agena_domain::MessageAuthor::channel_member(
                         event.event.actor.clone(),
                         scope.authority.role,
                         event.event.actor_display_name.clone(),
                     );
+                    author.group_ids = scope.authority.group_ids.clone();
+                    author.channel_authority = Some(scope.authority.clone());
                     let origin = agena_domain::MessageOrigin {
                         platform: agena_domain::Platform::chat(
                             b.spec.provider.clone(),
@@ -923,7 +925,10 @@ impl AssistantRuntime {
                     || now
                         >= admitted_at
                             .saturating_add(i64::from(b.spec.max_execution_seconds) * 1000)
-                    || manager.verify_channel_session(session).await.is_err())
+                    || manager
+                        .verify_channel_execution(session, execution)
+                        .await
+                        .is_err())
             {
                 // The stored receipt is the sole cancellation target. A new
                 // human turn or retry has a different execution/generation.
@@ -944,24 +949,24 @@ impl AssistantRuntime {
     }
     async fn export_channel(&self, b: &IntegrationBinding) -> Result<()> {
         for scope in self.integrations.channel_sessions(b.id).await? {
-            if !b.authorizes_scope(&scope.authority, Utc::now().timestamp_millis()) {
-                continue;
-            }
             let session = scope.session_id;
-            let route = ChannelOutputRoute::from_authority(&scope.authority, session);
             for (execution, generation, phase) in self
                 .integrations
                 .unexported_executions(b.id, session)
                 .await?
             {
-                let mut output_route = route.clone();
-                if output_route.actor == "@shared" {
-                    output_route.actor = self
-                        .integrations
-                        .channel_execution_actor(b.id, &execution)
-                        .await?
-                        .unwrap_or_else(|| "@unattributed".into());
-                }
+                let execution_id = execution
+                    .parse::<agena_domain::ExecutionId>()
+                    .map_err(runtime_error)?;
+                let authority = match self
+                    .manager()?
+                    .verify_channel_execution(session, execution_id)
+                    .await
+                {
+                    Ok(Some(authority)) => authority,
+                    _ => continue,
+                };
+                let output_route = ChannelOutputRoute::from_authority(&authority, session);
                 let text = self
                     .manager()?
                     .integration_execution_result(session, &execution)
@@ -997,6 +1002,16 @@ impl AssistantRuntime {
             }
             // Pending permissions stay genuine native user decisions. The remote
             // channel receives attention, never a forged approval tool response.
+            if !b.authorizes_scope(&scope.authority, Utc::now().timestamp_millis())
+                || self
+                    .manager()?
+                    .verify_channel_session(session)
+                    .await
+                    .is_err()
+            {
+                continue;
+            }
+            let route = ChannelOutputRoute::from_authority(&scope.authority, session);
             for question in self
                 .manager()?
                 .integration_execution_questions(session)
@@ -1043,6 +1058,47 @@ impl AssistantRuntime {
         let Some(mut d) = delivery else {
             return Ok(());
         };
+        // The outbox may wait across profile edits or membership removal.
+        // Recheck the exact original execution immediately before delivery.
+        if let Some(route) = &d.route {
+            if let Some(session) = route.session_id {
+                let prefix = format!("{}:", b.id);
+                let suffix = d.id.strip_prefix(&prefix).unwrap_or_default();
+                let authorized = if suffix.starts_with("attention:") {
+                    self.manager()?
+                        .verify_channel_session(session)
+                        .await
+                        .is_ok()
+                } else if let Some((execution, _generation)) = suffix.split_once(':') {
+                    match execution.parse::<agena_domain::ExecutionId>() {
+                        Ok(execution) => match self
+                            .manager()?
+                            .verify_channel_execution(session, execution)
+                            .await
+                        {
+                            Ok(Some(authority)) => {
+                                authority.actor == route.actor
+                                    && authority.identity == route.identity
+                                    && authority.resource == route.resource
+                                    && authority.thread == route.thread
+                                    && authority.kind == route.kind
+                                    && authority.epoch == route.epoch
+                            }
+                            _ => false,
+                        },
+                        Err(_) => false,
+                    }
+                } else {
+                    false
+                };
+                if !authorized {
+                    d.state = "suppressed".into();
+                    d.error = Some("channel permission assignment changed before delivery".into());
+                    self.integrations.finish_delivery(d).await?;
+                    return Ok(());
+                }
+            }
+        }
         // Once claimed, a pause cannot retract a send already handed to the
         // provider. Nothing is silently retried after an ambiguous failure.
         let request = ChannelDelivery {

@@ -45,6 +45,7 @@ impl Plugin for ProbePlugin {
 
 fn input(call_id: i64) -> ToolInvokeInput {
     ToolInvokeInput {
+        caller: None,
         tool_name: "wait".into(),
         session_id: 1,
         call_id,

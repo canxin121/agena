@@ -248,20 +248,33 @@ impl SessionManager {
     ) {
         let _ = self.channel_verifier.set(verifier);
     }
+    /// Access-control assignments are instance-owned and reloaded atomically.
+    pub fn access_control_config(&self) -> agena_domain::AccessControlConfig {
+        self.global_state.load().config.access_control.clone()
+    }
     pub async fn verify_channel_session(&self, id: i64) -> Result<(), AppError> {
+        let session = session_id(id)?;
         let config = self
             .kernel()
             .reader
-            .configuration(session_id(id)?)
+            .configuration(session)
             .await
             .map_err(kernel_error)?;
-        if let Some(authority) = &config.channel_authority {
+        if let Some(authority) = self
+            .channel_authority_for_execution(
+                session,
+                self.running_execution(session).await?,
+                config.channel_authority.as_ref(),
+                config.relation_kind == agena_domain::SessionRelationKind::Subagent,
+            )
+            .await?
+        {
             self.channel_verifier
                 .get()
                 .ok_or_else(|| {
                     AppError::Config("channel authorization service is unavailable".into())
                 })?
-                .authorize(authority)
+                .authorize(&authority)
                 .await
                 .map_err(AppError::Config)?;
         }
@@ -576,6 +589,7 @@ fn archive_failure(error: KernelError) -> agena_failure::Failure {
             if [
                 "session.permission:",
                 "session.permission_ceiling:",
+                "session.permission_ceiling_layers[",
                 "effective session.permission:",
                 "permission.network.",
                 "permission.network:",

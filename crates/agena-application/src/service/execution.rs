@@ -41,6 +41,35 @@ impl ApplicationService {
     ) -> ApplicationResult<agena_runtime::SessionRunOptions> {
         self.ensure_session_exists(session_id).await?;
 
+        let inherited_selection = execution_control
+            .selected_execution_selection(session_id)
+            .await
+            .map_err(execution_control_error)?;
+        let explicit_selection = agena_domain::ExecutionSelection {
+            provider: request
+                .model
+                .as_ref()
+                .map(|model| model.provider_id.clone()),
+            adapter: request
+                .model
+                .as_ref()
+                .and_then(|model| model.adapter_id.clone()),
+            model: request.model.as_ref().map(|model| model.model_id.clone()),
+            thinking_mode: request
+                .thinking_mode
+                .as_ref()
+                .map(|value| value.trim().to_owned()),
+            speed_mode: request
+                .speed_mode
+                .as_ref()
+                .map(|value| value.trim().to_owned()),
+            verbosity: request
+                .verbosity
+                .as_ref()
+                .map(|value| value.trim().to_ascii_lowercase()),
+            ..Default::default()
+        };
+        let explicit_model = request.model.is_some();
         let mut uses_global_default = false;
         let model = match request.model {
             Some(model) => {
@@ -91,6 +120,18 @@ impl ApplicationService {
         let mut speed_mode = non_empty(request.speed_mode.as_deref()).map(ToOwned::to_owned);
         let mut requested_verbosity =
             non_empty(request.verbosity.as_deref()).map(|value| value.trim().to_ascii_lowercase());
+        let inherited_route = inherited_selection.model_ref().ok().flatten();
+        // A mode-only profile has no route of its own. When the request
+        // inherits its model, catalog route resolution must retain those modes.
+        let inherit_modes = !explicit_model || inherited_route.as_ref() == Some(&model);
+        let inherited_parallel = inherit_modes
+            .then_some(inherited_selection.parallel_tool_calls)
+            .flatten();
+        if inherit_modes {
+            thinking_mode = thinking_mode.or(inherited_selection.thinking_mode);
+            speed_mode = speed_mode.or(inherited_selection.speed_mode);
+            requested_verbosity = requested_verbosity.or(inherited_selection.verbosity);
+        }
         let global_selection = provider_catalog.default_selection();
         let provider_options = provider_catalog
             .model_execution_options(&model)
@@ -212,12 +253,20 @@ impl ApplicationService {
             .or_else(|| metadata.parsed_default_temperature());
 
         Ok(agena_runtime::SessionRunOptions {
+            selection_override: Some(explicit_selection),
             model,
             thinking_mode,
             speed_mode,
             verbosity,
             model_supports_parallel_tool_calls: Some(
-                metadata.supports_parallel_tool_calls_for_model(),
+                metadata.supports_parallel_tool_calls_for_model()
+                    && inherited_parallel
+                        .or_else(|| {
+                            uses_global_default
+                                .then_some(global_selection.parallel_tool_calls)
+                                .flatten()
+                        })
+                        .unwrap_or(true),
             ),
             thinking,
             request_override,
@@ -359,6 +408,7 @@ impl ApplicationService {
             automation: session_automation_resource(&scheduler_jobs, session_id),
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
+                profile: context.profile,
                 prompts: context.prompts,
                 provider_retry: execution_control.provider_retry(session_id).await,
                 conversation: context.conversation,
@@ -375,6 +425,11 @@ impl ApplicationService {
                 permission_ceiling: agena_api::resource::PermissionConfigResource::from(
                     &context.permission_ceiling,
                 ),
+                permission_ceiling_layers: context
+                    .permission_ceiling_layers
+                    .iter()
+                    .map(agena_api::resource::PermissionConfigResource::from)
+                    .collect(),
                 model_provider_id: context.model_provider_id,
                 model_adapter_id: context.model_adapter_id,
                 model_id: context.model_id,

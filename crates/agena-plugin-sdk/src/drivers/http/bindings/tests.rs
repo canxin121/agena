@@ -335,6 +335,7 @@ impl Wire {
 
 fn invocation(call_id: i64, input: Value) -> Value {
     serde_json::to_value(ToolInvokeInput {
+        caller: None,
         tool_name: "probe".into(),
         session_id: 1,
         call_id,

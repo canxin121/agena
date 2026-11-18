@@ -136,6 +136,8 @@ pub enum SessionCommand {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionMetadataUpdate {
+    /// Named agent profile; an empty string clears the current selection.
+    pub profile: Option<String>,
     pub title: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,

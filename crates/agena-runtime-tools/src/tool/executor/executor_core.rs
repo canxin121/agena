@@ -135,6 +135,12 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_ceiling_or_self(session_context.permission_ceiling());
         }
+        for ceiling in session_context.permission_ceiling_layers() {
+            scoped.principal = scoped
+                .principal
+                .clone()
+                .apply_permission_ceiling_or_self(ceiling);
+        }
         scoped.channel_authority = session_context.channel_authority().cloned();
         scoped.channel_verifier = session_context.channel_verifier();
         if let Some(authority) = &scoped.channel_authority

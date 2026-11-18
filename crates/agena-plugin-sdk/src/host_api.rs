@@ -637,6 +637,10 @@ pub struct EventSubscription {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 /// Context of a host callback executed on behalf of a plugin.
 pub struct HostCallbackContext {
+    /// Sender metadata frozen by the host for this execution. Plugins may only
+    /// echo it with the matching authority token, never substitute another user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<crate::CallerIdentity>,
     /// Trusted host execution mode. This travels with callback authority and
     /// is independent of the model's tool arguments.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -681,6 +685,9 @@ where
     F: Future,
 {
     let mut current = current_host_callback_context().unwrap_or_default();
+    if let Some(caller) = patch.caller {
+        current.caller = Some(caller);
+    }
     if let Some(enabled) = patch.sandbox_enabled {
         current.sandbox_enabled = Some(enabled);
     }

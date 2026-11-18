@@ -30,31 +30,30 @@ impl App {
             ));
             return;
         }
-        let action = match &dialog.page {
-            // Pages whose entries are a fixed set of built-in mode keys rather
-            // than a named collection: there is nothing to add. Every key
-            // already exists - an entry with no stored value is showing its
-            // built-in default.
-            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkDefaults => {
-                self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
-                return;
-            }
-            PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
-            PermissionStudioPage::NetworkRules => {
+        let section = dialog.state.selected_section().map(|section| section.id);
+        let action = match section {
+            Some(PermissionStudioSectionId::PathRules) => PermissionStudioEditorAction::AddPathRule,
+            Some(PermissionStudioSectionId::NetworkRules) => {
                 self.activate_permission_studio_network(
                     dialog,
                     crate::PermissionStudioNetworkAction::AddRule { deny: false },
                 );
                 return;
             }
-            PermissionStudioPage::ToolNames => {
+            Some(PermissionStudioSectionId::ToolNames) => {
                 self.open_permission_studio_catalog_selector(
                     dialog,
                     PermissionStudioCatalogKind::ToolNames,
                 );
                 return;
             }
-            PermissionStudioPage::ToolCommandRules => PermissionStudioEditorAction::AddToolRule,
+            Some(PermissionStudioSectionId::ToolCommandRules) => {
+                PermissionStudioEditorAction::AddToolRule
+            }
+            _ => {
+                self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
+                return;
+            }
         };
         self.open_permission_studio_creator(dialog, action);
     }
@@ -66,9 +65,9 @@ impl App {
     ) {
         let catalog =
             crate::app_backend::permission_catalog::permission_tool_catalog(&self.application);
+        let selected = crate::permission_studio_local_config(dialog);
         let existing = match kind {
-            PermissionStudioCatalogKind::ToolNames => dialog
-                .permission
+            PermissionStudioCatalogKind::ToolNames => selected
                 .tools
                 .as_ref()
                 .map(|tools| tools.names.keys().cloned().collect::<BTreeSet<_>>())
@@ -141,15 +140,36 @@ impl App {
             return;
         }
         let selected_action = dialog.state.selected_item().map(|item| item.action.clone());
-        let (title, body, action) = match &dialog.page {
+        if let Some(PermissionStudioAction::EditMode(target)) = &selected_action
+            && matches!(
+                target,
+                PermissionStudioModeTarget::PathRule { .. }
+                    | PermissionStudioModeTarget::ToolName { .. }
+                    | PermissionStudioModeTarget::ToolRule { .. }
+                    | PermissionStudioModeTarget::ToolCommandPattern { .. }
+            )
+            && !crate::permission_studio_has_override(dialog, target)
+        {
+            self.flash_warning(
+                self.i18n
+                    .text("permission-studio-inherited-rule-no-local-edit"),
+            );
+            return;
+        }
+        let (title, body, action) = match dialog.state.selected_section().map(|section| section.id)
+        {
             // Class-default entries are cleared by emptying their mode in the
             // editor (which restores the built-in default), not by deleting the
             // entry, so the delete action does not apply here either.
-            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkDefaults => {
+            Some(
+                PermissionStudioSectionId::PathDefaults
+                | PermissionStudioSectionId::NetworkDefaults
+                | PermissionStudioSectionId::ToolDefaults,
+            ) => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
                 return;
             }
-            PermissionStudioPage::PathRules => {
+            Some(PermissionStudioSectionId::PathRules) => {
                 let Some(pattern) = selected_action.and_then(|action| match action {
                     PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule {
                         pattern,
@@ -174,14 +194,14 @@ impl App {
                     ConfirmAction::PermissionStudioDeletePathRule { pattern },
                 )
             }
-            PermissionStudioPage::NetworkRules => {
+            Some(PermissionStudioSectionId::NetworkRules) => {
                 self.activate_permission_studio_network(
                     dialog,
                     crate::PermissionStudioNetworkAction::DeleteRule,
                 );
                 return;
             }
-            PermissionStudioPage::ToolNames => {
+            Some(PermissionStudioSectionId::ToolNames) => {
                 let Some(key) = selected_action.and_then(|action| match action {
                     PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName {
                         key,
@@ -206,7 +226,7 @@ impl App {
                     ConfirmAction::PermissionStudioDeleteToolName { key },
                 )
             }
-            PermissionStudioPage::ToolCommandRules => {
+            Some(PermissionStudioSectionId::ToolCommandRules) => {
                 let Some((tool_name, pattern)) = selected_action.and_then(|action| match action {
                     PermissionStudioAction::EditMode(
                         PermissionStudioModeTarget::ToolCommandPattern { tool_name, pattern },
@@ -240,6 +260,13 @@ impl App {
                     },
                 )
             }
+            _ => {
+                self.flash_warning(ui_text::t(
+                    &self.i18n,
+                    "flash-permission-studio-no-selection",
+                ));
+                return;
+            }
         };
         self.overlay = Some(Overlay::Confirm(
             self.build_confirm_overlay(title, body, action),
@@ -258,7 +285,7 @@ impl App {
             return;
         };
 
-        let mut permission = dialog.permission.clone();
+        let mut permission = crate::permission_studio_local_config(&dialog);
         mutator(&mut permission);
         normalize_permission_config(&mut permission);
         match self.persist_permission_studio(&mut dialog, permission) {
@@ -358,6 +385,10 @@ impl App {
             }
             SettingsPickerAction::EditSessionPrompts(session_id) => {
                 self.open_prompt_studio(session_id);
+                false
+            }
+            SettingsPickerAction::EditSessionProfile(session_id) => {
+                self.open_session_profile_picker(session_id);
                 false
             }
             SettingsPickerAction::ToggleMcpServer => {
@@ -503,19 +534,9 @@ impl App {
                 .rebuild_client_versions_studio_overlay(&dialog)
                 .map(Route::ClientVersionsStudio)
                 .unwrap_or(Route::ClientVersionsStudio(dialog)),
-            Route::PermissionStudio(dialog) => self
-                .build_permission_studio_overlay(
-                    dialog.source.clone(),
-                    dialog.page.clone(),
-                    dialog.state.selected_section().map(|section| section.id),
-                    dialog.state.selected_item().map(|item| item.label.as_str()),
-                    dialog.state.focus(),
-                )
-                .map(|mut updated| {
-                    updated.pane_focus = dialog.pane_focus;
-                    Route::PermissionStudio(updated)
-                })
-                .unwrap_or(Route::PermissionStudio(dialog)),
+            // Nested rule editors and other routes keep this exact permission
+            // snapshot, including pending form input and the selected section.
+            Route::PermissionStudio(dialog) => Route::PermissionStudio(dialog),
             Route::SelectionPicker(dialog)
                 if dialog.query
                     == SelectionPickerQuery::Providers(ProviderPickerPurpose::Configure) =>
@@ -713,9 +734,10 @@ use crate::{
     MCP_SERVER_URL_SETTINGS_PATH, ModelCatalogStudioOverlay, Overlay,
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig, PermissionMode, PermissionStudioAction,
     PermissionStudioCatalogKind, PermissionStudioEditorAction, PermissionStudioModeTarget,
-    PermissionStudioOverlay, PermissionStudioPage, ProviderPickerPurpose, ProviderStudioOverlay,
-    Route, SelectionPickerOverlay, SelectionPickerQuery, SessionNavigationOverlay,
-    SessionSearchOverlay, SettingsFieldKind, SettingsFieldSpec, SettingsPickerAction,
-    SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay, ToolPermissionRules, ui_text,
+    PermissionStudioOverlay, PermissionStudioSectionId, ProviderPickerPurpose,
+    ProviderStudioOverlay, Route, SelectionPickerOverlay, SelectionPickerQuery,
+    SessionNavigationOverlay, SessionSearchOverlay, SettingsFieldKind, SettingsFieldSpec,
+    SettingsPickerAction, SettingsStudioFocus, SettingsStudioOverlay, TimelineOverlay,
+    ToolPermissionRules, ui_text,
 };
 use agena_tui_components::SearchPickerSelectionMode;

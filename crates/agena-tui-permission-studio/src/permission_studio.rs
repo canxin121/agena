@@ -1,208 +1,95 @@
-//! Navigation presentation for the permission studio.
+//! The permission studio is one access page with a sectioned content list.
 //!
-//! Permission configuration, editor values, and persistence remain App
-//! responsibilities. This module owns the two-pane navigation vocabulary,
-//! localized navigation tree, and pure selectable-list movement policy.
+//! Rows preserve section ownership for editing, keyboard navigation and pointer
+//! selection. Configuration and persistence remain application responsibilities.
 
-use agena_tui::i18n::I18n;
-use agena_tui_components::{SectionedListFocus, SelectableListState};
-
-#[derive(Debug, Clone)]
-/// A navigation item of the permission studio.
-pub struct PermissionStudioNavItem {
-    pub label: String,
-    pub level: usize,
-    pub page: PermissionStudioPage,
-    pub section: Option<PermissionStudioSectionId>,
-    pub selectable: bool,
-}
+use agena_tui_components::SectionedListFocus;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Pane focus of the permission studio.
-pub enum PermissionStudioPaneFocus {
-    Navigation,
-    Content,
-}
-
-impl PermissionStudioPaneFocus {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Navigation => Self::Content,
-            Self::Content => Self::Navigation,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Section of the permission studio.
 pub enum PermissionStudioSectionId {
-    RootPath,
-    RootNetwork,
-    RootTools,
     PathDefaults,
     PathRules,
     NetworkDefaults,
     NetworkRules,
-    /// The fallback an unnamed tool resolves to, on the Tool Access page beside
-    /// the per-name rules.
     ToolDefaults,
     ToolNames,
     ToolCommandRules,
+    RememberedRules,
+    NetworkPolicy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Page of the permission studio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionStudioPage {
-    PathDefaults,
-    PathRules,
-    NetworkDefaults,
-    NetworkRules,
-    ToolNames,
-    ToolCommandRules,
+    Access,
 }
 
 pub type PermissionStudioFocus = SectionedListFocus;
 
-pub fn nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem> {
-    vec![
-        nav_item(
-            i18n,
-            "permission-studio-nav-filesystem",
-            0,
-            PermissionStudioPage::PathDefaults,
-            Some(PermissionStudioSectionId::PathDefaults),
-            false,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-default-zones",
-            1,
-            PermissionStudioPage::PathDefaults,
-            Some(PermissionStudioSectionId::PathDefaults),
-            true,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-path-rules",
-            1,
-            PermissionStudioPage::PathRules,
-            Some(PermissionStudioSectionId::PathRules),
-            true,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-network",
-            0,
-            PermissionStudioPage::NetworkDefaults,
-            Some(PermissionStudioSectionId::NetworkDefaults),
-            false,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-network-defaults",
-            1,
-            PermissionStudioPage::NetworkDefaults,
-            Some(PermissionStudioSectionId::NetworkDefaults),
-            true,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-network-rules",
-            1,
-            PermissionStudioPage::NetworkRules,
-            Some(PermissionStudioSectionId::NetworkRules),
-            true,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-tool-access",
-            0,
-            PermissionStudioPage::ToolNames,
-            Some(PermissionStudioSectionId::ToolNames),
-            false,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-name-rules",
-            1,
-            PermissionStudioPage::ToolNames,
-            Some(PermissionStudioSectionId::ToolNames),
-            true,
-        ),
-        nav_item(
-            i18n,
-            "permission-studio-nav-command-rules",
-            1,
-            PermissionStudioPage::ToolCommandRules,
-            Some(PermissionStudioSectionId::ToolCommandRules),
-            true,
-        ),
-    ]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionStudioRow {
+    Section(usize),
+    Item { section: usize, item: usize },
 }
 
-fn nav_item(
-    i18n: &I18n,
-    label_key: &str,
-    level: usize,
-    page: PermissionStudioPage,
-    section: Option<PermissionStudioSectionId>,
-    selectable: bool,
-) -> PermissionStudioNavItem {
-    PermissionStudioNavItem {
-        label: i18n.text(label_key),
-        level,
-        page,
-        section,
-        selectable,
-    }
-}
-
-pub fn nav_index_for_page(page: &PermissionStudioPage) -> usize {
-    match page {
-        PermissionStudioPage::PathDefaults => 1,
-        PermissionStudioPage::PathRules => 2,
-        PermissionStudioPage::NetworkDefaults => 4,
-        PermissionStudioPage::NetworkRules => 5,
-        PermissionStudioPage::ToolNames => 7,
-        PermissionStudioPage::ToolCommandRules => 8,
-    }
-}
-
-pub fn nav_normalize_selection(nav: &mut SelectableListState<PermissionStudioNavItem>) {
-    if nav.items.is_empty() {
-        nav.selected = 0;
-        return;
-    }
-    nav.selected = nav.selected.min(nav.items.len().saturating_sub(1));
-    if nav.selected_item().is_some_and(|item| item.selectable) {
-        return;
-    }
-    nav.selected = nav
-        .items
+pub fn content_rows(item_counts: &[usize]) -> Vec<PermissionStudioRow> {
+    item_counts
         .iter()
-        .position(|item| item.selectable)
-        .unwrap_or_default();
+        .enumerate()
+        .flat_map(|(section, &count)| {
+            std::iter::once(PermissionStudioRow::Section(section))
+                .chain((0..count).map(move |item| PermissionStudioRow::Item { section, item }))
+        })
+        .collect()
 }
 
-pub fn nav_move_step(nav: &mut SelectableListState<PermissionStudioNavItem>, delta: isize) {
-    if nav.items.is_empty() || delta == 0 {
-        return;
-    }
-    let mut candidate = nav.selected;
-    for _ in 0..nav.items.len() {
-        let Some(next) = (if delta < 0 {
-            candidate.checked_sub(1)
-        } else {
-            candidate
-                .checked_add(1)
-                .filter(|next| *next < nav.items.len())
-        }) else {
-            return;
-        };
-        candidate = next;
-        if nav.items[candidate].selectable {
-            nav.selected = candidate;
-            return;
-        }
+pub fn selected_content_row(
+    rows: &[PermissionStudioRow],
+    section: usize,
+    item: usize,
+) -> Option<usize> {
+    rows.iter()
+        .position(|row| *row == PermissionStudioRow::Item { section, item })
+}
+
+/// Move through items across section boundaries, skipping empty sections.
+pub fn move_content_selection(
+    item_counts: &[usize],
+    selected: (usize, usize),
+    delta: isize,
+) -> Option<(usize, usize)> {
+    let items = item_counts
+        .iter()
+        .enumerate()
+        .flat_map(|(section, &count)| (0..count).map(move |item| (section, item)))
+        .collect::<Vec<_>>();
+    let current = items
+        .iter()
+        .position(|position| *position == selected)
+        .unwrap_or(0);
+    let next = current
+        .saturating_add_signed(delta)
+        .min(items.len().saturating_sub(1));
+    items.get(next).copied()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn access_rows_keep_section_ownership_without_sidebar_pages() {
+        let rows = content_rows(&[2, 0, 3]);
+        assert_eq!(rows.len(), 8);
+        assert_eq!(rows[3], PermissionStudioRow::Section(1));
+        assert_eq!(rows[4], PermissionStudioRow::Section(2));
+        assert_eq!(selected_content_row(&rows, 2, 1), Some(6));
+        assert_eq!(move_content_selection(&[2, 0, 3], (0, 1), 1), Some((2, 0)));
+        assert_eq!(move_content_selection(&[2, 0, 3], (2, 0), -1), Some((0, 1)));
+        assert_eq!(move_content_selection(&[2, 0, 3], (0, 0), 50), Some((2, 2)));
+        assert_eq!(
+            move_content_selection(&[2, 0, 3], (2, 2), -50),
+            Some((0, 0))
+        );
+        assert_eq!(move_content_selection(&[], (0, 0), 1), None);
     }
 }

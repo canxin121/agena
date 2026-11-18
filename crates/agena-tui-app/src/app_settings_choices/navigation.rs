@@ -20,7 +20,11 @@ impl App {
         let footer = ui_text::t(&self.i18n, "overlay-permission-rule-studio-footer");
         PermissionRuleStudioOverlay {
             rule_id,
+            initial_draft: draft.clone(),
             draft,
+            editable: true,
+            scope_locked: false,
+            save_request: None,
             return_permission: None,
             presentation: PermissionRuleStudioPresentation::new(title, footer, items, selected),
             editor: None,

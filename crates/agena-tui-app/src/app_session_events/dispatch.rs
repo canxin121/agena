@@ -407,13 +407,7 @@ impl App {
                 // default. A subsequent session reload still reconciles to
                 // the persisted execution selection.
                 if let Some(model_stack) = model_stack {
-                    self.run_options.replace_model_stack(
-                        model_stack.model,
-                        model_stack.thinking_mode,
-                        model_stack.speed_mode,
-                        model_stack.verbosity,
-                        model_stack.parallel_tool_calls,
-                    );
+                    self.run_options = model_stack;
                 }
                 self.focus = Focus::Composer;
 

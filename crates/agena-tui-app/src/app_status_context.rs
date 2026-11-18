@@ -205,6 +205,15 @@ impl App {
         };
 
         let mut parts = Vec::new();
+        if let Some(profile) = execution.execution.profile.as_deref() {
+            parts.push(StatusRow::normal(
+                "session-profile",
+                self.i18n.text_args(
+                    "status-part-profile",
+                    &agena_tui::fl_args!("value" => profile),
+                ),
+            ));
+        }
         parts.push(StatusRow::normal(
             "session-state",
             self.i18n.text_args(

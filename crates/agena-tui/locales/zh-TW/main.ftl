@@ -539,11 +539,11 @@ overlay-settings-section-model-catalog-summary = {$count} 個條目
 
 overlay-settings-section-model-catalog-description = 瀏覽解析後的 model catalog，查看條目元數據，並重新整理本地緩存。
 
-overlay-settings-section-permissions-label = 權限
+overlay-settings-section-permissions-label = 存取權限
 
 overlay-settings-section-permissions-summary = {$count} 條持久化權限規則
 
-overlay-settings-section-permissions-description = 分別編輯全域、工作區與目前工作階段的權限。
+overlay-settings-section-permissions-description = 在同一頁面管理檔案、網路、工具與已記住的核准決定。
 
 overlay-settings-section-tracing-summary = 日誌過濾與診斷
 
@@ -988,11 +988,11 @@ permission-studio-nav-network = 網路
 
 permission-studio-nav-network-defaults = 原則
 
-permission-studio-nav-network-rules = 規則
+permission-studio-nav-network-rules = 網路規則
 
 permission-studio-nav-tool-access = 工具權限
 
-permission-studio-nav-name-rules = 名稱規則
+permission-studio-nav-name-rules = 工具名稱規則
 
 permission-studio-nav-command-rules = 命令規則
 
@@ -3448,3 +3448,35 @@ settings-sandbox-active = 目前生效
 settings-sandbox-inactive = 目前未生效
 settings-sandbox-global-label = 全域 · { $label }
 settings-sandbox-workspace-label = 工作區 · { $label }
+permission-studio-page-access = 存取權限
+permission-studio-access-footer = ↑↓ 選擇 · Tab/Shift+Tab 切換區段 · PgUp/PgDn 翻頁 · Enter 編輯 · Ctrl+N 新增 · Ctrl+D 刪除 · Ctrl+E 重新命名 · Esc 返回
+permission-studio-access-content = 檔案、網路與工具
+permission-studio-remembered-rules = 已記住的核准決定
+permission-studio-remembered-open = 檢視已記住的核准決定
+permission-studio-remembered-detail = 管理核准時儲存的權限規則。
+permission-studio-remembered-create = 建立核准規則
+permission-studio-remembered-read-only = 目前範圍的已記住核准決定為唯讀。
+permission-studio-remembered-read-only-footer = ↑↓ 選擇 · Esc 返回 · 唯讀
+permission-studio-remembered-empty = 目前範圍沒有生效中的已記住核准決定。
+permission-studio-remembered-scope-locked = 此規則維持在存取權限頁選定的範圍。
+permission-studio-save-or-cancel = 請先儲存或取消目前的權限編輯，再離開頁面。
+permission-studio-access-read-only-footer = ↑↓ 選擇 · Tab/Shift+Tab 切換區段 · PgUp/PgDn 翻頁 · Esc 返回 · 唯讀
+
+permission-studio-origin-current = 本層
+permission-studio-origin-inherited = 繼承
+permission-studio-origin-effective = 生效
+permission-studio-read-only-follows-default = 跟隨→{$value}
+permission-studio-read-only-invalid = 無效
+permission-studio-section-rule-count = {$section} · {$count} 條規則
+permission-studio-tools-rule-count = 工具 · 名稱 {$names} · 命令 {$commands}
+permission-studio-workspace-label = 工作區
+permission-studio-external-label = 外部路徑
+permission-studio-path-readwrite-compact = 讀寫
+permission-studio-default-label = 預設
+permission-studio-read-only-class-label = 唯讀工具
+permission-studio-outbound-label = 出站
+permission-studio-inbound-label = 入站
+permission-studio-loopback-label = 主機回環
+permission-studio-network-controls = 網路操作
+permission-studio-add-network-rule = + 新增網路規則
+permission-studio-inherited-rule-no-local-edit = 編輯繼承規則可建立本層覆寫；重新命名和刪除僅適用於本層規則。

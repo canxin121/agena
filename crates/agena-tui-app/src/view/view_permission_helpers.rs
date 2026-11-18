@@ -1,3 +1,96 @@
+pub(crate) struct PermissionStudioColumns {
+    label: usize,
+    value: usize,
+    source: usize,
+}
+
+pub(crate) fn permission_studio_columns(
+    i18n: &I18n,
+    dialog: &crate::PermissionStudioOverlay,
+    width: usize,
+) -> PermissionStudioColumns {
+    let items = dialog
+        .state
+        .sections()
+        .iter()
+        .flat_map(|section| &section.items)
+        .filter(|item| item.source.is_some());
+    let value = items
+        .clone()
+        .map(|item| UnicodeWidthStr::width(sanitize_display_text(&item.value).as_str()))
+        .max()
+        .unwrap_or(0)
+        .min(width / 3 + 1);
+    let source = items
+        .filter_map(|item| item.source)
+        .map(|source| {
+            UnicodeWidthStr::width(crate::permission_studio_source_label(i18n, source).as_str())
+        })
+        .max()
+        .unwrap_or(0)
+        .min(width / 3);
+    PermissionStudioColumns {
+        label: width.saturating_sub(value + source + 2),
+        value,
+        source,
+    }
+}
+
+pub(crate) fn permission_studio_dense_line(
+    i18n: &I18n,
+    item: &PermissionStudioItem,
+    section_id: PermissionStudioSectionId,
+    columns: &PermissionStudioColumns,
+    width: usize,
+) -> ratatui::text::Line<'static> {
+    use ratatui::{
+        style::{Modifier, Style},
+        text::{Line, Span},
+    };
+    let muted = Style::default().fg(agena_tui_components::theme::muted_color());
+    let value_style = Style::default().add_modifier(Modifier::BOLD);
+    if let Some(source) = item.source {
+        let label = permission_studio_table_label(item, section_id, columns.label);
+        return Line::from(vec![
+            Span::raw(permission_studio_cell(&label, columns.label)),
+            Span::raw(" "),
+            Span::styled(
+                permission_studio_cell(&item.value, columns.value),
+                value_style,
+            ),
+            Span::raw(" "),
+            Span::styled(
+                permission_studio_cell(
+                    &crate::permission_studio_source_label(i18n, source),
+                    columns.source,
+                ),
+                muted,
+            ),
+        ]);
+    }
+    if item.value.is_empty() {
+        return Line::from(Span::styled(
+            super::truncate_display_text(&sanitize_display_text(&item.label), width),
+            muted,
+        ));
+    }
+    let label_width = columns.label.min(width / 2);
+    Line::from(vec![
+        Span::raw(permission_studio_cell(&item.label, label_width)),
+        Span::raw(" "),
+        Span::styled(
+            permission_studio_cell(&item.value, width.saturating_sub(label_width + 1)),
+            value_style,
+        ),
+    ])
+}
+
+fn permission_studio_cell(text: &str, width: usize) -> String {
+    let text = super::truncate_display_text(&sanitize_display_text(text), width);
+    let padding = width.saturating_sub(UnicodeWidthStr::width(text.as_str()));
+    format!("{text}{}", " ".repeat(padding))
+}
+
 pub(crate) fn permission_studio_table_label(
     item: &PermissionStudioItem,
     section_id: PermissionStudioSectionId,

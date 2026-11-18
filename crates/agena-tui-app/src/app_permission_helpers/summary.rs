@@ -127,11 +127,6 @@ pub(crate) fn permission_studio_read_only_message(
     }
 }
 
-pub(crate) fn permission_mode_input_text(mode: Option<PermissionMode>, i18n: &I18n) -> String {
-    mode.map(|mode| permission_mode_label(i18n, mode))
-        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
-}
-
 pub(crate) fn permission_mode_token_text(mode: Option<PermissionMode>) -> String {
     mode.map(permission_mode_token)
         .unwrap_or_default()

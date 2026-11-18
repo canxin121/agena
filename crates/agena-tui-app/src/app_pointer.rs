@@ -186,20 +186,15 @@ impl App {
                     else {
                         unreachable!()
                     };
-                    if dialog
-                        .nav
-                        .items
-                        .get(index)
-                        .is_some_and(|item| item.selectable)
-                    {
-                        dialog.nav.selected = index;
-                        set_permission_studio_pane_focus(
-                            &mut dialog,
-                            PermissionStudioPaneFocus::Navigation,
-                        );
-                        self.apply_permission_studio_nav_selection(&mut dialog);
-                    }
+                    let activate_item = crate::select_permission_studio_row(&mut dialog, index);
                     self.current_route = Route::PermissionStudio(dialog);
+                    if activate_item == Some(true) {
+                        self.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    } else if activate_item.is_none() {
+                        self.flash_warning(
+                            self.i18n.text("permission-studio-network-save-or-cancel"),
+                        );
+                    }
                     return;
                 }
                 let can_activate = self.focus_pointer_list(panel);
@@ -350,10 +345,7 @@ impl App {
                 });
                 panel != 0
             }
-            Route::PermissionStudio(dialog) => {
-                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
-                false
-            }
+            Route::PermissionStudio(_) => true,
             Route::ProviderStudio(dialog) => focus_provider_list(dialog, panel),
             Route::McpWorkbench(dialog) => {
                 dialog.focus_list(panel);

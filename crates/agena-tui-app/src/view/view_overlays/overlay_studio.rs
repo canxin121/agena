@@ -1,14 +1,12 @@
 use super::super::{
     App, BoundedListPanelHeight, DetailTextLine, DetailTextSpec, Frame, Line,
     ListWorkbenchDialogSpec, ListWorkbenchPanelState, Modifier, PermissionRuleStudioOverlay,
-    PermissionStudioFocus, PermissionStudioOverlay, PermissionStudioPaneFocus,
-    PermissionStudioSection, PermissionStudioSectionId, Rect, SettingsStudioOverlay, Span, Style,
-    SurfaceMode, Text, UnicodeWidthStr, WorkbenchOverlayDialogSpec, WorkbenchTextSection,
-    build_accented_two_line_list_item, build_detail_text, panel_highlight_style,
-    permission_rule_draft_label, permission_rule_mode_label, permission_rule_studio_detail_text,
-    permission_rule_subject_kind_name, permission_studio_table_label, render_list_workbench_dialog,
-    sanitize_display_text, selection_highlight_style, settings_item_detail_text,
-    settings_item_detail_title, settings_table_columns, workbench_navigation_width,
+    PermissionStudioOverlay, Rect, SettingsStudioOverlay, Span, Style, SurfaceMode, Text,
+    WorkbenchOverlayDialogSpec, WorkbenchTextSection, build_accented_two_line_list_item,
+    build_detail_text, permission_rule_draft_label, permission_rule_mode_label,
+    permission_rule_studio_detail_text, permission_rule_subject_kind_name,
+    render_list_workbench_dialog, sanitize_display_text, selection_highlight_style,
+    settings_item_detail_text, settings_item_detail_title,
 };
 use crate::ui_text;
 
@@ -49,205 +47,101 @@ impl App {
         dialog: &PermissionStudioOverlay,
         surface: SurfaceMode,
     ) {
-        let nav_items = dialog
-            .nav
-            .items
-            .iter()
-            .map(|item| {
-                build_accented_two_line_list_item(
-                    sanitize_display_text(format!(
-                        "{}{}",
-                        "  ".repeat(item.level),
-                        item.label.as_str()
-                    ))
-                    .into(),
-                    None,
-                    None,
-                )
-            })
-            .collect::<Vec<_>>();
-        let content_width = surface.content_width(area, 140);
-        let nav_width = workbench_navigation_width(content_width);
-        let selected_section = dialog.state.selected_section();
-        let table_title = selected_section
-            .map(|section| sanitize_display_text(section.label.as_str()))
-            .unwrap_or_else(|| ui_text::t(&self.i18n, "overlay-workbench-overview"));
-        let table_text = selected_section
-            .map(|section| {
-                self.permission_studio_table_text(
-                    dialog,
-                    section,
-                    content_width.saturating_sub(nav_width).saturating_sub(2),
-                    area.height.saturating_sub(10).clamp(1, 28) as usize,
-                )
-            })
-            .unwrap_or_else(|| {
-                Text::from(ui_text::t(&self.i18n, "overlay-settings-empty-section"))
-            });
-        let summary = format!(
-            "{} · {} · {} · {}",
-            dialog.title_context,
-            dialog.source_label,
-            dialog.scope_label,
-            if dialog.editable {
-                ui_text::t(&self.i18n, "value-editable")
-            } else {
-                ui_text::t(&self.i18n, "value-read-only")
-            }
+        use agena_tui_components::{WorkbenchFrameSpec, pointer, render_workbench_frame};
+        use ratatui::widgets::{List, ListItem, ListState};
+
+        let rows = crate::permission_studio_content_rows(dialog);
+        let selected = crate::selected_content_row(
+            &rows,
+            dialog.state.selected_section_index(),
+            dialog.state.selected_item_index(),
         );
-        let spec = ListWorkbenchDialogSpec::new(
+        let spec = WorkbenchFrameSpec::new(
             sanitize_display_text(dialog.title.as_str()).into(),
             sanitize_display_text(dialog.footer.as_str()).into(),
-            ListWorkbenchPanelState::items(
-                BoundedListPanelHeight {
-                    lines_per_item: 1,
-                    min_body_height: 8,
-                    max_body_height: 30,
-                },
-                Some(ui_text::t(&self.i18n, "overlay-permission-studio-nav").into()),
-                nav_items.as_slice(),
-                (!nav_items.is_empty()).then_some(dialog.nav.selected),
-                panel_highlight_style(dialog.pane_focus == PermissionStudioPaneFocus::Navigation),
-                ">> ".into(),
-            ),
-            vec![WorkbenchTextSection::new(table_title.into(), table_text, 8, 30).wrap(false)],
+            140,
+            u16::try_from(rows.len()).unwrap_or(u16::MAX),
         )
-        .summary(Some(sanitize_display_text(summary).into()))
-        .target_width(140)
-        .left_panel_width(nav_width)
-        .overlay(
-            dialog
-                .editor
-                .as_ref()
-                .map(WorkbenchOverlayDialogSpec::from_source),
+        .summary((!dialog.editable).then(|| self.i18n.text("value-read-only").into()))
+        .footer_max_height(area.height.saturating_sub(6).max(2));
+        let workbench = render_workbench_frame(frame, area, surface, &spec);
+        let width = workbench.body.width.saturating_sub(2) as usize;
+        let columns = super::super::permission_studio_columns(&self.i18n, dialog, width);
+        let items = rows
+            .iter()
+            .map(|row| match *row {
+                crate::PermissionStudioRow::Section(index) => {
+                    let section = &dialog.state.sections()[index];
+                    ListItem::new(Line::from(Span::styled(
+                        sanitize_display_text(section.label.as_str()),
+                        Style::default()
+                            .fg(agena_tui_components::theme::accent_color())
+                            .add_modifier(Modifier::BOLD),
+                    )))
+                }
+                crate::PermissionStudioRow::Item { section, item } => {
+                    let section = &dialog.state.sections()[section];
+                    ListItem::new(super::super::permission_studio_dense_line(
+                        &self.i18n,
+                        &section.items[item],
+                        section.id,
+                        &columns,
+                        width,
+                    ))
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut state = ListState::default().with_selected(selected);
+        frame.render_stateful_widget(
+            List::new(items)
+                .highlight_style(selection_highlight_style())
+                .highlight_symbol("› "),
+            workbench.body,
+            &mut state,
         );
-        render_list_workbench_dialog(frame, area, surface, &spec);
-    }
 
-    pub(crate) fn permission_studio_table_text(
-        &self,
-        dialog: &PermissionStudioOverlay,
-        section: &PermissionStudioSection,
-        width: u16,
-        visible_rows: usize,
-    ) -> Text<'static> {
-        let (left_header, mut right_header) = self.permission_studio_table_headers(section.id);
-        let width = width.max(24);
-        let left_width = width
-            .saturating_mul(45)
-            .saturating_div(100)
-            .clamp(12, width - 12);
-        let right_width = width.saturating_sub(left_width).saturating_sub(3).max(8);
-        let mut lines = Vec::new();
-        let header_style = Style::default()
-            .fg(agena_tui_components::theme::accent_color())
-            .add_modifier(Modifier::BOLD);
-        let row_style = Style::default();
-        let selected_style = selection_highlight_style();
-        let selected_index = dialog.state.selected_item_index();
-        let selected_focus = dialog.state.focus() == PermissionStudioFocus::Items;
-        let visible_rows = if matches!(
-            section.id,
-            PermissionStudioSectionId::NetworkDefaults | PermissionStudioSectionId::NetworkRules
-        ) {
-            visible_rows.max(1)
-        } else {
-            section.items.len().max(1)
-        };
-        let first_visible = selected_index
-            .saturating_sub(visible_rows / 2)
-            .min(section.items.len().saturating_sub(visible_rows));
-        if section.items.len() > visible_rows {
-            right_header = format!(
-                "{right_header} ({}/{})",
-                selected_index + 1,
-                section.items.len()
+        // Use the same flattened rows as keyboard navigation. All rows occupy
+        // one terminal line, so a scrolled click retains its section ownership.
+        let panel = pointer::next_list();
+        pointer::register(
+            workbench.body,
+            Some(pointer::PointerAction::FocusList(panel)),
+            Some((
+                pointer::key(crossterm::event::KeyCode::Up),
+                pointer::key(crossterm::event::KeyCode::Down),
+            )),
+        );
+        for index in state.offset()
+            ..rows
+                .len()
+                .min(state.offset() + workbench.body.height as usize)
+        {
+            pointer::register(
+                Rect::new(
+                    workbench.body.x,
+                    workbench.body.y + (index - state.offset()) as u16,
+                    workbench.body.width,
+                    1,
+                ),
+                Some(pointer::PointerAction::List {
+                    panel,
+                    index,
+                    selected: selected.unwrap_or(0),
+                }),
+                None,
             );
         }
-
-        lines.push(Line::from(Span::styled(
-            settings_table_columns(
-                &[
-                    (left_header.as_str(), left_width as usize),
-                    (right_header.as_str(), right_width as usize),
-                ],
-                width,
-            ),
-            header_style,
-        )));
-        lines.push(Line::from(Span::styled(
-            "─".repeat(width as usize),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )));
-
-        if section.items.is_empty() {
-            lines.push(Line::from(Span::styled(
-                ui_text::t(&self.i18n, "overlay-settings-empty-items"),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            )));
-            return Text::from(lines);
-        }
-
-        for (index, item) in section
-            .items
-            .iter()
-            .enumerate()
-            .skip(first_visible)
-            .take(visible_rows)
-        {
-            let is_selected = index == selected_index;
-            let style = if is_selected && selected_focus {
-                selected_style
-            } else if is_selected {
-                Style::default()
-                    .fg(agena_tui_components::theme::accent_color())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                row_style
-            };
-            let marker = if is_selected { ">> " } else { "   " };
-            let label_width = (left_width as usize).saturating_sub(UnicodeWidthStr::width(marker));
-            let label = permission_studio_table_label(item, section.id, label_width);
-            let left = format!("{marker}{label}");
-            lines.push(Line::from(Span::styled(
-                settings_table_columns(
-                    &[
-                        (left.as_str(), left_width as usize),
-                        (item.value.as_str(), right_width as usize),
-                    ],
-                    width,
-                ),
-                style,
-            )));
-        }
-
-        Text::from(lines)
-    }
-
-    pub(crate) fn permission_studio_table_headers(
-        &self,
-        section_id: PermissionStudioSectionId,
-    ) -> (String, String) {
-        match section_id {
-            PermissionStudioSectionId::PathDefaults => ("Setting".to_string(), "Value".to_string()),
-            PermissionStudioSectionId::PathRules => ("Path".to_string(), "Access".to_string()),
-            PermissionStudioSectionId::NetworkDefaults => (
-                self.i18n.text("permission-studio-network-column-setting"),
-                self.i18n.text("permission-studio-network-column-value"),
-            ),
-            PermissionStudioSectionId::NetworkRules => (
-                self.i18n.text("permission-studio-network-column-rule"),
-                self.i18n.text("permission-studio-network-column-value"),
-            ),
-            PermissionStudioSectionId::ToolDefaults | PermissionStudioSectionId::ToolNames => {
-                ("Name".to_string(), "Access".to_string())
-            }
-            PermissionStudioSectionId::ToolCommandRules => {
-                ("Tool".to_string(), "Access".to_string())
-            }
-            PermissionStudioSectionId::RootPath
-            | PermissionStudioSectionId::RootNetwork
-            | PermissionStudioSectionId::RootTools => ("Item".to_string(), "Summary".to_string()),
+        if let Some(editor) = &dialog.editor {
+            agena_tui_components::render_workbench_editor_dialog(
+                frame,
+                area,
+                SurfaceMode::Overlay,
+                editor.title.as_str().into(),
+                editor.prompt.as_str().into(),
+                editor.footer.as_str().into(),
+                editor.multiline,
+                &editor.input,
+            );
         }
     }
 
@@ -367,6 +261,7 @@ impl App {
                 .as_ref()
                 .map(WorkbenchOverlayDialogSpec::from_source),
         );
+        let spec = spec.footer_max_height(area.height.saturating_sub(6).max(2));
         render_list_workbench_dialog(frame, area, surface, &spec);
     }
 }

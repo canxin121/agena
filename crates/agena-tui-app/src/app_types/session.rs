@@ -311,6 +311,9 @@ impl SessionActivity {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RunOptionsState {
+    /// Only local user choices are sent as run overrides. Server-resolved
+    /// values remain available for display without pinning profile defaults.
+    pub(crate) explicit_model_stack: bool,
     pub(crate) model: Option<ModelRef>,
     pub(crate) thinking_mode: Option<String>,
     pub(crate) speed_mode: Option<String>,

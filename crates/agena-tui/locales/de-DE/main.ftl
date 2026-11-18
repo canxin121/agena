@@ -390,7 +390,7 @@ overlay-settings-section-model-catalog-label = Modellkatalog
 
 overlay-settings-section-model-catalog-summary = {$count} Einträge
 
-overlay-settings-section-permissions-label = Berechtigungen
+overlay-settings-section-permissions-label = Zugriffsrechte
 
 overlay-settings-section-permissions-summary = {$count} persisted permission rule(s)
 
@@ -771,11 +771,11 @@ permission-studio-nav-network = Netzwerk
 
 permission-studio-nav-network-defaults = Richtlinie
 
-permission-studio-nav-network-rules = Regeln
+permission-studio-nav-network-rules = Netzwerkregeln
 
 permission-studio-nav-tool-access = Werkzeugzugriff
 
-permission-studio-nav-name-rules = Namensregeln
+permission-studio-nav-name-rules = Werkzeugnamensregeln
 
 permission-studio-nav-command-rules = Befehlsregeln
 
@@ -1187,7 +1187,7 @@ overlay-choice-clear-value = Klarer Wert
 overlay-settings-section-plugins-description = Konfigurieren Sie Plugins und prüfen Sie deren Tools und Diagnoseinformationen.
 overlay-settings-section-providers-description = Konfigurieren Sie Anbieter und deren Netzwerkverhalten und überprüfen Sie den Modellkatalog.
 overlay-settings-section-model-catalog-description = Durchsuchen Sie den aufgelösten Modellkatalog, überprüfen Sie die Modellmetadaten und aktualisieren Sie den lokalen Cache.
-overlay-settings-section-permissions-description = Bearbeiten Sie globale Berechtigungen, Arbeitsbereichsberechtigungen und Berechtigungen für die aktuelle Sitzung separat.
+overlay-settings-section-permissions-description = Dateien, Netzwerk, Werkzeuge und gespeicherte Entscheidungen auf einer Seite verwalten.
 overlay-settings-section-runtime-session-description = Konfigurieren Sie Kompatibilitäts-Clientversionen und das Verhalten der automatischen Sitzungskomprimierung.
 settings-permission-effective-detail = Schreibgeschützt · Zusammengeführt aus Global, Arbeitsbereich und Sitzung.
 settings-permission-effective-read-only = Die effektive Berechtigung ist schreibgeschützt; Bearbeiten Sie stattdessen die Sitzung, den Arbeitsbereich oder die globale Quelle.
@@ -3543,3 +3543,35 @@ settings-sandbox-active = Derzeit aktiv
 settings-sandbox-inactive = Derzeit inaktiv
 settings-sandbox-global-label = Global · { $label }
 settings-sandbox-workspace-label = Arbeitsbereich · { $label }
+permission-studio-page-access = Zugriffsrechte
+permission-studio-access-footer = ↑↓ Auswahl · Tab/Shift+Tab Abschnitt · PgUp/PgDn Blättern · Enter Bearbeiten · Ctrl+N Hinzufügen · Ctrl+D Löschen · Ctrl+E Umbenennen · Esc Zurück
+permission-studio-access-content = Dateien, Netzwerk und Werkzeuge
+permission-studio-remembered-rules = Gespeicherte Entscheidungen
+permission-studio-remembered-open = Gespeicherte Entscheidungen öffnen
+permission-studio-remembered-detail = Bei Genehmigungen gespeicherte Regeln verwalten.
+permission-studio-remembered-create = Gespeicherte Regel erstellen
+permission-studio-remembered-read-only = Gespeicherte Entscheidungen in diesem Bereich sind schreibgeschützt.
+permission-studio-remembered-read-only-footer = ↑↓ Auswahl · Esc Zurück · Schreibgeschützt
+permission-studio-remembered-empty = Keine aktiven gespeicherten Entscheidungen in diesem Bereich.
+permission-studio-remembered-scope-locked = Die Regel bleibt im Bereich, der auf der Seite Zugriffsrechte ausgewählt wurde.
+permission-studio-save-or-cancel = Die aktuelle Berechtigungsänderung vor dem Verlassen speichern oder abbrechen.
+permission-studio-access-read-only-footer = ↑↓ Auswahl · Tab/Shift+Tab Abschnitt · PgUp/PgDn Blättern · Esc Zurück · Schreibgeschützt
+
+permission-studio-origin-current = lokal
+permission-studio-origin-inherited = geerbt
+permission-studio-origin-effective = effektiv
+permission-studio-read-only-follows-default = auto→{$value}
+permission-studio-read-only-invalid = ungültig
+permission-studio-section-rule-count = {$section} · Regeln {$count}
+permission-studio-tools-rule-count = Tools · Namen {$names} · Befehle {$commands}
+permission-studio-workspace-label = Arbeitsraum
+permission-studio-external-label = Extern
+permission-studio-path-readwrite-compact = Lesen/Schr.
+permission-studio-default-label = Standard
+permission-studio-read-only-class-label = Nur Lesen
+permission-studio-outbound-label = Ausgehend
+permission-studio-inbound-label = Eingehend
+permission-studio-loopback-label = Loopback
+permission-studio-network-controls = Netzwerkaktionen
+permission-studio-add-network-rule = + Netzwerkregel hinzufügen
+permission-studio-inherited-rule-no-local-edit = Bearbeiten erstellt eine lokale Überschreibung. Nur lokale Regeln können umbenannt oder entfernt werden.

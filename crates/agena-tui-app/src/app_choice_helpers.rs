@@ -325,7 +325,9 @@ pub(crate) fn provider_studio_field_allows_clear(field: ProviderStudioField) -> 
 
 pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAction) -> String {
     match action {
-        ChoiceOverlayAction::InsertContent { .. } | ChoiceOverlayAction::Exit => String::new(),
+        ChoiceOverlayAction::InsertContent { .. }
+        | ChoiceOverlayAction::SessionProfile { .. }
+        | ChoiceOverlayAction::Exit => String::new(),
         ChoiceOverlayAction::SettingsField(field) => i18n.text_args(
             "overlay-choice-clear-settings-detail",
             &agena_tui::fl_args!("field" => field.path.as_str()),
@@ -368,7 +370,8 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
             "overlay-choice-clear-permission-override-detail",
             &agena_tui::fl_args!("field" => permission_studio_mode_target_label(i18n, target)),
         ),
-        ChoiceOverlayAction::MessageQueue { .. }
+        ChoiceOverlayAction::RememberedPermissionRules { .. }
+        | ChoiceOverlayAction::MessageQueue { .. }
         | ChoiceOverlayAction::QueuedMessage { .. }
         | ChoiceOverlayAction::StoppedMessageQueue { .. }
         | ChoiceOverlayAction::RewindMode { .. }

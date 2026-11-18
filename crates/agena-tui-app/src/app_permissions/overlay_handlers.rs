@@ -189,7 +189,6 @@ impl App {
         }
 
         if dialog.network_rule.is_some()
-            && dialog.page == crate::PermissionStudioPage::NetworkRules
             && matches!(
                 resolve_tui_key(KeyContext::PermissionStudio, key),
                 Some(KeyAction::Back)
@@ -202,49 +201,35 @@ impl App {
             return false;
         }
         match resolve_tui_key(KeyContext::PermissionStudio, key) {
-            Some(KeyAction::Back) => match dialog.pane_focus {
-                PermissionStudioPaneFocus::Navigation => true,
-                PermissionStudioPaneFocus::Content => {
-                    set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
-                    false
-                }
-            },
-            Some(KeyAction::NextTab | KeyAction::PreviousTab) => {
-                let next = dialog.pane_focus.next();
-                set_permission_studio_pane_focus(dialog, next);
+            Some(KeyAction::Back) => true,
+            Some(KeyAction::NextTab | KeyAction::MoveRight) => {
+                crate::jump_permission_studio_section(dialog, 1);
                 false
             }
-            Some(KeyAction::MoveLeft) => {
-                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Navigation);
+            Some(KeyAction::PreviousTab | KeyAction::MoveLeft) => {
+                crate::jump_permission_studio_section(dialog, -1);
                 false
             }
-            Some(KeyAction::MoveRight) => {
-                set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
+            Some(
+                KeyAction::MoveUp
+                | KeyAction::MoveDown
+                | KeyAction::PageUp
+                | KeyAction::PageDown
+                | KeyAction::Home
+                | KeyAction::End,
+            ) => {
+                let delta = match resolve_tui_key(KeyContext::PermissionStudio, key) {
+                    Some(KeyAction::MoveUp) => -1,
+                    Some(KeyAction::MoveDown) => 1,
+                    Some(KeyAction::PageUp) => -10,
+                    Some(KeyAction::PageDown) => 10,
+                    Some(KeyAction::Home) => isize::MIN,
+                    _ => isize::MAX,
+                };
+                crate::move_permission_studio_selection(dialog, delta);
                 false
             }
-            Some(KeyAction::MoveUp)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
-                permission_studio_nav_move_step(&mut dialog.nav, -1);
-                self.apply_permission_studio_nav_selection(dialog);
-                false
-            }
-            Some(KeyAction::MoveDown)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
-                permission_studio_nav_move_step(&mut dialog.nav, 1);
-                self.apply_permission_studio_nav_selection(dialog);
-                false
-            }
-            Some(KeyAction::MoveUp) => {
-                dialog.state.move_selection(-1);
-                false
-            }
-            Some(KeyAction::MoveDown) => {
-                dialog.state.move_selection(1);
-                false
-            }
-            Some(KeyAction::Delete) if dialog.pane_focus == PermissionStudioPaneFocus::Content => {
+            Some(KeyAction::Delete) => {
                 self.open_permission_studio_delete_current(dialog);
                 false
             }
@@ -259,16 +244,8 @@ impl App {
                 );
                 false
             }
-            Some(KeyAction::PermissionRename)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Content =>
-            {
+            Some(KeyAction::PermissionRename) => {
                 self.open_permission_studio_rename_current(dialog);
-                false
-            }
-            Some(KeyAction::Activate)
-                if dialog.pane_focus == PermissionStudioPaneFocus::Navigation =>
-            {
-                self.apply_permission_studio_nav_selection(dialog);
                 false
             }
             Some(KeyAction::Activate) => self.activate_permission_studio_selection(dialog),
@@ -281,6 +258,9 @@ impl App {
         key: KeyEvent,
         dialog: &mut PermissionRuleStudioOverlay,
     ) -> bool {
+        if dialog.save_request.is_some() {
+            return false;
+        }
         if let Some(editor) = dialog.editor.as_mut() {
             match drive_editor_dialog_key(editor, key) {
                 EditorDialogKeyResult::Continue => {}
@@ -328,6 +308,10 @@ impl App {
         }
     }
     fn browse_selected_permission_rule_path(&mut self, dialog: &mut PermissionRuleStudioOverlay) {
+        if !dialog.editable || dialog.save_request.is_some() {
+            self.flash_warning(self.i18n.text("permission-studio-remembered-read-only"));
+            return;
+        }
         let Some(item) = dialog.presentation.list.selected_item() else {
             return;
         };
@@ -356,10 +340,9 @@ use crate::{
     App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent, LineInputOverlay,
     PermissionOverlay, PermissionOverlayChoice, PermissionPromptEffect, PermissionPromptPage,
     PermissionReplyKind, PermissionRuleStudioAction, PermissionRuleStudioOverlay,
-    PermissionRuleStudioPathField, PermissionStudioOverlay, PermissionStudioPaneFocus, Route,
-    SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
-    permission_overlay_choice, permission_overlay_reply_label, permission_rule_draft_from_request,
-    permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
+    PermissionRuleStudioPathField, PermissionStudioOverlay, Route, SettingsStudioOverlay,
+    drive_editor_dialog_key, drive_input_dialog_key, permission_overlay_choice,
+    permission_overlay_reply_label, permission_rule_draft_from_request, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;

@@ -3,9 +3,22 @@ impl App {
         &mut self,
         dialog: &mut PermissionRuleStudioOverlay,
     ) -> bool {
+        if !dialog.editable || dialog.save_request.is_some() {
+            self.flash_warning(self.i18n.text("permission-studio-remembered-read-only"));
+            return false;
+        }
         let Some(item) = dialog.presentation.list.selected_item().cloned() else {
             return false;
         };
+        if dialog.scope_locked
+            && matches!(
+                item.action,
+                PermissionRuleStudioAction::Scope | PermissionRuleStudioAction::SessionId
+            )
+        {
+            self.flash_warning(self.i18n.text("permission-studio-remembered-scope-locked"));
+            return false;
+        }
         match item.action {
             PermissionRuleStudioAction::SubjectKind => self.open_permission_rule_choice_overlay(
                 dialog,
@@ -54,6 +67,12 @@ impl App {
         dialog: &PermissionRuleStudioOverlay,
         field: PermissionRuleStudioChoiceField,
     ) {
+        if !dialog.editable
+            || dialog.save_request.is_some()
+            || (dialog.scope_locked && field == PermissionRuleStudioChoiceField::Scope)
+        {
+            return;
+        }
         let (title, prompt, input, all_items, allow_clear) =
             permission_rule_choice_overlay_spec(&self.i18n, &dialog.draft, field);
         self.open_choice_overlay(self.build_choice_overlay(
@@ -72,6 +91,12 @@ impl App {
         dialog: &mut PermissionRuleStudioOverlay,
         field: PermissionRuleStudioEditField,
     ) {
+        if !dialog.editable
+            || dialog.save_request.is_some()
+            || (dialog.scope_locked && matches!(field, PermissionRuleStudioEditField::SessionId))
+        {
+            return;
+        }
         let (title, prompt, footer, value) =
             permission_rule_editor_spec(&self.i18n, &dialog.draft, field);
         dialog.editor = Some(PermissionRuleStudioEditor::new(
@@ -90,6 +115,14 @@ impl App {
         field: PermissionRuleStudioEditField,
         input: String,
     ) -> UiResult<()> {
+        if !dialog.editable
+            || dialog.save_request.is_some()
+            || (dialog.scope_locked && matches!(field, PermissionRuleStudioEditField::SessionId))
+        {
+            return Err(crate::UiFailure::message(
+                self.i18n.text("permission-studio-remembered-read-only"),
+            ));
+        }
         match field {
             PermissionRuleStudioEditField::ToolName => {
                 dialog.draft.tool_name = input.trim().to_string();
@@ -125,6 +158,22 @@ impl App {
         &mut self,
         dialog: &mut PermissionRuleStudioOverlay,
     ) -> UiResult<()> {
+        if !dialog.editable {
+            return Err(crate::UiFailure::message(
+                self.i18n.text("permission-studio-remembered-read-only"),
+            ));
+        }
+        if dialog.save_request.is_some() {
+            return Ok(());
+        }
+        if dialog.scope_locked
+            && (dialog.draft.scope != dialog.initial_draft.scope
+                || dialog.draft.session_id != dialog.initial_draft.session_id)
+        {
+            return Err(crate::UiFailure::message(
+                self.i18n.text("permission-studio-remembered-scope-locked"),
+            ));
+        }
         let draft = dialog.draft.clone();
         match draft.subject_kind {
             PermissionRuleSubjectKind::Tool if draft.tool_name.trim().is_empty() => {
@@ -189,6 +238,8 @@ impl App {
         }
         let params = permission_rule_params_from_draft(&draft);
         let rule_id = dialog.rule_id;
+        let request = uuid::Uuid::new_v4();
+        dialog.save_request = Some(request);
         self.dispatch_backend_operation(
             move |application| async move {
                 match rule_id {
@@ -209,40 +260,32 @@ impl App {
                     }
                 }
             },
-            |app, result| match result {
-                Ok(saved) => {
-                    app.flash_success(app.i18n.text_args(
-                        "flash-permission-rule-saved",
-                        &agena_tui::fl_args!(
-                            "name" => permission_rule_label(&app.i18n, &saved)
-                        ),
-                    ));
-                    let route = std::mem::replace(&mut app.current_route, Route::Main);
-                    match route {
-                        Route::PermissionRuleStudio(mut dialog) => {
-                            dialog.rule_id = Some(saved.id);
-                            dialog.presentation.title = format!(
-                                "{} · {}",
-                                ui_text::t(&app.i18n, "overlay-permission-rule-workbench-title",),
-                                permission_rule_label(&app.i18n, &saved)
-                            );
-                            dialog.draft = permission_rule_draft_from_resource(&saved);
-                            app.refresh_permission_rule_studio(&mut dialog);
-                            if let Some(permission) = dialog.return_permission.clone() {
-                                app.current_route = app
-                                    .route_stack
-                                    .pop()
-                                    .map(|route| app.refresh_restored_route(route))
-                                    .unwrap_or(Route::Main);
-                                app.overlay = Some(crate::Overlay::Permission(permission));
-                            } else {
-                                app.current_route = Route::PermissionRuleStudio(dialog);
-                            }
+            move |app, result| {
+                let active = matches!(&app.current_route, Route::PermissionRuleStudio(current) if current.save_request == Some(request));
+                let pending = if active {
+                    Some(&mut app.current_route)
+                } else {
+                    app.route_stack.iter_mut().find(|route| matches!(route, Route::PermissionRuleStudio(current) if current.save_request == Some(request)))
+                };
+                let Some(Route::PermissionRuleStudio(current)) = pending else { return; };
+                current.save_request = None;
+                match result {
+                    Ok(saved) => {
+                        let label = permission_rule_label(&app.i18n, &saved);
+                        current.rule_id = Some(saved.id);
+                        current.presentation.title = format!("{} · {}", app.i18n.text("overlay-permission-rule-workbench-title"), label);
+                        current.draft = permission_rule_draft_from_resource(&saved);
+                        current.initial_draft = current.draft.clone();
+                        crate::refresh_permission_rule_studio_dialog(&app.i18n, current);
+                        let return_permission = active.then(|| current.return_permission.clone()).flatten();
+                        app.flash_success(app.i18n.text_args("flash-permission-rule-saved", &agena_tui::fl_args!("name" => label)));
+                        if let Some(permission) = return_permission {
+                            app.current_route = app.route_stack.pop().map(|route| app.refresh_restored_route(route)).unwrap_or(Route::Main);
+                            app.overlay = Some(crate::Overlay::Permission(permission));
                         }
-                        route => app.current_route = route,
                     }
+                    Err(error) => app.flash_error(error),
                 }
-                Err(error) => app.flash_error(error),
             },
         );
         Ok(())
@@ -252,10 +295,16 @@ impl App {
         &mut self,
         dialog: &mut PermissionRuleStudioOverlay,
     ) -> bool {
+        if !dialog.editable || dialog.save_request.is_some() {
+            self.flash_warning(self.i18n.text("permission-studio-remembered-read-only"));
+            return false;
+        }
         let Some(rule_id) = dialog.rule_id else {
             return false;
         };
         let name = permission_rule_draft_label(&self.i18n, &dialog.draft);
+        let request = uuid::Uuid::new_v4();
+        dialog.save_request = Some(request);
         self.dispatch_backend_operation(
             move |application| async move {
                 crate::app_backend::plugin_effects::revoke_permission_rule(&application, rule_id)
@@ -263,17 +312,21 @@ impl App {
             },
             move |app, result| match result {
                 Ok(_) => {
-                    app.flash_success(app.i18n.text_args(
-                        "flash-permission-rule-revoked",
-                        &agena_tui::fl_args!("name" => name),
-                    ));
-                    app.current_route = app
-                        .route_stack
-                        .pop()
-                        .map(|route| app.refresh_restored_route(route))
-                        .unwrap_or(Route::Main);
+                    app.flash_success(app.i18n.text_args("flash-permission-rule-revoked", &agena_tui::fl_args!("name" => name)));
+                    if matches!(&app.current_route, Route::PermissionRuleStudio(current) if current.save_request == Some(request)) {
+                        app.current_route = app.route_stack.pop().map(|route| app.refresh_restored_route(route)).unwrap_or(Route::Main);
+                    } else {
+                        app.route_stack.retain(|route| !matches!(route, Route::PermissionRuleStudio(current) if current.save_request == Some(request)));
+                    }
                 }
-                Err(error) => app.flash_error(error),
+                Err(error) => {
+                    for route in std::iter::once(&mut app.current_route).chain(app.route_stack.iter_mut()) {
+                        if let Route::PermissionRuleStudio(current) = route
+                            && current.save_request == Some(request)
+                        { current.save_request = None; }
+                    }
+                    app.flash_error(error);
+                }
             },
         );
         false

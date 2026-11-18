@@ -5,6 +5,11 @@ impl App {
         selection: agena_tui::choice::ChoiceSelection,
     ) -> bool {
         match dialog.action.clone() {
+            ChoiceOverlayAction::SessionProfile { session_id } => {
+                let value = choice_selection_value(&selection);
+                self.set_session_profile(session_id, (!value.is_empty()).then_some(value));
+                true
+            }
             ChoiceOverlayAction::Exit => {
                 let close = self.commit_exit_menu(&selection);
                 if !close {
@@ -255,11 +260,31 @@ impl App {
                     }
                 }
             }
+            ChoiceOverlayAction::RememberedPermissionRules {
+                source,
+                workspace_id,
+                rules,
+            } => {
+                self.open_remembered_permission_rule_selection(
+                    source,
+                    workspace_id,
+                    rules,
+                    &choice_selection_value(&selection),
+                );
+                true
+            }
             ChoiceOverlayAction::PermissionRuleStudio(field) => {
                 let value = choice_selection_value(&selection);
                 let current_session_id = self.current_or_selected_session_id();
                 match &mut self.current_route {
                     Route::PermissionRuleStudio(parent) => {
+                        if !parent.editable
+                            || parent.save_request.is_some()
+                            || (parent.scope_locked
+                                && field == PermissionRuleStudioChoiceField::Scope)
+                        {
+                            return true;
+                        }
                         match field {
                             PermissionRuleStudioChoiceField::SubjectKind => {
                                 parent.draft.subject_kind = match value.as_str() {
@@ -327,10 +352,11 @@ impl App {
                     ));
                     return true;
                 };
+                let projection = crate::PermissionStudioProjection::new(&parent);
                 let new_rule = match &target {
                     crate::PermissionStudioModeTarget::PathRule { pattern }
-                        if !parent
-                            .permission
+                        if !projection
+                            .effective
                             .path
                             .as_ref()
                             .is_some_and(|path| path.rules.contains_key(pattern)) =>
@@ -346,11 +372,11 @@ impl App {
                         editor.input = Editor::from_text(input);
                     }
                 }
-                let mut permission = if target.is_network() {
-                    crate::permission_studio_custom_network(&parent)
-                } else {
-                    parent.permission.clone()
-                };
+                let reset = value.trim().is_empty()
+                    || value.eq_ignore_ascii_case("clear")
+                    || value.eq_ignore_ascii_case("unset");
+                let mut permission =
+                    crate::permission_studio_mode_edit_config(&parent, &target, reset);
                 let result = apply_permission_studio_mode_input(
                     &self.i18n,
                     &mut permission,
@@ -457,7 +483,7 @@ impl App {
                     ));
                     return true;
                 };
-                let mut permission = parent.permission.clone();
+                let mut permission = crate::permission_studio_local_config(&parent);
                 apply_permission_studio_entries_mode(&mut permission, kind, entries, mode);
                 if let Err(error) = self.persist_permission_studio(&mut parent, permission) {
                     self.restore_permission_studio_dialog(host, parent);

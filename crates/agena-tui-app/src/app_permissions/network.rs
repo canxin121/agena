@@ -74,10 +74,6 @@ impl App {
                     },
                 )));
             }
-            Action::Advanced => {
-                dialog.network_advanced = !dialog.network_advanced;
-                refresh_network_form(&self.i18n, dialog);
-            }
             Action::AddRule { deny } | Action::EditRule { deny, .. } => {
                 if dialog.network_rule.is_some() {
                     return Ok(());
@@ -88,13 +84,9 @@ impl App {
                 };
                 dialog.network_rule =
                     Some(permission_studio_network_rule_draft(dialog, deny, index)?);
-                crate::set_permission_studio_pane_focus(
-                    dialog,
-                    crate::PermissionStudioPaneFocus::Content,
-                );
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::NetworkRules,
+                    PermissionStudioPage::Access,
                     Some(PermissionStudioSectionId::NetworkRules),
                     PermissionStudioFocus::Items,
                 );

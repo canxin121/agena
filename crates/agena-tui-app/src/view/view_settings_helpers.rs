@@ -311,13 +311,9 @@ pub(crate) fn settings_item_action_hint(
     }
 }
 
-pub(crate) fn settings_table_columns(columns: &[(&str, usize)], width: u16) -> String {
-    format_fixed_columns(columns, width, |text| sanitize_display_text(text))
-}
-
 use super::{
     I18n, Line, Modifier, SettingsPickerAction, SettingsStudioItem, SettingsStudioOverlay, Span,
-    Style, Text, format_fixed_columns, sanitize_terminal_text,
+    Style, Text, sanitize_terminal_text,
 };
 use crate::ui_text;
 use unicode_segmentation::UnicodeSegmentation;

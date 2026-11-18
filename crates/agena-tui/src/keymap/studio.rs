@@ -26,6 +26,10 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::PermissionStudio => match key.code {
             K::Esc if unmodified(key) => Some(A::Back),
+            K::PageUp if unmodified(key) => Some(A::PageUp),
+            K::PageDown if unmodified(key) => Some(A::PageDown),
+            K::Home if unmodified(key) => Some(A::Home),
+            K::End if unmodified(key) => Some(A::End),
             K::Char('n') if only_ctrl(key) => Some(A::PermissionAdd),
             K::Char('s') if only_ctrl(key) => Some(A::PermissionSave),
             K::Char('e') if only_ctrl(key) => Some(A::PermissionRename),

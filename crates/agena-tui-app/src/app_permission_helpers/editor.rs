@@ -1,8 +1,7 @@
 use super::{
     normalize_permission_config, parse_permission_studio_key_input,
     parse_permission_studio_optional_mode_input, parse_permission_studio_optional_path_mode_input,
-    path_access_modes_summary, path_permission_mode_token, permission_mode_input_text,
-    permission_mode_label, permission_mode_token_text, permission_studio_mode_target_value,
+    path_permission_mode_token, permission_mode_token_text, permission_studio_mode_target_value,
     permission_studio_path_target_value, rename_path_rule, rename_tool_name, rename_tool_rule,
     set_path_default_mode,
 };
@@ -11,257 +10,246 @@ pub(crate) fn permission_studio_sections(
     i18n: &I18n,
     dialog: &PermissionStudioOverlay,
 ) -> Vec<PermissionStudioSection> {
-    match &dialog.page {
-        PermissionStudioPage::PathDefaults => vec![PermissionStudioSection {
-            id: PermissionStudioSectionId::PathDefaults,
-            label: ui_text::t(i18n, "permission-studio-page-path-defaults"),
-            items: vec![
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-path-workspace"),
-                    value: permission_studio_path_default_summary(i18n, dialog, false),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathWorkspace,
-                    ),
-                },
-                PermissionStudioItem {
-                    label: ui_text::t(i18n, "permission-studio-path-external"),
-                    value: permission_studio_path_default_summary(i18n, dialog, true),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::PathExternal,
-                    ),
-                },
-            ],
+    let projection = super::PermissionStudioProjection::new(dialog);
+    let mut sections = vec![permission_studio_path_defaults(i18n, &projection)];
+    sections.extend(super::permission_studio_network_defaults(
+        i18n,
+        dialog,
+        &projection,
+    ));
+    sections.push(permission_studio_tool_defaults(i18n, &projection));
+    sections.push(permission_studio_path_rules(i18n, &projection));
+    sections.extend(super::permission_studio_network_rules(i18n, dialog));
+    sections.push(permission_studio_tool_names(i18n, &projection));
+    sections.push(permission_studio_command_rules(i18n, &projection));
+    sections.push(PermissionStudioSection {
+        id: PermissionStudioSectionId::RememberedRules,
+        label: i18n.text("permission-studio-remembered-rules"),
+        items: vec![PermissionStudioItem {
+            label: i18n.text("permission-studio-remembered-open"),
+            value: String::new(),
+            source: None,
+            action: PermissionStudioAction::RememberedRules,
         }],
-        PermissionStudioPage::PathRules => {
-            let mut rules = dialog
-                .permission
-                .path
-                .as_ref()
-                .map(|path| path.rules.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            rules.sort();
-            let mut rule_items = rules
-                .into_iter()
-                .map(|pattern| {
-                    let modes = dialog
-                        .permission
-                        .path
-                        .as_ref()
-                        .and_then(|path| path.rules.get(pattern.as_str()));
-                    PermissionStudioItem {
-                        label: pattern.clone(),
-                        value: path_access_modes_summary(i18n, modes),
-                        action: PermissionStudioAction::EditMode(
-                            PermissionStudioModeTarget::PathRule { pattern },
-                        ),
-                    }
-                })
-                .collect::<Vec<_>>();
-            rule_items.insert(0, permission_studio_new_rule_item(i18n));
-            vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::PathRules,
-                label: ui_text::t(i18n, "permission-studio-page-path-rules"),
-                items: rule_items,
-            }]
-        }
-        PermissionStudioPage::NetworkDefaults => {
-            super::permission_studio_network_defaults(i18n, dialog)
-        }
-        PermissionStudioPage::NetworkRules => super::permission_studio_network_rules(i18n, dialog),
-        PermissionStudioPage::ToolNames => {
-            let mut keys = dialog
-                .permission
-                .tools
-                .as_ref()
-                .map(|tools| tools.names.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            keys.sort();
-            let mut name_items = keys
-                .into_iter()
-                .map(|key| PermissionStudioItem {
-                    label: key.clone(),
-                    value: permission_mode_input_text(
-                        dialog
-                            .permission
-                            .tools
-                            .as_ref()
-                            .and_then(|tools| tools.names.get(key.as_str()).copied()),
-                        i18n,
-                    ),
-                    action: PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::ToolName { key },
-                    ),
-                })
-                .collect::<Vec<_>>();
-            name_items.insert(0, permission_studio_new_rule_item(i18n));
-            vec![
-                PermissionStudioSection {
-                    id: PermissionStudioSectionId::ToolNames,
-                    label: ui_text::t(i18n, "permission-studio-page-names"),
-                    items: name_items,
-                },
-                // What a tool the table above does not name falls back to. It
-                // sits in its own section so the two kinds of row - "one
-                // specific tool" and "everything else" - stay visually apart.
-                PermissionStudioSection {
-                    id: PermissionStudioSectionId::ToolDefaults,
-                    label: ui_text::t(i18n, "permission-studio-page-tool-defaults"),
-                    items: vec![PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-tool-default"),
-                        value: permission_mode_input_text(
-                            dialog
-                                .permission
-                                .tools
-                                .as_ref()
-                                .and_then(|tools| tools.default),
-                            i18n,
-                        ),
-                        action: PermissionStudioAction::EditMode(
-                            PermissionStudioModeTarget::ToolDefault,
-                        ),
-                    }],
-                },
-            ]
-        }
-        PermissionStudioPage::ToolCommandRules => {
-            // Shell-capable tools can be restricted by command pattern
-            // (including the command classes `no-op` / `routine` /
-            // `dangerous`). The `*` tool name is not a shell tool: it carries
-            // the read-only class, which applies to every tool whose declared
-            // tags say read-only.
-            let mut keys = dialog
-                .permission
-                .tools
-                .as_ref()
-                .map(|tools| tools.rules.keys().cloned().collect::<Vec<_>>())
-                .unwrap_or_default();
-            keys.retain(|tool_name| {
-                matches!(
-                    tool_name.as_str(),
-                    "agena.shell.exec"
-                        | "agena.shell.spawn"
-                        | "agena.shell.watch"
-                        | "agena.shell.open"
-                        | "agena.shell.write"
-                        | "*"
-                )
-            });
-            keys.sort();
-            keys.sort_by_key(|tool_name| tool_name == "*");
-            let mut tool_rule_items = keys
-                .into_iter()
-                .flat_map(|tool_name| {
-                    let wildcard = tool_name == "*";
-                    let rules = dialog
-                        .permission
-                        .tools
-                        .as_ref()
-                        .and_then(|tools| tools.rules.get(tool_name.as_str()));
-                    match rules {
-                        Some(ToolPermissionRules::Ordered(entries)) => {
-                            let mut items = entries
-                                .iter()
-                                .map(|(pattern, mode)| PermissionStudioItem {
-                                    label: format!("{tool_name} · {pattern}"),
-                                    value: permission_mode_label(i18n, *mode),
-                                    action: PermissionStudioAction::EditMode(
-                                        PermissionStudioModeTarget::ToolCommandPattern {
-                                            tool_name: tool_name.clone(),
-                                            pattern: pattern.clone(),
-                                        },
-                                    ),
-                                })
-                                .collect::<Vec<_>>();
-                            if !wildcard {
-                                items.push(PermissionStudioItem {
-                                    label: format!(
-                                        "{tool_name} · {}",
-                                        ui_text::t(
-                                            i18n,
-                                            "permission-studio-command-pattern-suffix"
-                                        )
-                                    ),
-                                    value: ui_text::t(i18n, "value-add"),
-                                    action: PermissionStudioAction::AddToolCommandPattern {
-                                        tool_name,
-                                    },
-                                });
-                            }
-                            items
-                        }
-                        Some(ToolPermissionRules::Mode(mode)) if !wildcard => {
-                            vec![
-                                PermissionStudioItem {
-                                    label: format!("{tool_name} · *"),
-                                    value: permission_mode_label(i18n, *mode),
-                                    action: PermissionStudioAction::EditMode(
-                                        PermissionStudioModeTarget::ToolCommandPattern {
-                                            tool_name: tool_name.clone(),
-                                            pattern: "*".to_string(),
-                                        },
-                                    ),
-                                },
-                                PermissionStudioItem {
-                                    label: format!(
-                                        "{tool_name} · {}",
-                                        ui_text::t(
-                                            i18n,
-                                            "permission-studio-command-pattern-suffix"
-                                        )
-                                    ),
-                                    value: ui_text::t(i18n, "value-add"),
-                                    action: PermissionStudioAction::AddToolCommandPattern {
-                                        tool_name,
-                                    },
-                                },
-                            ]
-                        }
-                        _ => Vec::new(),
-                    }
-                })
-                .collect::<Vec<_>>();
-            tool_rule_items.insert(0, permission_studio_new_rule_item(i18n));
-            vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::ToolCommandRules,
-                label: ui_text::t(i18n, "permission-studio-page-tool-rules"),
-                items: tool_rule_items,
-            }]
-        }
-    }
+    });
+    sections.extend(super::permission_studio_network_controls(i18n, dialog));
+    sections
 }
 
-fn permission_studio_path_default_summary(
-    i18n: &I18n,
-    dialog: &PermissionStudioOverlay,
-    external: bool,
-) -> String {
-    let selected = dialog.permission.path.as_ref();
-    let parent = dialog.inherited_permission.path.as_ref();
-    let (value, inherited) = if external {
-        (
-            selected.and_then(|path| path.external.as_ref()),
-            parent.and_then(|path| path.external.as_ref()),
-        )
-    } else {
-        (
-            selected.and_then(|path| path.workspace.as_ref()),
-            parent.and_then(|path| path.workspace.as_ref()),
-        )
-    };
-    if value.is_some() {
-        return path_access_modes_summary(i18n, value);
-    }
-    format!(
-        "{} · {}",
-        ui_text::t(i18n, "value-inherit"),
-        path_access_modes_summary(i18n, inherited),
+fn rules_title(i18n: &I18n, label: &str, count: usize) -> String {
+    i18n.text_args(
+        "permission-studio-section-rule-count",
+        &agena_tui::fl_args!(
+            "section" => i18n.text(label), "count" => count as i64,
+        ),
     )
 }
 
-fn permission_studio_new_rule_item(i18n: &I18n) -> PermissionStudioItem {
+fn permission_studio_path_defaults(
+    i18n: &I18n,
+    projection: &super::PermissionStudioProjection,
+) -> PermissionStudioSection {
+    PermissionStudioSection {
+        id: PermissionStudioSectionId::PathDefaults,
+        label: rules_title(
+            i18n,
+            "permission-studio-nav-filesystem",
+            projection
+                .effective
+                .path
+                .as_ref()
+                .map_or(0, |path| path.rules.len()),
+        ),
+        items: vec![
+            projection.mode_item(
+                i18n,
+                i18n.text("permission-studio-workspace-label"),
+                PermissionStudioModeTarget::PathWorkspace,
+            ),
+            projection.mode_item(
+                i18n,
+                i18n.text("permission-studio-external-label"),
+                PermissionStudioModeTarget::PathExternal,
+            ),
+        ],
+    }
+}
+
+fn permission_studio_tool_defaults(
+    i18n: &I18n,
+    projection: &super::PermissionStudioProjection,
+) -> PermissionStudioSection {
+    let tools = projection.effective.tools.as_ref();
+    let names = tools.map_or(0, |tools| tools.names.len());
+    let commands = tools.map_or(0, |tools| {
+        tools
+            .rules
+            .iter()
+            .filter(|(name, _)| name.as_str() != "*")
+            .map(|(_, rules)| match rules {
+                ToolPermissionRules::Mode(_) => 1,
+                ToolPermissionRules::Ordered(entries) => entries.len(),
+            })
+            .sum::<usize>()
+    });
+    PermissionStudioSection {
+        id: PermissionStudioSectionId::ToolDefaults,
+        label: i18n.text_args(
+            "permission-studio-tools-rule-count",
+            &agena_tui::fl_args!("names" => names as i64, "commands" => commands as i64),
+        ),
+        items: vec![
+            projection.mode_item(
+                i18n,
+                i18n.text("permission-studio-default-label"),
+                PermissionStudioModeTarget::ToolDefault,
+            ),
+            projection.mode_item(
+                i18n,
+                i18n.text("permission-studio-read-only-class-label"),
+                PermissionStudioModeTarget::ToolCommandPattern {
+                    tool_name: "*".into(),
+                    pattern: "read-only".into(),
+                },
+            ),
+        ],
+    }
+}
+
+fn local_rules_first(items: &mut [PermissionStudioItem]) {
+    items.sort_by_key(|item| item.source != Some(crate::PermissionStudioValueSource::Current));
+}
+
+fn permission_studio_path_rules(
+    i18n: &I18n,
+    projection: &super::PermissionStudioProjection,
+) -> PermissionStudioSection {
+    let mut items = projection
+        .effective
+        .path
+        .as_ref()
+        .into_iter()
+        .flat_map(|path| path.rules.keys())
+        .map(|pattern| {
+            projection.mode_item(
+                i18n,
+                pattern.clone(),
+                PermissionStudioModeTarget::PathRule {
+                    pattern: pattern.clone(),
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    local_rules_first(&mut items);
+    items.push(permission_studio_new_rule_item(
+        i18n,
+        "permission-studio-add-path-rule",
+    ));
+    PermissionStudioSection {
+        id: PermissionStudioSectionId::PathRules,
+        label: i18n.text("permission-studio-nav-path-rules"),
+        items,
+    }
+}
+
+fn permission_studio_tool_names(
+    i18n: &I18n,
+    projection: &super::PermissionStudioProjection,
+) -> PermissionStudioSection {
+    let mut items = projection
+        .effective
+        .tools
+        .as_ref()
+        .into_iter()
+        .flat_map(|tools| tools.names.keys())
+        .map(|key| {
+            projection.mode_item(
+                i18n,
+                key.clone(),
+                PermissionStudioModeTarget::ToolName { key: key.clone() },
+            )
+        })
+        .collect::<Vec<_>>();
+    local_rules_first(&mut items);
+    items.push(permission_studio_new_rule_item(
+        i18n,
+        "permission-studio-add-name",
+    ));
+    PermissionStudioSection {
+        id: PermissionStudioSectionId::ToolNames,
+        label: i18n.text("permission-studio-nav-name-rules"),
+        items,
+    }
+}
+
+fn permission_studio_command_rules(
+    i18n: &I18n,
+    projection: &super::PermissionStudioProjection,
+) -> PermissionStudioSection {
+    let mut items = Vec::new();
+    let mut actions = Vec::new();
+    for (tool_name, rules) in projection
+        .effective
+        .tools
+        .as_ref()
+        .into_iter()
+        .flat_map(|tools| tools.rules.iter())
+    {
+        // The read-only class is a top-level default, not a command exception.
+        if tool_name == "*" {
+            continue;
+        }
+        match rules {
+            ToolPermissionRules::Ordered(entries) => {
+                for pattern in entries.keys() {
+                    items.push(projection.mode_item(
+                        i18n,
+                        format!("{tool_name} · {pattern}"),
+                        PermissionStudioModeTarget::ToolCommandPattern {
+                            tool_name: tool_name.clone(),
+                            pattern: pattern.clone(),
+                        },
+                    ));
+                }
+            }
+            ToolPermissionRules::Mode(_) => items.push(projection.mode_item(
+                i18n,
+                tool_name.clone(),
+                PermissionStudioModeTarget::ToolRule {
+                    tool_name: tool_name.clone(),
+                },
+            )),
+        }
+        actions.push(PermissionStudioItem {
+            label: format!(
+                "{tool_name} · {}",
+                i18n.text("permission-studio-command-pattern-suffix")
+            ),
+            value: String::new(),
+            source: None,
+            action: PermissionStudioAction::AddToolCommandPattern {
+                tool_name: tool_name.clone(),
+            },
+        });
+    }
+    local_rules_first(&mut items);
+    items.extend(actions);
+    items.push(permission_studio_new_rule_item(
+        i18n,
+        "permission-studio-add-tool-rule",
+    ));
+    PermissionStudioSection {
+        id: PermissionStudioSectionId::ToolCommandRules,
+        label: i18n.text("permission-studio-nav-command-rules"),
+        items,
+    }
+}
+
+fn permission_studio_new_rule_item(i18n: &I18n, label: &str) -> PermissionStudioItem {
     PermissionStudioItem {
-        label: ui_text::t(i18n, "permission-studio-new-rule-label"),
-        value: ui_text::t(i18n, "permission-studio-new-rule-value"),
+        label: format!("+ {}", i18n.text(label)),
+        value: String::new(),
+        source: None,
         action: PermissionStudioAction::CreateRule,
     }
 }
@@ -285,6 +273,11 @@ pub(crate) fn permission_studio_mode_target_label(
                 "permission-studio-network-host-loopback"
             }
             PermissionStudioModeTarget::ToolDefault => "permission-studio-tool-default",
+            PermissionStudioModeTarget::ToolCommandPattern { tool_name, pattern }
+                if tool_name == "*" && pattern == "read-only" =>
+            {
+                "permission-studio-read-only-class-label"
+            }
             PermissionStudioModeTarget::PathRule { .. } => "permission-studio-rule-path",
             PermissionStudioModeTarget::ToolName { .. }
             | PermissionStudioModeTarget::ToolRule { .. }
@@ -306,7 +299,7 @@ pub(crate) fn permission_studio_mode_target_input_text(
     let permission = if target.is_network() {
         super::permission_studio_custom_network(dialog)
     } else {
-        dialog.permission.clone()
+        super::permission_studio_local_config(dialog)
     };
     permission_mode_token_text(permission_studio_mode_target_value(&permission, target))
 }
@@ -532,14 +525,14 @@ pub(crate) fn apply_permission_studio_text_input(
     permission: &mut PermissionConfig,
     target: &PermissionStudioTextTarget,
     input: &str,
-) -> UiResult<PermissionStudioPage> {
+) -> UiResult<PermissionStudioSectionId> {
     let value = parse_permission_studio_key_input(
         i18n,
         permission_studio_text_target_label(i18n, target).as_str(),
         input,
     )
     .map_err(crate::UiFailure::message)?;
-    let page = match target {
+    let section = match target {
         PermissionStudioTextTarget::PathRulePattern { pattern } => {
             let value = agena_domain::canonical_permission_path(&value)
                 .map_err(crate::UiFailure::message)?;
@@ -554,7 +547,7 @@ pub(crate) fn apply_permission_studio_text_input(
                 ));
             }
             rename_path_rule(permission, pattern.as_str(), value.as_str());
-            PermissionStudioPage::PathRules
+            PermissionStudioSectionId::PathRules
         }
         PermissionStudioTextTarget::ToolNameKey { key } => {
             if key != &value
@@ -568,7 +561,7 @@ pub(crate) fn apply_permission_studio_text_input(
                 ));
             }
             rename_tool_name(permission, key.as_str(), value.as_str());
-            PermissionStudioPage::ToolNames
+            PermissionStudioSectionId::ToolNames
         }
         PermissionStudioTextTarget::ToolRuleName { tool_name } => {
             if tool_name != &value
@@ -582,17 +575,17 @@ pub(crate) fn apply_permission_studio_text_input(
                 ));
             }
             rename_tool_rule(permission, tool_name.as_str(), value.as_str());
-            PermissionStudioPage::ToolCommandRules
+            PermissionStudioSectionId::ToolCommandRules
         }
     };
     normalize_permission_config(permission);
-    Ok(page)
+    Ok(section)
 }
 use crate::{
     I18n, PathAccessModes, PermissionConfig, PermissionStudioAction, PermissionStudioEditorAction,
     PermissionStudioItem, PermissionStudioModeTarget, PermissionStudioOverlay,
-    PermissionStudioPage, PermissionStudioSection, PermissionStudioSectionId,
-    PermissionStudioTextTarget, ToolPermissionRules, UiResult, settings_edit_title, ui_text,
+    PermissionStudioSection, PermissionStudioSectionId, PermissionStudioTextTarget,
+    ToolPermissionRules, UiResult, settings_edit_title, ui_text,
 };
 
 #[cfg(test)]

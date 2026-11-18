@@ -444,7 +444,7 @@ overlay-settings-section-model-catalog-label = 모델 카탈로그
 
 overlay-settings-section-model-catalog-summary = {$count} 항목
 
-overlay-settings-section-permissions-label = 권한
+overlay-settings-section-permissions-label = 접근 권한
 
 overlay-settings-section-permissions-summary = {$count} 지속 권한 규칙(s)
 
@@ -825,11 +825,11 @@ permission-studio-nav-network = 네트워크
 
 permission-studio-nav-network-defaults = 정책
 
-permission-studio-nav-network-rules = 규칙
+permission-studio-nav-network-rules = 네트워크 규칙
 
 permission-studio-nav-tool-access = 도구 접근
 
-permission-studio-nav-name-rules = 이름 규칙
+permission-studio-nav-name-rules = 도구 이름 규칙
 
 permission-studio-nav-command-rules = 명령 규칙
 
@@ -1241,7 +1241,7 @@ overlay-choice-clear-value = 명확한 가치
 overlay-settings-section-plugins-description = 플러그인을 구성하고 도구와 진단 정보를 확인하세요.
 overlay-settings-section-providers-description = 공급자와 해당 네트워크 동작을 구성하고, 모델 카탈로그를 검사합니다.
 overlay-settings-section-model-catalog-description = 확인된 모델 카탈로그를 찾아보고, 모델 메타데이터를 검사하고, 로컬 캐시를 새로 고칩니다.
-overlay-settings-section-permissions-description = 전역, 작업 공간 및 현재 세션 권한을 별도로 편집합니다.
+overlay-settings-section-permissions-description = 파일, 네트워크, 도구 및 기억된 승인 결정을 한 페이지에서 관리합니다.
 overlay-settings-section-runtime-session-description = 호환성 클라이언트 버전 및 자동 세션 압축 동작을 구성합니다.
 settings-permission-effective-detail = 읽기 전용 · 전역, 작업 공간 및 세션에서 병합되었습니다.
 settings-permission-effective-read-only = 유효 권한은 읽기 전용입니다. 대신 세션, 작업공간 또는 전역 소스를 편집하세요.
@@ -3393,3 +3393,35 @@ settings-sandbox-active = 현재 활성
 settings-sandbox-inactive = 현재 비활성
 settings-sandbox-global-label = 전역 · { $label }
 settings-sandbox-workspace-label = 작업 공간 · { $label }
+permission-studio-page-access = 접근 권한
+permission-studio-access-footer = ↑↓ 선택 · Tab/Shift+Tab 섹션 · PgUp/PgDn 스크롤 · Enter 편집 · Ctrl+N 추가 · Ctrl+D 삭제 · Ctrl+E 이름 변경 · Esc 돌아가기
+permission-studio-access-content = 파일, 네트워크 및 도구
+permission-studio-remembered-rules = 기억된 승인 결정
+permission-studio-remembered-open = 기억된 승인 결정 열기
+permission-studio-remembered-detail = 승인 요청에서 저장한 권한 규칙을 관리합니다.
+permission-studio-remembered-create = 승인 규칙 만들기
+permission-studio-remembered-read-only = 이 범위의 기억된 승인 결정은 읽기 전용입니다.
+permission-studio-remembered-read-only-footer = ↑↓ 선택 · Esc 돌아가기 · 읽기 전용
+permission-studio-remembered-empty = 이 범위에 활성 상태인 승인 결정이 없습니다.
+permission-studio-remembered-scope-locked = 이 규칙은 접근 권한 페이지에서 선택한 범위를 유지합니다.
+permission-studio-save-or-cancel = 현재 권한 편집을 저장하거나 취소한 후 이동하세요.
+permission-studio-access-read-only-footer = ↑↓ 선택 · Tab/Shift+Tab 섹션 · PgUp/PgDn 스크롤 · Esc 돌아가기 · 읽기 전용
+
+permission-studio-origin-current = 현재
+permission-studio-origin-inherited = 상속
+permission-studio-origin-effective = 유효
+permission-studio-read-only-follows-default = 따름→{$value}
+permission-studio-read-only-invalid = 유효하지 않음
+permission-studio-section-rule-count = {$section} · 규칙 {$count}
+permission-studio-tools-rule-count = 도구 · 이름 {$names} · 명령 {$commands}
+permission-studio-workspace-label = 작업 공간
+permission-studio-external-label = 외부 경로
+permission-studio-path-readwrite-compact = 읽기/쓰기
+permission-studio-default-label = 기본
+permission-studio-read-only-class-label = 읽기 전용
+permission-studio-outbound-label = 송신
+permission-studio-inbound-label = 수신
+permission-studio-loopback-label = 호스트 루프백
+permission-studio-network-controls = 네트워크 작업
+permission-studio-add-network-rule = + 네트워크 규칙 추가
+permission-studio-inherited-rule-no-local-edit = 상속된 규칙을 편집하면 현재 범위에서 재정의됩니다. 현재 범위의 규칙만 이름을 바꾸거나 삭제할 수 있습니다.

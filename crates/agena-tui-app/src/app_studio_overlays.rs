@@ -1,6 +1,6 @@
 use super::{
     permission_config_from_json_value, permission_studio_read_only_message,
-    refresh_permission_studio_dialog, set_permission_studio_pane_focus,
+    refresh_permission_studio_dialog,
 };
 
 impl App {
@@ -71,7 +71,7 @@ impl App {
                 match result {
                     Ok(()) => match app.build_permission_studio_overlay(
                         source,
-                        PermissionStudioPage::PathDefaults,
+                        PermissionStudioPage::Access,
                         Some(PermissionStudioSectionId::PathDefaults),
                         None,
                         PermissionStudioFocus::Items,
@@ -121,7 +121,7 @@ impl App {
                         app.settings_session_permission = Some((session_id, state));
                         match app.build_permission_studio_overlay(
                             source,
-                            PermissionStudioPage::PathDefaults,
+                            PermissionStudioPage::Access,
                             Some(PermissionStudioSectionId::PathDefaults),
                             None,
                             PermissionStudioFocus::Items,
@@ -155,7 +155,7 @@ impl App {
         preferred_item_label: Option<&str>,
         preferred_focus: PermissionStudioFocus,
     ) -> UiResult<PermissionStudioOverlay> {
-        let (title_context, source_label, scope_label, editable, permission) = match &source {
+        let (title_context, editable, permission) = match &source {
             PermissionStudioSource::GlobalConfig => {
                 let sources = crate::app_backend::config::config_json_sources(&self.application)
                     .map_err(crate::UiFailure::internal)?;
@@ -163,8 +163,6 @@ impl App {
                     &get_json_path(&sources.file, Some("permission")).unwrap_or(JsonValue::Null),
                 )?;
                 (
-                    ui_text::t(&self.i18n, "settings-permission-global-label"),
-                    sources.config_path.display().to_string(),
                     ui_text::t(&self.i18n, "permission-studio-source-global"),
                     true,
                     permission.clone(),
@@ -178,8 +176,6 @@ impl App {
                         .unwrap_or(JsonValue::Null),
                 )?;
                 (
-                    ui_text::t(&self.i18n, "settings-permission-workspace-label"),
-                    sources.project_config_path.display().to_string(),
                     ui_text::t(&self.i18n, "permission-studio-source-workspace"),
                     true,
                     permission,
@@ -188,9 +184,11 @@ impl App {
             PermissionStudioSource::Session { session_id } => {
                 let state = self.cached_session_permission_studio_state(*session_id)?;
                 (
-                    state.session_title.clone(),
-                    session_id.to_string(),
-                    ui_text::t(&self.i18n, "permission-studio-source-session"),
+                    format!(
+                        "{} · {}",
+                        ui_text::t(&self.i18n, "permission-studio-source-session"),
+                        state.session_title
+                    ),
                     true,
                     state.permission.clone(),
                 )
@@ -198,9 +196,11 @@ impl App {
             PermissionStudioSource::EffectiveSession { session_id } => {
                 let state = self.cached_session_permission_studio_state(*session_id)?;
                 (
-                    ui_text::t(&self.i18n, "settings-permission-effective-label"),
-                    state.session_title.clone(),
-                    ui_text::t(&self.i18n, "permission-studio-source-effective"),
+                    format!(
+                        "{} · {}",
+                        ui_text::t(&self.i18n, "permission-studio-source-effective"),
+                        state.session_title
+                    ),
                     false,
                     state.effective_permission.clone(),
                 )
@@ -231,16 +231,11 @@ impl App {
             footer: String::new(),
             source,
             title_context,
-            source_label,
-            scope_label,
             editable,
             permission,
             inherited_permission,
             network_rule: None,
-            network_advanced: false,
             save_request: None,
-            nav: SelectableListState::new(Vec::new(), 0),
-            pane_focus: PermissionStudioPaneFocus::Navigation,
             page,
             state: SectionedListState::new(Vec::new(), 0, 0, PermissionStudioFocus::Navigation),
             editor: None,
@@ -265,7 +260,6 @@ impl App {
         }
         let preferred_section = dialog.state.selected_section().map(|section| section.id);
         let preferred_item = dialog.state.selected_item().map(|item| item.label.as_str());
-        let pane_focus = dialog.pane_focus;
         match self.build_permission_studio_overlay(
             dialog.source.clone(),
             dialog.page.clone(),
@@ -274,7 +268,6 @@ impl App {
             dialog.state.focus(),
         ) {
             Ok(mut updated) => {
-                updated.network_advanced = dialog.network_advanced;
                 refresh_permission_studio_dialog(
                     &self.i18n,
                     &mut updated,
@@ -282,7 +275,6 @@ impl App {
                     preferred_item,
                     Some(dialog.state.focus()),
                 );
-                set_permission_studio_pane_focus(&mut updated, pane_focus);
                 *dialog = updated;
             }
             Err(error) => self.flash_error(error),
@@ -460,7 +452,7 @@ impl App {
 }
 use crate::{
     App, JsonValue, PermissionConfig, PermissionStudioFocus, PermissionStudioOverlay,
-    PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
-    PermissionStudioSource, Route, SectionedListState, SelectableListState, UiResult,
-    get_json_path, settings_path_cleared_message, settings_path_updated_message, ui_text,
+    PermissionStudioPage, PermissionStudioSectionId, PermissionStudioSource, Route,
+    SectionedListState, UiResult, get_json_path, settings_path_cleared_message,
+    settings_path_updated_message, ui_text,
 };

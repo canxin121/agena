@@ -417,7 +417,7 @@ overlay-settings-section-model-catalog-label = Catálogo de modelos
 
 overlay-settings-section-model-catalog-summary = {$count} entries
 
-overlay-settings-section-permissions-label = Permisos
+overlay-settings-section-permissions-label = Permisos de acceso
 
 overlay-settings-section-permissions-summary = {$count} persisted permission rule(s)
 
@@ -798,11 +798,11 @@ permission-studio-nav-network = Red
 
 permission-studio-nav-network-defaults = Política
 
-permission-studio-nav-network-rules = Reglas
+permission-studio-nav-network-rules = Reglas de red
 
 permission-studio-nav-tool-access = Acceso a herramientas
 
-permission-studio-nav-name-rules = Reglas de nombre
+permission-studio-nav-name-rules = Reglas de nombre de herramienta
 
 permission-studio-nav-command-rules = Reglas de comando
 
@@ -1214,7 +1214,7 @@ overlay-choice-clear-value = Borrar valor
 overlay-settings-section-plugins-description = Configure plugins y consulte sus herramientas y diagnósticos.
 overlay-settings-section-providers-description = Configure los proveedores y su comportamiento de red e inspeccione el catálogo de modelos.
 overlay-settings-section-model-catalog-description = Explore el catálogo de modelos resuelto, inspeccione los metadatos del modelo y actualice la caché local.
-overlay-settings-section-permissions-description = Edite los permisos globales, del espacio de trabajo y de la sesión actual por separado.
+overlay-settings-section-permissions-description = Gestionar archivos, red, herramientas y decisiones recordadas en una sola página.
 overlay-settings-section-runtime-session-description = Configure las versiones del cliente de compatibilidad y el comportamiento de compactación automática de la sesión.
 settings-permission-effective-detail = Sólo lectura · combinado desde global, espacio de trabajo y sesión.
 settings-permission-effective-read-only = El permiso efectivo es de sólo lectura; en su lugar, edite la sesión, el espacio de trabajo o la fuente global.
@@ -3412,3 +3412,35 @@ settings-sandbox-active = Activo ahora
 settings-sandbox-inactive = Inactivo ahora
 settings-sandbox-global-label = Global · { $label }
 settings-sandbox-workspace-label = Espacio de trabajo · { $label }
+permission-studio-page-access = Permisos de acceso
+permission-studio-access-footer = ↑↓ Seleccionar · Tab/Shift+Tab Sección · PgUp/PgDn Desplazar · Enter Editar · Ctrl+N Añadir · Ctrl+D Eliminar · Ctrl+E Renombrar · Esc Volver
+permission-studio-access-content = Archivos, red y herramientas
+permission-studio-remembered-rules = Decisiones recordadas
+permission-studio-remembered-open = Abrir decisiones recordadas
+permission-studio-remembered-detail = Gestionar las reglas guardadas durante las solicitudes de aprobación.
+permission-studio-remembered-create = Crear una regla recordada
+permission-studio-remembered-read-only = Las decisiones recordadas de este ámbito son de solo lectura.
+permission-studio-remembered-read-only-footer = ↑↓ Seleccionar · Esc Volver · Solo lectura
+permission-studio-remembered-empty = No hay decisiones recordadas activas en este ámbito.
+permission-studio-remembered-scope-locked = Esta regla conserva el ámbito seleccionado en la página de permisos de acceso.
+permission-studio-save-or-cancel = Guarda o cancela la edición de permisos antes de salir.
+permission-studio-access-read-only-footer = ↑↓ Seleccionar · Tab/Shift+Tab Sección · PgUp/PgDn Desplazar · Esc Volver · Solo lectura
+
+permission-studio-origin-current = local
+permission-studio-origin-inherited = heredado
+permission-studio-origin-effective = efectivo
+permission-studio-read-only-follows-default = auto→{$value}
+permission-studio-read-only-invalid = inválido
+permission-studio-section-rule-count = {$section} · reglas {$count}
+permission-studio-tools-rule-count = Herram. · nombres {$names} · comandos {$commands}
+permission-studio-workspace-label = Espacio
+permission-studio-external-label = Externo
+permission-studio-path-readwrite-compact = Leer/escribir
+permission-studio-default-label = Predet.
+permission-studio-read-only-class-label = Solo lectura
+permission-studio-outbound-label = Salida
+permission-studio-inbound-label = Entrada
+permission-studio-loopback-label = Bucle local
+permission-studio-network-controls = Acciones de red
+permission-studio-add-network-rule = + Añadir regla de red
+permission-studio-inherited-rule-no-local-edit = Editar la regla heredada crea una anulación local. Solo las reglas locales se pueden renombrar o eliminar.

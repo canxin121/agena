@@ -628,7 +628,7 @@ impl App {
         };
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let options = self.run_options.to_request();
+        let options = self.run_options.submission_request();
         tokio::spawn(async move {
             let result = application
                 .submit_document(session_id, document, options)
@@ -693,7 +693,7 @@ impl App {
         );
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let options = self.run_options.to_request();
+        let options = self.run_options.submission_request();
         tokio::spawn(async move {
             let result = application
                 .continue_session(session_id, options)
@@ -712,7 +712,7 @@ impl App {
         );
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let options = self.run_options.to_request();
+        let options = self.run_options.submission_request();
         tokio::spawn(async move {
             let result = application
                 .compact_session(session_id, options)
@@ -738,7 +738,7 @@ impl App {
         );
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let options = self.run_options.to_request();
+        let options = self.run_options.submission_request();
         let replied_request_id = request_id.clone();
         let replied_kind = kind;
         tokio::spawn(async move {
@@ -774,7 +774,7 @@ impl App {
         );
         let application = self.application.clone();
         let tx = self.tx.clone();
-        let options = self.run_options.to_request();
+        let options = self.run_options.submission_request();
         let request_id = reply.request_id.clone();
         tokio::spawn(async move {
             let result = application

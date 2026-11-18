@@ -3,14 +3,23 @@ impl App {
         &mut self,
         dialog: &mut PermissionStudioOverlay,
     ) -> bool {
-        if dialog.pane_focus == PermissionStudioPaneFocus::Navigation {
-            set_permission_studio_pane_focus(dialog, PermissionStudioPaneFocus::Content);
-            return false;
-        }
         let Some(item) = dialog.state.selected_item().cloned() else {
             return false;
         };
+        if dialog.network_rule.is_some()
+            && dialog
+                .state
+                .selected_section()
+                .is_some_and(|section| section.id != crate::PermissionStudioSectionId::NetworkRules)
+        {
+            self.flash_warning(self.i18n.text("permission-studio-network-save-or-cancel"));
+            return false;
+        }
         match item.action {
+            PermissionStudioAction::RememberedRules => {
+                self.open_remembered_permission_rules(dialog);
+                false
+            }
             PermissionStudioAction::CreateRule => {
                 self.open_permission_studio_add_current(dialog);
                 false
@@ -51,29 +60,6 @@ impl App {
                 }
             }
         }
-    }
-
-    pub(crate) fn apply_permission_studio_nav_selection(
-        &mut self,
-        dialog: &mut PermissionStudioOverlay,
-    ) {
-        let Some(item) = dialog.nav.selected_item().cloned() else {
-            return;
-        };
-        if !item.selectable {
-            return;
-        };
-        if dialog.network_rule.is_some() && item.page != dialog.page {
-            dialog.nav.selected = crate::permission_studio_nav_index_for_page(&dialog.page);
-            self.flash_warning(self.i18n.text("permission-studio-network-save-or-cancel"));
-            return;
-        }
-        self.set_permission_studio_page_with_section(
-            dialog,
-            item.page,
-            item.section,
-            dialog.state.focus(),
-        );
     }
 
     pub(crate) fn open_permission_studio_mode_overlay(
@@ -169,6 +155,21 @@ impl App {
         let Some(action) = dialog.state.selected_item().map(|item| item.action.clone()) else {
             return;
         };
+        if let PermissionStudioAction::EditMode(target) = &action
+            && matches!(
+                target,
+                PermissionStudioModeTarget::PathRule { .. }
+                    | PermissionStudioModeTarget::ToolName { .. }
+                    | PermissionStudioModeTarget::ToolRule { .. }
+            )
+            && !crate::permission_studio_has_override(dialog, target)
+        {
+            self.flash_warning(
+                self.i18n
+                    .text("permission-studio-inherited-rule-no-local-edit"),
+            );
+            return;
+        }
         let target = match action {
             PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule { pattern }) => {
                 PermissionStudioTextTarget::PathRulePattern { pattern }
@@ -212,34 +213,18 @@ impl App {
     ) -> UiResult<()> {
         match action {
             PermissionStudioEditorAction::Text(target) => {
-                let mut permission = dialog.permission.clone();
-                let next_page = apply_permission_studio_text_input(
+                let mut permission = crate::permission_studio_local_config(dialog);
+                let next_section = apply_permission_studio_text_input(
                     &self.i18n,
                     &mut permission,
                     &target,
                     input.as_str(),
                 )?;
                 self.persist_permission_studio(dialog, permission)?;
-                let next_section = match next_page {
-                    PermissionStudioPage::PathRules => Some(PermissionStudioSectionId::PathRules),
-                    PermissionStudioPage::NetworkRules => {
-                        Some(PermissionStudioSectionId::NetworkRules)
-                    }
-                    PermissionStudioPage::ToolNames => Some(PermissionStudioSectionId::ToolNames),
-                    PermissionStudioPage::ToolCommandRules => {
-                        Some(PermissionStudioSectionId::ToolCommandRules)
-                    }
-                    // The class-default pages have no free-text field: every
-                    // entry is a mode chosen from the value list, so no section
-                    // follows.
-                    PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkDefaults => {
-                        None
-                    }
-                };
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    next_page,
-                    next_section,
+                    PermissionStudioPage::Access,
+                    Some(next_section),
                     PermissionStudioFocus::Items,
                 );
             }
@@ -264,7 +249,7 @@ impl App {
                 }
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::PathRules,
+                    PermissionStudioPage::Access,
                     Some(PermissionStudioSectionId::PathRules),
                     PermissionStudioFocus::Items,
                 );
@@ -317,7 +302,7 @@ impl App {
                 .map_err(crate::UiFailure::message)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::ToolNames,
+                    PermissionStudioPage::Access,
                     Some(PermissionStudioSectionId::ToolNames),
                     PermissionStudioFocus::Items,
                 );
@@ -348,7 +333,7 @@ impl App {
                     ));
                     return Ok(());
                 }
-                let mut permission = dialog.permission.clone();
+                let mut permission = crate::permission_studio_local_config(dialog);
                 let rule = ToolPermissionRules::Mode(PermissionMode::Auto);
                 permission
                     .tools
@@ -358,7 +343,7 @@ impl App {
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::ToolCommandRules,
+                    PermissionStudioPage::Access,
                     Some(PermissionStudioSectionId::ToolCommandRules),
                     PermissionStudioFocus::Items,
                 );
@@ -370,7 +355,12 @@ impl App {
                     input.as_str(),
                 )
                 .map_err(crate::UiFailure::message)?;
-                let mut permission = dialog.permission.clone();
+                let target = PermissionStudioModeTarget::ToolCommandPattern {
+                    tool_name: tool_name.clone(),
+                    pattern: pattern.clone(),
+                };
+                let mut permission =
+                    crate::permission_studio_mode_edit_config(dialog, &target, false);
                 let tools = permission.tools.get_or_insert_with(Default::default);
                 let existing = tools.rules.remove(tool_name.as_str());
                 let mut entries = match existing {
@@ -389,7 +379,7 @@ impl App {
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
-                    PermissionStudioPage::ToolCommandRules,
+                    PermissionStudioPage::Access,
                     Some(PermissionStudioSectionId::ToolCommandRules),
                     PermissionStudioFocus::Items,
                 );
@@ -402,13 +392,12 @@ use crate::{
     App, ChoiceOverlayAction, Editor, PermissionMode, PermissionStudioAction,
     PermissionStudioCatalogKind, PermissionStudioEditor, PermissionStudioEditorAction,
     PermissionStudioFocus, PermissionStudioModeTarget, PermissionStudioOverlay,
-    PermissionStudioPage, PermissionStudioPaneFocus, PermissionStudioSectionId,
-    PermissionStudioTextTarget, ToolPermissionRules, UiResult,
-    apply_permission_studio_network_input, apply_permission_studio_text_input, editor_save_footer,
-    parse_permission_studio_key_input, path_permission_mode_choice_items,
-    permission_mode_choice_items, permission_studio_creator_input_text,
-    permission_studio_creator_spec, permission_studio_mode_target_input_text,
-    permission_studio_mode_target_label, permission_studio_read_only_message,
-    permission_studio_text_target_input_text, permission_studio_text_target_label,
-    set_permission_studio_pane_focus, settings_edit_title, ui_text,
+    PermissionStudioPage, PermissionStudioSectionId, PermissionStudioTextTarget,
+    ToolPermissionRules, UiResult, apply_permission_studio_network_input,
+    apply_permission_studio_text_input, editor_save_footer, parse_permission_studio_key_input,
+    path_permission_mode_choice_items, permission_mode_choice_items,
+    permission_studio_creator_input_text, permission_studio_creator_spec,
+    permission_studio_mode_target_input_text, permission_studio_mode_target_label,
+    permission_studio_read_only_message, permission_studio_text_target_input_text,
+    permission_studio_text_target_label, settings_edit_title, ui_text,
 };

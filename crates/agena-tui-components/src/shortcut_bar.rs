@@ -51,11 +51,40 @@ pub fn build_shortcut_bar<'a>(hints: impl IntoIterator<Item = ShortcutHint<'a>>)
     Text::from(build_shortcut_line(hints))
 }
 
+fn shortcut_hint_width(hint: &str, available: u16) -> u16 {
+    u16::try_from(unicode_width::UnicodeWidthStr::width(hint))
+        .unwrap_or(u16::MAX)
+        .min(available)
+}
+
+/// Measure the same indivisible hint chips used by the footer renderer.
+/// Ordinary paragraph wrapping can underestimate their required rows.
+pub(crate) fn shortcut_footer_height(text: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 0;
+    }
+    let mut rows: u16 = 0;
+    let mut x: u16 = 0;
+    for hint in text
+        .split('·')
+        .map(str::trim)
+        .filter(|hint| !hint.is_empty())
+    {
+        rows = rows.max(1);
+        let hint_width = shortcut_hint_width(hint, width);
+        if x.saturating_add(hint_width) > width {
+            rows = rows.saturating_add(1);
+            x = 0;
+        }
+        x = x.saturating_add(hint_width).saturating_add(2);
+    }
+    rows
+}
+
 /// Render trusted UI shortcut hints as compact buttons. Key labels are the
 /// existing keyboard bindings; localized descriptions do not determine actions.
 pub fn render_shortcut_footer(frame: &mut ratatui::Frame, area: ratatui::layout::Rect, text: &str) {
     use ratatui::{layout::Rect, widgets::Paragraph};
-    use unicode_width::UnicodeWidthStr;
     let mut x = area.x;
     let mut y = area.y;
     for hint in text
@@ -63,9 +92,7 @@ pub fn render_shortcut_footer(frame: &mut ratatui::Frame, area: ratatui::layout:
         .map(str::trim)
         .filter(|hint| !hint.is_empty())
     {
-        let width = u16::try_from(UnicodeWidthStr::width(hint))
-            .unwrap_or(u16::MAX)
-            .min(area.width);
+        let width = shortcut_hint_width(hint, area.width);
         if x.saturating_add(width) > area.right() {
             x = area.x;
             y = y.saturating_add(1);

@@ -76,6 +76,7 @@ struct TwoPaneWorkbenchSpec<'a> {
     pub title: Cow<'a, str>,
     pub summary: Option<Cow<'a, str>>,
     pub footer: Cow<'a, str>,
+    pub footer_max_height: u16,
     pub target_width: u16,
     pub left_panel_width: u16,
     pub left_min_width: Option<u16>,
@@ -100,6 +101,7 @@ pub struct ListWorkbenchDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub summary: Option<Cow<'a, str>>,
     pub footer: Cow<'a, str>,
+    pub footer_max_height: u16,
     pub target_width: u16,
     pub left_panel_width: u16,
     pub left_min_width: Option<u16>,
@@ -125,6 +127,7 @@ impl<'a> ListWorkbenchDialogSpec<'a> {
             title,
             summary: None,
             footer,
+            footer_max_height: 2,
             target_width: 140,
             left_panel_width: 36,
             left_min_width: None,
@@ -142,6 +145,11 @@ impl<'a> ListWorkbenchDialogSpec<'a> {
 
     pub fn target_width(mut self, target_width: u16) -> Self {
         self.target_width = target_width;
+        self
+    }
+
+    pub fn footer_max_height(mut self, height: u16) -> Self {
+        self.footer_max_height = height.max(1);
         self
     }
 
@@ -318,16 +326,17 @@ fn render_two_pane_workbench(
     spec: &TwoPaneWorkbenchSpec<'_>,
 ) {
     let content_width = surface.content_width(area, spec.target_width);
-    let stacked = match (spec.left_min_width, spec.right_min_width) {
-        (Some(left_min), Some(right_min)) => {
-            should_stack_detail_layout(content_width, left_min, right_min)
-        }
-        _ => should_stack_detail_layout(
-            content_width,
-            spec.left_panel_width,
-            MIN_TWO_PANE_DETAIL_WIDTH,
-        ),
-    };
+    let stacked = spec.right_sections.is_empty()
+        || match (spec.left_min_width, spec.right_min_width) {
+            (Some(left_min), Some(right_min)) => {
+                should_stack_detail_layout(content_width, left_min, right_min)
+            }
+            _ => should_stack_detail_layout(
+                content_width,
+                spec.left_panel_width,
+                MIN_TWO_PANE_DETAIL_WIDTH,
+            ),
+        };
     let right_width = match (stacked, spec.left_min_width, spec.right_min_width) {
         (true, _, _) => content_width.saturating_sub(2).max(1),
         (false, Some(left_min), Some(right_min)) => {
@@ -360,7 +369,8 @@ fn render_two_pane_workbench(
             spec.target_width,
             content_height,
         )
-        .summary(spec.summary.clone()),
+        .summary(spec.summary.clone())
+        .footer_max_height(spec.footer_max_height),
     );
     let (list_area, section_areas) = if stacked {
         let mut heights = Vec::with_capacity(1 + right_section_heights.len());
@@ -471,6 +481,7 @@ pub fn render_list_workbench_dialog(
             title: spec.title.clone(),
             summary: spec.summary.clone(),
             footer: spec.footer.clone(),
+            footer_max_height: spec.footer_max_height,
             target_width: spec.target_width,
             left_panel_width: spec.left_panel_width,
             left_min_width: spec.left_min_width,

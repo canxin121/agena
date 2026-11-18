@@ -529,7 +529,7 @@ overlay-settings-section-model-catalog-label = モデルカタログ
 
 overlay-settings-section-model-catalog-summary = {$count} エントリ
 
-overlay-settings-section-permissions-label = 権限
+overlay-settings-section-permissions-label = アクセス権限
 
 overlay-settings-section-permissions-summary = {$count} 永続許可規則
 
@@ -910,11 +910,11 @@ permission-studio-nav-network = ネットワーク
 
 permission-studio-nav-network-defaults = ポリシー
 
-permission-studio-nav-network-rules = ルール
+permission-studio-nav-network-rules = ネットワークルール
 
 permission-studio-nav-tool-access = ツールアクセス
 
-permission-studio-nav-name-rules = 名前ルール
+permission-studio-nav-name-rules = ツール名ルール
 
 permission-studio-nav-command-rules = コマンドルール
 
@@ -1372,7 +1372,7 @@ overlay-choice-clear-value = クリア値
 overlay-settings-section-plugins-description = プラグインを設定し、ツールと診断情報を確認します。
 overlay-settings-section-providers-description = プロバイダーとそのネットワーク動作を構成し、モデル カタログを検査します。
 overlay-settings-section-model-catalog-description = 解決されたモデル カタログを参照し、モデルのメタデータを検査し、ローカル キャッシュを更新します。
-overlay-settings-section-permissions-description = グローバル、ワークスペース、現在のセッションの権限を個別に編集します。
+overlay-settings-section-permissions-description = ファイル、ネットワーク、ツール、記憶した承認結果を一つのページで管理します。
 overlay-settings-section-runtime-session-description = 互換性のあるクライアントのバージョンと自動セッション圧縮動作を構成します。
 settings-permission-effective-detail = 読み取り専用 · グローバル、ワークスペース、セッションからマージされます。
 settings-permission-effective-read-only = 有効な権限は読み取り専用です。代わりにセッション、ワークスペース、またはグローバル ソースを編集してください。
@@ -3397,3 +3397,35 @@ settings-sandbox-active = 現在有効
 settings-sandbox-inactive = 現在無効
 settings-sandbox-global-label = グローバル · { $label }
 settings-sandbox-workspace-label = ワークスペース · { $label }
+permission-studio-page-access = アクセス権限
+permission-studio-access-footer = ↑↓ 選択 · Tab/Shift+Tab セクション · PgUp/PgDn スクロール · Enter 編集 · Ctrl+N 追加 · Ctrl+D 削除 · Ctrl+E 名前変更 · Esc 戻る
+permission-studio-access-content = ファイル・ネットワーク・ツール
+permission-studio-remembered-rules = 記憶した承認結果
+permission-studio-remembered-open = 記憶した承認結果を開く
+permission-studio-remembered-detail = 承認時に保存した権限ルールを管理します。
+permission-studio-remembered-create = 承認ルールを作成
+permission-studio-remembered-read-only = この範囲の記憶した承認結果は読み取り専用です。
+permission-studio-remembered-read-only-footer = ↑↓ 選択 · Esc 戻る · 読み取り専用
+permission-studio-remembered-empty = この範囲に有効な承認結果はありません。
+permission-studio-remembered-scope-locked = このルールはアクセス権限ページで選択した範囲に保持されます。
+permission-studio-save-or-cancel = 現在の権限編集を保存またはキャンセルしてから移動してください。
+permission-studio-access-read-only-footer = ↑↓ 選択 · Tab/Shift+Tab セクション · PgUp/PgDn スクロール · Esc 戻る · 読み取り専用
+
+permission-studio-origin-current = この層
+permission-studio-origin-inherited = 継承
+permission-studio-origin-effective = 有効
+permission-studio-read-only-follows-default = 追従→{$value}
+permission-studio-read-only-invalid = 無効
+permission-studio-section-rule-count = {$section} · ルール {$count}
+permission-studio-tools-rule-count = ツール · 名前 {$names} · コマンド {$commands}
+permission-studio-workspace-label = 作業領域
+permission-studio-external-label = 外部パス
+permission-studio-path-readwrite-compact = 読み書き
+permission-studio-default-label = 既定
+permission-studio-read-only-class-label = 読み取り専用
+permission-studio-outbound-label = 送信
+permission-studio-inbound-label = 受信
+permission-studio-loopback-label = ホストループ
+permission-studio-network-controls = ネットワーク操作
+permission-studio-add-network-rule = + ネットワークルールを追加
+permission-studio-inherited-rule-no-local-edit = 継承ルールを編集するとこの層で上書きできます。名前変更と削除はこの層のルールに適用されます。

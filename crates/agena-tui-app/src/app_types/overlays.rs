@@ -45,16 +45,11 @@ pub(crate) struct PermissionStudioOverlay {
     pub(crate) footer: String,
     pub(crate) source: PermissionStudioSource,
     pub(crate) title_context: String,
-    pub(crate) source_label: String,
-    pub(crate) scope_label: String,
     pub(crate) editable: bool,
     pub(crate) permission: PermissionConfig,
     pub(crate) inherited_permission: agena_domain::PermissionConfig,
     pub(crate) network_rule: Option<PermissionStudioNetworkRuleDraft>,
-    pub(crate) network_advanced: bool,
     pub(crate) save_request: Option<uuid::Uuid>,
-    pub(crate) nav: SelectableListState<PermissionStudioNavItem>,
-    pub(crate) pane_focus: PermissionStudioPaneFocus,
     pub(crate) page: PermissionStudioPage,
     pub(crate) state: SectionedListState<PermissionStudioSection>,
     pub(crate) editor: Option<PermissionStudioEditor>,
@@ -71,11 +66,20 @@ pub(crate) struct PermissionStudioLoadRequest {
 pub(crate) struct PermissionStudioItem {
     pub(crate) label: String,
     pub(crate) value: String,
+    pub(crate) source: Option<PermissionStudioValueSource>,
     pub(crate) action: PermissionStudioAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PermissionStudioValueSource {
+    Current,
+    Inherited,
+    Effective,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum PermissionStudioAction {
+    RememberedRules,
     CreateRule,
     EditMode(PermissionStudioModeTarget),
     EditNetworkPolicy,
@@ -88,7 +92,6 @@ pub(crate) enum PermissionStudioNetworkAction {
     Source,
     Offline,
     Outbound,
-    Advanced,
     AddRule { deny: bool },
     EditRule { deny: bool, index: usize },
     Field(PermissionStudioNetworkField),
@@ -125,8 +128,7 @@ pub(crate) struct PermissionStudioSection {
 }
 
 pub(crate) use agena_tui_permission_studio::permission_studio::{
-    PermissionStudioFocus, PermissionStudioNavItem, PermissionStudioPage,
-    PermissionStudioPaneFocus, PermissionStudioSectionId,
+    PermissionStudioFocus, PermissionStudioPage, PermissionStudioSectionId,
 };
 
 pub(crate) type PermissionStudioEditor = EditorDialogState<PermissionStudioEditorAction>;
@@ -250,6 +252,9 @@ pub(crate) struct ChoiceOverlay {
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
     Exit,
+    SessionProfile {
+        session_id: i64,
+    },
     MessageQueue {
         session_id: i64,
     },
@@ -288,6 +293,11 @@ pub(crate) enum ChoiceOverlayAction {
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
+    RememberedPermissionRules {
+        source: PermissionStudioSource,
+        workspace_id: Option<i64>,
+        rules: Vec<agena_api::resource::PermissionRuleResource>,
+    },
     PermissionStudioMode(PermissionStudioModeTarget),
     PermissionStudioNetworkProtocol,
     PermissionStudioAddEntries(PermissionStudioCatalogKind),
@@ -350,6 +360,7 @@ pub(crate) enum SettingsFieldKind {
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     EditSessionPrompts(i64),
+    EditSessionProfile(i64),
     ToggleMcpServer,
     EditMcpServerUrl,
     OpenGlobalDefaultModelChooser,
@@ -398,6 +409,10 @@ pub(crate) enum PermissionRuleSubjectKind {
 pub(crate) struct PermissionRuleStudioOverlay {
     pub(crate) rule_id: Option<i64>,
     pub(crate) draft: PermissionRuleDraft,
+    pub(crate) initial_draft: PermissionRuleDraft,
+    pub(crate) editable: bool,
+    pub(crate) scope_locked: bool,
+    pub(crate) save_request: Option<uuid::Uuid>,
     /// Permission prompt suspended while the user edits a pre-filled rule.
     ///
     /// Keeping this on the route instead of in `App::overlay` prevents an

@@ -53,6 +53,21 @@ impl App {
     /// Opens the session hub as the current route and kicks off the overview
     /// load. Used as the bootstrap landing view and from the hub itself.
     pub(crate) fn open_hub(&mut self) {
+        if std::iter::once(&self.current_route)
+            .chain(self.route_stack.iter())
+            .any(|route| match route {
+                Route::PermissionStudio(dialog) => crate::permission_studio_has_draft(dialog),
+                Route::PermissionRuleStudio(dialog) => {
+                    dialog.save_request.is_some()
+                        || dialog.editor.is_some()
+                        || dialog.draft != dialog.initial_draft
+                }
+                _ => false,
+            })
+        {
+            self.flash_warning(self.i18n.text("permission-studio-save-or-cancel"));
+            return;
+        }
         self.bot.cancel();
         if let Some(task) = self.active_subscription.take() {
             task.abort();

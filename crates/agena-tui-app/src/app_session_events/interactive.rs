@@ -259,6 +259,7 @@ impl App {
             execution.execution.model_verbosity.clone(),
             execution.execution.model_parallel_tool_calls,
         );
+        self.run_options.mark_model_stack_resolved();
     }
 
     pub(crate) fn sync_open_pending_interactive_overlay(&mut self) {

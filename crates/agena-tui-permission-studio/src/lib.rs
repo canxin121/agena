@@ -24,9 +24,8 @@ pub use permission_rule_studio::{
     handle_key as handle_rule_key,
 };
 pub use permission_studio::{
-    PermissionStudioFocus, PermissionStudioNavItem, PermissionStudioPage,
-    PermissionStudioPaneFocus, PermissionStudioSectionId, nav_index_for_page, nav_items,
-    nav_move_step, nav_normalize_selection,
+    PermissionStudioFocus, PermissionStudioPage, PermissionStudioRow, PermissionStudioSectionId,
+    content_rows, move_content_selection, selected_content_row,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

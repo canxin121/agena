@@ -3,6 +3,7 @@ use crate::ui_text;
 
 impl RunOptionsState {
     pub(crate) fn clear_model_stack(&mut self) {
+        self.explicit_model_stack = false;
         self.model = None;
         self.thinking_mode = None;
         self.speed_mode = None;
@@ -18,6 +19,7 @@ impl RunOptionsState {
         verbosity: Option<String>,
         parallel_tool_calls: Option<bool>,
     ) {
+        self.explicit_model_stack = true;
         self.model = model;
         self.thinking_mode = thinking_mode;
         self.speed_mode = speed_mode;
@@ -63,6 +65,7 @@ impl RunOptionsState {
     }
 
     pub(crate) fn apply_model_mode_input(&mut self, step: SessionModelModeStep, input: &str) {
+        self.explicit_model_stack = true;
         let trimmed = input.trim();
         let value = (!trimmed.is_empty()).then(|| trimmed.to_owned());
         match step {
@@ -71,6 +74,20 @@ impl RunOptionsState {
             SessionModelModeStep::Verbosity => {
                 self.verbosity = value.map(|value| value.to_ascii_lowercase())
             }
+        }
+    }
+
+    pub(crate) fn mark_model_stack_resolved(&mut self) {
+        self.explicit_model_stack = false;
+    }
+
+    /// Submit user choices only; the server resolves the current profile and
+    /// persisted selection again for ordinary messages and continuations.
+    pub(crate) fn submission_request(&self) -> RunOptions {
+        if self.explicit_model_stack {
+            self.to_request()
+        } else {
+            RunOptions::default()
         }
     }
 
@@ -121,5 +138,49 @@ fn model_ref_to_wire(model: &agena_domain::ModelRef) -> agena_api::resource::Mod
         None => {
             agena_api::resource::ModelRef::new(model.provider_id.as_ref(), model.model_id.as_ref())
         }
+    }
+}
+
+#[cfg(test)]
+mod profile_selection_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_profile_model_is_displayed_without_becoming_a_run_override() {
+        let mut state = RunOptionsState::default();
+        state.replace_model_stack(
+            Some(ModelRef::new("test", "profile-model")),
+            Some("high".into()),
+            None,
+            None,
+            None,
+        );
+        state.mark_model_stack_resolved();
+        assert!(state.to_request().model.is_some());
+        assert_eq!(state.to_request().thinking_mode.as_deref(), Some("high"));
+        assert!(state.submission_request().model.is_none());
+        assert!(state.submission_request().thinking_mode.is_none());
+    }
+
+    #[test]
+    fn local_choice_is_submitted_until_server_state_acknowledges_it() {
+        let mut state = RunOptionsState::default();
+        state.replace_model_stack(
+            Some(ModelRef::new("test", "explicit-model")),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(state.submission_request().model.is_some());
+        state.mark_model_stack_resolved();
+        assert!(state.submission_request().model.is_none());
+        state.apply_model_mode_input(SessionModelModeStep::ThinkingMode, "high");
+        assert_eq!(
+            state.submission_request().thinking_mode.as_deref(),
+            Some("high")
+        );
+        state.clear_model_stack();
+        assert!(state.submission_request().model.is_none());
     }
 }

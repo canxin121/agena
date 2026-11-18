@@ -210,6 +210,19 @@ impl App {
             SettingsStudioSectionId::RuntimeSession,
         ));
         if let Some(session_id) = self.current_or_selected_session_id() {
+            let profile = self
+                .transcript
+                .execution
+                .as_ref()
+                .filter(|state| state.session.id == session_id)
+                .and_then(|state| state.execution.profile.clone());
+            runtime_session_items.push(SettingsStudioItem::new(
+                ui_text::t(&self.i18n, "settings-agent-profile-label"),
+                profile
+                    .unwrap_or_else(|| ui_text::t(&self.i18n, "settings-agent-profile-unselected")),
+                ui_text::t(&self.i18n, "settings-agent-profile-detail"),
+                SettingsPickerAction::EditSessionProfile(session_id),
+            ));
             runtime_session_items.push(SettingsStudioItem::new(
                 "Prompt layers",
                 format!("Configured for session {session_id}"),

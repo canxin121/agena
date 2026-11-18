@@ -1,6 +1,7 @@
 import type { SettingsSidebarNavigationNode, SettingsTab } from './sidebar/settingsSidebarNavigation'
 import type { SettingsSubpageDefinition } from './workbench/settingsSectionNavigation'
 import { settingsText as st } from '../../i18n/settingsText'
+import { PERMISSION_ACCESS_SECTIONS, PERMISSION_ACCESS_VIEW } from './permissions/permissionNavigation'
 
 type SettingsSubpageSource = Omit<SettingsSubpageDefinition, 'label' | 'description'> & {
   label: () => string
@@ -34,6 +35,46 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   permissions: [
     {
+      id: 'profiles',
+      label: () => st('Permission profiles & users'),
+      description: () =>
+        st('Manage reusable permissions and assign them to groups, people, and conversations across platforms.'),
+      keywords: ['profiles', 'groups', 'users', 'conversations', 'telegram', '权限配置', '用户组', '私聊', '群聊'],
+    },
+    {
+      id: PERMISSION_ACCESS_VIEW,
+      aliases: PERMISSION_ACCESS_SECTIONS,
+      label: () => st('Access permissions'),
+      description: () => st('Configure file, network, and tool access together for each permission scope.'),
+      keywords: [
+        'filesystem',
+        'file',
+        'path',
+        'read',
+        'write',
+        'network',
+        'outbound',
+        'inbound',
+        'destination',
+        'cidr',
+        'protocol',
+        'ports',
+        'hostLoopback',
+        'tools',
+        'commands',
+        'allow',
+        'auto',
+        'ask',
+        'deny',
+        'inherit',
+        'rules',
+        '文件',
+        '网络',
+        '工具',
+        '审批',
+      ],
+    },
+    {
       id: 'sandbox',
       label: () => st('Sandbox & resource preflight'),
       description: () => st('Configure native sandbox isolation and resource preflight.'),
@@ -44,37 +85,6 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       label: () => st('Permission overview'),
       description: () => st('Read-only merged policy.'),
       keywords: ['effective', 'summary', 'permissions', 'read-only', '总览', '有效权限'],
-    },
-    {
-      id: 'filesystem',
-      label: () => st('Filesystem'),
-      description: () => st('Configure file and path access for each permission scope.'),
-      keywords: ['filesystem', 'file', 'path', 'read', 'write'],
-    },
-    {
-      id: 'network',
-      label: () => st('Network'),
-      description: () => st('Configure network destinations, protocols, and ports for each permission scope.'),
-      keywords: [
-        'network',
-        'mxc',
-        'outbound',
-        'inbound',
-        'destination',
-        'cidr',
-        'protocol',
-        'ports',
-        'allow',
-        'deny',
-        'inherit',
-        'hostLoopback',
-      ],
-    },
-    {
-      id: 'tools',
-      label: () => st('Tools'),
-      description: () => st('Configure tool access and review saved approval rules for each permission scope.'),
-      keywords: ['tools', 'commands', 'allow', 'auto', 'ask', 'deny', 'rules'],
     },
   ],
   'plugins-tools': [
@@ -141,6 +151,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     },
   ],
   'runtime-session': [
+    {
+      id: 'agent-profiles',
+      label: () => st('Agent profiles'),
+      description: () => st('Reuse permissions, system instructions, and model preferences across sessions.'),
+      keywords: ['agent', 'profile', 'permissions', 'system prompt', 'model', 'configuration', '智能体', '配置档案'],
+    },
     {
       id: 'prompt-library',
       label: () => st('Saved prompt library'),
@@ -232,7 +248,7 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
 
 export const SETTINGS_DEFAULT_SUBPAGE: Record<SettingsTab, string> = {
   'models-providers': 'provider-studio',
-  permissions: 'filesystem',
+  permissions: PERMISSION_ACCESS_VIEW,
   'plugins-tools': 'plugin-workbench',
   skills: 'library',
   'mcp-connections': 'connections',

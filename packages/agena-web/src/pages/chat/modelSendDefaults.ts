@@ -4,6 +4,9 @@ export type DeriveSendRunConfigInput = {
   selectedModelId?: string
   selectedThinkingMode?: string
   selectedSpeedMode?: string
+  modelSource?: 'empty' | 'session' | 'default' | 'manual'
+  thinkingModeSource?: 'empty' | 'session' | 'default' | 'model' | 'manual'
+  speedModeSource?: 'empty' | 'session' | 'default' | 'model' | 'manual'
 }
 
 export type DerivedSendRunConfig = {
@@ -30,14 +33,16 @@ export function deriveSendRunConfig(input: DeriveSendRunConfigInput): DerivedSen
   const speedMode = text(input.selectedSpeedMode)
 
   const output: DerivedSendRunConfig = {}
-  if (providerID && modelID) {
+  // Effective values are display projections. Sending them back would turn
+  // inherited profile defaults into permanent session overrides.
+  if (input.modelSource === 'manual' && providerID && modelID) {
     output.providerID = providerID
     if (adapterID) output.adapterID = adapterID
     output.modelID = modelID
   }
   if (hasSelectedModel) {
-    if (thinkingMode) output.thinkingMode = thinkingMode
-    if (speedMode) output.speedMode = speedMode
+    if (input.thinkingModeSource === 'manual' && thinkingMode) output.thinkingMode = thinkingMode
+    if (input.speedModeSource === 'manual' && speedMode) output.speedMode = speedMode
   }
   return output
 }

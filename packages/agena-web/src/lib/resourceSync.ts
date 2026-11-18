@@ -307,9 +307,9 @@ export function invalidateResources(
   if (changed) queue.invalidate(500)
 }
 
-export function invalidateResourcePrefix(prefix: string) {
+export function invalidateResourcePrefix(prefix: string, reason: InvalidationReason = 'reconcile') {
   ensureScope()
-  invalidateResources(new Set([...listeners.keys(), ...versions.keys()].filter((key) => key.startsWith(prefix))))
+  invalidateResources(new Set([...listeners.keys(), ...versions.keys()].filter((key) => key.startsWith(prefix))), reason)
 }
 
 export function applyResourceEvent(event: SseEvent) {

@@ -31,6 +31,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
 import { settingsQueryForDestination } from '@/components/settings/settingsDestination'
 import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
+import { permissionAccessHash } from '@/components/settings/permissions/permissionNavigation'
 import { useSettingsSessionTarget } from '@/components/settings/settingsSessionScope'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import {
@@ -140,9 +141,8 @@ const activeScope = computed(() => {
   return resolveSettingsScope(route.query.scope, remembered, activeScopes.value)
 })
 
-// Session-scoped pages edit one explicit conversation. The picker and these
-// panels share one resolution, so the header, the selector and the editor never
-// disagree about which session is being changed.
+// Session-scoped pages share this settings window's explicit target, falling
+// back to the last used conversation until the user chooses one.
 const sessionTarget = useSettingsSessionTarget()
 
 // The active subpage declares whether it owns the whole content area (dense
@@ -185,7 +185,7 @@ watch(
     void router.replace({
       path: settingsPathForTab(activeSection.value),
       query: { ...query, view: activeView.value },
-      hash: route.hash,
+      hash: route.hash || (activeSection.value === 'permissions' ? permissionAccessHash(route.query.view) : ''),
     })
   },
   { immediate: true },

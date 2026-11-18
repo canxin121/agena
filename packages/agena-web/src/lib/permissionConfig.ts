@@ -32,6 +32,42 @@ export type PermissionConfig = {
   approval_model?: JsonValue
 }
 
+// Keep the registered identities in agena-domain/tool_permission_config.rs.
+// Other tool names, including third-party names with underscores, are exact IDs.
+const permissionToolAliases = new Map<string, string>()
+for (const operation of [
+  'exec',
+  'spawn',
+  'watch',
+  'open',
+  'write',
+  'read',
+  'logs',
+  'list',
+  'stop',
+  'resize',
+  'signal',
+]) {
+  const canonical = `agena.shell.${operation}`
+  permissionToolAliases.set(`shell.${operation}`, canonical)
+  permissionToolAliases.set(`agena_shell_${operation}`, canonical)
+}
+permissionToolAliases.set('monitor.start', 'agena.monitor.start')
+permissionToolAliases.set('agena_monitor_start', 'agena.monitor.start')
+
+export function canonicalPermissionToolName(name: string): string {
+  return permissionToolAliases.get(name) || name
+}
+
+export function canonicalPermissionToolEntries<T>(values: Record<string, T> | undefined): Array<[string, T]> {
+  const projected = new Map<string, T>()
+  for (const name of Object.keys(values || {}).sort()) {
+    const canonical = canonicalPermissionToolName(name)
+    if (name === canonical || !projected.has(canonical)) projected.set(canonical, values![name]!)
+  }
+  return Array.from(projected).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+}
+
 export function renamePermissionRule<T>(rules: Record<string, T>, from: string, to: string): Record<string, T> {
   // Entry order determines which overlapping command rule wins.
   return Object.fromEntries(Object.entries(rules).map(([key, value]) => [key === from ? to : key, value]))

@@ -40,6 +40,7 @@ import Button from '@/components/ui/Button.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import ContextUsageChip from '@/components/chat/ContextUsageChip.vue'
+import AgentProfileChip from '@/components/settings/AgentProfileChip.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
 import type { OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
@@ -779,6 +780,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       <RiStackLine class="h-3 w-3" />
                       <span :class="modelChipTextClass">{{ modelStatusLabel }}</span>
                     </button>
+                    <AgentProfileChip v-if="chat.selectedSessionId" :profile="chat.selectedSessionExecution?.profile" />
                     <template v-if="hasThinkingModesForSelection">
                       <span class="text-muted-foreground/50">|</span>
                       <button

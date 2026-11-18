@@ -313,6 +313,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const releaseState = subscribeResource(`session:${sid}:state`, (event) => {
         if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
         scheduleSessionStatusRefresh(sid)
+      }, {
+        onInvalidate: (reason) => {
+          if (reason === 'mutation') {
+            void refreshExecutionStatus(sid, true).catch(() => scheduleSessionStatusRefresh(sid))
+          }
+        },
       })
       const releaseTranscript = subscribeResource(`session:${sid}:parts`, (event) => {
         if (event?.type === 'session_changed') return
@@ -445,6 +451,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function upsertSessionCache(
     updated: (Partial<Session> & { id: string }) | null | undefined,
     executionSnapshot = false,
+    recent: 'promote' | 'existing' | 'none' = 'promote',
   ) {
     if (!updated || typeof updated !== 'object') return
     const sid = typeof updated.id === 'string' ? updated.id.trim() : ''
@@ -453,10 +460,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!executionSnapshot) updated = sessionMetadataSnapshot(updated)
     const merged = { ...(sessionsById.value[sid] || {}), ...updated, id: sid } as Session
     sessionsById.value[sid] = merged
+    if (recent === 'none') return
     const hasInCurrent = sessions.value.some((s) => s.id === sid)
     if (hasInCurrent) {
       sessions.value = sessions.value.map((s) => (s.id === sid ? { ...s, ...merged } : s))
-    } else {
+    } else if (recent === 'promote') {
       sessions.value = [{ ...merged }, ...sessions.value].slice(0, SESSION_PAGE_SIZE)
     }
   }
@@ -1259,12 +1267,12 @@ const useChatStoreDefinition = defineStore('chat', () => {
     queue.invalidate(delayMs)
   }
 
-  async function refreshExecutionStatusInternal(sessionId: string): Promise<void> {
+  async function refreshExecutionStatusInternal(sessionId: string, forceFresh = false): Promise<void> {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const key = `session:${sid}:state`
     const observed = executionObservations.get(sid)
-    if (observed?.scope === captureResourceObservation(key).scope && observed.token) {
+    if (!forceFresh && observed?.scope === captureResourceObservation(key).scope && observed.token) {
       await checkResourceVersions([key])
       if (canReuseResource(key, observed.token) && hasInteractionSnapshot(sid)) {
         await reconcileExecutionParts(sid)
@@ -1274,7 +1282,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const writeEpoch = executionWriteEpoch.get(sid) ?? 0
-    const st = await chatApi.getSessionExecutionStatus(sid).catch((error) => {
+    const st = await chatApi.getSessionExecutionStatus(sid, forceFresh, forceFresh).catch((error) => {
       if (error instanceof ApiError && error.status === 404) {
         forgetSession(sid)
         return null
@@ -1401,7 +1409,11 @@ const useChatStoreDefinition = defineStore('chat', () => {
     })
   }
 
-  function applyExecutionStatus(st: chatApi.SessionExecutionStatus, activityGeneration?: number) {
+  function applyExecutionStatus(
+    st: chatApi.SessionExecutionStatus,
+    activityGeneration?: number,
+    promoteInRecent = true,
+  ) {
     const sid = st.session.id
     const controlVersion = st.controlVersion
     const previous = executionControlVersions.get(sid)
@@ -1420,7 +1432,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       version: Number(st.session.version || 0),
       requests: interactiveRequests(sessionStateRequests(st.state), sid),
     }
-    upsertSessionCache(st.session, true)
+    upsertSessionCache(st.session, true, promoteInRecent ? 'promote' : 'existing')
     applyAttention(sid, st.state)
     if (activityGeneration === undefined || activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
       backgroundActivityGeneration.set(sid, (backgroundActivityGeneration.get(sid) ?? 0) + 1)
@@ -1441,20 +1453,22 @@ const useChatStoreDefinition = defineStore('chat', () => {
         ...sessionExecutionBySession.value,
         [sid]: { ...execution },
       }
-      const patch: Partial<SessionRunConfig> = {}
       const providerID = readString(execution.model_provider_id as JsonValue)
       const adapterID = readString(execution.model_adapter_id as JsonValue)
       const modelID = readString(execution.model_id as JsonValue)
       const thinkingMode = readString(execution.model_thinking_mode as JsonValue)
       const speedMode = readString(execution.model_speed_mode as JsonValue)
       const verbosity = readString(execution.model_verbosity as JsonValue)
-      if (providerID) patch.providerID = providerID
-      if (adapterID) patch.adapterID = adapterID
-      if (modelID) patch.modelID = modelID
-      if (thinkingMode) patch.thinkingMode = thinkingMode
-      if (speedMode) patch.speedMode = speedMode
-      if (verbosity) patch.verbosity = verbosity
-      if (Object.keys(patch).length) upsertSessionRunConfig(sid, patch)
+      // This is the complete effective projection. A cleared mode or adapter
+      // must retire the previous value when a profile or model changes.
+      upsertSessionRunConfig(sid, {
+        providerID: providerID || undefined,
+        adapterID: adapterID || undefined,
+        modelID: modelID || undefined,
+        thinkingMode: thinkingMode || undefined,
+        speedMode: speedMode || undefined,
+        verbosity: verbosity || undefined,
+      })
     }
 
     if (st.usage && typeof st.usage === 'object') {
@@ -1470,6 +1484,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     state: chatApi.AgenaExecutionState | null,
     generation: number,
     activityGeneration?: number,
+    promoteInRecent = true,
   ): Session | null {
     if (!state || generation !== transcriptCacheGeneration) return null
     const session = chatApi.toSession(state.session)
@@ -1491,21 +1506,22 @@ const useChatStoreDefinition = defineStore('chat', () => {
         backgroundActivityKinds: activities.map((activity) => activity.kind.toLowerCase()),
       },
       activityGeneration,
+      promoteInRecent,
     )
     return getSessionById(session.id)
   }
 
-  async function refreshExecutionStatus(sessionId: string) {
+  async function refreshExecutionStatus(sessionId: string, forceFresh = false) {
     const sid = (sessionId || '').trim()
     if (!sid) return
 
     const existing = refreshExecutionInFlightBySession.get(sid)
     if (existing) {
-      await existing
-      return
+      if (forceFresh) await existing.catch(() => undefined)
+      else { await existing; return }
     }
 
-    const request = refreshExecutionStatusInternal(sid)
+    const request = refreshExecutionStatusInternal(sid, forceFresh)
     refreshExecutionInFlightBySession.set(sid, request)
     try {
       await request
@@ -1751,6 +1767,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     workspacePath?: string
     title?: string
     parentId?: number
+    profile?: string
   }): Promise<Session | null> {
     if (createSessionInFlight) return await createSessionInFlight
     createSessionInFlight = (async () => {
@@ -1767,6 +1784,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
           workspaceId,
           title: title || 'New session',
           autoTitle: !String(opts?.title || '').trim(),
+          ...(opts?.profile !== undefined ? { profile: opts.profile } : {}),
           ...(typeof opts?.parentId === 'number' ? { parentId: opts.parentId } : {}),
         })
         upsertSessionCache(created)
@@ -2034,12 +2052,22 @@ const useChatStoreDefinition = defineStore('chat', () => {
     reconcileExecutionAfterWrite(sid)
   }
 
+  async function setSessionSelection(sessionId: string, options: chatApi.RunOptionsPayload) {
+    const sid = sessionId.trim()
+    const generation = transcriptCacheGeneration
+    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
+    const state = await chatApi.setSessionSelection(sid, options)
+    if (applyExecutionResource(state, generation, activityGeneration)) reconcileExecutionAfterWrite(sid)
+    return state
+  }
+
   async function setSessionPermission(sessionId: string, permission: JsonValue) {
     const sid = sessionId.trim()
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await chatApi.setSessionPermission(sid, permission)
-    if (applyExecutionResource(state, generation, activityGeneration)) reconcileExecutionAfterWrite(sid)
+    // Editing a policy updates an existing row without opening or promoting its conversation.
+    if (applyExecutionResource(state, generation, activityGeneration, false)) reconcileExecutionAfterWrite(sid)
     return state
   }
 
@@ -2373,6 +2401,17 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
   }
 
+  /** Cache a settings/catalog lookup without opening or promoting a conversation. */
+  function cacheSessionMetadata(entries: Array<(Partial<Session> & { id: string }) | null | undefined>) {
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue
+      // Metadata lookups do not own execution state or trigger its reconciliation.
+      // Keep any already ordered snapshot and leave the recent page untouched.
+      const { state: _state, ...metadata } = entry
+      upsertSessionCache(metadata, false, 'none')
+    }
+  }
+
   // ─── SSE applyEvent ───────────────────────────────────────────────────────
 
   /**
@@ -2624,6 +2663,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     sessionActivityGeneration: (sid: string) => backgroundActivityGeneration.get(sid) ?? 0,
     applySessionActivity,
     refreshExecutionStatus,
+    setSessionSelection,
     sessionRunConfigBySession,
     attentionBySession,
     refreshSessions,
@@ -2669,6 +2709,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     selectedSessionCreatedMs,
     getSessionUsage,
     cacheSessions,
+    cacheSessionMetadata,
     getComposerDraft,
     setComposerDraft,
     revertToMessage,

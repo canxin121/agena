@@ -26,6 +26,8 @@ import { useModelSelectionPickerUi } from './modelSelectionPickerUi'
 import { createStringMapPersister, loadStringMapFromStorage, normalizeStringMapEntry } from './modelSelectionStorage'
 import { localStorageKeys } from '../../lib/persistence/storageKeys'
 import type { SessionRunConfig } from '@/types/chat'
+import type { RunOptionsPayload } from '@/stores/chat/api'
+import { useToastsStore } from '@/stores/toasts'
 
 type ChatMessageLike = {
   info?: {
@@ -41,6 +43,7 @@ type ChatLike = {
   messages: ChatMessageLike[]
   /** Server creation time of the open session, when the client already knows it. */
   selectedSessionCreatedMs?: number | null
+  setSessionSelection: (sessionId: string, options: RunOptionsPayload) => Promise<unknown>
 }
 
 export type ModelSlugOption = {
@@ -103,6 +106,7 @@ export function useChatModelSelection(opts: {
     opts
 
   const catalog = useModelSelectionCatalog()
+  const toasts = useToastsStore()
   const { providers, runtimeDefaultSelection, catalogLoading, catalogError, modelMetaFor } = catalog
 
   const selectedProviderId = ref('')
@@ -337,7 +341,10 @@ export function useChatModelSelection(opts: {
       const manual = readSessionManualModelEntry(sessionManualModelBySession.value, sessionId)
       if (manual) {
         const current = !sessionCachePredatesSession(manual.at, createdAtMs)
-        if (current && adoptSessionSelection(parseModelSlug(manual.value))) return
+        if (current && adoptSessionSelection(parseModelSlug(manual.value))) {
+          modelSource.value = 'manual'
+          return
+        }
         dropStaleManualSelection(sessionId)
       }
       const runAt = Number(chat.selectedSessionRunConfig?.at)
@@ -445,13 +452,19 @@ export function useChatModelSelection(opts: {
     picker.closeComposerPicker()
   }
 
-  function chooseModelDefault() {
+  async function chooseModelDefault() {
     const sessionId = activeSessionId()
     if (sessionId) {
+      try {
+        await chat.setSessionSelection(sessionId, {})
+      } catch (reason) {
+        toasts.push('error', reason instanceof Error ? reason.message : String(reason))
+        return
+      }
       sessionManualModelBySession.value = removeSessionManualModelPair(sessionManualModelBySession.value, sessionId)
       sessionManualModelPersister.persistSoon()
     }
-    applyResolvedSelection(false)
+    applyResolvedSelection(Boolean(sessionId))
     picker.closeComposerPicker()
   }
 
@@ -466,17 +479,27 @@ export function useChatModelSelection(opts: {
     picker.closeComposerPicker()
   }
 
-  function chooseThinkingModeDefault() {
+  async function chooseThinkingModeDefault() {
+    const sessionId = activeSessionId()
     const key = selectedModelKey.value
+    if (sessionId) {
+      try {
+        await chat.setSessionSelection(sessionId, { thinking_mode: '' })
+      } catch (reason) {
+        toasts.push('error', reason instanceof Error ? reason.message : String(reason))
+        return
+      }
+    }
     if (key && Object.prototype.hasOwnProperty.call(thinkingModeByModelKey.value, key)) {
       const next = { ...thinkingModeByModelKey.value }
       delete next[key]
       thinkingModeByModelKey.value = next
       thinkingModePersister.persistSoon()
     }
+    if (activeSessionId() !== sessionId || selectedModelKey.value !== key) return
     selectedThinkingMode.value = ''
     thinkingModeSource.value = 'empty'
-    resolveModes(false)
+    resolveModes(Boolean(sessionId))
     picker.closeComposerPicker()
   }
 
@@ -491,17 +514,27 @@ export function useChatModelSelection(opts: {
     picker.closeComposerPicker()
   }
 
-  function chooseSpeedModeDefault() {
+  async function chooseSpeedModeDefault() {
+    const sessionId = activeSessionId()
     const key = selectedModelKey.value
+    if (sessionId) {
+      try {
+        await chat.setSessionSelection(sessionId, { speed_mode: '' })
+      } catch (reason) {
+        toasts.push('error', reason instanceof Error ? reason.message : String(reason))
+        return
+      }
+    }
     if (key && Object.prototype.hasOwnProperty.call(speedModeByModelKey.value, key)) {
       const next = { ...speedModeByModelKey.value }
       delete next[key]
       speedModeByModelKey.value = next
       speedModePersister.persistSoon()
     }
+    if (activeSessionId() !== sessionId || selectedModelKey.value !== key) return
     selectedSpeedMode.value = ''
     speedModeSource.value = 'empty'
-    resolveModes(false)
+    resolveModes(Boolean(sessionId))
     picker.closeComposerPicker()
   }
 

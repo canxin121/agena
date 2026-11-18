@@ -30,7 +30,7 @@ export type PromptLayerScope = 'effective' | 'global' | 'workspace' | 'session'
 export type PromptResolutionFragment = {
   id: string
   title: string
-  scope: 'global' | 'workspace' | 'model' | 'session' | 'request'
+  scope: 'global' | 'workspace' | 'model' | 'profile' | 'session' | 'request'
   position: number
   bytes: number
   sha256: string

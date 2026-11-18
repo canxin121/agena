@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onScopeDispose, ref, watch } from 'vue'
 import { RiAddLine, RiArrowDownSLine, RiDeleteBinLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
@@ -14,6 +14,7 @@ import { useToastsStore } from '@/stores/toasts'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneRead } from '@/composables/usePaneRead'
 import { useChatStore } from '@/stores/chat'
+import { getSession } from '@/stores/chat/api'
 import { lastSessionId } from '@/lib/lastSession'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
@@ -55,7 +56,7 @@ type PermissionRulePage = {
 
 const PERMISSION_RULE_BATCH_SIZE = 200
 
-const props = defineProps<{ scope: PermissionScope; sessionId?: string }>()
+const props = defineProps<{ scope: PermissionScope; sessionId?: string; compact?: boolean }>()
 const toasts = useToastsStore()
 const chat = useChatStore()
 const directory = useDirectoryStore()
@@ -67,12 +68,15 @@ const selectedIds = ref<Set<number>>(new Set())
 
 const createBusy = ref(false)
 const createError = ref('')
+const createExpanded = ref(false)
+const createForm = ref<HTMLFormElement | null>(null)
 const newToolName = ref('')
 const newQualifier = ref('')
 const newMode = ref<PermissionMode>('ask')
 const bulkMode = ref<PermissionMode>('ask')
 const bulkBusy = ref(false)
 const rowBusy = ref<number | null>(null)
+const busy = computed(() => createBusy.value || bulkBusy.value || rowBusy.value !== null)
 const query = ref('')
 const stateFilter = ref('all')
 const stateOptions = computed(() => [
@@ -86,7 +90,61 @@ const activeSessionId = computed(() => {
   const id = Number(String(props.sessionId || '').trim() || lastSessionId.value || chat.selectedSessionId)
   return Number.isSafeInteger(id) && id > 0 ? id : null
 })
+function workspaceId(value: unknown): number | null {
+  const id = Number(value)
+  return Number.isSafeInteger(id) && id > 0 ? id : null
+}
+const targetWorkspace = ref<{ sessionId: number; workspaceId: number | null } | null>(null)
+const targetWorkspaceError = ref('')
+let targetWorkspaceGeneration = 0
+let targetWorkspaceController: AbortController | undefined
+watch(
+  () => [props.scope, activeSessionId.value] as const,
+  async ([scope, sessionId]) => {
+    const generation = ++targetWorkspaceGeneration
+    targetWorkspaceController?.abort()
+    targetWorkspace.value = null
+    targetWorkspaceError.value = ''
+    if ((scope !== 'session' && scope !== 'effective') || !sessionId) return
+    targetWorkspace.value = {
+      sessionId,
+      workspaceId: workspaceId(chat.getSessionById(String(sessionId))?.workspace_id),
+    }
+    const controller = new AbortController()
+    targetWorkspaceController = controller
+    try {
+      const session = await getSession(String(sessionId), controller.signal)
+      if (
+        generation !== targetWorkspaceGeneration ||
+        controller.signal.aborted ||
+        activeSessionId.value !== sessionId ||
+        props.scope !== scope
+      )
+        return
+      chat.cacheSessionMetadata([session])
+      const current = chat.getSessionById(String(sessionId))
+      targetWorkspace.value = {
+        sessionId,
+        workspaceId: workspaceId(
+          current && Object.hasOwn(current, 'workspace_id') ? current.workspace_id : session.workspace_id,
+        ),
+      }
+    } catch (reason) {
+      if (generation !== targetWorkspaceGeneration || controller.signal.aborted) return
+      targetWorkspace.value = { sessionId, workspaceId: null }
+      targetWorkspaceError.value = reason instanceof Error ? reason.message : String(reason)
+    }
+  },
+  { immediate: true },
+)
+onScopeDispose(() => {
+  targetWorkspaceGeneration += 1
+  targetWorkspaceController?.abort()
+})
 const activeWorkspaceId = computed(() => {
+  if (props.scope === 'session' || props.scope === 'effective') {
+    return targetWorkspace.value?.sessionId === activeSessionId.value ? targetWorkspace.value.workspaceId : null
+  }
   const sessionWorkspaceId = Number(chat.selectedSession?.workspace_id)
   if (Number.isSafeInteger(sessionWorkspaceId) && sessionWorkspaceId > 0) return sessionWorkspaceId
   if (typeof window === 'undefined' || !window.location) return null
@@ -181,12 +239,13 @@ const { loading, error, refresh } = usePaneRead(
     hasMore.value = data?.page?.has_more === true
   },
 )
-defineExpose({ refresh })
+defineExpose({ refresh, busy })
 watch(
   () => [props.scope, activeWorkspaceId.value, activeSessionId.value],
   () => {
     clearSelection()
     createError.value = ''
+    createExpanded.value = false
   },
 )
 
@@ -233,6 +292,14 @@ function clearSelection() {
 function clearFilters() {
   query.value = ''
   stateFilter.value = 'all'
+}
+
+async function toggleCreateForm() {
+  if (!canEdit.value || createBusy.value) return
+  createExpanded.value = !createExpanded.value
+  if (!createExpanded.value) return
+  await nextTick()
+  createForm.value?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus()
 }
 
 async function applyBulkOperation(action: 'delete' | 'set_mode') {
@@ -305,6 +372,7 @@ async function createRule() {
     })
     newToolName.value = ''
     newQualifier.value = ''
+    createExpanded.value = false
     toasts.push('success', st('Permission rule created'))
     await refresh()
   } catch (err) {
@@ -333,13 +401,23 @@ async function removeRule(id: number) {
 </script>
 
 <template>
-  <PermissionSettingsCard
-    :title="$st('Saved approval rules')"
-    :description="$st('Rules remembered from approvals. Changes here take effect immediately.')"
-    :count="sortedRules.length"
-    :icon="RiShieldCheckLine"
+  <component
+    :is="compact ? 'section' : PermissionSettingsCard"
+    v-bind="
+      compact
+        ? {}
+        : {
+            title: $st('Saved approval rules'),
+            description: $st('Rules remembered from approvals. Changes here take effect immediately.'),
+            count: sortedRules.length,
+            icon: RiShieldCheckLine,
+          }
+    "
+    class="saved-rules"
+    :class="{ 'saved-rules--compact': compact }"
+    data-saved-rules
   >
-    <template #actions>
+    <template v-if="!compact" #actions>
       <IconButton
         variant="ghost"
         size="sm"
@@ -350,11 +428,48 @@ async function removeRule(id: number) {
         ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
       /></IconButton>
     </template>
-    <p v-if="scope === 'workspace' && !activeWorkspaceId" class="mb-3 text-xs text-muted-foreground">
+    <div v-if="compact" class="saved-rules-heading">
+      <div class="flex min-w-0 items-center gap-1.5">
+        <RiShieldCheckLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <h3 class="min-w-0 text-xs font-semibold">{{ $st('Saved approval rules') }}</h3>
+        <span class="text-[11px] tabular-nums text-muted-foreground">{{ sortedRules.length }}</span>
+      </div>
+      <div class="flex items-center gap-0.5">
+        <IconButton
+          v-if="canEdit"
+          variant="ghost"
+          size="sm"
+          :tooltip="$st('Create tool rule')"
+          :aria-label="$st('Create tool rule')"
+          :aria-expanded="createExpanded"
+          :disabled="createBusy"
+          @click="toggleCreateForm"
+          ><RiAddLine class="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          variant="ghost"
+          size="sm"
+          :tooltip="$st('Refresh permission rules')"
+          :aria-label="$st('Refresh permission rules')"
+          :disabled="loading"
+          @click="refresh"
+          ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" />
+        </IconButton>
+      </div>
+      <span
+        class="saved-rules-immediate text-[11px] text-muted-foreground"
+        :title="$st('Rules remembered from approvals. Changes here take effect immediately.')"
+        >{{ $st('Applied immediately') }}</span
+      >
+    </div>
+    <p
+      v-if="scope === 'workspace' && !activeWorkspaceId"
+      :class="compact ? 'saved-rules-empty' : 'mb-3 text-xs text-muted-foreground'"
+    >
       {{ $st('Select a workspace to view and manage its permission rules.') }}
     </p>
     <p
-      v-if="sortedRules.some((rule) => rule.subject_kind === 'network_access')"
+      v-if="!compact && sortedRules.some((rule) => rule.subject_kind === 'network_access')"
       class="mb-3 text-xs text-muted-foreground"
     >
       {{
@@ -363,17 +478,17 @@ async function removeRule(id: number) {
         )
       }}
     </p>
-    <div v-if="sortedRules.length" class="mb-3 flex flex-wrap items-center gap-2">
+    <div v-if="sortedRules.length" class="saved-rules-controls" data-saved-rules-controls>
       <SearchInput
         v-model="query"
-        class="min-w-0 flex-1 basis-48"
+        class="saved-rules-search min-w-0"
         :placeholder="$st('Search rules…')"
         :input-aria-label="$st('Search saved approval rules')"
         :show-search-button="false"
         :clear-aria-label="$st('Clear search')"
         :clear-title="$st('Clear search')"
       />
-      <div class="w-36">
+      <div class="saved-rules-status min-w-0">
         <OptionPicker
           v-model="stateFilter"
           :options="stateOptions"
@@ -381,7 +496,10 @@ async function removeRule(id: number) {
           :title="$st('Rule status')"
         />
       </div>
-      <label v-if="selectableRules.length" class="flex items-center gap-2 text-xs text-muted-foreground"
+      <label
+        v-if="selectableRules.length"
+        class="saved-rules-select-all flex items-center gap-2 text-xs text-muted-foreground"
+        :title="$st('Select all')"
         ><input
           type="checkbox"
           class="accent-primary"
@@ -390,12 +508,12 @@ async function removeRule(id: number) {
           :disabled="bulkBusy || rowBusy !== null"
           :aria-label="$st('Select all permission rules')"
           @change="toggleAllSelection"
-        />{{ $st('Select all') }}</label
+        /><span :class="compact ? 'sr-only' : ''">{{ $st('Select all') }}</span></label
       >
     </div>
     <div
       v-if="selectedRules.length"
-      class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-2.5"
+      class="saved-rules-bulk mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 p-2.5"
     >
       <span class="text-xs font-medium">{{ $st('{count} selected', { count: selectedRules.length }) }}</span>
       <Button variant="ghost" size="sm" :disabled="bulkBusy" @click="clearSelection">{{ $st('Select none') }}</Button>
@@ -433,28 +551,47 @@ async function removeRule(id: number) {
       </div>
     </div>
     <div
-      v-if="error"
+      v-if="error || targetWorkspaceError"
       role="alert"
       class="mb-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
     >
-      {{ error }}
+      {{ error || targetWorkspaceError }}
     </div>
-    <p v-if="loading && !rules.length" role="status" class="py-3 text-sm text-muted-foreground">
+    <p
+      v-if="loading && !rules.length"
+      role="status"
+      :class="compact ? 'saved-rules-empty' : 'py-3 text-sm text-muted-foreground'"
+    >
       {{ $st('Loading permission rules...') }}
     </p>
-    <p v-else-if="!sortedRules.length && !error" class="py-3 text-sm text-muted-foreground">
+    <p
+      v-else-if="!sortedRules.length && !error && !(scope === 'workspace' && !activeWorkspaceId)"
+      :class="compact ? 'saved-rules-empty' : 'py-3 text-sm text-muted-foreground'"
+    >
       {{ $st('No permission rules configured.') }}
     </p>
-    <div v-else-if="!filteredRules.length && !error" class="rounded-lg bg-muted/20 px-4 py-5 text-center">
+    <div
+      v-else-if="sortedRules.length && !filteredRules.length && !error"
+      :class="
+        compact
+          ? 'saved-rules-empty flex flex-wrap items-center justify-between gap-1'
+          : 'rounded-lg bg-muted/20 px-4 py-5 text-center'
+      "
+    >
       <p class="text-sm text-muted-foreground">{{ $st('No matching rules.') }}</p>
       <Button variant="ghost" size="sm" class="mt-1" @click="clearFilters">{{ $st('Clear filters') }}</Button>
     </div>
-    <div class="grid gap-2">
+    <div v-if="filteredRules.length" class="saved-rules-list grid gap-2" role="list">
       <div
         v-for="rule in filteredRules"
         :key="rule.id"
-        class="saved-rule-row rounded-lg border border-border/50 bg-background/20 p-3"
-        :class="rule.revoked_at ? 'opacity-60' : ''"
+        class="saved-rule-row"
+        :class="[
+          compact ? 'saved-rule-row--compact' : 'rounded-lg border border-border/50 bg-background/20 p-3',
+          rule.revoked_at ? 'opacity-60' : '',
+        ]"
+        :data-saved-rule-id="rule.id"
+        role="listitem"
       >
         <input
           v-if="canRemoveRule(rule)"
@@ -466,15 +603,28 @@ async function removeRule(id: number) {
           @change="toggleRuleSelection(rule.id, ($event.target as HTMLInputElement).checked)"
         />
         <div class="saved-rule-heading min-w-0">
-          <div class="break-all font-mono text-xs font-medium">{{ ruleTitle(rule) }}</div>
-          <p v-if="rule.reason" class="mt-1 line-clamp-2 text-xs text-muted-foreground" :title="rule.reason">
+          <div
+            class="saved-rule-target break-all font-mono text-xs font-medium"
+            :class="compact ? 'line-clamp-2' : ''"
+            :title="ruleTitle(rule)"
+          >
+            {{ ruleTitle(rule) }}
+          </div>
+          <p
+            v-if="rule.reason"
+            class="saved-rule-reason mt-1 line-clamp-2 text-xs text-muted-foreground"
+            :title="rule.reason"
+          >
             {{ rule.reason }}
           </p>
-          <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+          <div
+            class="saved-rule-metadata mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground"
+            :title="`${scopeLabel(rule.scope)} · #${rule.id} · ${rule.source || ''}`"
+          >
             <span>{{ scopeLabel(rule.scope) }}</span
             ><span aria-hidden="true">·</span><span>#{{ rule.id }}</span
             ><span v-if="rule.source" :title="$st('Source')">{{ rule.source }}</span
-            ><span v-if="rule.subject_kind === 'network_access'">{{ $st('Mode') }}: {{ rule.mode }}</span
+            ><span v-if="!compact && rule.subject_kind === 'network_access'">{{ $st('Mode') }}: {{ rule.mode }}</span
             ><span v-if="rule.revoked_at" class="text-destructive">{{ $st('revoked') }}</span>
           </div>
         </div>
@@ -522,14 +672,37 @@ async function removeRule(id: number) {
     <p v-if="hasMore" class="mt-3 text-xs text-muted-foreground">
       {{ $st('More than 200 rules exist. Refine or manage older rules through the CLI.') }}
     </p>
-    <details v-if="canEdit" class="group mt-3 border-t border-border/50 pt-3">
+    <details
+      v-if="compact && sortedRules.some((rule) => rule.subject_kind === 'network_access')"
+      class="saved-rules-help group text-[11px] text-muted-foreground"
+    >
       <summary
+        class="flex cursor-pointer list-none items-center gap-1 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        {{ $st('Network access') }}
+        <RiArrowDownSLine class="h-3 w-3 transition-transform group-open:rotate-180" />
+      </summary>
+      <p class="pb-2 leading-relaxed">
+        {{
+          $st(
+            'Network decisions accept allow or deny and literal IP targets such as 192.0.2.10:443. Use tcp://, udp:// or icmp:// for a protocol; bare IP covers configured protocols and ports. Configure CIDRs in network settings.',
+          )
+        }}
+      </p>
+    </details>
+    <component
+      :is="compact ? 'div' : 'details'"
+      v-if="canEdit && (!compact || createExpanded)"
+      class="saved-rule-create group mt-3 border-t border-border/50 pt-3"
+    >
+      <summary
+        v-if="!compact"
         class="flex cursor-pointer list-none items-center gap-2 rounded-md py-1 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <RiAddLine class="h-4 w-4" />{{ $st('Create tool rule')
         }}<RiArrowDownSLine class="ml-auto h-4 w-4 transition-transform group-open:rotate-180" />
       </summary>
-      <form class="saved-rule-form mt-3" @submit.prevent="createRule">
+      <form ref="createForm" class="saved-rule-form" :class="compact ? '' : 'mt-3'" @submit.prevent="createRule">
         <label class="grid min-w-0 gap-1.5"
           ><span class="text-xs text-muted-foreground">{{ $st('Tool name') }}</span
           ><Input v-model="newToolName" placeholder="agena.shell.exec" :disabled="createBusy" class="font-mono text-xs"
@@ -551,16 +724,60 @@ async function removeRule(id: number) {
             :include-empty="false"
             :disabled="createBusy"
         /></label>
-        <Button type="submit" variant="outline" size="sm" class="h-9" :disabled="!canCreate">{{
-          createBusy ? $st('Creating…') : $st('Create rule')
-        }}</Button>
+        <div class="saved-rule-create-actions flex items-center justify-end gap-1">
+          <Button
+            v-if="compact"
+            type="button"
+            variant="ghost"
+            size="sm"
+            :disabled="createBusy"
+            @click="toggleCreateForm"
+            >{{ $st('Cancel') }}</Button
+          >
+          <Button type="submit" variant="outline" size="sm" class="h-9" :disabled="!canCreate">{{
+            createBusy ? $st('Creating…') : $st('Create rule')
+          }}</Button>
+        </div>
       </form>
       <p v-if="createError" class="mt-2 break-words text-xs text-destructive" role="alert">{{ createError }}</p>
-    </details>
-  </PermissionSettingsCard>
+    </component>
+  </component>
 </template>
 
 <style scoped>
+@reference '../../style.css';
+.saved-rules {
+  min-width: 0;
+  container: saved-rules / inline-size;
+}
+.saved-rules-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block-end: 0.75rem;
+}
+.saved-rules-search {
+  flex: 1 1 12rem;
+}
+.saved-rules-status {
+  width: 9rem;
+}
+.saved-rules-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0 0.375rem;
+  padding-block: 0.375rem;
+}
+.saved-rules-immediate {
+  grid-column: 1 / -1;
+  padding-inline-start: 1.375rem;
+}
+.saved-rules-empty {
+  @apply text-xs text-muted-foreground;
+  padding-block: 0.375rem;
+}
 .saved-rule-row {
   display: grid;
   grid-template-columns: 1.25rem minmax(0, 1fr) 2rem;
@@ -607,6 +824,143 @@ summary::-webkit-details-marker {
   }
   .saved-rule-form {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 9rem auto;
+  }
+}
+.saved-rules--compact .saved-rules-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 6.75rem auto;
+  gap: 0.375rem;
+  margin-block-end: 0.25rem;
+}
+.saved-rules--compact .saved-rules-status {
+  width: auto;
+}
+.saved-rules--compact .saved-rules-select-all {
+  justify-content: center;
+}
+.saved-rules--compact .saved-rules-bulk {
+  gap: 0.375rem;
+  padding: 0.375rem;
+  margin-block-end: 0.25rem;
+}
+.saved-rules--compact .saved-rules-list {
+  gap: 0;
+}
+.saved-rule-row--compact {
+  grid-template-columns: 1rem minmax(0, 1fr) 6.75rem var(--saved-rule-action-width, 2rem);
+  gap: 0.25rem 0.375rem;
+  padding-block: 0.375rem;
+}
+.saved-rule-row--compact + .saved-rule-row--compact {
+  @apply border-t border-border/50;
+}
+.saved-rule-row--compact .saved-rule-heading {
+  display: contents;
+}
+.saved-rule-row--compact .saved-rule-target {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  min-width: 0;
+}
+.saved-rule-row--compact .saved-rule-metadata {
+  grid-column: 2;
+  grid-row: 2;
+  min-width: 0;
+  margin: 0;
+  flex-wrap: nowrap;
+  gap: 0.25rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.saved-rule-row--compact .saved-rule-metadata > span {
+  flex-shrink: 0;
+}
+.saved-rule-row--compact .saved-rule-metadata > span:last-child {
+  min-width: 0;
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.saved-rule-row--compact .saved-rule-mode {
+  grid-column: 3;
+  grid-row: 2;
+  width: auto;
+  min-width: 0;
+}
+.saved-rule-row--compact .saved-rule-remove {
+  grid-column: 4;
+  grid-row: 1 / 3;
+}
+.saved-rule-row--compact .rule-checkbox {
+  grid-column: 1;
+  grid-row: 1 / 3;
+}
+.saved-rule-row--compact .saved-rule-reason {
+  grid-column: 2 / 4;
+  grid-row: 3;
+  margin: 0;
+  font-size: 0.8125rem;
+}
+.saved-rules--compact :deep(.text-xs),
+.saved-rules--compact :deep([class~='text-[11px]']),
+.saved-rules--compact .saved-rules-empty {
+  font-size: 0.8125rem;
+}
+.saved-rules--compact .saved-rule-create {
+  margin-block-start: 0.375rem;
+  padding-block-start: 0.5rem;
+}
+.saved-rules--compact .saved-rule-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+.saved-rules--compact .saved-rule-form > label {
+  gap: 0.25rem;
+}
+.saved-rules--compact .saved-rule-form > label:nth-child(-n + 2) {
+  grid-column: 1 / -1;
+}
+@container saved-rules (min-width: 40rem) {
+  .saved-rule-row--compact {
+    grid-template-columns: 1rem minmax(0, 1fr) 8rem 6.75rem var(--saved-rule-action-width, 2rem);
+  }
+  .saved-rule-row--compact .saved-rule-target {
+    grid-column: 2;
+  }
+  .saved-rule-row--compact .saved-rule-metadata {
+    grid-column: 3;
+    grid-row: 1;
+  }
+  .saved-rule-row--compact .saved-rule-mode {
+    grid-column: 4;
+    grid-row: 1;
+  }
+  .saved-rule-row--compact .saved-rule-remove {
+    grid-column: 5;
+    grid-row: 1;
+  }
+  .saved-rule-row--compact .rule-checkbox {
+    grid-row: 1;
+  }
+  .saved-rule-row--compact .saved-rule-reason {
+    grid-column: 2 / 4;
+    grid-row: 2;
+  }
+  .saved-rules--compact .saved-rule-form {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 8rem auto;
+  }
+  .saved-rules--compact .saved-rule-form > label:nth-child(-n + 2) {
+    grid-column: auto;
+  }
+}
+@media (pointer: coarse) {
+  .saved-rules--compact {
+    --saved-rule-action-width: 2.5rem;
+  }
+  .saved-rules--compact .saved-rules-heading :deep(button),
+  .saved-rules--compact .saved-rule-remove :deep(button) {
+    min-width: 2.5rem;
+    min-height: 2.5rem;
   }
 }
 </style>

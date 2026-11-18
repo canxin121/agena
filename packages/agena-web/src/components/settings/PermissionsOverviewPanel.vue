@@ -6,6 +6,7 @@ import { apiJson } from '@/lib/api'
 import { useChatStore } from '@/stores/chat'
 import { lastSessionId } from '@/lib/lastSession'
 import { settingsText as st } from '@/i18n/settingsText'
+import { PERMISSION_ACCESS_VIEW, permissionAccessHash } from './permissions/permissionNavigation'
 import Button from '@/components/ui/Button.vue'
 import SettingsCard from './SettingsCard.vue'
 
@@ -125,8 +126,8 @@ function modeLabel(mode: PermissionMode | PathPermissionMode | undefined): strin
 function openDetails(view: string) {
   void router.push({
     path: '/settings/permissions',
-    query: { ...route.query, view, scope: 'effective' },
-    hash: route.hash,
+    query: { ...route.query, view: PERMISSION_ACCESS_VIEW, scope: 'effective' },
+    hash: permissionAccessHash(view),
   })
 }
 

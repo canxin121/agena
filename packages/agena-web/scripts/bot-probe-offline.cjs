@@ -149,7 +149,9 @@ function offlineRequestHandler({ cdp, base, directory, middleware, errors }) {
       if (/^\/(api|auth|health)(\/|$)/.test(url.pathname)) {
         result = await fixtureResponse(middleware, event.request)
       } else {
-        const spa = ['/', '/bot', '/chat', '/assistant', '/integrations', '/tasks'].includes(url.pathname)
+        const spa =
+          ['/', '/bot', '/chat', '/assistant', '/integrations', '/tasks'].includes(url.pathname) ||
+          url.pathname.startsWith('/settings')
         const file = path.resolve(directory, spa ? 'index.html' : '.' + decodeURIComponent(url.pathname))
         if (!file.startsWith(directory + path.sep)) throw new Error('Invalid fixture asset path')
         let body

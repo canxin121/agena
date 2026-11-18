@@ -116,10 +116,15 @@ The resolver starts with the broadest layer and appends toward the narrowest:
    global fragment library.
 4. Matching workspace `prompts.models` overlays, in configuration order, using
    the workspace and inherited global libraries.
-5. Session layer. Its ordered entries may refer to saved global or workspace
+5. Selected [agent profile](agent-profiles.md) layers, from parent to child.
+   These use the global/workspace libraries and can reference inline fragments
+   declared by ancestor profiles. Selecting a profile also supplies its model,
+   permission defaults, and turn limit.
+6. Session layer. Its ordered entries may refer to saved global or workspace
    fragments, or to legacy session-local inline fragments.
-6. Request layer. This is an internal resolver scope; the current runtime always
-   resolves it as empty.
+7. Request layer. Explicit per-run system instructions replace the accumulated
+   configured layers for that request; omission adds no layer. The built-in
+   prompt is preserved.
 
 Each layer is processed in this order:
 
@@ -321,9 +326,11 @@ states:
 
 `GET /api/v1/sessions/{session_id}/state` exposes the stored layer under
 `execution.prompts` when it is non-empty. Forking and rewinding preserve the
-source session configuration, including its layer. Newly created child and
-delegated-agent sessions start with an empty layer unless their creation request
-supplies `prompts`.
+source session configuration, including its layer and selected agent profile.
+Newly created child and delegated-agent sessions inherit the parent's profile;
+their session-local layer starts empty unless the creation request supplies
+`prompts`. Profile selection and its create/update semantics are documented in
+[Agent profiles](agent-profiles.md).
 
 ## CLI
 

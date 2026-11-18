@@ -995,7 +995,7 @@ async function runDirectoryDialogAction(item: DirectoryDialogActionItem) {
     await selectDirectory(target.id, target.path)
     await workspaceNavigation.openMainTab('settings', {
       path: '/settings/permissions',
-      query: { view: 'filesystem', scope: 'workspace' },
+      query: { view: 'access', scope: 'workspace' },
     })
     return
   }

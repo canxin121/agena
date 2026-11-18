@@ -26,6 +26,7 @@ import { toolFailurePresentation } from '../../lib/toolFailures'
 import { normalizeSessionState } from '../../types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PromptLayer, PromptResolution } from '@/lib/promptLayers'
+import type { PermissionConfig } from '@/lib/permissionConfig'
 import type {
   MessageAuthor,
   MessageOrigin,
@@ -150,6 +151,9 @@ export type AgenaExecutionState = {
     model_speed_mode?: string | null
     model_verbosity?: string | null
     model_parallel_tool_calls?: boolean | null
+    profile?: string | null
+    permission_ceiling?: PermissionConfig
+    permission_ceiling_layers?: PermissionConfig[]
     prompts?: PromptLayer
     effective_workspace_root?: string | null
     [k: string]: JsonValue
@@ -739,6 +743,8 @@ export type CreateSessionInput = {
   title: string
   autoTitle?: boolean
   parentId?: number
+  /** Omit for the configured default; an empty string explicitly selects no profile. */
+  profile?: string
 }
 
 export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject {
@@ -749,6 +755,7 @@ export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject
   if (!title) throw new Error(i18n.global.t('chat.errors.sessionTitleRequired'))
 
   const payload: JsonObject = { workspace_id: workspaceId, title, auto_title: input.autoTitle === true }
+  if (input.profile !== undefined) payload.profile = input.profile
   if (typeof input.parentId === 'number' && Number.isSafeInteger(input.parentId) && input.parentId > 0) {
     payload.parent_id = input.parentId
   }
@@ -944,6 +951,8 @@ export type SessionUpdatePayload = {
   title?: string
   favorite?: boolean
   pinned?: boolean
+  /** Omit to preserve; an empty string removes the selected agent profile. */
+  profile?: string
   /** Omitted leaves the session layer unchanged; an object replaces it. */
   prompts?: PromptLayer
 }
@@ -958,7 +967,7 @@ export async function patchSessionMetadata(sessionId: string, patch: SessionUpda
   })
   const session = toSession(updated, scope)
   if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
-  const change = Object.prototype.hasOwnProperty.call(patch, 'prompts') ? 'execution' : 'metadata'
+  const change = Object.prototype.hasOwnProperty.call(patch, 'prompts') || Object.prototype.hasOwnProperty.call(patch, 'profile') ? 'execution' : 'metadata'
   reconcileSessionMutation(session.id, change, scope, patch)
   return session
 }
@@ -1205,13 +1214,23 @@ export async function sendMessage(sessionId: string, payload: SendMessagePayload
   return state
 }
 
-/** PUT /api/v1/sessions/{id}/selection — replace the persisted run selection. */
+/** PUT /selection: empty objects restore inheritance; empty modes clear one override. */
+export function buildSessionSelectionRequest(options: RunOptionsPayload): JsonObject {
+  const body = buildRunRequestBody(options)
+  // Empty modes deliberately clear one saved override while keeping the other
+  // fields. Message requests continue to omit empty display values.
+  for (const key of ['thinking_mode', 'speed_mode', 'verbosity'] as const) {
+    if (typeof options[key] === 'string' && !options[key]!.trim()) body[key] = ''
+  }
+  return body
+}
+
 export async function setSessionSelection(sessionId: string, options: RunOptionsPayload): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/selection`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(buildRunRequestBody(options)),
+    body: JSON.stringify(buildSessionSelectionRequest(options)),
   })
   toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)
@@ -1508,6 +1527,7 @@ export async function presentInteractiveRequest(
 export async function getSessionExecutionStatus(
   sessionId: string,
   force = false,
+  forceFresh = false,
 ): Promise<SessionExecutionStatus | null> {
   const sid = String(sessionId || '').trim()
   if (!sid) return null
@@ -1516,6 +1536,8 @@ export async function getSessionExecutionStatus(
     `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
     { signal: AbortSignal.timeout(30_000) },
     force,
+    undefined,
+    forceFresh,
   )
   const state = {
     ...raw,

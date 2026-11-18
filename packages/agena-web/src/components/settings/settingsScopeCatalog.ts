@@ -7,6 +7,7 @@
 
 import type { SettingsTab } from './sidebar/settingsSidebarNavigation'
 import { settingsText as st } from '../../i18n/settingsText'
+import { isPermissionAccessView, PERMISSION_ACCESS_VIEW } from './permissions/permissionNavigation'
 
 export const SETTINGS_SCOPE_IDS = ['effective', 'global', 'workspace', 'session'] as const
 
@@ -114,15 +115,22 @@ const PROMPT_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
 
 const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, readonly SettingsScopeSource[]>>> = {
   permissions: {
+    profiles: LAYER_SCOPE_SOURCES.filter((scope) => scope.id === 'global'),
+    access: PERMISSION_SCOPE_SOURCES,
     sandbox: LAYER_SCOPE_SOURCES,
-    filesystem: PERMISSION_SCOPE_SOURCES,
-    network: PERMISSION_SCOPE_SOURCES,
-    tools: PERMISSION_SCOPE_SOURCES,
   },
   'models-providers': {
     'model-settings': MODEL_SCOPE_SOURCES,
   },
   'runtime-session': {
+    'agent-profiles': [
+      ...LAYER_SCOPE_SOURCES,
+      {
+        id: 'session',
+        label: () => st('Current session'),
+        description: () => st('Choose the agent profile for the current session.'),
+      },
+    ],
     'prompt-library': LAYER_SCOPE_SOURCES,
     'prompt-layers': PROMPT_SCOPE_SOURCES,
   },
@@ -140,7 +148,9 @@ export function normalizeSettingsScopeId(value: unknown): string {
 function settingsScopeSources(section: SettingsTab | string, page: unknown): readonly SettingsScopeSource[] {
   const sources = SETTINGS_PAGE_SCOPE_SOURCES[section as SettingsTab]
   if (!sources) return []
-  return sources[normalizeSettingsScopeId(page)] || []
+  const id =
+    section === 'permissions' && isPermissionAccessView(page) ? PERMISSION_ACCESS_VIEW : normalizeSettingsScopeId(page)
+  return sources[id] || []
 }
 
 export function buildSettingsScopes(section: SettingsTab | string, page: unknown): SettingsScopeDefinition[] {

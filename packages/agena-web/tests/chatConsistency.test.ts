@@ -462,6 +462,22 @@ describe('chat session consistency', () => {
     expect(chat.getMessagesForSession('1').map((entry) => entry.info.id)).toEqual(['10'])
   })
 
+  test('a forced profile refresh updates equal-version model projections and clears retired modes', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    const initial = execution(10)
+    initial.execution = { profile: 'review', model_provider_id: 'local', model_adapter_id: 'old', model_id: 'old-model', model_thinking_mode: 'high', model_speed_mode: 'fast' }
+    const refreshed = execution(10)
+    refreshed.execution = { profile: 'review', model_provider_id: 'local', model_id: 'new-model' }
+    const getter = spyOn(chatApi, 'getSessionExecutionStatus')
+      .mockResolvedValueOnce(status(initial))
+      .mockResolvedValueOnce(status(refreshed))
+    await chat.refreshExecutionStatus('1', true)
+    expect(chat.sessionRunConfigBySession['1']?.modelID).toBe('old-model')
+    await chat.refreshExecutionStatus('1', true)
+    expect(getter).toHaveBeenLastCalledWith('1', true, true)
+    expect(chat.sessionRunConfigBySession['1']).toMatchObject({ modelID: 'new-model', adapterID: undefined, thinkingMode: undefined, speedMode: undefined })
+  })
+
   test('fork rewind creates a branch session without rewriting the source', async () => {
     const chat = useChatStoreUnscoped(pinia)
     chat.selectedSessionId = '1'

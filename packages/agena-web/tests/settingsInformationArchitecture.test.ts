@@ -44,7 +44,7 @@ describe('task-based settings navigation', () => {
     ['skills', 'install', 'extensions', 'skills'],
     ['mcp-server', 'connection', 'extensions', 'mcp-host'],
     ['permissions', 'overview', 'security', 'overview'],
-    ['permissions', 'tools', 'security', 'execution'],
+    ['permissions', 'access', 'security', 'access'],
     ['interface', 'notifications', 'appearance', 'notifications'],
     ['diagnostics', 'usage', 'records', 'usage'],
     ['diagnostics', 'advanced-settings', 'operations', 'advanced'],
@@ -93,5 +93,25 @@ describe('task-based settings navigation', () => {
     }
     const pages = buildSettingsSubpages('models-providers')
     expect(resolveSettingsSubpage('defaults', '', pages, 'provider-studio')).toBe('model-settings')
+  })
+
+  test('security has one access editor and searches all three permission domains', () => {
+    const security = categories.find((category) => category.id === 'security')!
+    const ids = security.children?.map((task) => task.id) || []
+    expect(ids.filter((id) => id === 'access')).toEqual(['access'])
+    expect(ids).toEqual(expect.arrayContaining(['profiles', 'sandbox', 'overview']))
+    expect(ids.filter((id) => ['files', 'network', 'execution'].includes(id))).toEqual([])
+    for (const query of ['filesystem', 'network', 'tools', '文件', '网络', '工具']) {
+      const rows = buildSettingsSidebarGroups({
+        query,
+        tabs: categories,
+        activeTab: 'interface',
+        activeView: 'tui',
+      }).flatMap((group) => group.items)
+      expect(rows.find((row) => row.key === 'security/access')?.view).toBe('access')
+      expect(rows.some((row) => ['security/files', 'security/network', 'security/execution'].includes(row.key))).toBe(
+        false,
+      )
+    }
   })
 })

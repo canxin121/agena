@@ -23,6 +23,7 @@ Engineering guides:
 - [Git workflow and file recovery](docs/git-workflow.md)
 - [Automatic session titles and auxiliary models](docs/session-titles.md)
 - [Layered prompt fragments and inheritance](docs/prompt-layers.md)
+- [Agent profiles: reusable permissions, prompts, and model settings](docs/agent-profiles.md)
 - [Skill libraries, installation, and authoring](docs/skills.md)
 - [Multi-user channel roles, privacy and permissions](docs/channel-access.md)
 - [Tool sandbox configuration and deployment](docs/sandbox.md)

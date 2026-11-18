@@ -6,6 +6,7 @@ import { RiRefreshLine, RiRefreshFill, RiCpuLine, RiStackLine } from '@remixicon
 import SettingsCard from './SettingsCard.vue'
 import PromptLayersPanel from './PromptLayersPanel.vue'
 import PromptLibraryPanel from './PromptLibraryPanel.vue'
+import AgentProfilesPanel from './AgentProfilesPanel.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
@@ -23,6 +24,7 @@ const tokensField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const promptPanel = ref<InstanceType<typeof PromptLayersPanel> | null>(null)
 const promptLibraryPanel = ref<InstanceType<typeof PromptLibraryPanel> | null>(null)
+const agentProfilesPanel = ref<InstanceType<typeof AgentProfilesPanel> | null>(null)
 const titleOptions = computed(() => [
   {
     path: 'session.auto_title.enabled',
@@ -77,6 +79,7 @@ async function refresh() {
       tokensField.value,
       promptPanel.value,
       promptLibraryPanel.value,
+      agentProfilesPanel.value,
     ].map((field) => field?.refresh()),
   )
 }
@@ -151,6 +154,7 @@ defineProps<{ activePage: string; scope: string; sessionId?: string }>()
         />
       </SettingsCard>
     </div>
+    <AgentProfilesPanel v-else-if="activePage === 'agent-profiles'" ref="agentProfilesPanel" :scope="scope" :session-id="sessionId" />
     <PromptLibraryPanel v-else-if="activePage === 'prompt-library'" ref="promptLibraryPanel" :scope="scope" />
     <PromptLayersPanel
       v-else-if="activePage === 'prompt-layers'"

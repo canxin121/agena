@@ -3,6 +3,7 @@ import { computed, defineAsyncComponent, ref } from 'vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 
+const PermissionProfilesPanel = defineAsyncComponent(() => import('@/components/settings/PermissionProfilesPanel.vue'))
 const PermissionStudioPanel = defineAsyncComponent(() => import('@/components/settings/PermissionStudioPanel.vue'))
 const PermissionsOverviewPanel = defineAsyncComponent(
   () => import('@/components/settings/PermissionsOverviewPanel.vue'),
@@ -17,7 +18,9 @@ defineExpose({ refresh: () => studio.value?.refresh() })
 </script>
 
 <template>
+  <PermissionStudioPanel v-if="activePage === 'access'" ref="studio" :scope="scope" :session-id="sessionId" />
   <SettingsSectionWorkbench
+    v-else
     section="permissions"
     :pages="pages"
     :active-page="activePage"
@@ -27,7 +30,8 @@ defineExpose({ refresh: () => studio.value?.refresh() })
     v-slot="{ activePage }"
   >
     <PermissionsOverviewPanel v-if="activePage === 'overview'" ref="studio" :session-id="sessionId" />
+    <PermissionProfilesPanel v-else-if="activePage === 'profiles'" ref="studio" />
     <SandboxSettingsPanel v-else-if="activePage === 'sandbox'" ref="studio" :scope="scope" />
-    <PermissionStudioPanel v-else ref="studio" :scope="scope" :section="activePage" :session-id="sessionId" />
+    <PermissionStudioPanel v-else ref="studio" :scope="scope" :session-id="sessionId" />
   </SettingsSectionWorkbench>
 </template>

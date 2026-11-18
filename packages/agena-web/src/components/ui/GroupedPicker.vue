@@ -8,11 +8,12 @@
  * so a caller that browses a large hierarchy (sessions by project, projects by
  * page) does not re-implement any of that.
  */
-import { computed, ref, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { cn } from '@/lib/utils'
+import { useUiStore } from '@/stores/ui'
 
 const props = withDefaults(
   defineProps<{
@@ -38,6 +39,14 @@ const props = withDefaults(
     block?: boolean
     /** Keep the chosen row highlighted even after the menu closes. */
     selectedId?: string
+    /** Controlled search; external callers load their own filtered pages. */
+    query?: string
+    filterMode?: 'internal' | 'external'
+    loading?: boolean
+    refreshable?: boolean
+    refreshing?: boolean
+    refreshLabel?: string
+    isCompactTouch?: boolean
   }>(),
   {
     placeholder: '',
@@ -56,19 +65,43 @@ const props = withDefaults(
     menuClass: '',
     block: false,
     selectedId: '',
+    filterMode: 'internal',
+    loading: false,
+    refreshable: false,
+    refreshing: false,
+    refreshLabel: '',
+    isCompactTouch: undefined,
   },
 )
 
 const emit = defineEmits<{
   (e: 'select', id: string): void
   (e: 'request-page', page: number): void
+  (e: 'update:query', query: string): void
+  (e: 'update:open', open: boolean): void
+  (e: 'refresh'): void
 }>()
 
+const ui = useUiStore()
 const open = ref(false)
-const query = ref('')
+const localQuery = ref('')
+const query = computed(() => props.query ?? localQuery.value)
+const isCompactTouch = computed(() => props.isCompactTouch ?? ui.isCompactTouch)
+const filteredGroups = computed(() => {
+  const search = query.value.trim().toLowerCase()
+  if (props.filterMode === 'external' || !props.searchable || !search) return props.groups
+  return props.groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) =>
+        [item.id, item.label, item.description, item.keywords].join(' ').toLowerCase().includes(search),
+      ),
+    }))
+    .filter((group) => group.items.length > 0)
+})
 
 const resolvedGroups = computed<OptionMenuGroup[]>(() =>
-  props.groups.map((group) => ({
+  filteredGroups.value.map((group) => ({
     ...group,
     items: group.items.map((item) => ({
       ...item,
@@ -85,10 +118,26 @@ const triggerClasses = computed(() => {
 })
 
 function select(item: OptionMenuItem) {
+  if (props.disabled || item.disabled) return
   emit('select', item.id)
   // Selecting a leaf closes the picker; a group header has no id to report.
-  open.value = false
+  setOpen(false)
 }
+function setOpen(value: boolean) {
+  if (value && props.disabled) return
+  open.value = value
+  emit('update:open', value)
+}
+function setQuery(value: string) {
+  localQuery.value = value
+  emit('update:query', value)
+}
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled && open.value) setOpen(false)
+  },
+)
 </script>
 
 <template>
@@ -100,9 +149,9 @@ function select(item: OptionMenuItem) {
       :aria-label="title || placeholder || label"
       aria-haspopup="dialog"
       :aria-expanded="open"
-      @click.stop="open = !open"
-      @keydown.down.prevent="open = true"
-      @keydown.up.prevent="open = true"
+      @click.stop="setOpen(!open)"
+      @keydown.down.prevent="setOpen(true)"
+      @keydown.up.prevent="setOpen(true)"
     >
       <span class="flex min-w-0 items-center gap-2">
         <component v-if="icon" :is="icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -122,19 +171,25 @@ function select(item: OptionMenuItem) {
       :search-placeholder="searchPlaceholder"
       :empty-text="emptyText"
       :helper-text="helperText"
+      :is-compact-touch="isCompactTouch"
       :collapsible-groups="collapsibleGroups"
       :paginated="false"
       :external-page="page"
       :external-page-count="pageCount"
       :external-pager-loading="pageLoading"
+      :loading="loading"
+      :refreshable="refreshable"
+      :refreshing="refreshing"
+      :refresh-label="refreshLabel"
       :desktop-fixed="true"
       desktop-placement="bottom-start"
       :desktop-class="cn('w-[min(26rem,calc(100vw-2rem))]', menuClass)"
       filter-mode="external"
-      @update:open="open = $event"
-      @update:query="query = $event"
+      @update:open="setOpen"
+      @update:query="setQuery"
       @select="select"
       @request-page="(page: number) => emit('request-page', page)"
+      @refresh="emit('refresh')"
     />
   </div>
 </template>

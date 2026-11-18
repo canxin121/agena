@@ -2139,6 +2139,9 @@ async function sendReady(sid: string | null) {
     selectedModelId: modelSelection.selectedModelId.value,
     selectedThinkingMode: modelSelection.selectedThinkingMode.value,
     selectedSpeedMode: modelSelection.selectedSpeedMode.value,
+    modelSource: modelSelection.modelSource.value,
+    thinkingModeSource: modelSelection.thinkingModeSource.value,
+    speedModeSource: modelSelection.speedModeSource.value,
   })
 
   // UX: if the editor is expanded, collapse it on send.

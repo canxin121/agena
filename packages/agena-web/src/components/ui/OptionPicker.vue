@@ -28,6 +28,7 @@ const props = withDefaults(
     disabled?: boolean
     size?: 'default' | 'sm'
     triggerClass?: string
+    displayLabel?: string
     icon?: Component
     maxInitialOptions?: number
     desktopFixed?: boolean
@@ -77,6 +78,7 @@ const triggerAriaLabel = computed(() => {
 })
 
 const selectedDisplayLabel = computed(() => {
+  if (props.displayLabel !== undefined) return props.displayLabel
   if (!selected.value) {
     const placeholder = String(props.placeholder || '').trim()
     const emptyLabel = String(props.emptyLabel || '').trim()

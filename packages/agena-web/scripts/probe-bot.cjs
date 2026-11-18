@@ -80,11 +80,11 @@ class Cdp {
       await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...coords, button: 'left', clickCount: 1 })
     }
   }
-  async clickText(selector, label) {
+  async clickText(selector, label, exact = false) {
     const point = await wait(
       () =>
         this.evaluate(`(() => {
-      const n=[...document.querySelectorAll(${JSON.stringify(selector)})].find(el=>el.getClientRects().length && !el.disabled && el.textContent.includes(${JSON.stringify(label)}));
+      const n=[...document.querySelectorAll(${JSON.stringify(selector)})].find(el=>el.getClientRects().length && !el.disabled && (${JSON.stringify(exact)} ? el.textContent.trim()===${JSON.stringify(label)} : el.textContent.includes(${JSON.stringify(label)})));
       if(!n) return null; n.scrollIntoView({block:'center'}); const r=n.getBoundingClientRect();
       const x=r.x+r.width/2,y=r.y+r.height/2; return n.contains(document.elementFromPoint(x,y)) ? {x,y,touch:matchMedia('(pointer:coarse)').matches} : null;
     })()`),
@@ -322,6 +322,8 @@ async function main() {
     )
   const navigate = (url) => cdp.evaluate(`window.__botProbe.router.push(${JSON.stringify(url)})`)
   const input = '[data-chat-input="true"]'
+  const permissionFixture =
+    process.env.PERMISSIONS_PROBE_ONLY === '1' ? require('./probe-permissions.cjs').createFixture({ execution }) : null
   try {
     await fs.writeFile(
       path.join(temporary, 'entry.ts'),
@@ -332,6 +334,9 @@ import { useUiStore } from '/src/stores/ui.ts'
 import { useBotsStore } from '/src/stores/bots.ts'
 import { useChatStoreUnscoped } from '/src/stores/chat.ts'
 import { setAppLocale } from '/src/i18n/index.ts'
+import { applyAppearanceSettingsToDom } from '/src/lib/appearance.ts'
+import { lastSessionId } from '/src/lib/lastSession.ts'
+import { toast } from ${JSON.stringify(path.join(web, 'node_modules/vue-sonner/lib/index.js'))}
 import { useWorkspaceNavigation } from '/src/app/navigation/useWorkspaceNavigation.ts'
 import { createApp, h } from 'vue'
 import { getActivePinia } from 'pinia'
@@ -344,7 +349,7 @@ window.__botProbe = {activeComposerSession: () => {
   let owner = [...document.querySelectorAll('[data-chat-input="true"]')].find(el=>el.getClientRects().length)?.__vueParentComponent;
   while(owner && !owner.type.__file?.endsWith('/pages/ChatPage.vue') && owner.type.__name!=='ChatPage') owner = owner.parent;
   return owner?.setupState.chat.selectedSessionId;
-},router,setAppLocale,bots:useBotsStore(),ui:useUiStore(),chat:useChatStoreUnscoped(),navigation:useWorkspaceNavigation(), mountProjectLink: (absolute = false) => {
+},router,setAppLocale,applyAppearanceSettingsToDom,lastConversation:()=>lastSessionId.value,dismissToasts:()=>toast.dismiss(),bots:useBotsStore(),ui:useUiStore(),chat:useChatStoreUnscoped(),navigation:useWorkspaceNavigation(), mountProjectLink: (absolute = false) => {
   const host = document.createElement('div'); host.id = 'bot-markdown-link';
   Object.assign(host.style, {position:'fixed',top:'80px',right:'40px',zIndex:'100'}); document.body.append(host);
   const href = (absolute ? location.origin : '') + '/chat?sessionId=7';
@@ -378,6 +383,7 @@ window.__botProbe = {activeComposerSession: () => {
               }
               if (/^\/(api|auth|health)(\/|$)/.test(p)) {
                 requests.push({ method: req.method, path: p })
+                if (permissionFixture && (await permissionFixture.handle(req, url, json))) return
                 if (/^\/api\/v1\/(tasks(?:\/|$)|chatbot\/messages$)/.test(p))
                   return json({ error: 'Retired endpoint' }, 404)
                 if (/^\/api\/v1\/sessions\/\d+\/messages$/.test(p) && req.method === 'POST') {
@@ -781,6 +787,31 @@ window.__botProbe = {activeComposerSession: () => {
       deviceScaleFactor: 1,
       mobile: false,
     })
+    if (permissionFixture) {
+      await require('./probe-permissions.cjs').run({ cdp, base, evidence, wait, check, visible, permissionFixture })
+      check(sent.length === 0, 'permission editing never sends a model message')
+      check(botRequests === 0, 'the permission session picker never creates or resolves a Bot session')
+      check(
+        !requests.some((request) => /^\/api\/v1\/sessions\/(8|42|164)\/(parts|messages)$/.test(request.path)),
+        'selecting and saving permission targets never loads their chat transcripts',
+      )
+      check(errors.length === 0, `no browser exceptions (${errors.length})`)
+      await fs.writeFile(
+        path.join(evidence, 'web-permissions-browser-report.json'),
+        JSON.stringify(
+          {
+            checks,
+            requests,
+            permissionWrites: permissionFixture.writes,
+            ruleWrites: permissionFixture.ruleWrites,
+            errors,
+          },
+          null,
+          2,
+        ),
+      )
+      return
+    }
     if (process.env.BOT_AVATAR_PROBE_ONLY === '1') {
       await require('./probe-bot-avatars.cjs')({
         cdp,

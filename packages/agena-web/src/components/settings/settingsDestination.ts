@@ -7,9 +7,8 @@ export function settingsQueryForDestination(
   currentSection: SettingsTab,
   currentQuery: LocationQuery,
 ): LocationQueryRaw {
-  // `sessionId` is not a settings parameter: a session-scoped page edits the
-  // conversation this client used last, so a stale id must not travel between
-  // sections.
+  // The retired chat `sessionId` is not a settings parameter. An explicitly
+  // selected `targetSessionId` stays in restQuery across settings destinations.
   const {
     view: _view,
     scope: _scope,

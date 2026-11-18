@@ -4,6 +4,7 @@ import { compileScript, parse } from '@vue/compiler-sfc'
 import { transformSync } from 'esbuild'
 import * as vue from 'vue'
 import * as permissionConfig from '../src/lib/permissionConfig'
+import * as permissionNavigation from '../src/components/settings/permissions/permissionNavigation'
 
 const source = readFileSync(new URL('../src/components/settings/PermissionsOverviewPanel.vue', import.meta.url), 'utf8')
 const { descriptor } = parse(source)
@@ -18,6 +19,7 @@ afterEach(() => {
 
 async function overview(policy: permissionConfig.PermissionConfig, cardId = 'network') {
   const modules: Record<string, unknown> = {
+    './permissions/permissionNavigation': permissionNavigation,
     vue: { ...vue, onMounted() {}, onBeforeUnmount() {} },
     'vue-router': { useRoute: () => ({}), useRouter: () => ({ push() {} }) },
     '@remixicon/vue': {},

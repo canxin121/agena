@@ -1,6 +1,6 @@
 import { apiJson } from '@/lib/api'
 import { notifyModelConfigurationChanged } from './modelConfigurationApi'
-import { captureResourceObservation } from './resourceSync'
+import { captureResourceObservation, invalidateResourcePrefix } from './resourceSync'
 import { readBatchedRuntimeSettingSources, retireRuntimeSettingReads } from './runtimeSettingReads'
 import type { JsonObject, JsonValue } from '@/types/json'
 
@@ -10,6 +10,7 @@ export type RuntimeSettingsLayer = 'global' | 'workspace'
 export type RuntimeSettingReadResponse = {
   config_path?: string
   config_found?: boolean
+  revision?: string
   source?: RuntimeSettingsSource
   path?: string | null
   value?: JsonValue
@@ -18,6 +19,8 @@ export type RuntimeSettingReadResponse = {
 export type RuntimeSettingEditResponse = {
   config_path?: string
   config_found?: boolean
+  before_revision?: string
+  after_revision?: string
   operation?: string
   path?: string | null
   dry_run?: boolean
@@ -47,13 +50,15 @@ export type RuntimeSettingsEditOptions = {
   dry_run?: boolean
   validate?: boolean
   reload?: boolean
+  expected_revision?: string
 }
 
-function optionsBody(options?: RuntimeSettingsEditOptions): Required<RuntimeSettingsEditOptions> {
+function optionsBody(options?: RuntimeSettingsEditOptions) {
   return {
     dry_run: options?.dry_run ?? false,
     validate: options?.validate ?? true,
     reload: options?.reload ?? true,
+    ...(options?.expected_revision !== undefined ? { expected_revision: options.expected_revision } : {}),
   }
 }
 
@@ -65,7 +70,15 @@ function reconcileModelSettings(
   changes?: JsonObject,
 ) {
   if (options?.dry_run || result.dry_run || result.changed === false || options?.reload === false) return
+  if (scope !== captureResourceObservation('sessions').scope) return
   const settingPath = path || ''
+  const profilePath = (key: string) => key === 'profiles' || key.startsWith('profiles.') || key === 'default_profile'
+  if (profilePath(settingPath) || (!settingPath && (!changes || Object.keys(changes).some(profilePath)))) {
+    // Profiles can alter the effective model and permissions without changing
+    // session metadata. Retire cached projections even when their version is unchanged.
+    invalidateResourcePrefix('session:', 'mutation')
+    notifyModelConfigurationChanged(scope, false)
+  }
   const defaultOnly =
     settingPath === 'providers.default_selection' ||
     settingPath.startsWith('providers.default_selection.') ||
@@ -168,6 +181,7 @@ export async function deleteRuntimeSetting(
     validate: String(editOptions.validate),
     reload: String(editOptions.reload),
   })
+  if (editOptions.expected_revision !== undefined) params.set('expected_revision', editOptions.expected_revision)
   const result = await editRuntimeSettings(
     `${layer ? `/api/v1/settings/layers/${layer}` : '/api/v1/settings'}?${params.toString()}`,
     { method: 'DELETE' },

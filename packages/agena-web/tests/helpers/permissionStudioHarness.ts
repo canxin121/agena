@@ -4,6 +4,8 @@ import { transformSync } from 'esbuild'
 import * as vue from 'vue'
 
 import * as permissionConfig from '../../src/lib/permissionConfig'
+import * as permissionNavigation from '../../src/components/settings/permissions/permissionNavigation'
+import { resolveSettingsSessionId } from '../../src/components/settings/settingsSessionScope'
 
 // Exercise the component's actual save/draft handlers with Vue reactivity and
 // isolated transport dependencies. No live settings service or browser is used.
@@ -29,11 +31,22 @@ export async function createPermissionEditor(
     path: { workspace: 'readwrite', external: 'deny' },
     network: { default: 'allow', inbound: 'deny', hostLoopback: 'deny' },
   },
-  options: { section?: string; scope?: PermissionSource; useRuntimeTransport?: boolean } = {},
+  options: {
+    section?: string
+    scope?: PermissionSource
+    useRuntimeTransport?: boolean
+    configPaths?: Partial<Record<'global' | 'workspace', string>>
+    sessionId?: string
+    windowId?: string
+    focused?: boolean
+  } = {},
 ) {
   const writes: Array<{ path: string; value: unknown; scope: string }> = []
   const requests: Array<{ url: string; method: string; body: unknown }> = []
   const reads: string[] = []
+  const sessionWrites: Array<{ sessionId: string; value: unknown }> = []
+  const sessionPolicies = new Map<string, permissionConfig.PermissionConfig>()
+  const sessionReadGates = new Map<string, Promise<void>>()
   const serverPolicies: Record<PermissionSource, permissionConfig.PermissionConfig> = {
     global: {},
     workspace: {},
@@ -45,12 +58,29 @@ export async function createPermissionEditor(
   let failure = ''
   let saveResponse: Record<string, unknown> = {}
   let saveGate: Promise<void> | undefined
+  let confirmation = true
+  const confirmations: Array<Record<string, unknown>> = []
+  let routeUpdate: ((to: any, from: any) => Promise<boolean>) | undefined
+  let routeLeave: ((to: any, from: any) => Promise<boolean> | boolean) | undefined
+  const route = vue.reactive({
+    path: '/settings/permissions',
+    params: { section: 'permissions' },
+    query: {
+      view: options.section ?? 'access',
+      scope: options.scope ?? 'global',
+      ...(options.sessionId ? { targetSessionId: options.sessionId } : {}),
+      ...(options.windowId ? { windowId: options.windowId } : {}),
+    } as Record<string, string>,
+    hash: '',
+  })
   const lastSessionId = vue.ref('1')
+  const workspacePane = options.windowId
+    ? { windowId: vue.ref(options.windowId), isFocused: vue.ref(options.focused !== false) }
+    : null
   const directory = vue.reactive({ currentDirectory: '/workspace/example' })
   const props = vue.reactive({
-    section: options.section ?? 'network',
     scope: options.scope ?? 'global',
-    sessionId: undefined as string | undefined,
+    sessionId: options.sessionId as string | undefined,
   })
   const messages: Array<[string, string]> = []
   const translate = (key: string, values: Record<string, unknown> = {}) =>
@@ -73,7 +103,20 @@ export async function createPermissionEditor(
   }
   const modules: Record<string, unknown> = {
     vue: { ...vue, onMounted() {}, onBeforeUnmount() {} },
-    'vue-router': { onBeforeRouteLeave() {}, onBeforeRouteUpdate() {} },
+    'vue-router': {
+      onBeforeRouteLeave(guard: typeof routeLeave) {
+        routeLeave = guard
+      },
+      onBeforeRouteUpdate(guard: typeof routeUpdate) {
+        routeUpdate = guard
+      },
+      useRoute: () => route,
+      useRouter: () => ({
+        replace: async (destination: any) => {
+          Object.assign(route, destination)
+        },
+      }),
+    },
     '@remixicon/vue': {},
     '@/components/settings/settingsScopeCatalog': { findSettingsScope: () => ({ label: 'Permissions' }) },
     '@/lib/api': {
@@ -91,39 +134,59 @@ export async function createPermissionEditor(
         }
         reads.push(url)
         if (url === '/api/v1/plugins/surface') return { permission_tools: [] }
-        if (url.includes('/sessions/'))
+        if (url.includes('/sessions/')) {
+          const sessionId = url.match(/\/sessions\/([^/]+)\//)?.[1] || '1'
+          const selected = structuredClone(sessionPolicies.get(sessionId) ?? serverPolicies.session)
+          const effective = structuredClone(sessionPolicies.get(sessionId) ?? serverPolicies.effective)
+          await sessionReadGates.get(sessionId)
           return {
             execution: {
-              selected_permission: structuredClone(serverPolicies.session),
+              selected_permission: selected,
               inherited_permission: structuredClone(parentPolicy),
-              effective_permission: structuredClone(serverPolicies.effective),
+              effective_permission: effective,
             },
           }
+        }
         const source = new URL(url, 'https://agena.test').pathname.split('/').at(-1)
         const policy = source === 'global' || source === 'workspace' ? serverPolicies[source] : serverPolicies.effective
-        return { value: structuredClone(policy), inherited_value: structuredClone(parentPolicy) }
+        return {
+          value: structuredClone(policy),
+          inherited_value: structuredClone(parentPolicy),
+          config_path: source === 'global' || source === 'workspace' ? options.configPaths?.[source] : undefined,
+        }
       },
     },
-    '@/lib/appConfirm': { confirmAction: async () => true },
+    '@/lib/appConfirm': {
+      confirmAction: async (options: Record<string, unknown>) => {
+        confirmations.push(options)
+        return confirmation
+      },
+    },
     '@/lib/runtimeSettings': transport,
     '@/stores/chat': {
-      useChatStore: () => ({
+      useChatStoreUnscoped: () => ({
         selectedSessionId: '1',
-        async setSessionPermission(_id: string, value: unknown) {
+        async setSessionPermission(id: string, value: unknown) {
+          if (saveGate) await saveGate
           if (failure) throw new Error(failure)
+          sessionWrites.push({ sessionId: id, value: structuredClone(value) })
           writes.push({ path: 'permission', value: structuredClone(value), scope: 'session' })
           serverPolicies.session = structuredClone(value) as permissionConfig.PermissionConfig
+          sessionPolicies.set(id, structuredClone(value) as permissionConfig.PermissionConfig)
           return { execution: { selected_permission: structuredClone(serverPolicies.session) } }
         },
       }),
     },
     '@/lib/lastSession': { lastSessionId },
+    '@/app/workspace/workspacePaneContext': { useWorkspacePaneContext: () => workspacePane },
     '@/stores/directory': { useDirectoryStore: () => directory },
     '@/stores/toasts': {
       useToastsStore: () => ({ push: (kind: string, message: string) => messages.push([kind, message]) }),
     },
     '@/i18n/settingsText': { settingsText: translate },
     '@/lib/permissionConfig': permissionConfig,
+    './permissions/permissionNavigation': permissionNavigation,
+    './settingsSessionScope': { resolveSettingsSessionId },
   }
   if (options.useRuntimeTransport) {
     const runtimeModule = { exports: {} }
@@ -160,9 +223,57 @@ export async function createPermissionEditor(
     writes,
     requests,
     reads,
+    sessionWrites,
     messages,
     lastSessionId,
     directory,
+    route,
+    workspacePane,
+    confirmations,
+    setConfirmation(value: boolean) {
+      confirmation = value
+    },
+    async navigate(view: string, scope = props.scope) {
+      return await routeUpdate?.(
+        { ...route, query: { ...route.query, view, scope } },
+        { ...route, query: { ...route.query } },
+      )
+    },
+    async guardRoute(to: unknown, from: unknown = { ...route, query: { ...route.query } }) {
+      return await routeUpdate?.(to, from)
+    },
+    async guardLeave(to: unknown, from: unknown = { ...route, query: { ...route.query } }) {
+      return await routeLeave?.(to, from)
+    },
+    async navigateSession(sessionId?: string) {
+      const query = { ...route.query }
+      if (sessionId) query.targetSessionId = sessionId
+      else delete query.targetSessionId
+      const allowed = await routeUpdate?.({ ...route, query }, { ...route, query: { ...route.query } })
+      if (allowed === false) return false
+      route.query = query
+      props.sessionId = resolveSettingsSessionId(query.targetSessionId, lastSessionId.value || '1')
+      await vue.nextTick()
+      await Promise.resolve()
+      await vue.nextTick()
+      return true
+    },
+    setSessionPolicy(sessionId: string, policy: permissionConfig.PermissionConfig) {
+      sessionPolicies.set(sessionId, structuredClone(policy))
+    },
+    holdSessionReads(sessionId: string) {
+      let release!: () => void
+      sessionReadGates.set(
+        sessionId,
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+      )
+      return () => {
+        sessionReadGates.delete(sessionId)
+        release()
+      }
+    },
     rejectSaves(message: string) {
       failure = message
     },
@@ -187,6 +298,7 @@ export async function createPermissionEditor(
     },
     async switchScope(value: PermissionSource) {
       props.scope = value
+      route.query.scope = value
       await vue.nextTick()
       await Promise.resolve()
       await vue.nextTick()

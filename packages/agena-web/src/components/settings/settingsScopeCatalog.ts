@@ -1,8 +1,7 @@
 /**
  * Scope-aware settings pages read or write one configuration layer at a time:
  * the effective (merged) view, the global layer, the current workspace, or the
- * current session. The page workbench renders those layers in its left scope
- * selector, keeping the global settings sidebar to two levels.
+ * current session. The page toolbar holds the scope selector.
  */
 
 import type { SettingsTab } from './sidebar/settingsSidebarNavigation'
@@ -49,14 +48,7 @@ const PERMISSION_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   },
 ]
 
-// Model selections compare all four layers, including a conversation's own
-// persisted selection.
-const MODEL_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
-  {
-    id: 'effective',
-    label: () => st('Effective settings'),
-    description: () => st('Read-only merged model settings.'),
-  },
+const SESSION_SETTINGS_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   {
     id: 'global',
     label: () => st('Global layer'),
@@ -66,6 +58,11 @@ const MODEL_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
     id: 'workspace',
     label: () => st('Workspace layer'),
     description: () => st('Overrides for this workspace.'),
+  },
+  {
+    id: 'effective',
+    label: () => st('Effective settings'),
+    description: () => st('Read-only merged settings.'),
   },
   {
     id: 'session',
@@ -89,38 +86,11 @@ const LAYER_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
   },
 ]
 
-const PROMPT_SCOPE_SOURCES: readonly SettingsScopeSource[] = [
-  {
-    id: 'effective',
-    label: () => st('Effective settings'),
-    description: () =>
-      st('Resolved prompt fragments for the selected session. Built-in instructions are not shown here.'),
-  },
-  {
-    id: 'global',
-    label: () => st('Global layer'),
-    description: () => st('Baseline for every workspace.'),
-  },
-  {
-    id: 'workspace',
-    label: () => st('Workspace layer'),
-    description: () => st('Overrides for this workspace.'),
-  },
-  {
-    id: 'session',
-    label: () => st('Current session'),
-    description: () => st('Applies only to the selected session.'),
-  },
-]
-
 const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, readonly SettingsScopeSource[]>>> = {
   permissions: {
     profiles: LAYER_SCOPE_SOURCES.filter((scope) => scope.id === 'global'),
+    assignments: LAYER_SCOPE_SOURCES.filter((scope) => scope.id === 'global'),
     access: PERMISSION_SCOPE_SOURCES,
-    sandbox: LAYER_SCOPE_SOURCES,
-  },
-  'models-providers': {
-    'model-settings': MODEL_SCOPE_SOURCES,
   },
   'runtime-session': {
     'agent-profiles': [
@@ -131,8 +101,7 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
         description: () => st('Choose the agent profile for the current session.'),
       },
     ],
-    'prompt-library': LAYER_SCOPE_SOURCES,
-    'prompt-layers': PROMPT_SCOPE_SOURCES,
+    'session-behavior': SESSION_SETTINGS_SCOPE_SOURCES,
   },
   diagnostics: {
     'advanced-settings': LAYER_SCOPE_SOURCES,

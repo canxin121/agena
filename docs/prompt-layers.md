@@ -1,39 +1,19 @@
 # Layered prompt fragments
 
-Agena keeps its built-in identity, tool, presentation, workflow, conversation,
-and project guidance separate from user-configured instructions. Prompt layers
-add ordered fragments after that built-in text. A layer can append fragments,
+Agena keeps its common identity, authorization, tool, presentation, conversation,
+and project guidance separate from role-specific instructions. Built-in and custom
+agent profiles supply task responsibilities through the same prompt-layer path.
+Prompt layers add ordered fragments after the common execution contract. A layer can append fragments,
 discard broader configured fragments, hide inherited fragment ids, and define
 inline fragments, but it does not replace the built-in prompt itself.
 
-## Saved prompt library (Web settings)
+## Saved prompt entries
 
-**Settings → Runtime & Session → Saved prompt library** is the reusable prompt
-catalog. Global and workspace catalogs have independent CRUD editors; entries
-have a title, free-form category, body, optional model-route and tool conditions,
-and a generated internal id. A saved prompt is **not** automatically included in
-any system prompt. Editing its body updates all future resolutions that
-reference it rather than copying instructions into each session.
-
-**Settings → Runtime & Session → Prompt layers** is the attachment editor. Select
-a saved prompt by title to append its id to the chosen global, workspace, or
-session layer. It supports ordering, hiding inherited entries, append/replace,
-and resolved previews. The TUI `o`, `h`, and `u` shortcuts also present
-saved prompts by name. The global layer can select global saved prompts;
-workspace and session layers can select global and workspace prompts. A
-workspace entry with the same id takes precedence where both scopes are
-available. Existing inline fragments remain editable for compatibility.
-
-The session layer is edited on the same page as the other layers: choose the
-**current session** scope. It always edits the conversation this client used
-last, which is recorded whenever any pane or bot binding opens one, so the
-layer selector names that conversation instead of asking for one. There is no
-separate session settings surface and no `?sessionId=`: the last used
-conversation is the target, so permissions and instructions for a conversation
-are reached from one place.
-
-Saved entries live in the `library` array of the existing `prompts`
-configuration, separate from `order` and `inline`:
+Reusable entries live in the `prompts.library` array of the global or workspace
+configuration. An entry has an ID, instructions, and optional title, category,
+model, and tool conditions. Editing an entry updates future runs that reference
+it. When both scopes contain the same ID, the workspace entry takes precedence.
+Use `order` to attach a saved entry to a layer.
 
 ```json
 {
@@ -51,10 +31,8 @@ configuration, separate from `order` and `inline`:
 }
 ```
 
-Legacy `prompts/<id>.md` fragments and the older inline fragments are still
-resolved and editable through their existing mechanisms. The Web library page
-manages JSON-backed entries; file-backed Markdown fragments remain managed as
-files. The picker does not currently enumerate those Markdown files.
+File-backed `prompts/<id>.md` fragments and inline fragments also participate in
+resolution. The saved prompt picker lists JSON-backed entries.
 
 The previous `additional_system_prompt` setting has been retired. Configuration
 files and the session API have no compatibility alias for it, and session
@@ -327,9 +305,11 @@ states:
 `GET /api/v1/sessions/{session_id}/state` exposes the stored layer under
 `execution.prompts` when it is non-empty. Forking and rewinding preserve the
 source session configuration, including its layer and selected agent profile.
-Newly created child and delegated-agent sessions inherit the parent's profile;
-their session-local layer starts empty unless the creation request supplies
-`prompts`. Profile selection and its create/update semantics are documented in
+Ordinary child sessions inherit the parent's saved profile. Delegated agents use
+the profile chosen by `agent.spawn`, or the configured subagent default, and do
+not copy the parent's role instructions. Their session-local layer starts empty
+unless the creation request supplies `prompts`. Unselected sessions resolve the
+default role for their relation. Profile selection and its create/update semantics are documented in
 [Agent profiles](agent-profiles.md).
 
 ## CLI
@@ -409,13 +389,10 @@ scopes.
 The TUI preserves model overlays but does not edit fragment conditions or model
 overlays. Its preview is the saved server state and excludes unsaved edits.
 
-In the Web client, open **Settings → Runtime & Session → Prompt layers**. The
-scope selector provides **Effective settings**, **Global layer**,
-**Workspace layer**, and **Current session**. The editor supports layer mode,
-inline id/title/body, model patterns, tool-availability conditions, ordering,
-hiding inherited ids, save, and an effective preview with size, warnings, and
-over-budget state. Provider Studio no longer contains a prompt editor. Web
-previews and TUI previews exclude the built-in prompt and unsaved drafts.
+In the Web client, open **Settings → AI & sessions → Agent profiles** to edit a
+role’s instructions. The profile editor can attach an existing saved prompt and
+edit the profile’s prompt layer under **Model, limits, and prompt layer**. The
+global and workspace `prompts` settings remain available in **Advanced settings**.
 
 ## Migrating from `additional_system_prompt`
 

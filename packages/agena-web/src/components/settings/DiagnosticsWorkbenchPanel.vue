@@ -23,7 +23,6 @@ defineProps<{ activePage: string; scope: string }>()
 <template>
   <SettingsSectionWorkbench
     section="diagnostics"
-    scope-layout="toolbar"
     :pages="pages"
     :active-page="activePage"
     :active-scope="scope"

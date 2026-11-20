@@ -10,6 +10,7 @@ export type PromptFragment = {
   title: string
   category?: string
   body: string
+  parts?: string[]
   when: PromptCondition
 }
 
@@ -23,7 +24,11 @@ export type PromptLayer = {
 export type ModelPromptLayer = PromptLayer & { match: string }
 
 /** The global/workspace config value. Saved library entries are independent of active order. */
-export type PromptScopeConfig = PromptLayer & { library: PromptFragment[]; models: ModelPromptLayer[] }
+export type PromptScopeConfig = PromptLayer & {
+  library: PromptFragment[]
+  models: ModelPromptLayer[]
+  categories?: string[]
+}
 
 export type PromptLayerScope = 'effective' | 'global' | 'workspace' | 'session'
 
@@ -40,7 +45,7 @@ export type PromptResolutionFragment = {
 export type PromptResolutionWarning = {
   scope: string
   id: string
-  kind: 'condition_not_matched' | 'unknown_variable'
+  kind: 'condition_not_matched' | 'unknown_variable' | 'missing_fragment'
   detail: string
 }
 
@@ -113,6 +118,7 @@ export function normalizePromptFragment(value: unknown): PromptFragment {
     title: text(item.title),
     ...(text(item.category).trim() ? { category: text(item.category) } : {}),
     body: text(item.body),
+    ...(strings(item.parts).length ? { parts: strings(item.parts) } : {}),
     when: normalizePromptCondition(item.when),
   }
 }
@@ -142,6 +148,7 @@ export function normalizePromptScopeConfig(value: unknown): PromptScopeConfig {
     ...normalizePromptLayer(item),
     library: Array.isArray(item.library) ? item.library.map(normalizePromptFragment) : [],
     models: Array.isArray(item.models) ? item.models.map(normalizeModelPromptLayer) : [],
+    ...(strings(item.categories).length ? { categories: strings(item.categories) } : {}),
   }
 }
 
@@ -166,6 +173,7 @@ export function promptScopeConfigWithLayer(value: PromptScopeConfig, layer: Prom
     ...normalizePromptLayer(layer),
     library: value.library.map(normalizePromptFragment),
     models: value.models.map(normalizeModelPromptLayer),
+    ...(value.categories?.length ? { categories: [...value.categories] } : {}),
   }
 }
 
@@ -174,7 +182,7 @@ export function promptLayerIsEmpty(value: PromptLayer): boolean {
 }
 
 export function promptScopeConfigIsEmpty(value: PromptScopeConfig): boolean {
-  return promptLayerIsEmpty(value) && !value.models.length && !value.library.length
+  return promptLayerIsEmpty(value) && !value.models.length && !value.library.length && !value.categories?.length
 }
 
 export function promptLayersEqual(left: PromptLayer, right: PromptLayer): boolean {
@@ -207,7 +215,8 @@ export function validatePromptLayer(layer: PromptLayer, allowExternalFragments =
     if (promptFragmentBodyBytes(fragment.body) > MAX_PROMPT_FRAGMENT_BYTES) {
       issues.push({ code: 'fragment_too_large', level: 'error', id: fragment.id })
     }
-    if (!fragment.body.trim()) issues.push({ code: 'empty_body', level: 'warning', id: fragment.id })
+    if (!fragment.body.trim() && !fragment.parts?.length)
+      issues.push({ code: 'empty_body', level: 'warning', id: fragment.id })
   }
   for (const id of layer.order) {
     if (!isValidPromptFragmentId(id)) issues.push({ code: 'invalid_id', level: 'error', id })

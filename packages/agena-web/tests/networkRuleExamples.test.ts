@@ -14,7 +14,19 @@ const examples = JSON.parse(
 
 describe('shared native network examples in the Web editor', () => {
   test.each(examples)('$name saves in either layer without changing its selectors', async ({ network }) => {
-    expect(parseNetworkPermissionConfig(network)).toEqual(network)
+    const expected =
+      network.version === 2
+        ? network
+        : {
+            version: 2,
+            default: 'deny',
+            inbound: 'deny',
+            hostLoopback: 'deny',
+            allow: [],
+            deny: [],
+            ...network,
+          }
+    expect(parseNetworkPermissionConfig(network)).toEqual(expected)
     for (const scope of ['global', 'workspace']) {
       const unrelated = { tools: { default: 'ask' as const } }
       const { panel, requests } = await createPermissionEditor(
@@ -22,40 +34,50 @@ describe('shared native network examples in the Web editor', () => {
         { network: { default: 'allow', deny: [{ to: '198.51.100.10' }] } },
         { section: 'network', scope, useRuntimeTransport: true },
       )
-      panel.setNetworkSource('custom')
+      if (scope !== 'global')
+        for (const field of ['default', 'inbound', 'hostLoopback', 'allow', 'deny'])
+          panel.setNetworkSource(field, 'local')
       panel.networkJson.value = JSON.stringify(network)
       await panel.save()
       expect(requests).toEqual([
         {
           url: `/api/v1/settings/layers/${scope}`,
           method: 'PUT',
-          body: { path: 'permission', value: { ...unrelated, network }, dry_run: false, validate: true, reload: true },
+          body: {
+            path: 'permission',
+            value: { ...unrelated, network: expected },
+            dry_run: false,
+            validate: true,
+            reload: true,
+          },
         },
       ])
-      expect(panel.savedConfig.value.network).toEqual(network)
+      expect(panel.savedConfig.value.network).toEqual(expected)
       expect(panel.networkCustom.value).toBe(true)
       expect(panel.dirty.value).toBe(false)
     }
   })
 
-  test('replacing inherited network does not retain its denies, and clearing custom mode restores inheritance', async () => {
+  test('legacy JSON replaces all five fields and resetting them restores the parent policy', async () => {
     const parent = { network: { default: 'allow' as const, deny: [{ to: '192.0.2.99' }] } }
     const { panel, requests } = await createPermissionEditor({}, parent, {
       section: 'network',
       scope: 'workspace',
       useRuntimeTransport: true,
     })
-    panel.setNetworkSource('custom')
+    for (const field of ['default', 'inbound', 'hostLoopback', 'allow', 'deny']) panel.setNetworkSource(field, 'local')
     const replacement = { default: 'deny', allow: [{ to: '192.0.2.99', protocol: 'tcp', ports: [443] }] }
     panel.networkJson.value = JSON.stringify(replacement)
     await panel.save()
-    expect(panel.savedConfig.value.network).toEqual(replacement)
-    expect(panel.displayedNetwork.value).toEqual(replacement)
-    panel.setNetworkSource('inherit')
+    const canonical = parseNetworkPermissionConfig(replacement)
+    expect(panel.savedConfig.value.network).toEqual(canonical)
+    expect(panel.displayedNetwork.value).toEqual(canonical)
+    for (const field of ['default', 'inbound', 'hostLoopback', 'allow', 'deny'])
+      panel.setNetworkSource(field, 'inherit')
     await panel.save()
     expect(panel.savedConfig.value).toEqual({})
     expect(panel.networkCustom.value).toBe(false)
-    expect(panel.displayedNetwork.value).toEqual(parent.network)
+    expect(panel.displayedNetwork.value).toEqual(parseNetworkPermissionConfig(parent.network))
     expect(requests[1]).toEqual({
       url: '/api/v1/settings/layers/workspace?path=permission&dry_run=false&validate=true&reload=true',
       method: 'DELETE',
@@ -86,8 +108,8 @@ describe('shared native network examples in the Web editor', () => {
       expect(requests).toHaveLength(1)
       expect(writes).toHaveLength(0)
       expect(panel.saveError.value).toBe(error)
-      expect(panel.config.value.network).toEqual(network)
-      expect(panel.savedConfig.value.network).toEqual({})
+      expect(panel.config.value.network).toEqual(parseNetworkPermissionConfig(network))
+      expect(panel.savedConfig.value.network).toEqual(parseNetworkPermissionConfig({}))
       expect(panel.dirty.value).toBe(true)
     },
   )

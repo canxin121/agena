@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RiRefreshLine, RiBarChartBoxLine, RiCoinsLine, RiTokenSwapLine } from '@remixicon/vue'
+import { RiRefreshLine, RiBarChartBoxLine, RiCoinsLine, RiTokenSwapLine, RiSpeedUpLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneRead } from '@/composables/usePaneRead'
+import { formatDurationMs, formatTokenRate } from '@/lib/usagePerformance'
+import type { UsagePerformanceTotals } from '@/types/usage'
 
 type UsageTotals = {
+  performance?: UsagePerformanceTotals | null
   requests: number
   sessions: number
   input_tokens: number
@@ -128,6 +131,54 @@ const cacheMetrics = computed(() => {
   ]
 })
 
+const performanceMetrics = computed(() => {
+  const performance = stats.value?.totals.performance
+  return [
+    {
+      key: 'generation',
+      label: st('Generation speed'),
+      value: formatTokenRate(performance?.tokens_per_second),
+      samples: performance?.generation_count,
+      hint: st('Output and reasoning tokens divided by the time between the first and last output chunks.'),
+    },
+    {
+      key: 'ttft',
+      label: st('Average first output'),
+      value: formatDurationMs(performance?.average_ttft_ms),
+      samples: performance?.ttft_count,
+      hint: st('Time to the first non-empty text, reasoning, or tool-call output.'),
+    },
+    {
+      key: 'duration',
+      label: st('Average request duration'),
+      value: formatDurationMs(performance?.average_duration_ms),
+      samples: performance?.request_count,
+      hint: st('Time from sending the model request to its completion.'),
+    },
+    {
+      key: 'throughput',
+      label: st('End-to-end speed'),
+      value: formatTokenRate(performance?.end_to_end_tokens_per_second),
+      samples: performance?.throughput_count,
+      hint: st('Output and reasoning tokens divided by the complete model request duration.'),
+    },
+    {
+      key: 'p95-ttft',
+      label: st('P95 first output'),
+      value: formatDurationMs(performance?.p95_ttft_ms),
+      samples: performance?.ttft_count,
+      hint: st('95% of measured requests finish this stage within this time.'),
+    },
+    {
+      key: 'p95-duration',
+      label: st('P95 request duration'),
+      value: formatDurationMs(performance?.p95_duration_ms),
+      samples: performance?.request_count,
+      hint: st('95% of measured requests finish this stage within this time.'),
+    },
+  ]
+})
+
 function rowLabel(section: UsageSection['key'], row: UsageBreakdown): string {
   if (section === 'by_day') return String(row.date || '')
   if (section === 'by_provider') return String(row.provider_id || '')
@@ -150,7 +201,7 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="min-w-0 space-y-4">
+  <div class="settings-stack">
     <SettingsCard
       :title="$st('Usage overview')"
       :icon="RiBarChartBoxLine"
@@ -181,35 +232,67 @@ defineExpose({ refresh })
       <p v-else-if="!stats" class="py-6 text-center text-sm text-muted-foreground">
         {{ $st('No usage data available.') }}
       </p>
-      <dl v-else class="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3 sm:p-4">
+      <dl v-else class="settings-control-grid">
+        <div class="min-w-0 rounded-md border border-border/50 bg-muted/20 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Requests') }}</dt>
-          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
+          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
             {{ formatInteger(stats.totals.requests) }}
           </dd>
         </div>
-        <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3 sm:p-4">
+        <div class="min-w-0 rounded-md border border-border/50 bg-muted/20 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Sessions') }}</dt>
-          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
+          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
             {{ formatInteger(stats.totals.sessions) }}
           </dd>
         </div>
-        <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3 sm:p-4">
+        <div class="min-w-0 rounded-md border border-border/50 bg-muted/20 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Tokens') }}</dt>
-          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
+          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
             {{ formatInteger(stats.totals.total_tokens) }}
           </dd>
         </div>
-        <div class="min-w-0 rounded-lg border border-primary/20 bg-primary/5 p-3 sm:p-4">
+        <div class="min-w-0 rounded-md border border-primary/20 bg-primary/5 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Cost') }}</dt>
-          <dd class="mt-2 break-all font-mono text-xl font-semibold tabular-nums">
+          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
             {{ formatUsd(stats.totals.total_cost_usd) }}
           </dd>
         </div>
       </dl>
     </SettingsCard>
     <template v-if="stats">
-      <div class="grid gap-4 xl:grid-cols-2">
+      <SettingsCard
+        :title="$st('Model performance')"
+        :icon="RiSpeedUpLine"
+        :description="
+          $st('Completed requests with timing: {count}', {
+            count: formatInteger(stats.totals.performance?.request_count),
+          })
+        "
+      >
+        <dl class="settings-control-grid">
+          <div
+            v-for="metric in performanceMetrics"
+            :key="metric.key"
+            class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3"
+          >
+            <dt class="text-xs text-muted-foreground" :title="metric.hint">{{ metric.label }}</dt>
+            <dd class="mt-2 break-words font-mono text-lg font-semibold tabular-nums">{{ metric.value }}</dd>
+            <dd class="mt-1 text-[11px] text-muted-foreground">
+              {{ $st('Samples: {count}', { count: formatInteger(metric.samples) }) }}
+            </dd>
+          </div>
+        </dl>
+        <p class="mt-3 text-xs leading-relaxed text-muted-foreground">
+          {{
+            stats.totals.performance?.request_count
+              ? $st(
+                  'Only completed requests with the required measurements contribute. Speeds use total output and reasoning tokens divided by total measured time; local tool execution is excluded.',
+                )
+              : $st('No performance samples yet. Completed model requests with timing will appear here.')
+          }}
+        </p>
+      </SettingsCard>
+      <div class="settings-columns">
         <SettingsCard :title="$st('Token details')" :icon="RiTokenSwapLine">
           <dl class="divide-y divide-border/50 text-xs">
             <div class="flex flex-wrap justify-between gap-2 pb-3">
@@ -269,14 +352,14 @@ defineExpose({ refresh })
         </p>
         <template v-else-if="activeBreakdown">
           <div
-            class="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-border/50 bg-muted/20 p-1 sm:flex sm:flex-wrap"
+            class="settings-toolbar mb-2.5 rounded-md border border-border/50 bg-muted/20 p-0.5"
             :aria-label="$st('Usage breakdown')"
           >
             <button
               v-for="section in sections"
               :key="section.key"
               type="button"
-              class="min-w-0 rounded-md px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-1"
+              class="min-w-0 rounded-md px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring flex-1 basis-auto"
               :class="
                 activeBreakdown.key === section.key
                   ? 'bg-background text-foreground shadow-sm'
@@ -289,34 +372,70 @@ defineExpose({ refresh })
             </button>
           </div>
           <div
-            class="hidden grid-cols-[minmax(0,1fr)_minmax(4rem,.35fr)_minmax(5rem,.4fr)_minmax(5rem,.4fr)] gap-3 rounded-lg bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground sm:grid"
+            class="usage-breakdown-heading rounded-md bg-muted/20 px-2.5 py-2 text-xs text-muted-foreground"
             aria-hidden="true"
           >
             <span>{{ $st('Name') }}</span
             ><span class="text-right">{{ $st('Requests') }}</span
             ><span class="text-right">{{ $st('Tokens') }}</span
-            ><span class="text-right">{{ $st('Cost') }}</span>
+            ><span class="text-right">{{ $st('Cost') }}</span
+            ><span class="text-right">{{ $st('Generation speed') }}</span
+            ><span class="text-right">{{ $st('Average first output') }}</span
+            ><span class="text-right">{{ $st('Average request duration') }}</span>
           </div>
           <dl class="divide-y divide-border/50">
             <div
               v-for="row in activeBreakdown.rows"
               :key="rowLabel(activeBreakdown.key, row)"
-              class="grid min-w-0 grid-cols-3 gap-x-3 gap-y-2 px-1 py-3 text-xs sm:grid-cols-[minmax(0,1fr)_minmax(4rem,.35fr)_minmax(5rem,.4fr)_minmax(5rem,.4fr)] sm:items-center sm:px-3"
+              class="usage-breakdown-row px-1 py-2 text-xs"
             >
-              <dt class="col-span-3 break-all font-mono font-medium sm:col-span-1">
+              <dt class="usage-breakdown-name break-all font-mono font-medium">
                 {{ rowLabel(activeBreakdown.key, row) }}
               </dt>
-              <dd class="min-w-0 sm:text-right">
-                <span class="mb-1 block text-[10px] text-muted-foreground sm:sr-only">{{ $st('Requests') }}</span
+              <dd class="usage-breakdown-value min-w-0">
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{ $st('Requests') }}</span
                 ><span class="break-all font-mono tabular-nums">{{ formatInteger(row.requests) }}</span>
               </dd>
-              <dd class="min-w-0 sm:text-right">
-                <span class="mb-1 block text-[10px] text-muted-foreground sm:sr-only">{{ $st('Tokens') }}</span
+              <dd class="usage-breakdown-value min-w-0">
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{ $st('Tokens') }}</span
                 ><span class="break-all font-mono tabular-nums">{{ formatInteger(row.total_tokens) }}</span>
               </dd>
-              <dd class="min-w-0 sm:text-right">
-                <span class="mb-1 block text-[10px] text-muted-foreground sm:sr-only">{{ $st('Cost') }}</span
+              <dd class="usage-breakdown-value min-w-0">
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{ $st('Cost') }}</span
                 ><span class="break-all font-mono tabular-nums">{{ formatUsd(row.total_cost_usd) }}</span>
+              </dd>
+              <dd class="usage-breakdown-value min-w-0">
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{
+                  $st('Generation speed')
+                }}</span>
+                <span class="break-words font-mono tabular-nums">{{
+                  formatTokenRate(row.performance?.tokens_per_second)
+                }}</span>
+                <span class="mt-1 block text-[10px] text-muted-foreground">{{
+                  $st('Samples: {count}', { count: formatInteger(row.performance?.generation_count) })
+                }}</span>
+              </dd>
+              <dd class="usage-breakdown-value min-w-0">
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{
+                  $st('Average first output')
+                }}</span>
+                <span class="break-words font-mono tabular-nums">{{
+                  formatDurationMs(row.performance?.average_ttft_ms)
+                }}</span>
+                <span class="mt-1 block text-[10px] text-muted-foreground">{{
+                  $st('Samples: {count}', { count: formatInteger(row.performance?.ttft_count) })
+                }}</span>
+              </dd>
+              <dd class="usage-breakdown-value min-w-0">
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{
+                  $st('Average request duration')
+                }}</span>
+                <span class="break-words font-mono tabular-nums">{{
+                  formatDurationMs(row.performance?.average_duration_ms)
+                }}</span>
+                <span class="mt-1 block text-[10px] text-muted-foreground">{{
+                  $st('Samples: {count}', { count: formatInteger(row.performance?.request_count) })
+                }}</span>
               </dd>
             </div>
           </dl>
@@ -325,3 +444,44 @@ defineExpose({ refresh })
     </template>
   </div>
 </template>
+
+<style scoped>
+@reference '../../style.css';
+
+.usage-breakdown-heading {
+  display: none;
+}
+
+.usage-breakdown-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.usage-breakdown-name {
+  grid-column: 1 / -1;
+}
+
+@container settings-card (min-width: 56rem) {
+  .usage-breakdown-heading,
+  .usage-breakdown-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) repeat(6, minmax(0, 0.7fr));
+    align-items: center;
+    gap: 0.625rem;
+    padding-inline: 0.625rem;
+  }
+
+  .usage-breakdown-name {
+    grid-column: 1;
+  }
+
+  .usage-breakdown-value {
+    text-align: end;
+  }
+
+  .usage-breakdown-label {
+    @apply sr-only;
+  }
+}
+</style>

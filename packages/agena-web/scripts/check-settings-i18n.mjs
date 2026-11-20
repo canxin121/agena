@@ -11,11 +11,16 @@ const rootFiles = [
   'src/pages/SettingsPage.vue',
   'src/components/McpDialog.vue',
   'src/components/MemoryMetadataView.vue',
+  'src/features/bots/BotManagerHost.vue',
   // The composer's context-usage popover renders the same usage labels the
   // settings usage report does, so both catalogs are checked together.
   'src/components/chat/ContextUsageChip.vue',
+  // The profile picker shares role labels and settings destinations with its editor.
+  'src/pages/ChatPage.vue',
+  'src/pages/chat/useChatProfilePicker.ts',
   'src/lib/mcpConnections.ts',
   'src/lib/permissionConfig.ts',
+  'src/lib/permissionProfiles.ts',
 ].sort()
 const vueFiles = rootFiles.filter((file) => file.endsWith('.vue'))
 const catalogFiles = globSync('src/i18n/settings-text/*.json').sort()
@@ -346,7 +351,7 @@ const contextualGlossary = {
     'Apply JSON': 'تطبيق JSON',
     Dark: 'داكن',
     Light: 'فاتح',
-    'Clear approval model': 'مسح نموذج الموافقة',
+    'Set in this layer': 'تعيين في هذه الطبقة',
     'Plugin Marketplace': 'متجر الإضافات',
   },
   'es-ES': {
@@ -361,7 +366,7 @@ const contextualGlossary = {
     'Apply JSON': 'Aplicar JSON',
     Dark: 'Oscuro',
     Light: 'Claro',
-    'Clear approval model': 'Borrar modelo de aprobación',
+    'Set in this layer': 'Establecer en esta capa',
     'Plugin Marketplace': 'Marketplace de plugins',
   },
   'fr-FR': {
@@ -376,7 +381,7 @@ const contextualGlossary = {
     'Apply JSON': 'Appliquer le JSON',
     Dark: 'Sombre',
     Light: 'Clair',
-    'Clear approval model': 'Effacer le modèle d’approbation',
+    'Set in this layer': 'Définir dans cette couche',
     'Plugin Marketplace': 'Place de marché des plugins',
   },
   'hi-IN': {
@@ -391,7 +396,7 @@ const contextualGlossary = {
     'Apply JSON': 'JSON लागू करें',
     Dark: 'गहरा',
     Light: 'हल्का',
-    'Clear approval model': 'अनुमोदन मॉडल हटाएँ',
+    'Set in this layer': 'इस स्तर पर सेट करें',
     'Plugin Marketplace': 'प्लगइन मार्केटप्लेस',
   },
   'pt-BR': {
@@ -406,7 +411,7 @@ const contextualGlossary = {
     'Apply JSON': 'Aplicar JSON',
     Dark: 'Escuro',
     Light: 'Claro',
-    'Clear approval model': 'Limpar modelo de aprovação',
+    'Set in this layer': 'Definir nesta camada',
     'Plugin Marketplace': 'Marketplace de plugins',
   },
   'zh-CN': {
@@ -421,7 +426,7 @@ const contextualGlossary = {
     'Apply JSON': '应用 JSON',
     Dark: '深色',
     Light: '浅色',
-    'Clear approval model': '清除审批模型',
+    'Set in this layer': '在本层设置',
     'Plugin Marketplace': '插件市场',
   },
 }

@@ -12,7 +12,7 @@ defineProps<{ text: string }>()
       <RiInformationLine class="h-4 w-4" aria-hidden="true" />
     </summary>
     <div
-      class="absolute right-0 top-full z-40 w-64 max-w-[calc(100vw-3rem)] rounded-md border border-border bg-popover p-3 leading-relaxed text-popover-foreground shadow-md"
+      class="absolute end-0 top-full z-40 w-64 max-w-[calc(100vw-3rem)] rounded-md border border-border bg-popover p-3 leading-relaxed text-popover-foreground shadow-md"
     >
       {{ text }}
     </div>

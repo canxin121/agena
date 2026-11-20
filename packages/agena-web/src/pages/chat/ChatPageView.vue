@@ -77,6 +77,7 @@ const {
   composerControlsRef,
   composerPickerRef,
   modelTriggerRef,
+  profileTriggerRef,
   thinkingTriggerRef,
   speedTriggerRef,
 
@@ -339,6 +340,7 @@ function resolveAnchorEl(target: TooltipAnchorLike): HTMLElement | null {
 const activePickerAnchor = computed(() => {
   const mode = unref(composerPickerOpen)
   if (mode === 'model') return resolveAnchorEl(unref(modelTriggerRef) as TooltipAnchorLike)
+  if (mode === 'profile') return resolveAnchorEl(unref(profileTriggerRef) as TooltipAnchorLike)
   if (mode === 'thinking') return resolveAnchorEl(unref(thinkingTriggerRef) as TooltipAnchorLike)
   if (mode === 'speed') return resolveAnchorEl(unref(speedTriggerRef) as TooltipAnchorLike)
   return null
@@ -394,6 +396,7 @@ void composerRef
 void composerControlsRef
 void composerPickerRef
 void modelTriggerRef
+void profileTriggerRef
 void thinkingTriggerRef
 void speedTriggerRef
 const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
@@ -780,7 +783,14 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       <RiStackLine class="h-3 w-3" />
                       <span :class="modelChipTextClass">{{ modelStatusLabel }}</span>
                     </button>
-                    <AgentProfileChip v-if="chat.selectedSessionId" :profile="chat.selectedSessionExecution?.profile" />
+                    <span v-if="chat.selectedSessionId" ref="profileTriggerRef" class="inline-flex">
+                      <AgentProfileChip
+                        :profile="chat.selectedSessionExecution?.profile"
+                        :profile-is-default="chat.selectedSessionExecution?.profile_is_default"
+                        :open="composerPickerOpen === 'profile'"
+                        @select="toggleComposerPicker('profile')"
+                      />
+                    </span>
                     <template v-if="hasThinkingModesForSelection">
                       <span class="text-muted-foreground/50">|</span>
                       <button
@@ -912,6 +922,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     <OptionMenu
                       ref="composerPickerRef"
                       :open="Boolean(composerPickerOpen)"
+                      :close-on-select="composerPickerOpen !== 'profile'"
                       :query="composerPickerQuery"
                       :groups="composerPickerGroups"
                       :title="composerPickerTitle"

@@ -25,7 +25,10 @@ afterEach(() => {
 })
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 
-async function editor(initial = permissionProfiles.emptyPermissionCatalog()) {
+async function editor(
+  initial = permissionProfiles.emptyPermissionCatalog(),
+  defaults?: permissionProfiles.PermissionCatalog,
+) {
   let state = clone(initial)
   let revision = 1
   let failure = ''
@@ -36,7 +39,7 @@ async function editor(initial = permissionProfiles.emptyPermissionCatalog()) {
     async apiJson(url: string, init?: RequestInit) {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       requests.push({ url, method: init?.method || 'GET', body })
-      if (!init?.method) return { value: clone(state), revision: 'r' + revision }
+      if (!init?.method) return { value: clone(state), default_value: defaults, revision: 'r' + revision }
       if (raceNextWrite) {
         revision += 1
         raceNextWrite = false
@@ -61,7 +64,7 @@ async function editor(initial = permissionProfiles.emptyPermissionCatalog()) {
   const transportModules: Record<string, unknown> = {
     '@/lib/api': api,
     './modelConfigurationApi': { notifyModelConfigurationChanged() {} },
-    './resourceSync': { captureResourceObservation: () => ({ scope: 1 }) },
+    './resourceSync': { captureResourceObservation: () => ({ scope: 1 }), invalidateResourcePrefix() {} },
     './runtimeSettingReads': { retireRuntimeSettingReads() {}, readBatchedRuntimeSettingSources() {} },
   }
   const transport = { exports: {} as Record<string, (...args: any[]) => Promise<unknown>> }
@@ -76,6 +79,7 @@ async function editor(initial = permissionProfiles.emptyPermissionCatalog()) {
   const modules: Record<string, unknown> = {
     vue: { ...vue, onMounted() {}, onBeforeUnmount() {} },
     'vue-router': { onBeforeRouteLeave() {}, onBeforeRouteUpdate() {} },
+    '@remixicon/vue': {},
     '@/lib/appConfirm': { confirmAction: async () => true },
     '@/lib/permissionConfig': permissionConfig,
     '@/lib/permissionProfiles': permissionProfiles,
@@ -115,6 +119,29 @@ async function editor(initial = permissionProfiles.emptyPermissionCatalog()) {
 }
 
 describe('permission configuration management', () => {
+  test('the default profile is present and editable before it has an authored record', async () => {
+    const id = permissionProfiles.DEFAULT_PERMISSION_PROFILE_ID
+    const defaults = permissionProfiles.emptyPermissionCatalog()
+    defaults.profiles[id] = {
+      name: 'Default permissions',
+      complete: true,
+      description: '',
+      revision: 1,
+      permission: {},
+    }
+    const { panel, current } = await editor(permissionProfiles.emptyPermissionCatalog(), defaults)
+    expect(panel.rows.value.map((row: { id: string }) => row.id)).toEqual([id])
+    expect(current().profiles).toEqual({})
+    await panel.selectEntry(id)
+    panel.draft.value.permission.tools.default = 'ask'
+    await panel.save()
+    expect(current().profiles[id]).toMatchObject({
+      revision: 2,
+      complete: true,
+      permission: { tools: { default: 'ask' } },
+    })
+  })
+
   test('is reachable only in global settings', () => {
     expect(buildSettingsSubpages('permissions').some((page) => page.id === 'profiles')).toBe(true)
     expect(buildSettingsNavigationCategories().find((category) => category.id === 'security')?.children).toEqual(
@@ -131,14 +158,17 @@ describe('permission configuration management', () => {
       name: 'Readers',
       grantEnabled: true,
       toolsText: 'fs.read\nfs.read\nfs.list',
-      mcpText: '{"docs":["search"]}',
-      permissionText:
-        '{"path":{"workspace":"readonly","external":"deny"},"tools":{"default":"ask","names":{"fs.read":"allow"}}}',
+      mcp: [{ server: 'docs', tools: 'search' }],
+      permission: {
+        path: { workspace: 'readonly', external: 'deny' },
+        tools: { default: 'ask', names: { 'fs.read': 'allow' } },
+      },
     })
     await panel.save()
     expect(panel.error.value).toBe('')
     expect(current().profiles.readers?.grant?.tools).toEqual(['fs.read', 'fs.list'])
     expect(current().profiles.readers?.revision).toBe(1)
+    expect(current().profiles.readers).toMatchObject({ complete: true, permission: { network: { default: 'deny' } } })
     await panel.addEntry(true)
     panel.draft.value.id = 'researchers'
     panel.draft.value.name = 'Researchers'
@@ -158,7 +188,8 @@ describe('permission configuration management', () => {
       actor: '123',
       group_ids: ['staff'],
       profile_id: 'researchers',
-      permissionText: '{"tools":{"names":{"shell":"deny"}}}',
+      resource: '-100123',
+      permission: { tools: { names: { shell: 'deny' } } },
     })
     await panel.save()
     await panel.selectSection('conversations')
@@ -174,6 +205,7 @@ describe('permission configuration management', () => {
     expect(panel.error.value).toBe('')
     expect(current().users[0]).toMatchObject({
       actor: '123',
+      resource: '-100123',
       group_ids: ['staff'],
       profile_id: 'researchers',
       overrides: { tools: { names: { shell: 'deny' } } },
@@ -197,20 +229,25 @@ describe('permission configuration management', () => {
       overrides: {},
     })
     const { panel, writes, current } = await editor(catalog)
+    await panel.selectEntry('reader')
     await panel.removeEntry()
     expect(panel.error.value).toContain('in use')
     expect(writes).toHaveLength(0)
     await panel.selectSection('groups')
+    await panel.selectEntry('staff')
     await panel.removeEntry()
     expect(panel.error.value).toContain('in use')
     await panel.selectSection('users')
+    await panel.selectEntry(permissionProfiles.permissionUserKey(catalog.users[0]!))
     panel.draft.value.actor = 'two'
     await panel.save()
     expect(current().users.map((user) => user.actor)).toEqual(['two'])
     await panel.removeEntry()
     await panel.selectSection('groups')
+    await panel.selectEntry('staff')
     await panel.removeEntry()
     await panel.selectSection('profiles')
+    await panel.selectEntry('reader')
     await panel.removeEntry()
     expect(current()).toEqual(permissionProfiles.emptyPermissionCatalog())
   })
@@ -219,6 +256,7 @@ describe('permission configuration management', () => {
     const catalog = permissionProfiles.emptyPermissionCatalog()
     catalog.profiles.reader = { name: 'Reader', description: '', revision: 1, permission: {} }
     const harness = await editor(catalog)
+    await harness.panel.selectEntry('reader')
     harness.panel.draft.value.name = 'Changed'
     harness.fail('Conflicting groups at priority 10')
     await harness.panel.save()
@@ -241,10 +279,13 @@ describe('permission configuration management', () => {
       users: [{ platform: 'telegram', tenant: 'telegram', account: 'bot', actor: 'one' }],
     })
     const { panel, current } = await editor(catalog)
-    expect(panel.draft.value.permissionText).toBe('{}')
+    await panel.selectEntry('reader')
+    expect(panel.draft.value.permission).toEqual({})
     await panel.selectSection('groups')
+    await panel.selectEntry('staff')
     expect(panel.draft.value.priority).toBe(0)
     await panel.selectSection('users')
+    await panel.selectEntry(permissionProfiles.permissionUserKey(catalog.users[0]!))
     expect(panel.draft.value.group_ids).toEqual([])
     panel.draft.value.group_ids = ['staff']
     await panel.save()

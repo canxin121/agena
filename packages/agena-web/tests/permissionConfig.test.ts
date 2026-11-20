@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   canonicalPermissionPath,
+  mergeNetworkPermissionConfig,
   parsePermissionConfig,
   parseNetworkPermissionConfig,
   permissionConfigErrorMessage,
@@ -15,7 +16,7 @@ describe('sandbox-compatible permission configuration', () => {
     const config = parsePermissionConfig({
       tools: { rules: { 'agena.shell.exec': renamePermissionRule(commands, 'git *', 'git p*') } },
     })
-    expect(Object.entries(config.tools!.rules!['agena.shell.exec']!)).toEqual([
+    expect(Object.entries(config.tools!.rules!['shell.*']!)).toEqual([
       ['git p*', 'allow'],
       ['git push *', 'deny'],
     ])
@@ -33,7 +34,7 @@ describe('sandbox-compatible permission configuration', () => {
           '<workspace>/secrets': 'deny',
         },
       },
-      network: { default: 'deny', inbound: 'deny', hostLoopback: 'deny' },
+      network: { version: 2, default: 'deny', inbound: 'deny', hostLoopback: 'deny' },
       tools: { names: { 'agena.shell.exec': 'ask' } },
     }
     expect(parsePermissionConfig(config)).toEqual(config)
@@ -250,6 +251,15 @@ describe('sandbox-compatible permission configuration', () => {
 })
 
 describe('flat MXC network configuration', () => {
+  const offline = {
+    version: 2,
+    default: 'deny',
+    inbound: 'deny',
+    hostLoopback: 'deny',
+    allow: [],
+    deny: [],
+  }
+
   test('keeps one target, one protocol and concise port ranges', () => {
     const network = {
       default: 'deny',
@@ -263,21 +273,99 @@ describe('flat MXC network configuration', () => {
       inbound: 'deny',
       hostLoopback: 'deny',
     }
-    expect(parseNetworkPermissionConfig(network)).toEqual(network)
+    expect(parseNetworkPermissionConfig(network)).toEqual({ version: 2, ...network })
   })
 
-  test('a present empty object stays an explicit offline policy', () => {
-    expect(parsePermissionConfig({ network: {} })).toEqual({ network: {} })
+  test('legacy empty and partial objects retain their complete offline defaults', () => {
+    expect(parsePermissionConfig({ network: {} })).toEqual({ network: offline })
     expect(parsePermissionConfig({})).toEqual({})
-    expect(parseNetworkPermissionConfig({ default: 'deny' })).toEqual({ default: 'deny' })
-    expect(parseNetworkPermissionConfig({ allow: [], deny: [] })).toEqual({ allow: [], deny: [] })
+    expect(parseNetworkPermissionConfig({ default: 'deny' })).toEqual(offline)
+    expect(parseNetworkPermissionConfig({ allow: [], deny: [] })).toEqual(offline)
     expect(parseNetworkPermissionConfig({ allow: [{ to: '*', except: [] }] })).toEqual({
+      ...offline,
       allow: [{ to: '*', except: [] }],
     })
   })
 
+  test('version 2 retains omitted fields and explicit deny or empty list values', () => {
+    expect(parseNetworkPermissionConfig({ version: 2 })).toEqual({ version: 2 })
+    expect(parsePermissionConfig({ network: { version: 2, inbound: 'deny' } })).toEqual({
+      network: { version: 2, inbound: 'deny' },
+    })
+    expect(parseNetworkPermissionConfig({ version: 2, allow: [], deny: [] })).toEqual({
+      version: 2,
+      allow: [],
+      deny: [],
+    })
+    const migrated = parseNetworkPermissionConfig({ allow: [{ to: '*', protocol: 'tcp', ports: [443] }] })
+    expect(parseNetworkPermissionConfig(JSON.parse(JSON.stringify(migrated)))).toEqual(migrated)
+    const sparse = { version: 2, default: 'deny', deny: [] }
+    expect(parseNetworkPermissionConfig(JSON.parse(JSON.stringify(sparse)))).toEqual(sparse)
+  })
+
+  test.each([null, 0, 1, 3, 2.5, '2', true, [], {}].map((version) => ({ version })))(
+    'rejects invalid network version $version',
+    ({ version }) => {
+      expect(() => parseNetworkPermissionConfig({ version })).toThrow(
+        'Invalid permission value at permission.network.version: expected 2.',
+      )
+    },
+  )
+
+  test('per-field merge keeps independent parent values and honors explicit empty lists', () => {
+    const parent = parseNetworkPermissionConfig({
+      version: 2,
+      default: 'allow',
+      inbound: 'deny',
+      hostLoopback: 'allow',
+      allow: [{ to: '192.0.2.1', protocol: 'tcp', ports: [443] }],
+      deny: [{ to: '198.51.100.2' }],
+    })
+    const local = parseNetworkPermissionConfig({ version: 2, default: 'deny', allow: [] })
+    const merged = mergeNetworkPermissionConfig(parent, local)
+    expect(merged).toEqual({ ...parent, default: 'deny', allow: [] })
+    expect(mergeNetworkPermissionConfig(parent, { version: 2, deny: [] })).toEqual({ ...parent, deny: [] })
+    expect(mergeNetworkPermissionConfig(parent, { version: 2, inbound: 'allow' })).toEqual({
+      ...parent,
+      inbound: 'allow',
+    })
+    expect(mergeNetworkPermissionConfig(parent, { version: 2, hostLoopback: 'deny' })).toEqual({
+      ...parent,
+      hostLoopback: 'deny',
+    })
+    expect(mergeNetworkPermissionConfig(parent, { version: 2 })).toEqual(parent)
+    expect(parent.default).toBe('allow')
+    expect(local).toEqual({ version: 2, default: 'deny', allow: [] })
+    expect(merged?.deny).not.toBe(parent.deny)
+    expect(merged?.allow).not.toBe(local.allow)
+  })
+
+  test('merging legacy layers materializes their complete policy before applying sparse overrides', () => {
+    expect(mergeNetworkPermissionConfig({ default: 'allow', deny: [{ to: '192.0.2.1' }] }, {})).toEqual(offline)
+    expect(mergeNetworkPermissionConfig({}, { version: 2, default: 'allow' })).toEqual({
+      ...offline,
+      default: 'allow',
+    })
+    expect(mergeNetworkPermissionConfig({ version: 2, inbound: 'allow' }, { default: 'allow' })).toEqual({
+      ...offline,
+      default: 'allow',
+    })
+  })
+
+  test('missing layers remain unknown while a sparse known layer stays sparse', () => {
+    expect(mergeNetworkPermissionConfig(null, undefined)).toBeNull()
+    expect(mergeNetworkPermissionConfig(undefined, null)).toBeNull()
+    expect(mergeNetworkPermissionConfig(null, { version: 2, allow: [] })).toEqual({ version: 2, allow: [] })
+    expect(mergeNetworkPermissionConfig({ version: 2, inbound: 'deny' }, undefined)).toEqual({
+      version: 2,
+      inbound: 'deny',
+    })
+    expect(mergeNetworkPermissionConfig(null, {})).toEqual(offline)
+  })
+
   test.each([
     ['permission.network', null],
+    ['permission.network.version', { version: null }],
     ['permission.network.default', { default: null }],
     ['permission.network.allow', { allow: null }],
     ['permission.network.deny', { deny: null }],
@@ -290,6 +378,8 @@ describe('flat MXC network configuration', () => {
     ['permission.network.allow[0].except', { allow: [{ to: '192.0.2.0/24', except: null }] }],
   ])('rejects explicit null at %s', (field, network) => {
     expect(() => parsePermissionConfig({ network })).toThrow(field as string)
+    if (network && typeof network === 'object' && field !== 'permission.network.version')
+      expect(() => parseNetworkPermissionConfig({ ...network, version: 2 })).toThrow(field as string)
   })
 
   test.each([

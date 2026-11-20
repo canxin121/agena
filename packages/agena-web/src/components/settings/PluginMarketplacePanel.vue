@@ -401,7 +401,7 @@ onMounted(() => void refresh(false))
 </script>
 
 <template>
-  <div class="min-w-0 space-y-4">
+  <div class="settings-stack">
     <p
       v-if="error"
       role="alert"
@@ -426,10 +426,10 @@ onMounted(() => void refresh(false))
           ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''"
         /></IconButton>
       </template>
-      <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+      <div class="settings-toolbar">
         <SearchInput
           v-model="query"
-          class="min-w-0 flex-1"
+          class="settings-toolbar-search"
           :placeholder="$st('Search plugin id, name, category, repository, or tags')"
           :input-aria-label="$st('Search plugin marketplace')"
           :show-search-button="false"
@@ -455,7 +455,7 @@ onMounted(() => void refresh(false))
               ><RiUploadCloud2Line class="mr-1.5 h-4 w-4 shrink-0" />{{ $st('Sync') }}</Button
             >
           </div>
-          <div class="grid gap-3 text-xs text-muted-foreground sm:grid-cols-2">
+          <div class="settings-control-grid text-xs text-muted-foreground">
             <label class="flex items-start gap-2"
               ><input v-model="requireSignature" type="checkbox" class="mt-0.5 shrink-0" />{{
                 $st('Require a trusted Ed25519 signature')
@@ -524,11 +524,11 @@ onMounted(() => void refresh(false))
       >
         {{ $st('Search to update the results.') }}
       </p>
-      <div v-else class="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+      <div v-else class="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,19rem),1fr))] gap-2.5">
         <article
           v-for="plugin in entries"
           :key="plugin.plugin_id"
-          class="flex min-w-0 flex-col gap-3 rounded-xl border border-border/60 bg-background/30 p-4 transition-colors hover:border-primary/30"
+          class="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-background/30 p-3 transition-colors hover:border-primary/30"
         >
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="min-w-0">
@@ -568,7 +568,7 @@ onMounted(() => void refresh(false))
               {{ tag }}
             </span>
           </div>
-          <div class="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+          <div class="settings-control-grid text-[11px] text-muted-foreground">
             <span>{{ $st('Kind') }}: {{ plugin.latest_kind || $st('Not reported') }}</span>
             <span>{{ $st('Target') }}: {{ plugin.latest_platform || $st('Not reported') }}</span>
             <span>{{ $st('License') }}: {{ plugin.license || $st('Not reported') }}</span>
@@ -629,7 +629,6 @@ onMounted(() => void refresh(false))
       :title="$st('Installed marketplace plugins')"
       :icon="RiCheckboxCircleLine"
       :count="installed.length"
-      :description="$st('{count} plugin installations are managed by the marketplace.', { count: installed.length })"
     >
       <template #actions
         ><Button
@@ -679,7 +678,7 @@ onMounted(() => void refresh(false))
         <div
           v-for="plugin in installed"
           :key="plugin.plugin_id"
-          class="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 py-3 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+          class="settings-marketplace-installation grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-2 py-2.5"
         >
           <label v-if="outdatedById.has(plugin.plugin_id)" class="flex items-start justify-center pt-1">
             <input
@@ -721,7 +720,7 @@ onMounted(() => void refresh(false))
               </span>
             </div>
           </div>
-          <div class="col-start-2 flex flex-wrap items-center justify-end gap-2 sm:col-auto">
+          <div class="settings-marketplace-actions flex flex-wrap items-center justify-end gap-2">
             <Button
               v-if="outdatedById.has(plugin.plugin_id)"
               size="sm"
@@ -763,3 +762,18 @@ onMounted(() => void refresh(false))
     </SettingsCard>
   </div>
 </template>
+
+<style scoped>
+.settings-marketplace-actions {
+  grid-column: 2;
+}
+
+@container settings-card (min-width: 36rem) {
+  .settings-marketplace-installation {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .settings-marketplace-actions {
+    grid-column: 3;
+  }
+}
+</style>

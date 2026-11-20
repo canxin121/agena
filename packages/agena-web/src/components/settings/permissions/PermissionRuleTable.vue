@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RiDeleteBinLine, RiEditLine, RiFolderLine, RiGlobalLine, RiTerminalBoxLine, RiToolsLine } from '@remixicon/vue'
+import {
+  RiDeleteBinLine,
+  RiEditLine,
+  RiFolderLine,
+  RiGlobalLine,
+  RiResetLeftLine,
+  RiTerminalBoxLine,
+  RiToolsLine,
+} from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -13,15 +21,17 @@ const props = defineProps<{
   rows: PermissionRuleRow[]
   selectedKeys: string[]
   disabled?: boolean
+  scope?: string
 }>()
 const emit = defineEmits<{
   select: [row: PermissionRuleRow, selected: boolean]
   'select-visible': [rows: PermissionRuleRow[], selected: boolean]
   mode: [row: PermissionRuleRow, value: string]
   'rename-target': [row: PermissionRuleRow, event: Event]
-  'rename-condition': [row: PermissionRuleRow, event: Event]
   edit: [row: PermissionRuleRow]
   remove: [row: PermissionRuleRow]
+  source: [row: PermissionRuleRow]
+  reset: [row: PermissionRuleRow]
 }>()
 
 const query = ref('')
@@ -39,10 +49,16 @@ const kindIcons = {
 }
 const heading = computed(() => kindLabels.value[props.kind])
 const targetLabel = computed(() =>
-  props.kind === 'filesystem' ? st('Path') : props.kind === 'network' ? st('Rule target') : st('Tool name'),
+  props.kind === 'command'
+    ? st('Command pattern')
+    : props.kind === 'filesystem'
+      ? st('Path')
+      : props.kind === 'network'
+        ? st('Rule target')
+        : st('Tool name'),
 )
-const hasCondition = computed(() => props.kind === 'network' || props.kind === 'command')
-const conditionLabel = computed(() => (props.kind === 'network' ? st('Protocol / ports') : st('Command pattern')))
+const hasCondition = computed(() => props.kind === 'network')
+const showSources = computed(() => props.scope !== 'global')
 // The table has a fixed rule kind. A caller cannot accidentally render or select
 // another domain by passing a combined array or a key selected in another table.
 const kindRows = computed(() => props.rows.filter((row) => row.kind === props.kind))
@@ -56,7 +72,9 @@ const visibleRows = computed(() => {
 })
 const selected = computed(() => new Set(props.selectedKeys))
 const hasSelectable = computed(() => kindRows.value.some((row) => row.selectable))
-const hasActions = computed(() => kindRows.value.some((row) => row.editAction || row.removable))
+const hasActions = computed(() =>
+  kindRows.value.some((row) => row.editAction || row.removable || row.sourceAction || row.resetAction),
+)
 const visibleSelectable = computed(() => visibleRows.value.filter((row) => row.selectable))
 const allVisibleSelected = computed(
   () => visibleSelectable.value.length > 0 && visibleSelectable.value.every((row) => selected.value.has(row.key)),
@@ -67,7 +85,7 @@ const selectedCount = computed(
 )
 
 function selectRow(row: PermissionRuleRow, event: Event) {
-  if (props.disabled || row.kind !== props.kind || !row.selectable) return
+  if (props.disabled || row.readOnly || row.kind !== props.kind || !row.selectable) return
   emit('select', row, (event.target as HTMLInputElement).checked)
 }
 function selectVisible() {
@@ -82,19 +100,37 @@ function clearSearch() {
 <template>
   <section
     class="permission-rule-table"
-    :class="{ 'has-selection': hasSelectable, 'has-condition': hasCondition }"
+    :class="{
+      'has-selection': hasSelectable,
+      'has-condition': hasCondition,
+      'without-source': !showSources,
+    }"
     :data-permission-rule-table="kind"
-    :aria-labelledby="'permission-rule-title-' + kind"
+    :aria-label="heading"
   >
     <header class="rule-table-toolbar">
-      <h2 :id="'permission-rule-title-' + kind" class="rule-table-title">
-        <component :is="kindIcons[kind]" class="h-4 w-4 shrink-0" aria-hidden="true" />
-        {{ heading }}<span class="rule-table-count">{{ kindRows.length }}</span>
-      </h2>
+      <div class="rule-table-heading">
+        <label v-if="hasSelectable" class="rule-table-select-all" :title="$st('Select all permission rules')">
+          <input
+            type="checkbox"
+            class="accent-primary"
+            data-permission-select-all
+            :checked="allVisibleSelected"
+            :indeterminate="someVisibleSelected && !allVisibleSelected"
+            :disabled="disabled || !visibleSelectable.length"
+            :aria-label="$st('Select all permission rules')"
+            @change="selectVisible"
+          />
+        </label>
+        <h3 class="rule-table-title" data-permission-rule-heading>
+          <component :is="kindIcons[kind]" class="h-4 w-4 shrink-0" aria-hidden="true" />
+          {{ heading }}<span class="rule-table-count">{{ kindRows.length }}</span>
+        </h3>
+      </div>
       <SearchInput
         v-model="query"
         class="rule-table-search"
-        input-class="h-8 text-[13px]"
+        input-class="h-8 text-[13px] shadow-none"
         :placeholder="$st('Search rules…')"
         :input-aria-label="heading + ' · ' + $st('Search rules…')"
         :input-title="heading"
@@ -104,46 +140,41 @@ function clearSearch() {
       />
       <div v-if="$slots.actions" class="rule-table-actions"><slot name="actions" /></div>
     </header>
-    <div v-if="selectedCount" class="rule-table-bulk">
-      <span class="text-[13px] font-medium">{{ $st('{count} selected', { count: selectedCount }) }}</span>
-      <slot name="bulk" />
+    <div v-if="selectedCount && $slots.bulk" class="rule-table-bulk">
+      <slot name="bulk" :count="selectedCount" />
     </div>
     <slot name="create" />
-    <table v-if="visibleRows.length" class="rule-table" :aria-label="heading">
+    <table v-if="visibleRows.length" class="rule-table" role="table" :aria-label="heading">
       <colgroup>
         <col v-if="hasSelectable" class="rule-table-selection-column" />
-        <col />
-        <col v-if="hasCondition" />
+        <col class="rule-table-target-column" />
+        <col v-if="hasCondition" class="rule-table-condition-column" />
         <col class="rule-table-mode-column" />
-        <col class="rule-table-source-column" />
+        <col v-if="showSources" class="rule-table-source-column" />
         <col v-if="hasActions" class="rule-table-action-column" />
       </colgroup>
-      <thead>
-        <tr>
+      <thead role="rowgroup">
+        <tr role="row">
           <th v-if="hasSelectable" scope="col" class="rule-table-selection">
-            <input
-              type="checkbox"
-              class="accent-primary"
-              :checked="allVisibleSelected"
-              :indeterminate="someVisibleSelected && !allVisibleSelected"
-              :disabled="disabled || !visibleSelectable.length"
-              :aria-label="$st('Select all permission rules')"
-              @change="selectVisible"
-            />
+            <span class="sr-only">{{ $st('Select') }}</span>
           </th>
           <th scope="col">{{ targetLabel }}</th>
-          <th v-if="hasCondition" scope="col">{{ conditionLabel }}</th>
+          <th v-if="hasCondition" scope="col">{{ $st('Protocol / ports') }}</th>
           <th scope="col">{{ $st('Mode') }}</th>
-          <th scope="col">{{ $st('Source') }}</th>
-          <th v-if="hasActions" scope="col" class="text-right">{{ $st('Actions') }}</th>
+          <th v-if="showSources" scope="col">{{ $st('Source') }}</th>
+          <th v-if="hasActions" scope="col" class="rule-table-action-heading">{{ $st('Actions') }}</th>
         </tr>
       </thead>
-      <tbody>
+      <tbody role="rowgroup">
         <tr
           v-for="row in visibleRows"
           :key="row.key"
+          role="row"
           class="rule-table-row"
-          :class="{ 'is-selected': row.selectable && selected.has(row.key) }"
+          :class="{
+            'is-selected': row.selectable && selected.has(row.key),
+            'is-inherited': row.readOnly,
+          }"
           :data-permission-rule="row.kind"
           :data-rule-scope="row.source"
           :data-rule-action="row.networkAction"
@@ -158,7 +189,7 @@ function clearSearch() {
               data-permission-row-action="select"
               class="accent-primary"
               :checked="selected.has(row.key)"
-              :disabled="disabled"
+              :disabled="disabled || row.readOnly"
               :aria-label="`${$st('Select')} ${row.target}${row.condition ? ` · ${row.condition}` : ''}`"
               @change="selectRow(row, $event)"
             />
@@ -169,11 +200,12 @@ function clearSearch() {
                 v-if="row.targetEditable"
                 data-permission-row-action="rename-target"
                 :value="row.target"
+                :size="Math.max(8, Math.min(row.target.length, 40))"
                 type="text"
                 class="rule-table-input"
                 :title="row.target"
                 :aria-label="`${targetLabel}: ${row.target}`"
-                :disabled="disabled"
+                :disabled="disabled || row.readOnly"
                 @change="emit('rename-target', row, $event)"
               />
               <code v-else class="rule-table-value" :title="row.target">{{ row.target }}</code>
@@ -181,22 +213,8 @@ function clearSearch() {
           </td>
           <td v-if="hasCondition" class="rule-table-condition">
             <div class="rule-table-condition-content">
-              <input
-                v-if="row.conditionEditable"
-                data-permission-row-action="rename-condition"
-                :value="row.condition"
-                type="text"
-                class="rule-table-input"
-                :title="row.condition"
-                :aria-label="`${conditionLabel}: ${row.target}`"
-                :disabled="disabled"
-                @change="emit('rename-condition', row, $event)"
-              />
-              <code v-else-if="row.condition" class="rule-table-value" :title="row.condition">{{ row.condition }}</code>
+              <code v-if="row.condition" class="rule-table-value" :title="row.condition">{{ row.condition }}</code>
               <span v-else class="rule-table-empty-condition text-muted-foreground">—</span>
-              <span class="rule-table-mobile-source permission-rule-source" :data-source="row.source">{{
-                row.sourceLabel
-              }}</span>
             </div>
           </td>
           <td class="rule-table-mode" data-permission-mode>
@@ -206,17 +224,42 @@ function clearSearch() {
               :options="row.modeOptions"
               :include-empty="false"
               :title="`${$st('Mode')}: ${row.target}`"
-              :disabled="disabled"
+              :disabled="disabled || row.readOnly"
               size="sm"
               @update:model-value="emit('mode', row, $event)"
             />
             <span v-else class="permission-rule-mode" :data-mode="row.mode">{{ row.modeLabel }}</span>
           </td>
-          <td class="rule-table-source">
+          <td v-if="showSources" class="rule-table-source">
             <span class="permission-rule-source" :data-source="row.source">{{ row.sourceLabel }}</span>
           </td>
           <td v-if="hasActions" class="rule-table-row-actions">
-            <div class="flex justify-end gap-0.5">
+            <div class="rule-table-row-controls">
+              <IconButton
+                v-if="row.resetAction"
+                data-permission-row-action="reset"
+                variant="ghost"
+                size="sm"
+                class="h-8 w-8"
+                :tooltip="row.resetActionLabel"
+                :aria-label="row.resetActionLabel"
+                :disabled="disabled"
+                @click="emit('reset', row)"
+                ><RiResetLeftLine class="h-4 w-4"
+              /></IconButton>
+              <IconButton
+                v-if="row.sourceAction"
+                :data-permission-row-action="'source-' + row.sourceAction"
+                variant="ghost"
+                size="sm"
+                class="h-8 w-8"
+                :tooltip="row.sourceActionLabel"
+                :aria-label="row.sourceActionLabel"
+                :disabled="disabled"
+                @click="emit('source', row)"
+                ><RiEditLine v-if="row.sourceAction === 'local'" class="h-4 w-4" />
+                <RiResetLeftLine v-else class="h-4 w-4" />
+              </IconButton>
               <IconButton
                 v-if="row.editAction"
                 data-permission-row-action="edit"
@@ -225,7 +268,7 @@ function clearSearch() {
                 class="h-8 w-8"
                 :tooltip="$st('Edit network rule')"
                 :aria-label="$st('Edit network rule')"
-                :disabled="disabled"
+                :disabled="disabled || row.readOnly"
                 @click="emit('edit', row)"
                 ><RiEditLine class="h-4 w-4"
               /></IconButton>
@@ -237,7 +280,7 @@ function clearSearch() {
                 class="h-8 w-8"
                 :tooltip="$st('Remove rule')"
                 :aria-label="$st('Remove rule')"
-                :disabled="disabled"
+                :disabled="disabled || row.readOnly"
                 @click="emit('remove', row)"
                 ><RiDeleteBinLine class="h-4 w-4"
               /></IconButton>
@@ -246,9 +289,9 @@ function clearSearch() {
         </tr>
       </tbody>
     </table>
-    <div v-else class="rule-table-empty">
+    <div v-else-if="kind !== 'network' || query" class="rule-table-empty">
       <span>{{
-        kindRows.length ? $st('No matching rules.') : $st('No exceptions in this scope. Default policies apply.')
+        query ? $st('No matching rules.') : $st('No exceptions in this scope. Default policies apply.')
       }}</span>
       <Button v-if="query" type="button" variant="ghost" size="sm" @click="clearSearch">{{
         $st('Clear search')
@@ -259,50 +302,81 @@ function clearSearch() {
 
 <style scoped>
 @reference '../../../style.css';
+
 .permission-rule-table {
-  @apply border-t border-border/70;
-  min-width: 0;
   container: permission-rules / inline-size;
+  min-width: 0;
+  padding: 0.5625rem 0.75rem 0.625rem;
+}
+.permission-rule-table + .permission-rule-table {
+  @apply border-t border-border/70;
 }
 .rule-table-toolbar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(5rem, 1fr) minmax(0, max-content);
+  grid-template-areas: 'heading search actions';
   align-items: center;
-  gap: 0.375rem 0.75rem;
-  padding-block: 0.375rem;
+  gap: 0.375rem 0.5625rem;
+  min-width: 0;
+  padding-bottom: 0.5rem;
+}
+.rule-table-heading {
+  grid-area: heading;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
 }
 .rule-table-title {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.875rem;
-  font-weight: 600;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.rule-table-title svg {
+  @apply text-muted-foreground;
+}
+.rule-table-select-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 1.25rem;
+  min-height: 2rem;
+  cursor: pointer;
 }
 .rule-table-count {
-  @apply text-muted-foreground;
-  font-size: 0.8125rem;
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
+  @apply rounded-md bg-muted/45 px-1.5 text-xs font-medium tabular-nums text-muted-foreground;
 }
 .rule-table-search {
-  flex: 1 1 12rem;
+  grid-area: search;
   min-width: 0;
-  max-width: 22rem;
-  margin-inline-start: auto;
+  width: min(100%, 13rem);
+  justify-self: end;
 }
 .rule-table-actions {
+  grid-area: actions;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
+  min-width: 0;
+}
+.rule-table-actions :deep(button) {
+  max-width: 100%;
+  height: auto;
+  min-height: 2rem;
+  white-space: normal;
+  line-height: 1.25;
+}
+.rule-table-actions :deep(button svg) {
+  flex-shrink: 0;
 }
 .rule-table-bulk {
-  @apply border-y border-primary/20 bg-primary/5;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem;
-  padding: 0.25rem 0.375rem;
+  margin-block-end: 0.375rem;
 }
 .rule-table {
   width: 100%;
@@ -311,34 +385,56 @@ function clearSearch() {
   font-size: 0.8125rem;
 }
 .rule-table-selection-column {
-  width: 1.75rem;
+  width: 1.625rem;
 }
 .rule-table-mode-column {
-  width: 10rem;
+  width: 6.25rem;
+}
+[data-permission-rule-table='filesystem'] .rule-table-mode-column {
+  width: 7.75rem;
 }
 .rule-table-source-column {
-  width: 6rem;
+  width: 6.25rem;
 }
 .rule-table-action-column {
-  width: 4.75rem;
+  width: 5rem;
+}
+.has-condition .rule-table-target-column {
+  width: 26%;
+}
+.rule-table thead {
+  @apply bg-muted/30 text-muted-foreground;
 }
 .rule-table th {
-  @apply text-muted-foreground;
-  height: 1.75rem;
+  height: 1.875rem;
   text-align: start;
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  font-weight: 550;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.rule-table th:first-child {
+  border-start-start-radius: 0.25rem;
+}
+.rule-table th:last-child {
+  border-start-end-radius: 0.25rem;
+}
+.rule-table th.rule-table-action-heading {
+  text-align: end;
 }
 .rule-table :is(th, td) {
-  padding: 0.0625rem 0.375rem;
+  padding: 0.1875rem 0.375rem;
   vertical-align: middle;
 }
 .rule-table-row {
-  @apply border-t border-border/50 hover:bg-muted/20;
-  height: 2.25rem;
+  @apply border-b border-border/45 hover:bg-muted/20;
+  height: 2.375rem;
+}
+.rule-table-row:last-child {
+  border-bottom: 0;
 }
 .rule-table-row.is-selected {
-  @apply bg-primary/5;
+  @apply bg-primary/6;
 }
 .rule-table-selection {
   text-align: center;
@@ -347,19 +443,22 @@ function clearSearch() {
 .rule-table-condition-content {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
   min-width: 0;
+}
+.rule-table-row.is-inherited :is(.rule-table-target-content, .rule-table-condition-content) {
+  @apply text-muted-foreground;
 }
 .rule-table-value {
   display: block;
+  max-width: 100%;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 0.8125rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 .rule-table-input {
-  @apply rounded border border-transparent bg-transparent focus:border-input focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60;
+  @apply rounded border border-transparent bg-transparent focus:border-input focus:outline-none focus:ring-1
+    focus:ring-ring disabled:opacity-60;
   width: 100%;
   min-width: 0;
   height: 2rem;
@@ -370,129 +469,140 @@ function clearSearch() {
 .rule-table-mode :deep(button[aria-haspopup]) {
   height: auto;
   min-height: 2rem;
-  padding-block: 0.25rem;
+  padding-block: 0.1875rem;
+  padding-inline: 0.375rem;
+  gap: 0.25rem;
   font-size: 0.8125rem;
+  text-align: start;
+}
+.rule-table-mode > :deep(div) {
+  min-width: 0;
+  max-width: 8rem;
 }
 .rule-table-mode :deep(.truncate) {
   overflow: visible;
+  overflow-wrap: anywhere;
   text-overflow: clip;
   white-space: normal;
-  line-height: 1.2;
+  line-height: 1.25;
 }
-.permission-rule-mode,
-.permission-rule-source {
-  display: inline-block;
+.permission-rule-mode {
+  @apply inline-block rounded-md bg-muted/55 px-1.5 py-0.5;
   max-width: 100%;
-  font-size: 0.8125rem;
+  font-size: 0.75rem;
+  font-weight: 550;
   line-height: 1.3;
-  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.permission-rule-mode[data-mode='allow'] {
+  @apply bg-primary/10;
 }
 .permission-rule-mode[data-mode='deny'] {
-  @apply text-destructive;
+  @apply bg-destructive/10 text-destructive;
 }
 .permission-rule-source {
-  @apply text-muted-foreground;
+  @apply text-xs text-muted-foreground;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
 }
-.rule-table-mobile-source {
-  display: none;
+.rule-table-row-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.125rem;
 }
 .rule-table-empty {
-  @apply border-t border-border/50 text-muted-foreground;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-  padding: 0.5rem 0;
-  font-size: 0.8125rem;
+  @apply flex flex-wrap items-center gap-2 rounded-md bg-muted/20 px-2.5 py-2 text-muted-foreground;
 }
-@container permission-rules (max-width: 49rem) {
+@container permission-rules (max-width: 32rem) {
   .rule-table-toolbar {
-    gap: 0.375rem 0.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    grid-template-areas: 'heading actions' 'search search';
   }
   .rule-table-search {
-    max-width: none;
+    width: 100%;
   }
+  .rule-table-actions :deep(button) {
+    max-width: 9rem;
+  }
+}
+@container permission-rules (max-width: 33rem) {
   .rule-table,
   .rule-table tbody {
     display: block;
+    width: 100%;
   }
-  .rule-table colgroup,
-  .rule-table thead {
+  .rule-table colgroup {
     display: none;
+  }
+  .rule-table thead {
+    @apply sr-only;
   }
   .rule-table-row {
     position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(7.5rem, max-content);
-    grid-template-rows: auto auto;
+    grid-template-columns: minmax(0, 1fr) minmax(0, max-content) auto;
+    grid-template-areas:
+      'target mode actions'
+      'source mode actions';
     align-items: center;
-    gap: 0.125rem 0.5rem;
+    gap: 0 0.5rem;
+    width: 100%;
+    min-height: 2.375rem;
     height: auto;
-    min-height: 4.25rem;
-    padding-block: 0.25rem;
+    padding: 0.25rem 0;
+  }
+  .has-condition .rule-table-row {
+    grid-template-areas:
+      'target mode actions'
+      'condition mode actions'
+      'source mode actions';
+  }
+  .without-source .rule-table-row {
+    grid-template-areas: 'target mode actions';
+  }
+  .without-source.has-condition .rule-table-row {
+    grid-template-areas:
+      'target mode actions'
+      'condition mode actions';
   }
   .has-selection .rule-table-row {
-    padding-inline-start: 1.5rem;
+    padding-inline-start: 1.375rem;
   }
   .rule-table td {
     display: block;
     min-width: 0;
     padding: 0;
   }
-  .rule-table td.rule-table-selection {
+  .rule-table .rule-table-selection {
     position: absolute;
-    inset-inline-start: 0;
-    top: 0;
-    bottom: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.25rem;
-  }
-  .has-condition .rule-table td.rule-table-source {
-    display: none;
+    inset-inline-start: 0.125rem;
+    inset-block-start: 0.625rem;
   }
   .rule-table-target {
-    grid-column: 1;
-    grid-row: 1;
+    grid-area: target;
   }
   .rule-table-condition {
-    grid-column: 1;
-    grid-row: 2;
+    grid-area: condition;
   }
   .rule-table-source {
-    grid-column: 1;
-    grid-row: 2;
+    grid-area: source;
   }
   .rule-table-mode {
-    grid-column: 2;
-    grid-row: 1;
+    grid-area: mode;
+    min-width: 0;
+    max-width: min(7rem, 29cqi);
   }
   .rule-table-row-actions {
-    grid-column: 2;
-    grid-row: 2;
-  }
-  .rule-table-mobile-source {
-    display: inline-block;
-    flex-shrink: 0;
+    grid-area: actions;
   }
   .rule-table-empty-condition {
     display: none;
-  }
-  .rule-table-condition-content {
-    gap: 0.375rem;
-  }
-  .rule-table-condition-content .rule-table-value {
-    flex: 1 1 auto;
-  }
-  .rule-table-mode {
-    max-width: 11rem;
   }
 }
 @media (pointer: coarse) {
   .rule-table-row-actions :deep(button),
   .rule-table-mode :deep(button[aria-haspopup]) {
-    min-height: 2.5rem;
+    min-height: 2.375rem;
   }
 }
 </style>

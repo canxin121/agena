@@ -638,8 +638,8 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-col gap-4 lg:h-full lg:min-h-0">
-    <div class="flex flex-wrap items-center justify-between gap-3">
+  <div class="settings-viewport">
+    <div class="settings-toolbar justify-between">
       <div class="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <span class="rounded-full border border-border/60 bg-muted/30 px-2.5 py-1">{{
           $st('{count} skills', { count: catalog?.skills.length || 0 })
@@ -681,12 +681,12 @@ defineExpose({ refresh })
         </li>
       </ul>
     </details>
-    <div class="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[19rem_minmax(0,1fr)]">
+    <div class="settings-master-detail settings-viewport-region">
       <aside
-        class="min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background lg:flex lg:min-h-0"
-        :class="showDetail ? 'hidden' : 'flex'"
+        class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-background"
+        :class="{ 'settings-hide-stacked': showDetail }"
       >
-        <div class="space-y-3 border-b border-border/60 p-3">
+        <div class="space-y-2 border-b border-border/60 p-2.5">
           <SearchInput v-model="query" :placeholder="$st('Search skills')" :aria-label="$st('Search skills')" />
           <div class="grid grid-cols-2 gap-2">
             <OptionPicker
@@ -705,7 +705,7 @@ defineExpose({ refresh })
             />
           </div>
         </div>
-        <div class="max-h-[28rem] min-h-0 flex-1 overflow-y-auto p-1.5 lg:max-h-none" :aria-busy="loading">
+        <div class="settings-viewport-scroll p-1.5" :aria-busy="loading">
           <div v-if="loading && !catalog" role="status" class="px-4 py-10 text-center text-sm text-muted-foreground">
             {{ $st('Loading…') }}
           </div>
@@ -769,10 +769,10 @@ defineExpose({ refresh })
       </aside>
 
       <section
-        class="min-w-0 flex-col overflow-hidden rounded-xl border border-border/60 bg-background lg:flex lg:min-h-0"
-        :class="showDetail ? 'flex' : 'hidden'"
+        class="settings-skill-detail flex min-h-0 min-w-0 flex-col rounded-lg border border-border/60 bg-background"
+        :class="{ 'settings-hide-stacked': !showDetail }"
       >
-        <div class="flex items-center justify-between gap-2 border-b border-border/60 p-3 lg:hidden">
+        <div class="settings-stacked-only border-b border-border/60 px-2 py-1">
           <Button variant="ghost" size="sm" @click="showDetail = false"
             ><RiArrowLeftLine class="mr-1 h-4 w-4" />{{ $st('Skills') }}</Button
           >
@@ -791,7 +791,7 @@ defineExpose({ refresh })
           </p>
         </div>
         <template v-else>
-          <header class="shrink-0 space-y-3 border-b border-border/60 p-4">
+          <header class="shrink-0 space-y-2 border-b border-border/60 p-2.5">
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div class="min-w-0">
                 <h2 class="break-words text-base font-semibold">{{ detail.name }}</h2>
@@ -831,7 +831,7 @@ defineExpose({ refresh })
               <summary class="cursor-pointer text-muted-foreground">
                 {{ $st('Details and source') }} · {{ scopeLabel(detail.scope) }}
               </summary>
-              <dl class="mt-3 grid max-h-48 gap-3 overflow-auto sm:grid-cols-2">
+              <dl class="settings-control-grid mt-2 max-h-48 overflow-auto">
                 <div class="min-w-0 sm:col-span-2">
                   <dt class="text-muted-foreground">{{ $st('Path') }}</dt>
                   <dd class="mt-1 break-all font-mono">{{ detail.path }}</dd>
@@ -944,7 +944,7 @@ defineExpose({ refresh })
           >
             {{ $st('This file cannot be opened as text. Choose another skill file.') }}
           </div>
-          <div v-else-if="preview" class="min-h-80 flex-1 overflow-auto p-4 lg:min-h-0">
+          <div v-else-if="preview" class="settings-skill-file min-h-80 flex-1 overflow-auto p-3">
             <MarkdownRenderer
               v-if="isMarkdown"
               :content="path === 'SKILL.md' ? skillMarkdownBody(content) : content"
@@ -961,7 +961,7 @@ defineExpose({ refresh })
             :readonly="!detail.editable"
             :disabled="busy"
             spellcheck="false"
-            class="min-h-80 w-full flex-1 resize-y bg-transparent p-4 font-mono text-xs leading-6 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-60 lg:min-h-0 lg:resize-none"
+            class="settings-skill-file min-h-80 w-full flex-1 resize-y bg-transparent p-3 font-mono text-xs leading-6 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-60"
           />
           <div class="shrink-0 space-y-2 border-t border-border/60 p-3">
             <p v-if="editorError" role="alert" class="whitespace-pre-wrap break-words text-xs text-destructive">
@@ -1117,3 +1117,16 @@ defineExpose({ refresh })
     </Dialog>
   </div>
 </template>
+
+<style scoped>
+@container settings-workbench (min-width: 42rem) {
+  .settings-skill-detail {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .settings-skill-file {
+    min-height: 12rem;
+    resize: none;
+  }
+}
+</style>

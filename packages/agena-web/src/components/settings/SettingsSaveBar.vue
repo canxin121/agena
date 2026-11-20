@@ -31,7 +31,7 @@ const emit = defineEmits<{
 
 <template>
   <div
-    class="flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5 shadow-sm backdrop-blur"
+    class="settings-toolbar justify-between rounded-lg border px-2.5 py-1.5 backdrop-blur"
     :class="[
       dirty ? 'border-amber-500/35 bg-amber-500/[0.06]' : 'border-border/60 bg-background/90',
       sticky ? 'sticky bottom-3 z-20' : '',
@@ -51,7 +51,7 @@ const emit = defineEmits<{
       <span v-else class="text-muted-foreground">{{ $st('All changes are saved.') }}</span>
     </div>
 
-    <div v-if="dirty || saving" class="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
+    <div v-if="dirty || saving" class="settings-toolbar">
       <Button
         class="h-auto min-w-0 whitespace-normal py-2"
         variant="ghost"

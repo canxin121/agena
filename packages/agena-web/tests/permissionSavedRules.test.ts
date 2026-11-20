@@ -23,7 +23,6 @@ function savedRules(
     scope?: 'global' | 'workspace' | 'session' | 'effective'
     sessionId?: string
     workspaceId?: number
-    compact?: boolean
     sessions?: Record<string, { workspace_id?: number | null }>
   } = {},
 ) {
@@ -39,7 +38,7 @@ function savedRules(
   })
   let writeGate: Promise<void> | undefined
   const modules: Record<string, unknown> = {
-    vue,
+    vue: { ...vue, useId: () => 'saved-rules-test' },
     '@remixicon/vue': {},
     '@/lib/api': {
       async apiJson(url: string, options: { method?: string; body?: string } = {}) {
@@ -116,7 +115,6 @@ function savedRules(
   const props = vue.reactive({
     scope: options.scope || 'global',
     sessionId: options.sessionId,
-    compact: options.compact,
   })
   const panel = scope.run(() => module.exports.default!.setup(props, { expose() {} }))!
   return {
@@ -218,9 +216,9 @@ describe('saved native network decisions', () => {
   })
 })
 
-describe('compact saved approval rules', () => {
+describe('saved approval rules', () => {
   test('creation opens on demand and persists independently in the selected scope', async () => {
-    const { panel, calls } = savedRules([], { compact: true })
+    const { panel, calls } = savedRules([])
     expect(panel.createExpanded.value).toBe(false)
     await panel.toggleCreateForm()
     expect(panel.createExpanded.value).toBe(true)
@@ -250,7 +248,7 @@ describe('compact saved approval rules', () => {
   })
 
   test('a rejected creation keeps the expanded form and its values available for retry', async () => {
-    const { panel, calls, rejectWrites } = savedRules([], { compact: true })
+    const { panel, calls, rejectWrites } = savedRules([])
     await panel.toggleCreateForm()
     panel.newToolName.value = 'agena.shell.exec'
     panel.newQualifier.value = 'git status'
@@ -270,7 +268,7 @@ describe('compact saved approval rules', () => {
 
   test.each(['session', 'effective'] as const)('%s exposes saved rules without enabling writes', async (scope) => {
     const currentRule = { ...rule(1, 'tool', 'ask'), scope: 'session', session_id: 1, workspace_id: 7 }
-    const { panel, calls } = savedRules([currentRule], { compact: true, scope, sessionId: '1', workspaceId: 7 })
+    const { panel, calls } = savedRules([currentRule], { scope, sessionId: '1', workspaceId: 7 })
     expect(panel.filteredRules.value).toHaveLength(1)
     expect(panel.canEdit.value).toBe(false)
 
@@ -287,14 +285,11 @@ describe('compact saved approval rules', () => {
   })
 
   test('search and state filtering retain the visible rule and bulk selection semantics', async () => {
-    const { panel } = savedRules(
-      [
-        rule(1, 'tool', 'ask'),
-        { ...rule(2, 'tool'), tool_name: 'agena.fs.read' },
-        { ...rule(3, 'tool'), revoked_at: '2026-01-01T00:00:00Z' },
-      ],
-      { compact: true },
-    )
+    const { panel } = savedRules([
+      rule(1, 'tool', 'ask'),
+      { ...rule(2, 'tool'), tool_name: 'agena.fs.read' },
+      { ...rule(3, 'tool'), revoked_at: '2026-01-01T00:00:00Z' },
+    ])
     panel.query.value = 'agena.shell.exec'
     panel.stateFilter.value = 'active'
     await vue.nextTick()
@@ -378,7 +373,7 @@ describe('compact saved approval rules', () => {
   })
 
   test('pending remembered-rule mutations expose busy until persistence finishes', async () => {
-    const fixture = savedRules([], { compact: true })
+    const fixture = savedRules([])
     fixture.panel.newToolName.value = 'agena.shell.exec'
     const release = fixture.holdWrites()
     const saving = fixture.panel.createRule()

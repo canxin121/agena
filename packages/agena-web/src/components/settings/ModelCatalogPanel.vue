@@ -351,7 +351,7 @@ defineExpose({ refresh: () => load() })
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 min-w-0 flex-col gap-4" data-model-catalog>
+  <div class="settings-viewport" data-model-catalog>
     <div
       v-if="error"
       class="shrink-0 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
@@ -365,17 +365,17 @@ defineExpose({ refresh: () => load() })
     >
       {{ $st('Last refresh issue:') }} {{ failureText }}
     </div>
-    <section class="grid shrink-0 gap-3 rounded-xl border border-border/70 bg-card/30 p-3 sm:p-4">
-      <div class="flex min-w-0 flex-wrap items-center gap-2">
+    <section class="grid shrink-0 gap-2 rounded-lg border border-border/70 bg-card/30 p-2.5">
+      <div class="settings-toolbar">
         <SearchInput
           v-model="query"
-          class="min-w-0 basis-full sm:basis-48 sm:flex-1"
+          class="settings-toolbar-search"
           :placeholder="$st('Search model id, display name, origin, lifecycle, or description')"
           :input-aria-label="$st('Search Model Catalog')"
           @search="search"
           @clear="clearSearch"
         />
-        <div class="min-w-0 flex-1 sm:max-w-48">
+        <div class="min-w-0 flex-[1_1_8rem] max-w-48">
           <OptionPicker
             v-model="origin"
             :options="originOptions"
@@ -416,21 +416,21 @@ defineExpose({ refresh: () => load() })
     </section>
 
     <div
-      class="grid min-w-0 gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(13rem,28%)_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]"
+      class="settings-master-detail settings-viewport-region"
     >
       <section
-        class="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-card/30 lg:min-h-0"
+        class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card/30"
         :aria-label="$st('Catalog models')"
       >
         <div
-          class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/20 px-3 py-3 text-xs"
+          class="settings-toolbar justify-between border-b border-border/60 bg-muted/20 px-2.5 py-2 text-xs"
         >
           <span class="font-medium">{{ $st('Catalog models') }}</span
           ><span class="tabular-nums text-muted-foreground">{{
             $st('{count} shown', { count: visibleItems.length })
           }}</span>
         </div>
-        <div class="min-w-0 p-3 lg:hidden">
+        <div class="settings-stacked-only min-w-0 p-2.5">
           <OptionPicker
             :model-value="selectedModel?.model_id || ''"
             :options="mobileModelOptions"
@@ -441,12 +441,12 @@ defineExpose({ refresh: () => load() })
             @update:model-value="selectedModelId = $event"
           />
         </div>
-        <div class="hidden overflow-y-auto p-2 lg:block lg:min-h-0 lg:max-h-none lg:flex-1">
+        <div class="settings-split-only settings-viewport-scroll p-1.5">
           <button
             v-for="model in visibleItems"
             :key="model.model_id"
             type="button"
-            class="mb-1 grid w-full min-w-0 gap-1 rounded-lg border px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            class="grid w-full min-w-0 gap-0.5 rounded-md border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             :class="
               selectedModel?.model_id === model.model_id
                 ? 'border-primary/25 bg-primary/8'
@@ -498,10 +498,10 @@ defineExpose({ refresh: () => load() })
       <article
         v-if="selectedModel"
         :key="selectedModel.model_id"
-        class="min-w-0 space-y-4 lg:min-h-0 lg:overflow-y-auto lg:pr-1"
+        class="settings-stack settings-viewport-scroll"
         :aria-label="selectedModel.display_name || selectedModel.model_id"
       >
-        <header class="rounded-xl border border-border/70 bg-card/30 p-4 sm:p-5">
+        <header class="rounded-lg border border-border/70 bg-card/30 p-3">
           <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span v-if="selectedModel.origin">{{ selectedModel.origin }}</span
             ><span v-if="selectedModel.lifecycle" class="rounded-md bg-muted/60 px-2 py-0.5">{{
@@ -516,7 +516,7 @@ defineExpose({ refresh: () => load() })
           >
             {{ selectedModel.description }}
           </p>
-          <dl class="mt-4 grid grid-cols-3 gap-3 border-t border-border/60 pt-4">
+          <dl class="settings-control-grid mt-3 border-t border-border/60 pt-2.5">
             <div
               v-for="item in [
                 { label: $st('Context window'), value: selectedModel.context_window_tokens },
@@ -563,7 +563,7 @@ defineExpose({ refresh: () => load() })
                 }}</span>
               </div>
             </div>
-            <dl class="grid gap-3 border-t border-border/50 pt-3 sm:grid-cols-3">
+            <dl class="settings-control-grid border-t border-border/50 pt-2.5">
               <div>
                 <dt class="text-xs text-muted-foreground">{{ $st('Output modalities') }}</dt>
                 <dd class="mt-1 text-sm">
@@ -582,7 +582,7 @@ defineExpose({ refresh: () => load() })
           </div>
         </SettingsCard>
         <SettingsCard :title="$st('Response modes')">
-          <div class="grid gap-4 sm:grid-cols-2">
+          <div class="settings-control-grid">
             <div
               v-for="group in [
                 { label: $st('Thinking modes'), items: modes(selectedModel.thinking_modes, true) },
@@ -609,7 +609,7 @@ defineExpose({ refresh: () => load() })
           :title="$st('Pricing')"
           :description="$st('USD per million tokens. Missing prices are not reported by the catalog.')"
         >
-          <dl class="grid grid-cols-2 gap-4 xl:grid-cols-4">
+          <dl class="settings-control-grid">
             <div v-for="price in priceLabels" :key="price.key" class="min-w-0">
               <dt class="text-xs text-muted-foreground">{{ price.label }}</dt>
               <dd class="mt-1 break-all text-base font-medium tabular-nums">
@@ -633,7 +633,7 @@ defineExpose({ refresh: () => load() })
           </details>
         </SettingsCard>
         <SettingsCard :title="$st('Model information')">
-          <dl class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <dl class="settings-control-grid">
             <div
               v-for="item in [
                 { label: $st('Source'), value: selectedModel.source_label || selectedModel.source },
@@ -652,7 +652,7 @@ defineExpose({ refresh: () => load() })
         <details class="min-w-0 rounded-xl border border-border/70 bg-card/30">
           <summary class="cursor-pointer px-4 py-3 text-sm font-medium">{{ $st('Advanced model details') }}</summary>
           <div class="grid min-w-0 gap-4 border-t border-border/60 p-4">
-            <dl class="grid gap-4 sm:grid-cols-2">
+            <dl class="settings-control-grid">
               <div
                 v-for="item in [
                   { label: $st('Verbosity'), value: yesNo(selectedModel.supports_verbosity) },

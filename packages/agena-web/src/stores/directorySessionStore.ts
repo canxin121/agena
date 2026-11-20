@@ -77,7 +77,7 @@ function stateMapFromAgenaSessions(sessions: UnknownRecord[]): Record<string, Se
   return states
 }
 
-async function fetchAgenaWorkspaces(opts?: {
+export async function fetchAgenaWorkspaces(opts?: {
   limit?: number
   page?: number
   search?: string

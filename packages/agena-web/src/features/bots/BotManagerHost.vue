@@ -6,6 +6,7 @@ import { RiAddLine, RiEditLine, RiArchiveLine, RiCheckLine } from '@remixicon/vu
 import Dialog from '@/components/ui/Dialog.vue'
 import Input from '@/components/ui/Input.vue'
 import Button from '@/components/ui/Button.vue'
+import PromptReferenceList from '@/components/settings/PromptReferenceList.vue'
 import { archiveBot, createBot, emptyBotPersona, getBot, updateBot, type BotPersona, type BotProfile } from '@/lib/bots'
 import { botDraftFields, instructionsBytes, MAX_INSTRUCTIONS_BYTES } from '@/features/bots/draft'
 import BotAvatar from '@/features/bots/BotAvatar.vue'
@@ -16,6 +17,9 @@ import { useBotsStore } from '@/stores/bots'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
+import { availableSavedPrompts } from '@/lib/promptLibrary'
+import { emptyPromptScopeConfig, normalizePromptScopeConfig, type PromptFragment } from '@/lib/promptLayers'
+import { getRuntimeSettingLayer } from '@/lib/runtimeSettings'
 const bots = useBotsStore()
 const ui = useUiStore()
 const toasts = useToastsStore()
@@ -36,6 +40,8 @@ const error = ref('')
 const editing = ref<BotProfile | null>(null)
 const draftName = ref('')
 const persona = ref<BotPersona>(emptyBotPersona())
+const promptOptions = ref<PromptFragment[]>([])
+const promptError = ref('')
 const avatarInput = ref<HTMLInputElement | null>(null)
 const avatarDraft = useBotAvatarDraft()
 const { avatar: draftAvatar, change: avatarChange, loading: avatarLoading, error: avatarError } = avatarDraft
@@ -119,7 +125,7 @@ async function edit(id?: string | null, rename = false) {
     if (profile.archived) throw new Error(t('bot.profiles.archived'))
     editing.value = profile
     draftName.value = profile.name
-    persona.value = { instructions: profile.persona.instructions }
+    persona.value = { ...profile.persona }
     avatarDraft.reset(profile.avatar)
     receipt = null
     managerOpen.value = false
@@ -142,7 +148,11 @@ async function save() {
   saveOwnership = new SaveOwnership(navigationVersion, route.fullPath, ui.activeWorkspaceWindowId)
   const current = editing.value
   const generation = sequence
-  const fields = botDraftFields(draftName.value, persona.value.instructions, avatarChange.value)
+  const base = botDraftFields(draftName.value, persona.value.instructions, avatarChange.value)
+  const fields = {
+    ...base,
+    persona: { ...base.persona, ...(persona.value.prompts ? { prompts: persona.value.prompts } : {}) },
+  }
   try {
     const profile = current
       ? await updateBot(current.id, {
@@ -168,6 +178,29 @@ async function save() {
   } finally {
     if (generation === sequence) busy.value = false
   }
+}
+
+watch(editorOpen, async (open, _, onCleanup) => {
+  if (!open) return
+  const abort = new AbortController()
+  onCleanup(() => abort.abort())
+  promptOptions.value = []
+  promptError.value = ''
+  try {
+    const result = await getRuntimeSettingLayer('global', 'prompts', { signal: abort.signal })
+    if (abort.signal.aborted) return
+    promptOptions.value = availableSavedPrompts(
+      normalizePromptScopeConfig(result.value),
+      emptyPromptScopeConfig(),
+      'global',
+    ).map(({ fragment }) => fragment)
+  } catch (reason) {
+    if (!abort.signal.aborted) promptError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+})
+
+function setBotPrompts(ids: string[], publish = persona.value.prompts?.publish_to_channels === true) {
+  persona.value.prompts = { ids, publish_to_channels: publish }
 }
 function confirmArchive(profile: BotProfile) {
   error.value = ''
@@ -410,6 +443,25 @@ onBeforeUnmount(() => {
         >
           {{ t('bot.profiles.instructionsCount', { count: byteCount, max: MAX_INSTRUCTIONS_BYTES }) }}
         </p>
+      </div>
+      <div v-if="promptOptions.length || persona.prompts?.ids.length || promptError" class="grid min-w-0 gap-2">
+        <span class="text-sm font-medium">{{ $st('Saved prompts') }}</span>
+        <PromptReferenceList
+          :model-value="persona.prompts?.ids ?? []"
+          :options="promptOptions"
+          :disabled="busy"
+          @update:model-value="setBotPrompts($event)"
+        />
+        <label v-if="persona.prompts?.ids.length" class="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            :checked="persona.prompts.publish_to_channels"
+            :disabled="busy"
+            @change="setBotPrompts(persona.prompts.ids, ($event.target as HTMLInputElement).checked)"
+          />
+          {{ $st('Use these prompts in connected channels') }}
+        </label>
+        <p v-if="promptError" role="alert" class="break-words text-xs text-destructive">{{ promptError }}</p>
       </div>
       <p v-if="error" role="alert" class="whitespace-pre-wrap break-words text-sm text-destructive">{{ error }}</p>
       <button

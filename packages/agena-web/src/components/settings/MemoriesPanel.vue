@@ -317,8 +317,7 @@ defineExpose({ refresh })
 
 <template>
   <div
-    class="grid min-w-0 items-start gap-4"
-    :class="selectedName ? 'xl:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]' : ''"
+    :class="selectedName ? 'settings-columns' : 'settings-stack'"
   >
     <SettingsCard :title="$st('Memory library')" :icon="RiBookOpenLine" :count="items.length">
       <template #actions
@@ -348,7 +347,7 @@ defineExpose({ refresh })
       <p v-if="editError && !selectedName" role="alert" class="mb-3 break-words text-xs text-destructive">
         {{ editError }}
       </p>
-      <div v-if="items.length" class="mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-muted/20 p-2.5">
+      <div v-if="items.length" class="settings-toolbar mb-2 rounded-md bg-muted/20 px-2.5 py-1.5">
         <label class="flex items-center gap-2 text-xs font-medium"
           ><input
             type="checkbox"
@@ -394,11 +393,11 @@ defineExpose({ refresh })
           $st('Clear filters')
         }}</Button>
       </div>
-      <div v-else class="space-y-2" :class="selectedName ? 'xl:max-h-[36rem] xl:overflow-y-auto' : ''">
+      <div v-else :class="selectedName ? 'settings-list' : 'settings-columns'">
         <div
           v-for="item in filteredItems"
           :key="memoryName(item)"
-          class="flex min-w-0 items-start gap-3 rounded-lg border p-3 transition-colors"
+          class="flex min-w-0 items-start gap-2 rounded-md border p-2.5 transition-colors"
           :class="
             selectedName === memoryName(item)
               ? 'border-primary/30 bg-primary/5'
@@ -450,7 +449,7 @@ defineExpose({ refresh })
         </dl>
       </details>
     </SettingsCard>
-    <div v-if="selectedName && originalMemory" ref="editorElement" class="min-w-0 scroll-mt-4">
+    <div v-if="selectedName && originalMemory" ref="editorElement" class="min-w-0 scroll-mt-20">
       <SettingsCard :title="$st('Edit memory')" :icon="RiEditLine">
         <template #actions
           ><Button variant="ghost" size="sm" :disabled="editBusy" @click="closeEditor">{{
@@ -459,7 +458,7 @@ defineExpose({ refresh })
         >
         <div class="space-y-4">
           <MemoryMetadataView :metadata="originalMemory.metadata" />
-          <div class="grid gap-3 sm:grid-cols-2">
+          <div class="settings-control-grid">
             <label class="min-w-0 space-y-2"
               ><span class="block text-xs font-medium text-muted-foreground">{{ $st('Name') }}</span
               ><Input :model-value="editName" disabled class="font-mono text-sm"

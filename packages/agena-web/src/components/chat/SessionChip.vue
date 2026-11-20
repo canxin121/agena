@@ -7,6 +7,7 @@ import { RiLoader4Line } from '@remixicon/vue'
 import { ref } from 'vue'
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'radix-vue'
 import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
+import { cn } from '@/lib/utils'
 
 defineOptions({ inheritAttrs: false })
 
@@ -16,6 +17,7 @@ const props = defineProps<{
   hint?: string
   open: boolean
   busy?: boolean
+  panelClass?: string
 }>()
 defineEmits<{ (event: 'update:open', value: boolean): void }>()
 const bodyEl = ref<HTMLElement | null>(null)
@@ -68,7 +70,12 @@ function scrollBody(event: KeyboardEvent) {
         :avoid-collisions="true"
         :collision-padding="10"
         sticky="always"
-        class="z-[80] w-[min(92vw,42rem)] rounded-xl border border-border bg-background px-3 py-2 shadow-xl outline-none"
+        :class="
+          cn(
+            'z-[80] w-[min(92vw,42rem)] rounded-xl border border-border bg-background px-3 py-2 shadow-xl outline-none',
+            panelClass,
+          )
+        "
         :aria-label="title"
         data-keyboard-overlay="true"
         data-transcript-chrome="true"

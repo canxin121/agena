@@ -45,7 +45,7 @@ export type SettingsSidebarNavigationNode = {
   // One task may contain several legacy subpages shown as local page tabs.
   relatedViews?: string[]
   // Search can open the matching internal subpage instead of always opening
-  // the group's default (for example API key -> Provider Studio).
+  // the group's default (for example marketplace -> Plugin Marketplace).
   searchTargets?: Array<{ view: string; label: string; keywords: string[] }>
   // A scope row selects one configuration layer of its parent page: it carries
   // both the page view and the scope id, so the row is its own destination.

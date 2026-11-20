@@ -5,11 +5,11 @@ defineProps<{ title: string; description?: string; count?: number; icon?: Compon
 </script>
 
 <template>
-  <section class="min-w-0 rounded-xl border border-border/70 bg-card/30" data-settings-card>
-    <header class="flex flex-wrap items-center gap-3 rounded-t-xl border-b border-border/60 bg-muted/20 px-4 py-3.5">
-      <component :is="icon" v-if="icon" class="h-4.5 w-4.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-      <div class="min-w-0 flex-1 basis-40">
-        <component :is="heading || 'h2'" class="flex items-center gap-2 text-[15px] font-semibold">
+  <section class="settings-card" data-settings-card>
+    <header class="settings-card-heading">
+      <component :is="icon" v-if="icon" class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div class="min-w-0 flex-1 basis-36">
+        <component :is="heading || 'h2'" class="flex flex-wrap items-center gap-1.5 text-sm font-semibold">
           {{ title }}
           <span
             v-if="count !== undefined"
@@ -17,10 +17,34 @@ defineProps<{ title: string; description?: string; count?: number; icon?: Compon
             >{{ count }}</span
           >
         </component>
-        <p v-if="description" class="mt-1 text-xs leading-relaxed text-muted-foreground">{{ description }}</p>
+        <p v-if="description" class="mt-0.5 text-xs leading-snug text-muted-foreground">{{ description }}</p>
       </div>
       <slot name="actions" />
     </header>
-    <div class="min-w-0 p-3 sm:p-4"><slot /></div>
+    <div class="settings-card-body"><slot /></div>
   </section>
 </template>
+
+<style scoped>
+@reference '../../style.css';
+.settings-card {
+  @apply rounded-lg border border-border/70 bg-card/30;
+  container: settings-card / inline-size;
+  min-width: 0;
+}
+.settings-card-heading {
+  @apply rounded-t-lg border-b border-border/60 bg-muted/20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+  min-width: 0;
+  min-height: 2.375rem;
+  padding: 0.375rem 0.75rem;
+  overflow-wrap: anywhere;
+}
+.settings-card-body {
+  min-width: 0;
+  padding: 0.625rem 0.75rem;
+}
+</style>

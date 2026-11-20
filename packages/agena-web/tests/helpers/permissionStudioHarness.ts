@@ -4,6 +4,8 @@ import { transformSync } from 'esbuild'
 import * as vue from 'vue'
 
 import * as permissionConfig from '../../src/lib/permissionConfig'
+import * as permissionProfiles from '../../src/lib/permissionProfiles'
+import { runtimeSettingBaseValue } from '../../src/lib/runtimeSettingLayer'
 import * as permissionNavigation from '../../src/components/settings/permissions/permissionNavigation'
 import { resolveSettingsSessionId } from '../../src/components/settings/settingsSessionScope'
 
@@ -39,6 +41,11 @@ export async function createPermissionEditor(
     sessionId?: string
     windowId?: string
     focused?: boolean
+    resolvedPolicy?: permissionConfig.PermissionConfig
+    legacySettingsMetadata?: boolean
+    profileDraft?: boolean
+    profiles?: permissionProfiles.PermissionCatalog['profiles']
+    factoryProfiles?: permissionProfiles.PermissionCatalog['profiles']
   } = {},
 ) {
   const writes: Array<{ path: string; value: unknown; scope: string }> = []
@@ -46,6 +53,8 @@ export async function createPermissionEditor(
   const reads: string[] = []
   const sessionWrites: Array<{ sessionId: string; value: unknown }> = []
   const sessionPolicies = new Map<string, permissionConfig.PermissionConfig>()
+  const sessionProfiles = new Map<string, string>()
+  const fileProfiles: Partial<Record<PermissionSource, string>> = {}
   const sessionReadGates = new Map<string, Promise<void>>()
   const serverPolicies: Record<PermissionSource, permissionConfig.PermissionConfig> = {
     global: {},
@@ -81,6 +90,8 @@ export async function createPermissionEditor(
   const props = vue.reactive({
     scope: options.scope ?? 'global',
     sessionId: options.sessionId as string | undefined,
+    draftPermission: options.profileDraft ? structuredClone(initial) : undefined,
+    inheritedDraftPermission: options.profileDraft ? structuredClone(inherited) : undefined,
   })
   const messages: Array<[string, string]> = []
   const translate = (key: string, values: Record<string, unknown> = {}) =>
@@ -90,7 +101,8 @@ export async function createPermissionEditor(
     if (failure) throw new Error(failure)
     writes.push({ path, value: structuredClone(value), scope: source })
     const current = saveResponse.current !== undefined ? saveResponse.current : value
-    serverPolicies[source] = structuredClone(current ?? {}) as permissionConfig.PermissionConfig
+    if (path === 'permission_profile') fileProfiles[source] = typeof current === 'string' ? current : undefined
+    else serverPolicies[source] = structuredClone(current ?? {}) as permissionConfig.PermissionConfig
     return { changed: true, current: value ?? null, validated: true, ...structuredClone(saveResponse) }
   }
   const transport = {
@@ -102,7 +114,7 @@ export async function createPermissionEditor(
     },
   }
   const modules: Record<string, unknown> = {
-    vue: { ...vue, onMounted() {}, onBeforeUnmount() {} },
+    vue: { ...vue, onMounted() {}, onBeforeUnmount() {}, useId: () => 'permission-studio-test' },
     'vue-router': {
       onBeforeRouteLeave(guard: typeof routeLeave) {
         routeLeave = guard
@@ -137,21 +149,55 @@ export async function createPermissionEditor(
         if (url.includes('/sessions/')) {
           const sessionId = url.match(/\/sessions\/([^/]+)\//)?.[1] || '1'
           const selected = structuredClone(sessionPolicies.get(sessionId) ?? serverPolicies.session)
-          const effective = structuredClone(sessionPolicies.get(sessionId) ?? serverPolicies.effective)
+          const profile = sessionProfiles.get(sessionId)
+          const effective = profile
+            ? permissionConfig.completePermissionConfig(options.profiles?.[profile]?.permission ?? {})
+            : structuredClone(sessionPolicies.get(sessionId) ?? serverPolicies.effective)
           await sessionReadGates.get(sessionId)
           return {
             execution: {
               selected_permission: selected,
+              permission_profile: profile,
               inherited_permission: structuredClone(parentPolicy),
               effective_permission: effective,
             },
           }
         }
-        const source = new URL(url, 'https://agena.test').pathname.split('/').at(-1)
+        const request = new URL(url, 'https://agena.test')
+        const source = request.pathname.split('/').at(-1)
+        const path = request.searchParams.get('path')
+        if (path === 'access_control')
+          return {
+            value: { profiles: structuredClone(options.profiles ?? {}) },
+            default_value: { profiles: structuredClone(options.factoryProfiles ?? {}) },
+          }
+        const profile = source === 'global' || source === 'workspace' ? fileProfiles[source] : undefined
+        const implicitDefault =
+          source === 'global' &&
+          profile === undefined &&
+          !Object.keys(serverPolicies.global).length &&
+          options.factoryProfiles?.[permissionProfiles.DEFAULT_PERMISSION_PROFILE_ID]
+            ? permissionProfiles.DEFAULT_PERMISSION_PROFILE_ID
+            : undefined
+        const activeProfile = profile ?? implicitDefault
+        if (path === 'permission_profile') return { value: profile ?? null, layer_value: activeProfile ?? null }
         const policy = source === 'global' || source === 'workspace' ? serverPolicies[source] : serverPolicies.effective
         return {
           value: structuredClone(policy),
-          inherited_value: structuredClone(parentPolicy),
+          ...(source === 'global' && !options.legacySettingsMetadata
+            ? { default_value: structuredClone(parentPolicy) }
+            : { inherited_value: structuredClone(parentPolicy) }),
+          ...(activeProfile
+            ? {
+                layer_value: permissionConfig.completePermissionConfig(
+                  options.profiles?.[activeProfile]?.permission ??
+                    options.factoryProfiles?.[activeProfile]?.permission ??
+                    {},
+                ),
+              }
+            : options.resolvedPolicy !== undefined
+              ? { layer_value: structuredClone(options.resolvedPolicy) }
+              : {}),
           config_path: source === 'global' || source === 'workspace' ? options.configPaths?.[source] : undefined,
         }
       },
@@ -173,7 +219,15 @@ export async function createPermissionEditor(
           writes.push({ path: 'permission', value: structuredClone(value), scope: 'session' })
           serverPolicies.session = structuredClone(value) as permissionConfig.PermissionConfig
           sessionPolicies.set(id, structuredClone(value) as permissionConfig.PermissionConfig)
+          sessionProfiles.delete(id)
           return { execution: { selected_permission: structuredClone(serverPolicies.session) } }
+        },
+        async setSessionPermissionProfile(id: string, profile: string | null) {
+          if (saveGate) await saveGate
+          if (failure) throw new Error(failure)
+          if (profile) sessionProfiles.set(id, profile)
+          else sessionProfiles.delete(id)
+          writes.push({ path: 'permission_profile', value: profile, scope: 'session' })
         },
       }),
     },
@@ -185,6 +239,8 @@ export async function createPermissionEditor(
     },
     '@/i18n/settingsText': { settingsText: translate },
     '@/lib/permissionConfig': permissionConfig,
+    '@/lib/permissionProfiles': permissionProfiles,
+    '@/lib/runtimeSettingLayer': { runtimeSettingBaseValue },
     './permissions/permissionNavigation': permissionNavigation,
     './settingsSessionScope': { resolveSettingsSessionId },
   }
@@ -193,7 +249,7 @@ export async function createPermissionEditor(
     const runtimeModules: Record<string, unknown> = {
       '@/lib/api': modules['@/lib/api'],
       './modelConfigurationApi': { notifyModelConfigurationChanged() {} },
-      './resourceSync': { captureResourceObservation: () => ({ scope: 1 }) },
+      './resourceSync': { captureResourceObservation: () => ({ scope: 1 }), invalidateResourcePrefix() {} },
       './runtimeSettingReads': { retireRuntimeSettingReads() {}, readBatchedRuntimeSettingSources() {} },
     }
     new Function('require', 'module', 'exports', runtimeSettingsCompiled)(
@@ -215,7 +271,14 @@ export async function createPermissionEditor(
   new Function('require', 'module', 'exports', compiled)(require, module, module.exports)
   const scope = vue.effectScope()
   scopes.push(scope)
-  const panel = scope.run(() => module.exports.default!.setup(props, { expose() {} }))!
+  const panel = scope.run(() =>
+    module.exports.default!.setup(props, {
+      expose() {},
+      emit(name: string, value: permissionConfig.PermissionConfig) {
+        if (name === 'update:draftPermission') props.draftPermission = value
+      },
+    }),
+  )!
   await panel.load()
   return {
     panel,

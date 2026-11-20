@@ -962,8 +962,8 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="flex min-w-0 flex-col gap-3 lg:h-full lg:min-h-0">
-    <div class="flex flex-wrap items-center justify-between gap-3">
+  <div class="settings-viewport">
+    <div class="settings-toolbar justify-between">
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-live="polite">
         <span>{{ $st('{count} installed', { count: statuses.length }) }}</span>
         <span class="inline-flex items-center gap-1.5">
@@ -980,9 +980,6 @@ defineExpose({ refresh })
         </button>
       </div>
       <div class="flex items-center gap-2">
-        <Button variant="outline" size="sm" @click="browseMarketplace">
-          {{ $st('Browse marketplace') }} <RiArrowRightLine class="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
-        </Button>
         <IconButton
           variant="ghost"
           size="md"
@@ -1015,14 +1012,14 @@ defineExpose({ refresh })
 
     <div
       v-else-if="statuses.length && !selectedPluginId"
-      class="flex min-w-0 flex-col gap-4 lg:min-h-0 lg:flex-1"
+      class="settings-viewport-region flex flex-col gap-2.5"
       data-plugin-workbench
       data-plugin-grid
     >
-      <div class="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+      <div class="settings-toolbar">
         <SearchInput
           v-model="pluginQuery"
-          class="min-w-0 flex-1"
+          class="settings-toolbar-search"
           :placeholder="$st('Search name or purpose')"
           :show-search-button="false"
           :input-aria-label="$st('Search plugins')"
@@ -1031,7 +1028,7 @@ defineExpose({ refresh })
         />
         <OptionPicker
           v-model="stateFilter"
-          class="sm:w-44"
+          class="max-w-full"
           :options="stateOptions"
           :title="$st('State filter')"
           :empty-label="$st('All states')"
@@ -1050,7 +1047,7 @@ defineExpose({ refresh })
       </div>
       <div
         v-if="filteredStatuses.length"
-        class="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] content-start gap-4 p-0.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain"
+        class="settings-viewport-scroll grid grid-cols-[repeat(auto-fill,minmax(min(100%,20rem),1fr))] content-start gap-2.5 p-0.5"
         :aria-label="$st('Configured plugins')"
         data-plugin-list
       >
@@ -1076,18 +1073,18 @@ defineExpose({ refresh })
       </PluginEmptyState>
     </div>
 
-    <div v-else-if="selectedPluginId" class="flex min-w-0 flex-col gap-3 lg:min-h-0 lg:flex-1" data-plugin-workbench>
+    <div v-else-if="selectedPluginId" class="settings-viewport-region flex flex-col gap-2" data-plugin-workbench>
       <div>
         <Button variant="ghost" size="sm" :disabled="settingsSaving" data-plugin-back @click="showPluginList">
           <RiArrowLeftLine class="mr-1.5 h-4 w-4" aria-hidden="true" />{{ $st('Back to plugins') }}
         </Button>
       </div>
       <div
-        class="flex min-w-0 flex-col overflow-clip rounded-xl border border-border/60 lg:min-h-0 lg:flex-1 lg:overflow-hidden"
+        class="settings-viewport-region flex flex-col overflow-clip rounded-lg border border-border/60"
         data-plugin-detail
       >
         <template v-if="selectedStatus">
-          <header class="flex shrink-0 items-start gap-3 px-4 pb-4 pt-5 lg:px-5">
+          <header class="flex shrink-0 items-start gap-2.5 px-3 py-2.5">
             <PluginAvatar :icon="selectedMetadata.icon" />
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -1180,7 +1177,7 @@ defineExpose({ refresh })
             role="tabpanel"
             :aria-labelledby="`${panelId}-tab-${activeTab}`"
             tabindex="0"
-            class="min-w-0 p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overscroll-contain lg:p-5"
+            class="settings-viewport-scroll p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             data-plugin-content
           >
             <PluginEmptyState v-if="detailLoading" :title="$st('Loading plugin details…')" :icon="RiRefreshLine" />
@@ -1192,7 +1189,7 @@ defineExpose({ refresh })
             >
               <Button variant="outline" size="sm" @click="loadSelectedPlugin">{{ $st('Retry') }}</Button>
             </PluginEmptyState>
-            <section v-else-if="activeTab === 'overview'" class="space-y-6">
+            <section v-else-if="activeTab === 'overview'" class="settings-stack">
               <button
                 v-if="diagnosticCount"
                 type="button"
@@ -1206,7 +1203,7 @@ defineExpose({ refresh })
                 }}</span
                 ><RiArrowRightLine class="h-4 w-4 shrink-0" />
               </button>
-              <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <div class="settings-control-grid">
                 <button
                   v-for="action in overviewActions"
                   :key="action.tab"
@@ -1226,7 +1223,7 @@ defineExpose({ refresh })
                 <h3 class="text-xs font-medium text-muted-foreground">{{ $st('About this plugin') }}</h3>
                 <MarkdownRenderer :content="selectedManifest.help" source-path="" />
               </div>
-              <dl class="grid gap-x-6 gap-y-4 border-t border-border/60 pt-4 text-xs sm:grid-cols-2">
+              <dl class="settings-control-grid border-t border-border/60 pt-2.5 text-xs">
                 <div>
                   <dt class="text-muted-foreground">{{ $st('Authors') }}</dt>
                   <dd class="mt-1 break-words">{{ selectedMetadata.authors.join(', ') || $st('Not reported') }}</dd>
@@ -1688,7 +1685,7 @@ defineExpose({ refresh })
                     </div>
                   </div>
 
-                  <dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+                  <dl class="settings-control-grid">
                     <div>
                       <dt class="text-xs text-muted-foreground">{{ $st('Required plugins') }}</dt>
                       <dd class="mt-1 text-sm">{{ selectedActivation?.requires?.join(', ') || $st('None') }}</dd>
@@ -1733,7 +1730,7 @@ defineExpose({ refresh })
 
                   <div
                     v-if="selectedIncomingDependencies.length || selectedOutgoingDependencies.length"
-                    class="grid gap-4 lg:grid-cols-2"
+                    class="settings-columns"
                   >
                     <div v-if="selectedIncomingDependencies.length">
                       <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Depends on') }}</h3>
@@ -1775,7 +1772,7 @@ defineExpose({ refresh })
 
                   <div
                     v-if="selectedServiceImports.length || selectedServiceExports.length"
-                    class="grid gap-4 lg:grid-cols-2"
+                    class="settings-columns"
                   >
                     <div v-if="selectedServiceImports.length">
                       <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Service imports') }}</h3>
@@ -1837,7 +1834,7 @@ defineExpose({ refresh })
                       selectedToolRegistrations.length ||
                       selectedCommandRegistrations.length
                     "
-                    class="grid gap-4 lg:grid-cols-2"
+                    class="settings-columns"
                   >
                     <div v-if="selectedPipelineHandlers.length">
                       <h3 class="text-xs font-medium text-muted-foreground">{{ $st('Typed pipeline handlers') }}</h3>

@@ -9,8 +9,10 @@ import type { Command } from './useChatCommands'
 import type { SkillCatalogEntry } from './skillReferences'
 import type { ComposerExpose } from './composerInput'
 import type { JsonObject } from '@/types/json'
+import type { RequestPerformance } from '@/types/usage'
 import type { usePlanViewer } from './usePlanViewer'
 import type { QueuedMessagePreview } from './queuedMessages'
+import type { ComposerPickerKind } from './composerPickerTypes'
 
 type DynamicRecord = JsonObject
 
@@ -40,6 +42,7 @@ type SessionUsageLike = {
   lastCacheReadTokens?: number | null
   lastCacheInputTokens?: number | null
   lastCacheHitRate?: number | null
+  lastPerformance?: RequestPerformance | null
 }
 
 export type ChatPageViewContext = {
@@ -58,6 +61,7 @@ export type ChatPageViewContext = {
   composerControlsRef: Ref<HTMLElement | null>
   composerPickerRef: Ref<ContainsTargetExpose | null>
   modelTriggerRef: Ref<HTMLElement | null>
+  profileTriggerRef: Ref<HTMLElement | null>
   thinkingTriggerRef: Ref<HTMLElement | null>
   speedTriggerRef: Ref<HTMLElement | null>
   transcriptSearchInputRef: Ref<HTMLInputElement | null>
@@ -190,7 +194,7 @@ export type ChatPageViewContext = {
   canAbort: MaybeRef<boolean>
   abortRun: () => void | Promise<void>
 
-  composerPickerOpen: MaybeRef<null | 'model' | 'thinking' | 'speed'>
+  composerPickerOpen: MaybeRef<null | ComposerPickerKind>
   composerPickerTitle: MaybeRef<string>
   composerPickerSearchable: MaybeRef<boolean>
   composerPickerSearchPlaceholder: MaybeRef<string>
@@ -211,7 +215,7 @@ export type ChatPageViewContext = {
   modelChipLabelMobile: MaybeRef<string>
   modelChipLabel: MaybeRef<string>
   modelStatusLabel: MaybeRef<string>
-  toggleComposerPicker: (kind: 'model' | 'thinking' | 'speed') => void | Promise<void>
+  toggleComposerPicker: (kind: ComposerPickerKind) => void | Promise<void>
   thinkingModeHint: MaybeRef<string>
   thinkingModeChipLabel: MaybeRef<string>
   speedModeHint: MaybeRef<string>

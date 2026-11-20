@@ -1,0 +1,146 @@
+.settings-stack {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 0.75rem;
+}
+
+.settings-columns,
+.settings-master-detail {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 0.75rem;
+}
+
+.settings-columns > *,
+.settings-master-detail > * {
+  min-width: 0;
+}
+
+.settings-columns-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-control-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.5rem 0.75rem;
+}
+
+.settings-control-grid > *,
+.settings-control-grid :is(input, select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-toolbar {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.settings-toolbar-search {
+  min-width: 0;
+  flex: 1 1 min(100%, 14rem);
+}
+
+.settings-list {
+  display: grid;
+  min-width: 0;
+  max-height: min(15rem, 45vh);
+  align-content: start;
+  gap: 0.25rem;
+  overflow-y: auto;
+}
+
+.settings-viewport {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.settings-viewport-region,
+.settings-viewport-scroll {
+  min-width: 0;
+  min-height: 0;
+}
+
+.settings-split-only {
+  display: none;
+}
+
+.settings-field-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.settings-field-row.settings-field-toggle {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+@container settings-card (min-width: 30rem) {
+  .settings-field-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.75fr);
+  }
+}
+
+@container settings-workbench (min-width: 52rem) {
+  .settings-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container settings-workbench (min-width: 42rem) {
+  .settings-master-detail {
+    grid-template-columns: minmax(12rem, 28%) minmax(0, 1fr);
+  }
+
+  .settings-list {
+    max-height: min(34rem, 65vh);
+  }
+
+  .settings-viewport {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .settings-viewport-region {
+    flex: 1;
+  }
+
+  .settings-viewport-region.settings-master-detail {
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .settings-viewport-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .settings-stacked-only {
+    display: none;
+  }
+
+  .settings-split-only {
+    display: block;
+  }
+}
+
+@container settings-workbench (width < 42rem) {
+  .settings-hide-stacked {
+    display: none;
+  }
+}

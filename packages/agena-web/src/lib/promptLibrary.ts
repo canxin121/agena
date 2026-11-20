@@ -34,9 +34,7 @@ export function availableSavedPrompts(
   }
   add(global, 'global')
   if (target !== 'global') add(workspace, 'workspace')
-  return [...items.values()].sort((a, b) =>
-    (a.fragment.title || a.id).localeCompare(b.fragment.title || b.id),
-  )
+  return [...items.values()].sort((a, b) => (a.fragment.title || a.id).localeCompare(b.fragment.title || b.id))
 }
 
 export function nextSavedPromptId(
@@ -66,8 +64,11 @@ export function savedPromptDisplayName(fragment: PromptFragment): string {
 
 export function savedPromptMatches(fragment: PromptFragment, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase()
-  return !needle || [fragment.title, fragment.category || '', fragment.body, fragment.id].some((part) =>
-    part.toLocaleLowerCase().includes(needle),
+  return (
+    !needle ||
+    [fragment.title, fragment.category || '', fragment.body, fragment.id].some((part) =>
+      part.toLocaleLowerCase().includes(needle),
+    )
   )
 }
 
@@ -75,11 +76,65 @@ export function savedPromptIsValid(fragment: PromptFragment): boolean {
   return (
     isValidPromptFragmentId(fragment.id) &&
     fragment.title.trim().length > 0 &&
-    fragment.body.trim().length > 0 &&
+    (fragment.parts?.length ? !fragment.body.trim() : Boolean(fragment.body.trim())) &&
     new TextEncoder().encode(fragment.body).length <= 16 * 1024
   )
 }
 
 export function scopeUsesPrompt(config: PromptScopeConfig, id: string): boolean {
-  return config.order.includes(id) || config.models.some((model) => model.order.includes(id))
+  return (
+    config.order.includes(id) ||
+    config.models.some((model) => model.order.includes(id)) ||
+    [...config.library, ...config.inline, ...config.models.flatMap((model) => model.inline)].some((fragment) =>
+      fragment.parts?.includes(id),
+    )
+  )
+}
+
+export function promptCategories(config: PromptScopeConfig): string[] {
+  return [
+    ...new Set(
+      [
+        ...(config.categories ?? []),
+        ...[...config.library, ...config.inline].map((fragment) => fragment.category ?? ''),
+      ].filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right))
+}
+
+/** Rename a category in place. Removing a category keeps all of its prompts. */
+export function changePromptCategory(config: PromptScopeConfig, previous: string, next: string): PromptScopeConfig {
+  const update = (fragment: PromptFragment) =>
+    previous && fragment.category === previous ? normalizePromptFragment({ ...fragment, category: next }) : fragment
+  return {
+    ...config,
+    categories: [
+      ...new Set([...(config.categories ?? []).filter((name) => name !== previous), ...(next ? [next] : [])]),
+    ],
+    library: config.library.map(update),
+    inline: config.inline.map(update),
+  }
+}
+
+/** Preview the linked bodies in their saved order, before applying runtime conditions. */
+export function composedPromptText(root: PromptFragment, prompts: ReadonlyMap<string, PromptFragment>): string | null {
+  const bodies: string[] = []
+  const ancestors = new Set<string>()
+  let remaining = 256
+  function visit(fragment: PromptFragment): boolean {
+    if (ancestors.has(fragment.id) || ancestors.size >= 32 || !remaining--) return false
+    if (!fragment.parts?.length) {
+      const body = fragment.body.trim()
+      if (body) bodies.push(body)
+      return true
+    }
+    ancestors.add(fragment.id)
+    for (const id of fragment.parts) {
+      const part = prompts.get(id)
+      if (!part || !visit(part)) return false
+    }
+    ancestors.delete(fragment.id)
+    return true
+  }
+  return visit(root) ? bodies.join('\n\n') : null
 }

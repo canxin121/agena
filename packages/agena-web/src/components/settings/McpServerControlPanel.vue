@@ -161,7 +161,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="min-w-0 space-y-4">
+  <div class="settings-stack">
     <div
       v-if="error"
       class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
@@ -180,14 +180,9 @@ onMounted(() => {
       }}<Button variant="outline" size="sm" @click="refresh()">{{ $st('Refresh') }}</Button>
     </div>
 
-    <fieldset v-else :disabled="loading || saving" class="min-w-0 space-y-4">
+    <fieldset v-else :disabled="loading || saving" class="settings-columns">
       <SettingsCard
         :title="$st('MCP surface')"
-        :description="
-          $st(
-            'Manage the live MCP surface served by the connected Agena server process. Web and TUI are control clients; they do not run a second MCP server.',
-          )
-        "
       >
         <template #actions
           ><IconButton
@@ -199,7 +194,7 @@ onMounted(() => {
             @click="refresh()"
             ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" /></IconButton
         ></template>
-        <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div class="settings-toolbar mb-2.5 justify-between">
           <div>
             <div class="mt-1 text-xs text-muted-foreground">
               {{ mcpSurfaceSummary }}
@@ -228,9 +223,6 @@ onMounted(() => {
           <ul v-if="control.warnings.length" class="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
             <li v-for="warning in control.warnings" :key="warning">{{ warning }}</li>
           </ul>
-          <div v-else class="mt-1 text-muted-foreground">
-            {{ $st('The MCP server is ready at the connection address above.') }}
-          </div>
         </div>
       </SettingsCard>
       <SettingsCard :title="$st('Connection addresses')">
@@ -256,6 +248,7 @@ onMounted(() => {
         </div>
       </SettingsCard>
       <SettingsCard
+        class="settings-columns-wide"
         :title="$st('OAuth authorization')"
         :description="
           $st(
@@ -263,7 +256,7 @@ onMounted(() => {
           )
         "
       >
-        <div class="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div class="settings-control-grid">
           <div class="rounded-md border border-border/60 p-3 text-xs">
             <div class="text-muted-foreground">{{ $st('Password status') }}</div>
             <div class="mt-1 font-medium">
@@ -308,7 +301,7 @@ onMounted(() => {
         </p>
       </SettingsCard>
 
-      <details v-if="oauth" class="min-w-0 rounded-xl border border-border/60 bg-card/30 p-4">
+      <details v-if="oauth" class="settings-columns-wide min-w-0 rounded-lg border border-border/60 bg-card/30 p-3">
         <summary class="cursor-pointer text-sm font-medium">{{ $st('OAuth discovery endpoints') }}</summary>
         <dl class="mt-3 grid gap-2 text-xs">
           <div
@@ -320,10 +313,10 @@ onMounted(() => {
               ['Revocation endpoint', oauth?.revocationEndpoint],
             ]"
             :key="entry[0]"
-            class="grid gap-1 sm:grid-cols-[13rem_minmax(0,1fr)]"
+            class="settings-toolbar"
           >
-            <dt class="text-muted-foreground">{{ entry[0] }}</dt>
-            <dd class="flex min-w-0 items-start gap-2">
+            <dt class="flex-[0_1_12rem] text-muted-foreground">{{ entry[0] }}</dt>
+            <dd class="flex min-w-0 flex-[1_1_16rem] items-center gap-2">
               <code class="min-w-0 flex-1 break-all">{{ entry[1] || '—' }}</code>
               <Button
                 v-if="entry[1]"

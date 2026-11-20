@@ -1,14 +1,37 @@
 import { isValidPromptFragmentId, normalizePromptFragment, normalizePromptLayer } from './promptLayers'
 import type { PromptLayer } from './promptLayers'
+import { canonicalPermissionToolEntries, mergeNetworkPermissionConfig, parsePermissionConfig } from './permissionConfig'
+import type { RuntimeSettingsLayer, RuntimeSettingsReadBundle } from './runtimeSettings'
 import type { JsonObject } from '../types/json'
+
+export const DEFAULT_PRIMARY_AGENT_PROFILE = 'main'
+export const DEFAULT_SUBAGENT_PROFILE = 'worker'
+
+export function resolveAgentProfileDefault(
+  bundle: RuntimeSettingsReadBundle | null | undefined,
+  layer: RuntimeSettingsLayer,
+  fallback: string,
+): { name: string; source: 'global' | 'workspace' | 'builtin' } {
+  const workspace = bundle?.workspace?.value
+  const global = bundle?.global?.value
+  if (layer === 'workspace' && typeof workspace === 'string')
+    return { name: workspace || fallback, source: 'workspace' }
+  if (typeof global === 'string') return { name: global || fallback, source: 'global' }
+  return { name: fallback, source: 'builtin' }
+}
+
+export type AgentProfileMode = 'primary' | 'subagent' | 'all'
 
 export type AgentProfileConfig = {
   title?: string
   description?: string
   extends?: string | null
+  mode?: AgentProfileMode | null
+  hidden?: boolean | null
   model?: JsonObject | null
   prompts?: Partial<PromptLayer>
   permission?: JsonObject
+  permission_profile?: string
   max_turns?: number | null
 }
 
@@ -24,6 +47,89 @@ export function agentProfileCatalog(value: unknown): AgentProfileCatalog {
 /** A workspace entry replaces the entire global entry with the same name. */
 export function mergedAgentProfiles(global: AgentProfileCatalog, workspace: AgentProfileCatalog): AgentProfileCatalog {
   return { ...global, ...workspace }
+}
+
+/** Factory defaults survive a partial override; file scopes still replace named raw entries. */
+export function withBuiltinAgentProfiles(
+  builtins: AgentProfileCatalog,
+  overrides: AgentProfileCatalog,
+): AgentProfileCatalog {
+  const catalog = agentProfileCatalog(builtins)
+  for (const [name, overlay] of Object.entries(overrides)) {
+    const base = catalog[name]
+    if (!base) {
+      catalog[name] = agentProfileCatalog({ [name]: overlay })[name]!
+      continue
+    }
+    const next = { ...base }
+    if (overlay.title) next.title = overlay.title
+    if (overlay.description) next.description = overlay.description
+    for (const key of ['mode', 'hidden', 'extends', 'model', 'max_turns'] as const) {
+      if (overlay[key] != null) Object.assign(next, { [key]: overlay[key] })
+    }
+    if (overlay.permission_profile) {
+      next.permission_profile = overlay.permission_profile
+      next.permission = overlay.permission
+    } else if (overlay.permission)
+      next.permission = mergeAgentProfilePermission(base.permission || {}, overlay.permission)
+    if (overlay.prompts) {
+      const layer = normalizePromptLayer(overlay.prompts)
+      if (layer.mode === 'replace') next.prompts = layer
+      else {
+        const previous = normalizePromptLayer(base.prompts)
+        previous.order = previous.order.filter((id) => !layer.disabled.includes(id))
+        previous.inline = previous.inline.filter((fragment) => !layer.disabled.includes(fragment.id))
+        previous.disabled = [...new Set([...previous.disabled, ...layer.disabled])]
+        for (const id of layer.order) previous.order = [...previous.order.filter((old) => old !== id), id]
+        for (const fragment of layer.inline)
+          previous.inline = [...previous.inline.filter((old) => old.id !== fragment.id), fragment]
+        next.prompts = previous
+      }
+    }
+    catalog[name] = next
+  }
+  return catalog
+}
+
+/** Merge profile permissions with the runtime's per-field and per-rule precedence. */
+export function mergeAgentProfilePermission(base: JsonObject, overlay: JsonObject): JsonObject {
+  const object = (value: unknown): JsonObject =>
+    value && typeof value === 'object' && !Array.isArray(value) ? (value as JsonObject) : {}
+  function normalize(permission: JsonObject): JsonObject {
+    try {
+      return parsePermissionConfig(permission)
+    } catch {
+      return permission
+    }
+  }
+  const lower = normalize(base)
+  const upper = normalize(overlay)
+  const result = { ...lower }
+  if (upper.approval_model != null) result.approval_model = upper.approval_model
+  if (upper.network != null) {
+    try {
+      result.network = mergeNetworkPermissionConfig(lower.network, upper.network)
+    } catch {
+      result.network = upper.network
+    }
+  }
+  for (const section of ['path', 'tools'] as const) {
+    if (upper[section] == null) continue
+    const previous = object(lower[section])
+    const patch = object(upper[section])
+    const next = { ...previous, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value != null)) }
+    for (const key of section === 'path' ? ['rules'] : ['names', 'plugin', 'rules']) {
+      if (patch[key] == null) continue
+      const parent = object(previous[key])
+      const local = object(patch[key])
+      next[key] =
+        section === 'tools' && key !== 'plugin'
+          ? Object.fromEntries([...canonicalPermissionToolEntries(parent), ...canonicalPermissionToolEntries(local)])
+          : { ...parent, ...local }
+    }
+    result[section] = next
+  }
+  return result
 }
 
 export function isValidAgentProfileName(name: string): boolean {
@@ -94,4 +200,40 @@ export function agentProfileReferences(catalog: AgentProfileCatalog, name: strin
   return Object.entries(catalog)
     .filter(([, profile]) => profile.extends === name)
     .map(([id]) => id)
+}
+
+/** Resolve presentation and selection metadata using the same parent-first rules as the server. */
+export function agentProfileMetadata(
+  catalog: AgentProfileCatalog,
+  name: string,
+): { mode: AgentProfileMode; hidden: boolean } {
+  let mode: AgentProfileMode = 'all'
+  let hidden = false
+  for (const id of agentProfileLineage(catalog, name)) {
+    const profile = catalog[id]!
+    if (profile.mode != null) {
+      if (!['primary', 'subagent', 'all'].includes(profile.mode))
+        throw new Error(`Invalid profile mode: ${profile.mode}`)
+      mode = profile.mode
+    }
+    if (profile.hidden != null) {
+      if (typeof profile.hidden !== 'boolean') throw new Error('Profile hidden must be a boolean')
+      hidden = profile.hidden
+    }
+  }
+  return { mode, hidden }
+}
+
+/** Hidden affects model discovery, while people can select every compatible role. */
+export function selectableAgentProfiles(catalog: AgentProfileCatalog, subagent: boolean): AgentProfileCatalog {
+  return Object.fromEntries(
+    Object.entries(catalog).filter(([id]) => {
+      try {
+        const { mode } = agentProfileMetadata(catalog, id)
+        return mode === 'all' || mode === (subagent ? 'subagent' : 'primary')
+      } catch {
+        return false
+      }
+    }),
+  )
 }

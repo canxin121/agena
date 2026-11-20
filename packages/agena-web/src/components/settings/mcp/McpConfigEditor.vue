@@ -168,11 +168,11 @@ watch(() => props.modelValue, (next) => {
         <details class="rounded-xl border border-border/70 bg-muted/10">
           <summary class="cursor-pointer px-3 py-3 text-xs font-medium">{{ st('Timeouts and tool filters') }}</summary>
           <div class="space-y-4 border-t border-border/60 p-3">
-            <div class="grid gap-3 sm:grid-cols-2">
+            <div class="settings-control-grid">
               <label class="space-y-1.5" :for="fieldId + '-connect'"><span class="text-xs font-medium">{{ st('Connect timeout (ms)') }}</span><input :id="fieldId + '-connect'" type="number" min="1" max="300000" :value="value('/timeouts/connect_ms') ?? 20000" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @input="set('/timeouts/connect_ms', Number(($event.target as HTMLInputElement).value))" /></label>
               <label class="space-y-1.5" :for="fieldId + '-request'"><span class="text-xs font-medium">{{ st('Request timeout (ms)') }}</span><input :id="fieldId + '-request'" type="number" min="1" max="3600000" :value="value('/timeouts/request_ms') ?? 60000" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" @input="set('/timeouts/request_ms', Number(($event.target as HTMLInputElement).value))" /></label>
             </div>
-            <div class="grid gap-3 sm:grid-cols-2">
+            <div class="settings-control-grid">
               <label class="space-y-1.5" :for="fieldId + '-include'"><span class="text-xs font-medium">{{ st('Include tool patterns') }}</span><textarea :id="fieldId + '-include'" :value="listText('/tools/include')" rows="3" class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs" spellcheck="false" @input="setList('/tools/include', ($event.target as HTMLTextAreaElement).value)" /></label>
               <label class="space-y-1.5" :for="fieldId + '-exclude'"><span class="text-xs font-medium">{{ st('Exclude tool patterns') }}</span><textarea :id="fieldId + '-exclude'" :value="listText('/tools/exclude')" rows="3" class="w-full rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs" spellcheck="false" @input="setList('/tools/exclude', ($event.target as HTMLTextAreaElement).value)" /></label>
             </div>

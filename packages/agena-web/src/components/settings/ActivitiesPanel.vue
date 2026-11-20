@@ -358,16 +358,16 @@ defineExpose({ refresh })
         /></IconButton>
       </div>
     </template>
-    <div class="mb-4 flex min-w-0 flex-col gap-3 xl:flex-row xl:items-center">
+    <div class="settings-toolbar mb-2.5">
       <SearchInput
         v-model="searchQuery"
-        class="min-w-0 flex-1"
+        class="settings-toolbar-search"
         :placeholder="$st('Search activities')"
         :input-aria-label="$st('Search activities')"
         :show-search-button="false"
       />
       <div
-        class="grid grid-cols-3 gap-1 rounded-lg border border-border/50 bg-muted/20 p-1"
+        class="grid min-w-0 grid-cols-3 gap-1 rounded-md border border-border/50 bg-muted/20 p-0.5"
         :aria-label="$st('Status')"
       >
         <button
@@ -409,13 +409,13 @@ defineExpose({ refresh })
         $st('Clear filters')
       }}</Button>
     </div>
-    <div v-else class="space-y-3">
+    <div v-else class="settings-columns">
       <article
         v-for="activity in sortedActivities"
         :key="activityId(activity)"
-        class="min-w-0 rounded-xl border border-border/60 bg-background/30 p-3 sm:p-4"
+        class="min-w-0 rounded-lg border border-border/60 bg-background/30 p-2.5"
       >
-        <div class="flex min-w-0 flex-wrap items-start gap-3">
+        <div class="flex min-w-0 flex-wrap items-start gap-2">
           <div class="min-w-0 flex-1">
             <h3 class="break-words text-sm font-semibold">{{ activity.title || activityId(activity) }}</h3>
             <p v-if="activity.description" class="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
@@ -446,7 +446,7 @@ defineExpose({ refresh })
         >
           {{ activity.message }}
         </p>
-        <div class="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-3">
+        <div class="settings-toolbar mt-2 justify-between border-t border-border/50 pt-2">
           <details class="min-w-0 text-[11px] text-muted-foreground">
             <summary class="cursor-pointer">{{ $st('Details') }}</summary>
             <code class="mt-2 block break-all">{{ activityId(activity) }}</code>

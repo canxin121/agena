@@ -1,17 +1,28 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
-import SettingsCard from './SettingsCard.vue'
+import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
+import SettingsDisclosureRow from './SettingsDisclosureRow.vue'
+import SettingsSaveBar from './SettingsSaveBar.vue'
 import Button from '@/components/ui/Button.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
 import { confirmAction } from '@/lib/appConfirm'
-import { parsePermissionConfig, permissionConfigErrorMessage } from '@/lib/permissionConfig'
+import {
+  completePermissionConfig,
+  parsePermissionConfig,
+  permissionConfigErrorMessage,
+  type PermissionConfig,
+} from '@/lib/permissionConfig'
 import {
   emptyPermissionCatalog,
   permissionCatalogSnapshot,
   permissionGrantFromFields,
   permissionGroupReferences,
   permissionIdentityKey,
+  permissionProfileDisplayName,
   permissionProfileReferences,
+  permissionUserKey,
   readPermissionCatalog,
   type PermissionCatalog,
   type PermissionCatalogSection,
@@ -32,18 +43,22 @@ type Draft = {
   actor: string
   resource: string
   group_ids: string[]
-  permissionText: string
+  permission: PermissionConfig
+  complete: boolean
   grantEnabled: boolean
   toolsText: string
   hostsText: string
-  mcpText: string
+  mcp: Array<{ server: string; tools: string }>
   privateMemory: boolean
   sourceWorkspace: boolean
 }
 
+const props = defineProps<{ assignments?: boolean }>()
 const catalog = ref<PermissionCatalog>(emptyPermissionCatalog())
+const factoryProfiles = ref<PermissionCatalog['profiles']>({})
+const profiles = computed(() => ({ ...factoryProfiles.value, ...catalog.value.profiles }))
 const revision = ref<string | undefined>()
-const section = ref<PermissionCatalogSection>('profiles')
+const section = ref<PermissionCatalogSection>(props.assignments ? 'groups' : 'profiles')
 const selectedId = ref<string | null>(null)
 const draft = ref<Draft | null>(null)
 const original = ref('')
@@ -53,15 +68,21 @@ const loaded = ref(false)
 const saving = ref(false)
 const error = ref('')
 const saved = ref(false)
+const PermissionStudioPanel = defineAsyncComponent(() => import('./PermissionStudioPanel.vue'))
+const permissionEditors = ref<{ pendingRule: boolean; applyPendingRule: () => boolean }[]>([])
+const editorKey = ref(0)
 let generation = 0
 
 const tabs = computed(() => [
-  { id: 'profiles' as const, label: st('Permission profiles') },
   { id: 'groups' as const, label: st('User groups') },
   { id: 'users' as const, label: st('Users') },
   { id: 'conversations' as const, label: st('Conversations') },
 ])
-const dirty = computed(() => draft.value !== null && JSON.stringify(draft.value) !== original.value)
+const dirty = computed(
+  () =>
+    draft.value !== null &&
+    (JSON.stringify(draft.value) !== original.value || permissionEditors.value[0]?.pendingRule === true),
+)
 const identityFields = computed(() => [
   { key: 'platform' as const, label: st('Platform') },
   { key: 'tenant' as const, label: st('Tenant ID') },
@@ -73,9 +94,9 @@ const identityFields = computed(() => [
 const entries = computed(() => {
   switch (section.value) {
     case 'profiles':
-      return Object.entries(catalog.value.profiles).map(([id, profile]) => ({
+      return Object.entries(profiles.value).map(([id, profile]) => ({
         id,
-        title: profile.name || id,
+        title: permissionProfileDisplayName(id, profile),
         detail: profile.description || id,
       }))
     case 'groups':
@@ -86,9 +107,9 @@ const entries = computed(() => {
       }))
     case 'users':
       return catalog.value.users.map((user) => ({
-        id: permissionIdentityKey(user, user.actor),
+        id: permissionUserKey(user),
         title: user.actor,
-        detail: [user.platform, user.tenant, user.account].join(' / '),
+        detail: [user.platform, user.tenant, user.account, user.resource].filter(Boolean).join(' / '),
       }))
     case 'conversations':
       return catalog.value.conversations.map((conversation) => ({
@@ -100,11 +121,32 @@ const entries = computed(() => {
 })
 const filteredEntries = computed(() => {
   const query = search.value.trim().toLowerCase()
-  return entries.value.filter((entry) =>
-    [entry.id, entry.title, entry.detail].some((text) => text.toLowerCase().includes(query)),
-  )
+  return entries.value
+    .filter(
+      (entry) =>
+        (selectedId.value === entry.id && dirty.value) ||
+        [entry.id, entry.title, entry.detail].some((text) => text.toLowerCase().includes(query)),
+    )
+    .sort(
+      (left, right) =>
+        Number(Object.hasOwn(factoryProfiles.value, right.id)) -
+          Number(Object.hasOwn(factoryProfiles.value, left.id)) || left.title.localeCompare(right.title),
+    )
 })
-const profileOptions = computed(() => Object.entries(catalog.value.profiles))
+const rows = computed(() => {
+  const items = filteredEntries.value.map((entry) => ({ ...entry, key: entry.id, open: selectedId.value === entry.id }))
+  if (draft.value && selectedId.value === null) {
+    items.unshift({
+      id: '',
+      key: '',
+      open: true,
+      title: draft.value.name || (props.assignments ? st('New assignment') : st('New permission profile')),
+      detail: draft.value.id,
+    })
+  }
+  return items
+})
+const profileOptions = computed(() => Object.entries(profiles.value))
 const groupOptions = computed(() => Object.entries(catalog.value.groups).sort((a, b) => a[1].priority - b[1].priority))
 const profileUsage = computed(() =>
   selectedId.value && section.value === 'profiles'
@@ -128,17 +170,19 @@ function blankDraft(): Draft {
     actor: '',
     resource: '',
     group_ids: [],
-    permissionText: '{}',
+    permission: {},
+    complete: false,
     grantEnabled: false,
     toolsText: '',
     hostsText: '',
-    mcpText: '{}',
+    mcp: [],
     privateMemory: false,
     sourceWorkspace: false,
   }
 }
 
 function showEntry(id: string | null) {
+  editorKey.value++
   selectedId.value = id
   saved.value = false
   if (id === null) {
@@ -149,15 +193,20 @@ function showEntry(id: string | null) {
   const next = blankDraft()
   next.id = id
   if (section.value === 'profiles') {
-    const profile = catalog.value.profiles[id]
+    const profile = profiles.value[id]
     if (!profile) return showEntry(null)
     next.name = profile.name
     next.description = profile.description || ''
-    next.permissionText = JSON.stringify(profile.permission || {}, null, 2)
-    next.grantEnabled = Boolean(profile.grant)
+    next.complete = profile.complete === true
+    next.permission = parsePermissionConfig(profile.permission)
+    if (next.complete) next.permission = completePermissionConfig(next.permission)
+    next.grantEnabled = next.complete || Boolean(profile.grant)
     next.toolsText = (profile.grant?.tools || []).join('\n')
     next.hostsText = (profile.grant?.network_hosts || []).join('\n')
-    next.mcpText = JSON.stringify(profile.grant?.mcp_tools || {}, null, 2)
+    next.mcp = Object.entries(profile.grant?.mcp_tools || {}).map(([server, tools]) => ({
+      server,
+      tools: tools.join('\n'),
+    }))
     next.privateMemory = profile.grant?.private_memory || false
     next.sourceWorkspace = profile.grant?.source_workspace || false
   } else if (section.value === 'groups') {
@@ -165,12 +214,12 @@ function showEntry(id: string | null) {
     if (!group) return showEntry(null)
     Object.assign(next, { name: group.name, priority: group.priority, profile_id: group.profile_id || '' })
   } else if (section.value === 'users') {
-    const user = catalog.value.users.find((item) => permissionIdentityKey(item, item.actor) === id)
+    const user = catalog.value.users.find((item) => permissionUserKey(item) === id)
     if (!user) return showEntry(null)
     Object.assign(next, user, {
       group_ids: [...user.group_ids],
       profile_id: user.profile_id || '',
-      permissionText: JSON.stringify(user.overrides || {}, null, 2),
+      permission: parsePermissionConfig(user.overrides),
     })
   } else {
     const conversation = catalog.value.conversations.find((item) => permissionIdentityKey(item, item.resource) === id)
@@ -200,11 +249,10 @@ async function load() {
     const response = await getRuntimeSettingLayer('global', 'access_control')
     if (token !== generation) return
     catalog.value = readPermissionCatalog(response.value)
+    factoryProfiles.value = readPermissionCatalog(response.default_value).profiles
     revision.value = response.revision
     loaded.value = true
-    showEntry(
-      entries.value.some((entry) => entry.id === selectedId.value) ? selectedId.value : (entries.value[0]?.id ?? null),
-    )
+    showEntry(entries.value.some((entry) => entry.id === selectedId.value) ? selectedId.value : null)
   } catch (reason) {
     if (token === generation) error.value = permissionConfigErrorMessage(reason, st)
   } finally {
@@ -221,7 +269,7 @@ async function selectSection(next: PermissionCatalogSection) {
   section.value = next
   search.value = ''
   error.value = ''
-  showEntry(entries.value[0]?.id ?? null)
+  showEntry(null)
 }
 
 async function selectEntry(id: string) {
@@ -230,18 +278,31 @@ async function selectEntry(id: string) {
   showEntry(id)
 }
 
+async function toggleEntry(id: string) {
+  if (id && id !== selectedId.value) return selectEntry(id)
+  if (await canDiscard()) showEntry(null)
+}
+
 async function addEntry(copy = false) {
   if (!(await canDiscard())) return
-  const next = copy && draft.value ? { ...draft.value, group_ids: [...draft.value.group_ids] } : blankDraft()
+  const next: Draft = copy && draft.value ? JSON.parse(JSON.stringify(draft.value)) : blankDraft()
   if (section.value === 'profiles' || section.value === 'groups') {
     next.id = (section.value === 'profiles' ? 'profile-' : 'group-') + crypto.randomUUID()
     if (copy) next.name = st('{name} copy', { name: next.name })
   }
+  if (section.value === 'profiles') setComplete(next)
+  editorKey.value++
   selectedId.value = null
   draft.value = next
   original.value = ''
   error.value = ''
   saved.value = false
+}
+
+function setComplete(entry: Draft) {
+  entry.complete = true
+  entry.grantEnabled = true
+  entry.permission = completePermissionConfig(entry.permission)
 }
 
 function updatedCatalog(): { value: PermissionCatalog; id: string } {
@@ -263,13 +324,34 @@ function updatedCatalog(): { value: PermissionCatalog; id: string } {
   let id = d.id.trim()
   if (section.value === 'profiles' || section.value === 'groups') {
     if (!id || !d.name.trim()) throw new Error(st('Enter an ID and a name.'))
-    if (selectedId.value === null && Object.hasOwn(next[section.value], id))
+    if (selectedId.value === null && Object.hasOwn(section.value === 'profiles' ? profiles.value : next.groups, id))
       throw new Error(st('This ID already exists.'))
   }
   if (section.value === 'profiles') {
-    const permission = parsePermissionConfig(JSON.parse(d.permissionText))
+    const permission = parsePermissionConfig(d.complete ? completePermissionConfig(d.permission) : d.permission)
+    const grants = d.mcp.map(
+      ({ server, tools }) =>
+        [
+          server.trim(),
+          tools
+            .split(/\r?\n/)
+            .map((tool) => tool.trim())
+            .filter(Boolean),
+        ] as const,
+    )
+    if (
+      d.grantEnabled &&
+      (new Set(grants.map(([server]) => server)).size !== grants.length || grants.some(([server]) => !server))
+    )
+      throw new Error(st('Enter a distinct server ID for each MCP grant.'))
     const grant = d.grantEnabled
-      ? permissionGrantFromFields(d.toolsText, d.hostsText, JSON.parse(d.mcpText), d.privateMemory, d.sourceWorkspace)
+      ? permissionGrantFromFields(
+          d.toolsText,
+          d.hostsText,
+          Object.fromEntries(grants),
+          d.privateMemory,
+          d.sourceWorkspace,
+        )
       : undefined
     if (grant === null) throw new Error(st('MCP grants must map server IDs to lists of tool names.'))
     next.profiles = {
@@ -277,8 +359,9 @@ function updatedCatalog(): { value: PermissionCatalog; id: string } {
       [id]: {
         name: d.name.trim(),
         description: d.description.trim(),
-        revision: (selectedId.value ? next.profiles[selectedId.value]?.revision || 0 : 0) + 1,
+        revision: (selectedId.value ? profiles.value[selectedId.value]?.revision || 0 : 0) + 1,
         permission,
+        ...(d.complete ? { complete: true } : {}),
         ...(grant ? { grant } : {}),
       },
     }
@@ -292,14 +375,15 @@ function updatedCatalog(): { value: PermissionCatalog; id: string } {
     const user = {
       ...identity,
       actor: d.actor.trim(),
+      ...(d.resource.trim() ? { resource: d.resource.trim() } : {}),
       group_ids: [...d.group_ids],
       ...(d.profile_id ? { profile_id: d.profile_id } : {}),
-      overrides: parsePermissionConfig(JSON.parse(d.permissionText)),
+      overrides: parsePermissionConfig(d.permission),
     }
-    id = permissionIdentityKey(user, user.actor)
-    if (next.users.some((item) => permissionIdentityKey(item, item.actor) === id && id !== selectedId.value))
+    id = permissionUserKey(user)
+    if (next.users.some((item) => permissionUserKey(item) === id && id !== selectedId.value))
       throw new Error(st('This identity already has a configuration.'))
-    const index = next.users.findIndex((item) => permissionIdentityKey(item, item.actor) === selectedId.value)
+    const index = next.users.findIndex((item) => permissionUserKey(item) === selectedId.value)
     if (index < 0) next.users.push(user)
     else next.users[index] = user
   } else {
@@ -338,6 +422,7 @@ async function persist(next: PermissionCatalog, id: string | null) {
 
 async function save() {
   if (saving.value || !draft.value) return
+  if (permissionEditors.value[0]?.applyPendingRule() === false) return
   saving.value = true
   error.value = ''
   saved.value = false
@@ -353,11 +438,13 @@ async function save() {
 
 async function removeEntry() {
   if (saving.value || selectedId.value === null) return
+  if (section.value === 'profiles' && Object.hasOwn(factoryProfiles.value, selectedId.value)) return
   if (profileUsage.value.length) {
     error.value = st('This entry is in use. Reassign or remove its bindings before deleting it.')
     return
   }
   const id = selectedId.value
+  const targetSection = section.value
   if (
     !(await confirmAction({
       title: st('Delete configuration?'),
@@ -367,14 +454,14 @@ async function removeEntry() {
     }))
   )
     return
+  if (saving.value || selectedId.value !== id || section.value !== targetSection) return
   saving.value = true
   error.value = ''
   try {
     const next = readPermissionCatalog(catalog.value as unknown as JsonValue)
     if (section.value === 'profiles') delete next.profiles[id]
     else if (section.value === 'groups') delete next.groups[id]
-    else if (section.value === 'users')
-      next.users = next.users.filter((user) => permissionIdentityKey(user, user.actor) !== id)
+    else if (section.value === 'users') next.users = next.users.filter((user) => permissionUserKey(user) !== id)
     else next.conversations = next.conversations.filter((item) => permissionIdentityKey(item, item.resource) !== id)
     await persist(next, null)
   } catch (reason) {
@@ -404,107 +491,107 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-4" :aria-busy="loading || saving">
-    <SettingsCard
-      :title="$st('Permission profiles & users')"
-      :description="
-        $st('Manage reusable permissions and assign them to groups, people, and conversations across platforms.')
-      "
+  <section class="settings-stack min-w-0" :aria-busy="loading || saving" data-permission-profiles>
+    <div v-if="assignments" class="settings-toolbar" role="group" :aria-label="$st('Permission assignments')">
+      <Button
+        v-for="tab in tabs"
+        :key="tab.id"
+        size="sm"
+        :variant="section === tab.id ? 'secondary' : 'ghost'"
+        :disabled="saving"
+        :aria-pressed="section === tab.id"
+        @click="selectSection(tab.id)"
+        >{{ tab.label }}</Button
+      >
+    </div>
+    <div class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
+      <SearchInput
+        v-model="search"
+        class="settings-toolbar-search"
+        :placeholder="$st('Search configurations')"
+        :input-aria-label="$st('Search configurations')"
+      />
+      <span v-if="saved && !dirty" class="text-xs text-muted-foreground" role="status">{{ $st('Saved') }}</span>
+      <IconButton
+        size="sm"
+        :loading="loading"
+        :disabled="saving"
+        :aria-label="$st('Refresh')"
+        :tooltip="$st('Refresh')"
+        @click="refresh"
+      >
+        <RiRefreshLine class="h-4 w-4" aria-hidden="true" />
+      </IconButton>
+      <Button size="sm" :disabled="loading || saving || !loaded" @click="addEntry()">
+        <RiAddLine class="me-1.5 h-4 w-4" aria-hidden="true" />
+        {{ assignments ? $st('Add') : $st('New permission profile') }}
+      </Button>
+    </div>
+    <p
+      v-if="error && !dirty"
+      class="break-words rounded-md border border-destructive/40 p-2.5 text-sm text-destructive"
+      role="alert"
     >
-      <p class="mb-3 text-xs text-muted-foreground">
-        {{
-          $st(
-            'Global configuration. Identity fields match exact platform, tenant, bot account, and sender or conversation IDs.',
-          )
-        }}
-      </p>
-      <details class="mb-4 rounded-md border border-border/60 p-3 text-xs text-muted-foreground">
-        <summary class="cursor-pointer font-medium text-foreground">{{ $st('How permissions combine') }}</summary>
-        <p class="mt-2">
-          {{
-            $st(
-              'Order: existing permissions → conversation default → groups from lowest to highest priority → user profile → personal overrides. Existing permission ceilings still apply.',
-            )
-          }}
-        </p>
-        <p class="mt-2">
-          {{
-            $st(
-              'Groups with the same priority must agree on overlapping settings. Conflicts and missing references are rejected when saving.',
-            )
-          }}
-        </p>
-      </details>
-      <div class="mb-4 flex flex-wrap gap-2" :aria-label="$st('Permission configuration categories')">
-        <Button
-          v-for="tab in tabs"
-          :key="tab.id"
-          size="sm"
-          :variant="section === tab.id ? 'secondary' : 'ghost'"
-          :disabled="saving"
-          :aria-pressed="section === tab.id"
-          @click="selectSection(tab.id)"
-          >{{ tab.label }}</Button
-        >
-      </div>
-      <div v-if="error" class="mb-3 rounded-md border border-destructive/40 p-3 text-xs text-destructive" role="alert">
-        {{ error }}
-      </div>
-      <p v-if="saved && !dirty" class="mb-3 text-xs text-muted-foreground" role="status">{{ $st('Saved') }}</p>
-      <p v-if="loading" class="text-sm text-muted-foreground" role="status">{{ $st('Loading…') }}</p>
-      <div v-else-if="loaded" class="grid min-w-0 gap-4 lg:grid-cols-[minmax(12rem,0.8fr)_minmax(0,1.6fr)]">
-        <div class="grid min-w-0 content-start gap-3">
-          <div class="flex flex-wrap justify-between gap-2">
-            <Button size="sm" variant="outline" :disabled="saving" @click="addEntry()">{{ $st('Add') }}</Button>
-            <Button size="sm" variant="ghost" :disabled="saving" @click="refresh">{{ $st('Refresh') }}</Button>
-          </div>
-          <input
-            v-model="search"
-            :aria-label="$st('Search configurations')"
-            :placeholder="$st('Search configurations')"
-            class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm"
-          />
-          <div class="grid max-h-[35rem] min-w-0 gap-1 overflow-auto">
-            <button
-              v-for="entry in filteredEntries"
-              :key="entry.id"
-              type="button"
-              :disabled="saving"
-              :aria-pressed="selectedId === entry.id"
-              class="min-w-0 rounded-md border px-3 py-2 text-left hover:bg-muted/50"
-              :class="selectedId === entry.id ? 'border-primary/50 bg-primary/10' : 'border-border/60'"
-              @click="selectEntry(entry.id)"
-            >
-              <span class="block truncate text-sm font-medium">{{ entry.title }}</span>
-              <span class="block truncate text-xs text-muted-foreground">{{ entry.detail }}</span>
-            </button>
-            <p v-if="!filteredEntries.length" class="p-2 text-sm text-muted-foreground">
-              {{ $st('No configurations found. Add one to get started.') }}
-            </p>
-          </div>
-        </div>
-
-        <form v-if="draft" class="grid min-w-0 content-start gap-3" @submit.prevent="save">
+      {{ error }}
+    </p>
+    <p v-if="loading && !loaded" class="text-sm text-muted-foreground" role="status">{{ $st('Loading…') }}</p>
+    <div v-else-if="loaded" class="grid min-w-0 gap-2">
+      <SettingsDisclosureRow
+        v-for="row in rows"
+        :key="row.key"
+        :data-permission-profile="row.id"
+        class="min-w-0 bg-card/30"
+        body-class="min-w-0 p-2.5"
+        :disabled="loading || saving"
+        :open="row.open"
+        :label="row.title"
+        :summary="row.detail"
+        :tone="row.open && dirty ? 'dirty' : 'default'"
+        @toggle="toggleEntry(row.id)"
+      >
+        <template #leading>
+          <span
+            class="hidden h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/30 text-muted-foreground sm:flex"
+          >
+            <RiShieldCheckLine class="h-4 w-4" aria-hidden="true" />
+          </span>
+        </template>
+        <template v-if="row.open && selectedId !== null" #actions>
+          <Button v-if="section === 'profiles'" size="sm" variant="ghost" :disabled="saving" @click="addEntry(true)">{{
+            $st('Copy profile')
+          }}</Button>
+          <IconButton
+            v-if="section !== 'profiles' || !Object.hasOwn(factoryProfiles, row.id)"
+            size="sm"
+            :disabled="saving || profileUsage.length > 0"
+            :aria-label="$st('Delete')"
+            :tooltip="$st('Delete')"
+            @click="removeEntry"
+          >
+            <RiDeleteBinLine class="h-4 w-4 text-destructive" aria-hidden="true" />
+          </IconButton>
+        </template>
+        <template v-if="row.open && draft">
           <fieldset :disabled="saving" class="grid min-w-0 gap-3">
-            <template v-if="section === 'profiles' || section === 'groups'">
-              <label class="grid gap-1 text-xs text-muted-foreground">
+            <div v-if="section === 'profiles' || section === 'groups'" class="settings-control-grid">
+              <label class="grid min-w-0 gap-1 text-xs text-muted-foreground">
                 {{ $st('ID') }}
                 <input
                   v-model="draft.id"
                   :readonly="selectedId !== null"
                   required
-                  class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                  class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                 />
               </label>
-              <label class="grid gap-1 text-xs text-muted-foreground">
+              <label class="grid min-w-0 gap-1 text-xs text-muted-foreground">
                 {{ $st('Name') }}
                 <input
                   v-model="draft.name"
                   required
-                  class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                  class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                 />
               </label>
-            </template>
+            </div>
 
             <template v-if="section === 'users' || section === 'conversations'">
               <p class="text-xs text-muted-foreground">
@@ -514,7 +601,7 @@ defineExpose({ refresh })
                   )
                 }}
               </p>
-              <div class="grid gap-3 sm:grid-cols-2">
+              <div class="settings-control-grid">
                 <label
                   v-for="field in identityFields"
                   :key="field.key"
@@ -524,6 +611,13 @@ defineExpose({ refresh })
                   <input
                     v-model="draft[field.key]"
                     required
+                    class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+                  />
+                </label>
+                <label v-if="section === 'users'" class="grid gap-1 text-xs text-muted-foreground">
+                  {{ $st('Conversation ID (optional)') }}
+                  <input
+                    v-model="draft.resource"
                     class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                   />
                 </label>
@@ -572,7 +666,7 @@ defineExpose({ refresh })
                   {{ section === 'conversations' ? $st('Choose a permission profile.') : $st('Inherit') }}
                 </option>
                 <option v-for="[id, profile] in profileOptions" :key="id" :value="id">
-                  {{ profile.name || id }} · {{ id }}
+                  {{ permissionProfileDisplayName(id, profile) }} · {{ id }}
                 </option>
               </select>
             </label>
@@ -586,40 +680,40 @@ defineExpose({ refresh })
               />
             </label>
 
-            <label
-              v-if="section === 'profiles' || section === 'users'"
-              class="grid gap-1 text-xs text-muted-foreground"
+            <Button
+              v-if="section === 'profiles' && !draft.complete"
+              type="button"
+              size="sm"
+              variant="outline"
+              class="justify-self-start"
+              @click="setComplete(draft)"
             >
-              {{
-                section === 'profiles' ? $st('Permission rules (JSON)') : $st('Personal permission overrides (JSON)')
-              }}
-              <textarea
-                v-model="draft.permissionText"
-                rows="10"
-                spellcheck="false"
-                class="min-h-40 w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground"
-              />
-              <span>{{
-                $st(
-                  'Uses the existing path, network, tools, and approval_model permission fields. Leave an empty object to inherit.',
-                )
-              }}</span>
-            </label>
+              {{ $st('Convert to complete configuration') }}
+            </Button>
+            <PermissionStudioPanel
+              v-if="section === 'profiles' || section === 'users'"
+              :key="editorKey"
+              ref="permissionEditors"
+              v-model:draft-permission="draft.permission"
+              :standalone-draft="draft.complete"
+              :draft-disabled="saving"
+            />
 
-            <template v-if="section === 'profiles'">
-              <label class="flex items-center gap-2 text-sm">
+            <details v-if="section === 'profiles'" class="grid min-w-0 gap-2 rounded-md border border-border/60 p-2.5">
+              <summary class="cursor-pointer text-sm font-medium">{{ $st('Channel capabilities') }}</summary>
+              <label v-if="!draft.complete" class="mt-2 flex items-center gap-2 text-sm">
                 <input v-model="draft.grantEnabled" type="checkbox" />{{
                   $st('Set channel capabilities for this profile')
                 }}
               </label>
-              <p class="text-xs text-muted-foreground">
+              <p v-if="!draft.complete" class="mt-2 text-xs text-muted-foreground">
                 {{
                   $st(
                     'An unset capability grant inherits the earlier grant. When enabled, this profile replaces it. Granted tools still pass permission checks.',
                   )
                 }}
               </p>
-              <div v-if="draft.grantEnabled" class="grid gap-3 rounded-md border border-border/60 p-3">
+              <div v-if="draft.grantEnabled" class="mt-2 grid min-w-0 gap-2.5">
                 <label class="grid gap-1 text-xs text-muted-foreground">
                   {{ $st('Granted tool IDs') }}
                   <textarea
@@ -629,16 +723,35 @@ defineExpose({ refresh })
                     class="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground"
                   />
                 </label>
-                <label class="grid gap-1 text-xs text-muted-foreground">
-                  {{ $st('MCP tool grants (JSON)') }}
-                  <textarea
-                    v-model="draft.mcpText"
-                    rows="4"
-                    spellcheck="false"
-                    class="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground"
-                  />
-                  <span>{{ $st('Map each MCP server ID to an array of allowed tool names.') }}</span>
-                </label>
+                <div v-for="(grant, index) in draft.mcp" :key="index" class="settings-toolbar items-end">
+                  <label class="grid min-w-0 flex-1 gap-1 text-xs text-muted-foreground">
+                    {{ $st('MCP server ID') }}
+                    <input
+                      v-model="grant.server"
+                      class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground"
+                    />
+                  </label>
+                  <label class="grid min-w-0 flex-1 gap-1 text-xs text-muted-foreground">
+                    {{ $st('Allowed MCP tools') }}
+                    <textarea
+                      v-model="grant.tools"
+                      rows="2"
+                      :placeholder="$st('One tool name per line.')"
+                      class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground"
+                    />
+                  </label>
+                  <Button type="button" size="sm" variant="ghost" @click="draft.mcp.splice(index, 1)">{{
+                    $st('Remove')
+                  }}</Button>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  class="justify-self-start"
+                  @click="draft.mcp.push({ server: '', tools: '' })"
+                  >{{ $st('Add MCP grant') }}</Button
+                >
                 <label class="grid gap-1 text-xs text-muted-foreground">
                   {{ $st('Allowed network hosts') }}
                   <textarea
@@ -657,39 +770,31 @@ defineExpose({ refresh })
                   }}</label
                 >
               </div>
-            </template>
+            </details>
           </fieldset>
-
-          <p v-if="profileUsage.length" class="text-xs text-muted-foreground">
+          <p v-if="profileUsage.length" class="mt-2 text-xs text-muted-foreground">
             {{ $st('Used by {count} bindings. Reassign them before deleting.', { count: profileUsage.length }) }}
           </p>
-          <div class="flex flex-wrap gap-2">
-            <Button type="submit" size="sm" :disabled="saving || !dirty">{{
-              saving ? $st('Saving…') : $st('Save')
-            }}</Button>
-            <Button
-              v-if="section === 'profiles'"
-              type="button"
-              size="sm"
-              variant="outline"
-              :disabled="saving"
-              @click="addEntry(true)"
-              >{{ $st('Copy profile') }}</Button
-            >
-            <Button
-              v-if="selectedId !== null"
-              type="button"
-              size="sm"
-              variant="ghost"
-              :disabled="saving || profileUsage.length > 0"
-              @click="removeEntry"
-              >{{ $st('Delete') }}</Button
-            >
-          </div>
-        </form>
-        <p v-else class="p-3 text-sm text-muted-foreground">{{ $st('Select an entry to edit.') }}</p>
-      </div>
-      <Button v-else-if="!loading" size="sm" variant="outline" @click="load">{{ $st('Retry') }}</Button>
-    </SettingsCard>
-  </div>
+        </template>
+      </SettingsDisclosureRow>
+      <p
+        v-if="!rows.length && !loading"
+        class="rounded-md border border-dashed border-border/60 p-3 text-sm text-muted-foreground"
+      >
+        {{ $st('No configurations found. Add one to get started.') }}
+      </p>
+    </div>
+    <Button v-else-if="!loading" size="sm" variant="outline" @click="load">{{ $st('Retry') }}</Button>
+    <SettingsSaveBar
+      v-if="dirty || saving"
+      :dirty="dirty"
+      :saving="saving"
+      :disabled="loading"
+      :save-disabled="(section === 'profiles' || section === 'groups') && (!draft?.id.trim() || !draft.name.trim())"
+      :error="error"
+      sticky
+      @save="save"
+      @discard="showEntry(selectedId)"
+    />
+  </section>
 </template>

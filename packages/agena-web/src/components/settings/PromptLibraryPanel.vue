@@ -1,346 +1,442 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine } from '@remixicon/vue'
-
-import SettingsCard from './SettingsCard.vue'
 import Button from '@/components/ui/Button.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import Input from '@/components/ui/Input.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
+import { settingsText as st } from '@/i18n/settingsText'
 import { confirmAction } from '@/lib/appConfirm'
+import { listBots } from '@/lib/bots'
 import {
-  emptyPromptScopeConfig,
+  MAX_PROMPT_TOTAL_BYTES,
   normalizePromptFragment,
   normalizePromptScopeConfig,
-  promptScopeConfigIsEmpty,
+  promptFragmentBodyBytes,
   type PromptFragment,
   type PromptScopeConfig,
 } from '@/lib/promptLayers'
 import {
+  availableSavedPrompts,
+  changePromptCategory,
+  composedPromptText,
   nextSavedPromptId,
+  promptCategories,
   savedPromptDisplayName,
   savedPromptIsValid,
   savedPromptMatches,
   scopeUsesPrompt,
 } from '@/lib/promptLibrary'
-import { deleteRuntimeSetting, getRuntimeSettingLayer, setRuntimeSetting } from '@/lib/runtimeSettings'
-import { settingsText as st } from '@/i18n/settingsText'
+import { readRuntimeSettingSources, setRuntimeSetting, type RuntimeSettingsReadBundle } from '@/lib/runtimeSettings'
 import { useDirectoryStore } from '@/stores/directory'
+import PromptReferenceList from './PromptReferenceList.vue'
 
-const props = defineProps<{ scope: string }>()
+const props = defineProps<{ scope: 'global' | 'workspace' }>()
 const directory = useDirectoryStore()
-const source = computed<'global' | 'workspace'>(() => (props.scope === 'workspace' ? 'workspace' : 'global'))
-const globalConfig = ref<PromptScopeConfig>(emptyPromptScopeConfig())
-const workspaceConfig = ref<PromptScopeConfig>(emptyPromptScopeConfig())
-const baseline = computed(() => (source.value === 'global' ? globalConfig.value : workspaceConfig.value))
-const selectedId = ref('')
-const draft = ref<PromptFragment | null>(null)
-const draftOrigin = ref<'library' | 'inline' | 'new'>('library')
-const original = ref('')
-const search = ref('')
-const categoryFilter = ref('')
+const sources = ref<RuntimeSettingsReadBundle | null>(null)
+const botReferences = ref<string[]>([])
 const loading = ref(false)
 const saving = ref(false)
-const loaded = ref(false)
 const error = ref('')
+const search = ref('')
+const filter = ref<string | null>('')
+const category = ref('')
+const categoryName = ref('')
+const selected = ref('')
+const draft = ref<PromptFragment | null>(null)
+const origin = ref<'library' | 'inline' | 'new'>('new')
+const composing = ref(false)
+const original = ref('')
 let generation = 0
 
-const entries = computed(() => [
-  ...baseline.value.library.map((fragment) => ({ fragment, origin: 'library' as const })),
-  ...baseline.value.inline.map((fragment) => ({ fragment, origin: 'inline' as const })),
-])
-const categories = computed(() =>
-  [...new Set(entries.value.map(({ fragment }) => fragment.category?.trim()).filter((value): value is string => !!value))]
-    .sort((a, b) => a.localeCompare(b)),
+const global = computed(() => normalizePromptScopeConfig(sources.value?.global.value))
+const workspace = computed(() => normalizePromptScopeConfig(sources.value?.workspace.value))
+const current = computed(() => (props.scope === 'global' ? global.value : workspace.value))
+const options = computed(() =>
+  availableSavedPrompts(global.value, workspace.value, props.scope).map(({ fragment }) => fragment),
 )
-const filtered = computed(() =>
-  entries.value.filter(({ fragment }) =>
-    (!categoryFilter.value || (fragment.category || '') === categoryFilter.value) &&
-    savedPromptMatches(fragment, search.value),
+const entries = computed(() =>
+  [...current.value.library, ...current.value.inline].sort((a, b) =>
+    savedPromptDisplayName(a).localeCompare(savedPromptDisplayName(b)),
   ),
 )
-const dirty = computed(
-  () => draft.value !== null && (draftOrigin.value === 'new' || JSON.stringify(draft.value) !== original.value),
+const categories = computed(() => promptCategories(current.value))
+const filtered = computed(() =>
+  entries.value.filter(
+    (prompt) =>
+      (filter.value === null ? !prompt.category : !filter.value || filter.value === prompt.category) &&
+      savedPromptMatches(prompt, search.value),
+  ),
 )
-const valid = computed(() => draft.value !== null && savedPromptIsValid(draft.value))
-const used = computed(() => {
-  const id = selectedId.value
-  return !!id && (scopeUsesPrompt(globalConfig.value, id) || scopeUsesPrompt(workspaceConfig.value, id))
-})
+const components = computed(() => options.value.filter((prompt) => prompt.id !== selected.value))
+const preview = computed(() =>
+  draft.value && composing.value
+    ? composedPromptText(draft.value, new Map(components.value.map((prompt) => [prompt.id, prompt])))
+    : null,
+)
+const exceedsBudget = computed(
+  () => preview.value !== null && promptFragmentBodyBytes(preview.value) > MAX_PROMPT_TOTAL_BYTES,
+)
+const valid = computed(
+  () =>
+    !!draft.value &&
+    savedPromptIsValid(draft.value) &&
+    (!composing.value || (draft.value.parts?.length && preview.value !== null && !exceedsBudget.value)),
+)
+const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== original.value)
+const categoryDirty = computed(() => categoryName.value !== category.value)
+const busy = computed(() => loading.value || saving.value)
+const uses = computed(
+  () =>
+    scopeUsesPrompt(current.value, selected.value) ||
+    (props.scope === 'global' &&
+      (scopeUsesPrompt(workspace.value, selected.value) || botReferences.value.includes(selected.value))),
+)
 
-function beginEditing(fragment: PromptFragment, origin: 'library' | 'inline' | 'new') {
-  draft.value = normalizePromptFragment(fragment)
-  draftOrigin.value = origin
+function show(prompt?: PromptFragment) {
+  selected.value = prompt?.id ?? ''
+  draft.value = prompt ? normalizePromptFragment(prompt) : null
   original.value = JSON.stringify(draft.value)
-  selectedId.value = fragment.id
-  error.value = ''
+  origin.value = current.value.inline.some((item) => item.id === selected.value) ? 'inline' : 'library'
+  composing.value = Boolean(prompt?.parts?.length)
 }
 
-async function canDiscard(): Promise<boolean> {
+function selectCategory(name: string) {
+  category.value = name
+  categoryName.value = name
+}
+
+async function canDiscard(includeCategory = true) {
   if (saving.value) return false
-  if (!dirty.value) return true
+  if (!dirty.value && (!includeCategory || !categoryDirty.value)) return true
   return confirmAction({
     title: st('Discard unsaved changes?'),
-    description: st('You have unsaved changes.'),
     confirmText: st('Discard changes'),
     cancelText: st('Keep editing'),
   })
 }
 
-async function load(preferId = selectedId.value) {
-  const revision = ++generation
+async function load(prefer = selected.value) {
+  const token = ++generation
   loading.value = true
-  loaded.value = false
   error.value = ''
   try {
-    const [global, workspace] = await Promise.all([
-      getRuntimeSettingLayer('global', 'prompts'),
-      getRuntimeSettingLayer('workspace', 'prompts'),
+    const [data, bots] = await Promise.all([
+      readRuntimeSettingSources('prompts'),
+      props.scope === 'global' ? listBots().catch(() => null) : null,
     ])
-    if (generation !== revision) return
-    globalConfig.value = normalizePromptScopeConfig(global.value)
-    workspaceConfig.value = normalizePromptScopeConfig(workspace.value)
-    const config = source.value === 'global' ? globalConfig.value : workspaceConfig.value
-    const items = [
-      ...config.library.map((fragment) => ({ fragment, origin: 'library' as const })),
-      ...config.inline.map((fragment) => ({ fragment, origin: 'inline' as const })),
-    ]
-    const chosen = items.find(({ fragment }) => fragment.id === preferId) || items[0]
-    if (chosen) beginEditing(chosen.fragment, chosen.origin)
-    else {
-      draft.value = null
-      selectedId.value = ''
-      original.value = ''
-      draftOrigin.value = 'library'
-    }
-    loaded.value = true
+    if (token !== generation) return
+    sources.value = data
+    botReferences.value = bots?.items.flatMap((bot) => bot.persona.prompts?.ids ?? []) ?? []
+    show(entries.value.find((prompt) => prompt.id === prefer) ?? entries.value[0])
+    if (filter.value && !categories.value.includes(filter.value)) filter.value = ''
+    selectCategory(categories.value.includes(category.value) ? category.value : '')
   } catch (reason) {
-    if (generation === revision) error.value = reason instanceof Error ? reason.message : String(reason)
+    if (token === generation) {
+      sources.value = null
+      error.value = reason instanceof Error ? reason.message : String(reason)
+    }
   } finally {
-    if (generation === revision) loading.value = false
+    if (token === generation) loading.value = false
   }
 }
 
-async function selectPrompt(id: string) {
-  if (selectedId.value === id || !(await canDiscard())) return
-  const entry = entries.value.find(({ fragment }) => fragment.id === id)
-  if (entry) beginEditing(entry.fragment, entry.origin)
+async function choose(prompt: PromptFragment) {
+  if (!(await canDiscard(false))) return
+  error.value = ''
+  show(prompt)
 }
 
-async function addPrompt() {
-  if (!(await canDiscard())) return
-  const id = nextSavedPromptId(source.value, globalConfig.value, workspaceConfig.value)
-  beginEditing(
-    { id, title: '', category: '', body: '', when: { models: [], requires_tools: null } },
-    'new',
+async function create(composition: boolean) {
+  if (!(await canDiscard(false))) return
+  show(
+    normalizePromptFragment({
+      id: nextSavedPromptId(props.scope, global.value, workspace.value),
+      category: filter.value,
+    }),
   )
+  origin.value = 'new'
+  composing.value = composition
+  error.value = ''
 }
 
-function updateField(field: 'title' | 'category' | 'body', value: string) {
-  if (draft.value) draft.value = { ...draft.value, [field]: value }
-}
-
-function updateModels(value: string) {
-  if (!draft.value) return
-  draft.value = {
-    ...draft.value,
-    when: { ...draft.value.when, models: value.split(',').map((item) => item.trim()).filter(Boolean) },
-  }
-}
-
-function updateTools(value: string) {
-  if (!draft.value) return
-  draft.value = {
-    ...draft.value,
-    when: { ...draft.value.when, requires_tools: value === '' ? null : value === 'true' },
-  }
-}
-
-/** Merge into the current config, never overwrite its active layers/model overlays. */
-async function persist(change: 'save' | 'delete') {
-  if (!draft.value || saving.value || (change === 'save' && !valid.value)) return
+async function persist(next: PromptScopeConfig, prefer: string) {
+  const token = generation
+  const scope = props.scope
+  const base = sources.value?.[scope]
+  if (!base || busy.value) return false
   saving.value = true
   error.value = ''
   try {
-    const selected = { ...draft.value, when: { ...draft.value.when } }
-    const latest = normalizePromptScopeConfig((await getRuntimeSettingLayer(source.value, 'prompts')).value)
-    if (
-      JSON.stringify(latest.library) !== JSON.stringify(baseline.value.library) ||
-      JSON.stringify(latest.inline) !== JSON.stringify(baseline.value.inline)
-    ) {
-      throw new Error(st('Saved prompts changed elsewhere. Refresh and try again.'))
+    if (base.revision === undefined)
+      throw new Error(st('The configuration revision is missing. Refresh and try again.'))
+    const response = await setRuntimeSetting('prompts', next, { expected_revision: base.revision }, scope)
+    if (token !== generation || !sources.value) return false
+    sources.value = {
+      ...sources.value,
+      [scope]: { ...base, value: response.current ?? next, revision: response.after_revision },
     }
-    const next: PromptScopeConfig = { ...latest }
-    const field = draftOrigin.value === 'inline' ? 'inline' : 'library'
-    if (change === 'delete' && draftOrigin.value === 'new') {
-      draft.value = null
-      selectedId.value = ''
-      return
-    }
-    if (change === 'delete' && used.value) {
-      throw new Error(st('Remove this prompt from active layers before deleting it.'))
-    }
-    const items = [...next[field]]
-    const index = items.findIndex((item) => item.id === selected.id)
-    if (change === 'delete') {
-      if (index >= 0) items.splice(index, 1)
-    } else if (index >= 0) items[index] = normalizePromptFragment(selected)
-    else items.push(normalizePromptFragment(selected))
-    next[field] = items
-    if (promptScopeConfigIsEmpty(next)) {
-      await deleteRuntimeSetting('prompts', undefined, source.value)
-    } else {
-      await setRuntimeSetting('prompts', next, undefined, source.value)
-    }
-    await load(change === 'delete' ? '' : selected.id)
+    show(entries.value.find((prompt) => prompt.id === prefer))
+    return true
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
+    if (token === generation) error.value = reason instanceof Error ? reason.message : String(reason)
+    return false
   } finally {
     saving.value = false
   }
 }
 
-async function removePrompt() {
-  if (!draft.value || saving.value) return
-  if (draftOrigin.value === 'new') {
-    draft.value = null
-    selectedId.value = ''
-    return
-  }
-  if (used.value) {
-    error.value = st('Remove this prompt from active layers before deleting it.')
-    return
-  }
+async function savePrompt() {
+  if (!draft.value || !valid.value) return
+  const field = origin.value === 'inline' ? 'inline' : 'library'
+  const entry = normalizePromptFragment({ ...draft.value, title: draft.value.title.trim() })
+  const list = current.value[field]
+  await persist(
+    {
+      ...current.value,
+      [field]:
+        origin.value === 'new' ? [...list, entry] : list.map((prompt) => (prompt.id === entry.id ? entry : prompt)),
+    },
+    entry.id,
+  )
+}
+
+async function deletePrompt() {
+  if (origin.value === 'new') return show()
+  if (!draft.value || uses.value || busy.value) return
+  const id = selected.value
+  const token = generation
   const confirmed = await confirmAction({
     title: st('Delete saved prompt?'),
-    description: st('Other sessions may still reference this prompt. Deleting it could break their instructions.'),
     confirmText: st('Delete'),
     cancelText: st('Cancel'),
   })
-  if (confirmed) await persist('delete')
+  if (!confirmed || token !== generation || id !== selected.value) return
+  if (props.scope === 'global') {
+    try {
+      const bots = await listBots()
+      if (token !== generation || id !== selected.value) return
+      botReferences.value = bots.items.flatMap((bot) => bot.persona.prompts?.ids ?? [])
+    } catch (reason) {
+      if (token === generation) error.value = reason instanceof Error ? reason.message : String(reason)
+      return
+    }
+    if (uses.value) return
+  }
+  const field = origin.value === 'inline' ? 'inline' : 'library'
+  await persist({ ...current.value, [field]: current.value[field].filter((prompt) => prompt.id !== id) }, '')
+}
+
+async function saveCategory(remove = false) {
+  const previous = category.value
+  const name = remove ? '' : categoryName.value.trim()
+  const token = generation
+  if (remove ? !previous : !name || name === previous) return
+  if (name && categories.value.includes(name)) {
+    error.value = st('A category with this name already exists.')
+    return
+  }
+  if (!(await canDiscard(false)) || token !== generation) return
+  if (
+    remove &&
+    !(await confirmAction({
+      title: st('Delete prompt category?'),
+      description: st('Prompts in this category will become uncategorized.'),
+      confirmText: st('Delete'),
+      cancelText: st('Cancel'),
+    }))
+  )
+    return
+  if (token !== generation || previous !== category.value) return
+  if (
+    await persist(changePromptCategory(current.value, previous, name), origin.value === 'new' ? '' : selected.value)
+  ) {
+    if (filter.value === previous) filter.value = name
+    selectCategory(name)
+  }
 }
 
 async function refresh() {
   if (await canDiscard()) await load()
 }
-defineExpose({ refresh })
 
-watch(source, () => { void load('') })
+defineExpose({ refresh, canDiscard, dirty, categoryDirty, saving })
 watch(
-  () => directory.currentDirectory,
+  () => [props.scope, props.scope === 'workspace' ? directory.currentDirectory : null],
   () => {
-    if (source.value === 'workspace') void load('')
+    void load('')
   },
 )
-onMounted(() => { void load('') })
-onBeforeUnmount(() => { generation += 1 })
-onBeforeRouteUpdate(async (to, from) => {
-  if (to.path === from.path && to.query.view === from.query.view) return canDiscard()
-  return canDiscard()
+onMounted(() => {
+  void load('')
 })
-onBeforeRouteLeave(canDiscard)
+onBeforeUnmount(() => {
+  generation++
+})
 </script>
 
 <template>
-  <div class="grid min-w-0 gap-4" :aria-busy="loading || saving">
-    <SettingsCard :title="$st('Saved prompt library')" :description="$st('Create, organize, and reuse prompts without managing fragment IDs.')">
-      <div v-if="error" class="mb-3 rounded-md border border-destructive/40 p-3 text-xs text-destructive" role="alert">{{ error }}</div>
-      <p v-if="loading" class="text-sm text-muted-foreground" role="status">{{ $st('Loading…') }}</p>
-      <div v-else-if="loaded" class="grid min-w-0 gap-4 md:grid-cols-[minmax(12rem,0.8fr)_minmax(0,1.6fr)]">
-        <div class="grid min-w-0 content-start gap-3">
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-sm font-medium">{{ $st('Saved prompts') }} ({{ entries.length }})</span>
-            <div class="flex gap-1">
-              <Button size="sm" variant="ghost" :disabled="saving" @click="refresh">
-                <RiRefreshLine class="h-4 w-4" /><span class="sr-only">{{ $st('Refresh') }}</span>
-              </Button>
-              <Button size="sm" variant="outline" :disabled="saving" @click="addPrompt">
-                <RiAddLine class="mr-1 h-4 w-4" />{{ $st('Add') }}
-              </Button>
-            </div>
-          </div>
-          <input
-            v-model="search"
-            :placeholder="$st('Search saved prompts')"
-            class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm"
-          />
-          <select v-model="categoryFilter" class="min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm">
-            <option value="">{{ $st('All categories') }}</option>
-            <option v-for="category in categories" :key="category" :value="category">{{ category }}</option>
-          </select>
-          <div class="grid max-h-[35rem] min-w-0 gap-1 overflow-auto">
-            <button
-              v-for="entry in filtered"
-              :key="entry.fragment.id"
-              type="button"
-              class="min-w-0 rounded-md border px-3 py-2 text-left hover:bg-muted/50"
-              :class="selectedId === entry.fragment.id ? 'border-primary/50 bg-primary/10' : 'border-border/60'"
-              @click="selectPrompt(entry.fragment.id)"
-            >
-              <span class="block truncate text-sm font-medium">{{ savedPromptDisplayName(entry.fragment) }}</span>
-              <span class="block truncate text-xs text-muted-foreground">
-                {{ entry.fragment.category || $st('Uncategorized') }}
-                <template v-if="entry.origin === 'inline'"> · {{ $st('Legacy inline') }}</template>
-              </span>
-            </button>
-            <p v-if="!filtered.length" class="p-2 text-sm text-muted-foreground">{{ $st('No saved prompts found.') }}</p>
-          </div>
-        </div>
-        <div v-if="draft" class="grid min-w-0 content-start gap-3">
-          <div class="flex items-center justify-between gap-2">
-            <h3 class="text-sm font-medium">{{ draftOrigin === 'new' ? $st('New prompt') : $st('Edit prompt') }}</h3>
-            <span v-if="used" class="text-xs text-muted-foreground">{{ $st('Used in active layers') }}</span>
-          </div>
-          <label class="grid gap-1 text-xs text-muted-foreground">
-            {{ $st('Title') }}
-            <input :value="draft.title" :disabled="saving" class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-              @input="updateField('title', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label class="grid gap-1 text-xs text-muted-foreground">
-            {{ $st('Category') }}
-            <input :value="draft.category || ''" :disabled="saving" :placeholder="$st('Any category, e.g. writing, coding, research')"
-              class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-              @input="updateField('category', ($event.target as HTMLInputElement).value)" />
-          </label>
-          <label class="grid gap-1 text-xs text-muted-foreground">
-            {{ $st('Instructions') }}
-            <textarea :value="draft.body" :disabled="saving" rows="12"
-              class="min-h-40 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-              @input="updateField('body', ($event.target as HTMLTextAreaElement).value)" />
-          </label>
-          <details class="rounded-md border border-border/60 p-3">
-            <summary class="cursor-pointer text-sm">{{ $st('Conditions') }}</summary>
-            <div class="mt-3 grid gap-3">
-              <label class="grid gap-1 text-xs text-muted-foreground">
-                {{ $st('Model patterns') }}
-                <input :value="draft.when.models.join(', ')" :disabled="saving" spellcheck="false"
-                  class="rounded-md border border-input bg-background px-3 py-2 font-mono text-xs text-foreground"
-                  @change="updateModels(($event.target as HTMLInputElement).value)" />
-              </label>
-              <label class="grid gap-1 text-xs text-muted-foreground">
-                {{ $st('Required tools') }}
-                <select :value="draft.when.requires_tools === null ? '' : String(draft.when.requires_tools)"
-                  :disabled="saving" class="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
-                  @change="updateTools(($event.target as HTMLSelectElement).value)">
-                  <option value="">{{ $st('Inherit') }}</option>
-                  <option value="true">{{ $st('Required') }}</option>
-                  <option value="false">{{ $st('Not required') }}</option>
-                </select>
-              </label>
-            </div>
-          </details>
-          <p v-if="draftOrigin === 'inline'" class="text-xs text-muted-foreground">
-            {{ $st('Legacy inline prompts remain attached to their original layers.') }}
-          </p>
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <Button variant="ghost" color="danger" :disabled="saving" @click="removePrompt">
-              <RiDeleteBinLine class="mr-1 h-4 w-4" />{{ $st('Delete') }}
-            </Button>
-            <Button :disabled="saving || !valid || !dirty" @click="persist('save')">
-              {{ saving ? $st('Saving…') : $st('Save changes') }}
-            </Button>
-          </div>
-        </div>
-        <p v-else class="text-sm text-muted-foreground">{{ $st('Select a saved prompt or add a new one.') }}</p>
+  <section class="settings-stack min-w-0" :aria-busy="busy" data-prompt-library>
+    <div class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
+      <SearchInput
+        v-model="search"
+        class="settings-toolbar-search"
+        :placeholder="$st('Search prompts…')"
+        :input-aria-label="$st('Search prompts…')"
+      />
+      <select
+        v-model="filter"
+        :aria-label="$st('Prompt category')"
+        class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+      >
+        <option value="">{{ $st('All categories') }}</option>
+        <option :value="null">{{ $st('Uncategorized') }}</option>
+        <option v-for="name in categories" :key="name" :value="name">{{ name }}</option>
+      </select>
+      <IconButton
+        size="sm"
+        :loading="loading"
+        :disabled="saving"
+        :aria-label="$st('Refresh')"
+        :tooltip="$st('Refresh')"
+        @click="refresh"
+      >
+        <RiRefreshLine class="h-4 w-4" aria-hidden="true" />
+      </IconButton>
+      <Button type="button" size="sm" variant="outline" :disabled="busy || !sources" @click="create(true)">{{
+        $st('New composition')
+      }}</Button>
+      <Button type="button" size="sm" :disabled="busy || !sources" @click="create(false)">
+        <RiAddLine class="me-1.5 h-4 w-4" aria-hidden="true" />{{ $st('New fragment') }}
+      </Button>
+    </div>
+    <p
+      v-if="error"
+      role="alert"
+      class="break-words rounded-md border border-destructive/30 p-2 text-sm text-destructive"
+    >
+      {{ error }}
+    </p>
+    <details v-if="sources" class="rounded-md border border-border/70 bg-card/30 px-2.5 py-2">
+      <summary class="cursor-pointer text-xs font-medium">{{ $st('Manage categories') }}</summary>
+      <form class="settings-toolbar mt-2" @submit.prevent="saveCategory()">
+        <select
+          :value="category"
+          class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+          :aria-label="$st('Prompt category')"
+          :disabled="busy"
+          @change="selectCategory(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">{{ $st('New category') }}</option>
+          <option v-for="name in categories" :key="name" :value="name">{{ name }}</option>
+        </select>
+        <Input
+          v-model="categoryName"
+          class="h-8 min-w-0 flex-1"
+          :aria-label="$st('Category name')"
+          :placeholder="$st('Category name')"
+          :disabled="busy"
+        />
+        <Button type="submit" size="sm" :disabled="busy || !categoryDirty || !categoryName.trim()">{{
+          $st('Save')
+        }}</Button>
+        <IconButton
+          v-if="category"
+          type="button"
+          size="sm"
+          :disabled="busy"
+          :aria-label="$st('Delete prompt category?')"
+          :tooltip="$st('Delete')"
+          @click="saveCategory(true)"
+        >
+          <RiDeleteBinLine class="h-4 w-4 text-destructive" aria-hidden="true" />
+        </IconButton>
+      </form>
+    </details>
+    <div v-if="sources" class="settings-master-detail">
+      <div class="min-w-0 overflow-hidden rounded-md border border-border/70">
+        <button
+          v-for="prompt in filtered"
+          :key="prompt.id"
+          type="button"
+          :disabled="busy"
+          :aria-pressed="prompt.id === selected"
+          class="flex w-full min-w-0 flex-wrap items-center justify-between gap-x-2 border-b border-border/50 px-2.5 py-1.5 text-start text-sm last:border-0 hover:bg-muted"
+          :class="{ 'bg-muted': prompt.id === selected }"
+          @click="choose(prompt)"
+        >
+          <span class="min-w-0 break-words font-medium">{{ savedPromptDisplayName(prompt) }}</span>
+          <span class="break-words text-xs text-muted-foreground">{{
+            [prompt.category, prompt.parts?.length ? $st('Prompt composition') : ''].filter(Boolean).join(' · ')
+          }}</span>
+        </button>
+        <p v-if="!filtered.length" class="p-2.5 text-xs text-muted-foreground">{{ $st('No saved prompts') }}</p>
       </div>
-    </SettingsCard>
-  </div>
+      <form v-if="draft" class="min-w-0 rounded-md border border-border/70 p-2.5" @submit.prevent="savePrompt">
+        <fieldset class="grid min-w-0 gap-2.5" :disabled="busy">
+          <div class="settings-control-grid">
+            <label class="grid min-w-0 gap-1 text-xs text-muted-foreground">
+              {{ $st('Title') }}
+              <Input v-model="draft.title" class="h-8" required />
+            </label>
+            <label class="grid min-w-0 gap-1 text-xs text-muted-foreground">
+              {{ $st('Prompt category') }}
+              <select
+                v-model="draft.category"
+                class="h-8 min-w-0 rounded-md border border-input bg-background px-2 text-xs text-foreground"
+              >
+                <option :value="undefined">{{ $st('Uncategorized') }}</option>
+                <option v-for="name in categories" :key="name" :value="name">{{ name }}</option>
+              </select>
+            </label>
+          </div>
+          <template v-if="composing">
+            <PromptReferenceList
+              :model-value="draft.parts ?? []"
+              :options="components"
+              :disabled="busy"
+              @update:model-value="draft.parts = $event"
+            />
+            <p v-if="draft.parts?.length && preview === null" role="alert" class="text-xs text-destructive">
+              {{ $st('Check for missing or circular prompt references.') }}
+            </p>
+            <p v-if="exceedsBudget" role="alert" class="text-xs text-destructive">
+              {{ $st('The combined prompt exceeds the size limit.') }}
+            </p>
+            <details v-if="preview" class="rounded-md border border-border/60 px-2.5 py-2">
+              <summary class="cursor-pointer text-xs font-medium">{{ $st('Preview') }}</summary>
+              <pre class="mt-2 max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-xs">{{ preview }}</pre>
+            </details>
+          </template>
+          <label v-else class="grid gap-1 text-xs text-muted-foreground">
+            {{ $st('Instructions') }}
+            <textarea
+              v-model="draft.body"
+              rows="7"
+              spellcheck="false"
+              required
+              class="min-w-0 resize-y rounded-md border border-input bg-background p-2 text-sm text-foreground"
+            />
+          </label>
+          <div class="settings-toolbar">
+            <Button type="submit" size="sm" :disabled="!valid || (!dirty && origin !== 'new')">{{
+              $st('Save')
+            }}</Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              :disabled="origin !== 'new' && uses"
+              @click="deletePrompt"
+              >{{ origin === 'new' ? $st('Cancel') : $st('Delete') }}</Button
+            >
+            <span v-if="uses" class="text-xs text-muted-foreground">{{
+              $st('Referenced by other prompts or active layers')
+            }}</span>
+          </div>
+        </fieldset>
+      </form>
+    </div>
+    <p v-else-if="loading" role="status" class="text-xs text-muted-foreground">{{ $st('Loading…') }}</p>
+  </section>
 </template>

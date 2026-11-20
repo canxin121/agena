@@ -5,11 +5,9 @@ import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/se
 
 const ModelCatalogPanel = defineAsyncComponent(() => import('@/components/settings/ModelCatalogPanel.vue'))
 const ProviderStudioPanel = defineAsyncComponent(() => import('@/components/settings/ProviderStudioPanel.vue'))
-const ModelSettingsPanel = defineAsyncComponent(() => import('@/components/settings/ModelSettingsPanel.vue'))
 
 const pages = computed(() => buildSettingsSubpages('models-providers'))
-// Both model selections share one page and the workbench's layer selector.
-defineProps<{ activePage: string; scope: string; sessionId?: string }>()
+defineProps<{ activePage: string }>()
 const editor = ref<{ refresh: () => Promise<void> } | null>(null)
 defineExpose({
   refresh: async () => {
@@ -21,15 +19,12 @@ defineExpose({
 <template>
   <SettingsSectionWorkbench
     section="models-providers"
-    scope-layout="toolbar"
     :pages="pages"
     :active-page="activePage"
-    :active-scope="scope"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['models-providers']"
     v-slot="{ activePage }"
   >
-    <ProviderStudioPanel ref="editor" v-if="activePage === 'provider-studio'" />
-    <ModelCatalogPanel ref="editor" v-else-if="activePage === 'model-catalog'" />
-    <ModelSettingsPanel ref="editor" v-else :scope="scope" :session-id="sessionId" />
+    <ModelCatalogPanel v-if="activePage === 'model-catalog'" ref="editor" />
+    <ProviderStudioPanel v-else ref="editor" />
   </SettingsSectionWorkbench>
 </template>

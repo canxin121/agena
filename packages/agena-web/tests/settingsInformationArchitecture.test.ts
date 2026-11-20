@@ -34,18 +34,33 @@ describe('task-based settings navigation', () => {
     expect(new Set(actual).size).toBe(actual.length)
   })
 
+  test('AI & sessions puts Session settings first and Model Catalog last', () => {
+    const rows = buildSettingsSidebarGroups({
+      query: '',
+      tabs: categories,
+      activeTab: 'runtime-session',
+      activeView: 'session-behavior',
+      expandedNodeKeys: new Set(['ai-session']),
+    }).flatMap((group) => group.items)
+    expect(rows.filter((row) => row.key.startsWith('ai-session/')).map((row) => row.view)).toEqual([
+      'session-behavior',
+      'provider-studio',
+      'agent-profiles',
+      'model-catalog',
+    ])
+  })
+
   test.each([
-    ['models-providers', 'provider-studio', 'ai-session', 'models'],
-    ['models-providers', 'model-catalog', 'ai-session', 'models'],
-    ['runtime-session', 'prompt-layers', 'ai-session', 'instructions'],
+    ['models-providers', 'provider-studio', 'ai-session', 'provider-studio'],
+    ['models-providers', 'model-catalog', 'ai-session', 'model-catalog'],
+    ['runtime-session', 'agent-profiles', 'ai-session', 'agent-profiles'],
     ['runtime-session', 'client-versions', 'operations', 'clients'],
-    ['runtime-session', 'compaction', 'ai-session', 'context'],
+    ['runtime-session', 'session-behavior', 'ai-session', 'session-behavior'],
     ['plugins-tools', 'marketplace', 'extensions', 'plugins'],
     ['skills', 'install', 'extensions', 'skills'],
     ['mcp-server', 'connection', 'extensions', 'mcp-host'],
-    ['permissions', 'overview', 'security', 'overview'],
     ['permissions', 'access', 'security', 'access'],
-    ['interface', 'notifications', 'appearance', 'notifications'],
+    ['interface', 'web-appearance', 'appearance', 'web'],
     ['diagnostics', 'usage', 'records', 'usage'],
     ['diagnostics', 'advanced-settings', 'operations', 'advanced'],
   ] as const)('highlights %s/%s under %s/%s', (section, view, categoryId, taskId) => {
@@ -61,17 +76,23 @@ describe('task-based settings navigation', () => {
     expect(rows.find((row) => row.key === categoryId)?.branchActive).toBe(true)
   })
 
-  test('search finds fields inside collapsed model tasks without exposing unrelated categories', () => {
+  test.each([
+    ['default model', 'session-behavior', 'session-behavior'],
+    ['审批模型', 'session-behavior', 'session-behavior'],
+    ['auxiliary model', 'session-behavior', 'session-behavior'],
+    ['api key', 'provider-studio', 'provider-studio'],
+    ['pricing', 'model-catalog', 'model-catalog'],
+    ['指令', 'agent-profiles', 'agent-profiles'],
+  ])('searching for %s opens its own sidebar page', (query, taskId, view) => {
     const groups = buildSettingsSidebarGroups({
-      query: 'api key',
+      query,
       tabs: categories,
       activeTab: 'interface',
       activeView: 'tui',
     })
     const rows = groups.flatMap((group) => group.items)
-    expect(rows.some((row) => row.key === 'ai-session/models')).toBe(true)
-    expect(rows.find((row) => row.key === 'ai-session/models')?.view).toBe('provider-studio')
-    expect(rows.some((row) => row.key === 'ai-session/instructions')).toBe(false)
+    const aiRows = rows.filter((row) => row.key.startsWith('ai-session/') && row.view)
+    expect(aiRows.map((row) => [row.key, row.view])).toEqual([[`ai-session/${taskId}`, view]])
   })
 
   test('Hook searches find the plugin settings workbench', () => {
@@ -87,21 +108,32 @@ describe('task-based settings navigation', () => {
     }
   })
 
-  test('old section URLs and renamed model views remain valid', () => {
+  test('default profile searches lead to Session settings', () => {
+    for (const query of ['default profile', 'default_subagent_profile', '默认Profile', '默认档案', '子 Agent']) {
+      const rows = buildSettingsSidebarGroups({
+        query,
+        tabs: categories,
+        activeTab: 'interface',
+        activeView: 'tui',
+      }).flatMap((group) => group.items)
+      expect(rows.find((row) => row.key === 'ai-session/session-behavior')?.view).toBe('session-behavior')
+      expect(rows.some((row) => row.key === 'ai-session/agent-profiles')).toBe(false)
+    }
+  })
+
+  test('old section URLs and remembered context settings remain valid', () => {
     for (const section of SETTINGS_TAB_IDS) {
       expect(settingsTabFromRouteValue(`/settings/${section}?view=any`)).toBe(section)
     }
-    const pages = buildSettingsSubpages('models-providers')
-    expect(resolveSettingsSubpage('defaults', '', pages, 'provider-studio')).toBe('model-settings')
+    const pages = buildSettingsSubpages('runtime-session')
+    expect(resolveSettingsSubpage('', 'compaction', pages, 'session-behavior')).toBe('session-behavior')
   })
 
-  test('security has one access editor and searches all three permission domains', () => {
+  test('security searches permission domains and execution safeguards from one access editor', () => {
     const security = categories.find((category) => category.id === 'security')!
     const ids = security.children?.map((task) => task.id) || []
-    expect(ids.filter((id) => id === 'access')).toEqual(['access'])
-    expect(ids).toEqual(expect.arrayContaining(['profiles', 'sandbox', 'overview']))
-    expect(ids.filter((id) => ['files', 'network', 'execution'].includes(id))).toEqual([])
-    for (const query of ['filesystem', 'network', 'tools', '文件', '网络', '工具']) {
+    expect(ids).toEqual(['profiles', 'assignments', 'access'])
+    for (const query of ['filesystem', 'network', 'tools', 'sandbox', '文件', '网络', '工具', '资源预检']) {
       const rows = buildSettingsSidebarGroups({
         query,
         tabs: categories,
@@ -109,9 +141,6 @@ describe('task-based settings navigation', () => {
         activeView: 'tui',
       }).flatMap((group) => group.items)
       expect(rows.find((row) => row.key === 'security/access')?.view).toBe('access')
-      expect(rows.some((row) => ['security/files', 'security/network', 'security/execution'].includes(row.key))).toBe(
-        false,
-      )
     }
   })
 })

@@ -4,6 +4,7 @@
 @import './styles/typography.css';
 @import './styles/transcript-interactions.css';
 @import './styles/mobile.css';
+@import './styles/settings.css';
 @plugin "@tailwindcss/typography";
 
 /* Tailwind v4: ensure we scan Vue + TS + CSS sources for class usage. */

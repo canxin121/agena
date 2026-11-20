@@ -1,6 +1,13 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter, type RouteLocationNormalized } from 'vue-router'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type Ref } from 'vue'
+import {
+  RouterLink,
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+  useRoute,
+  useRouter,
+  type RouteLocationNormalized,
+} from 'vue-router'
 import {
   RiAddLine,
   RiCheckLine,
@@ -8,34 +15,47 @@ import {
   RiCodeSSlashLine,
   RiFolderLine,
   RiGlobalLine,
+  RiListSettingsLine,
   RiLockLine,
   RiRefreshLine,
   RiResetLeftLine,
   RiSave3Line,
-  RiTerminalBoxLine,
   RiToolsLine,
 } from '@remixicon/vue'
+import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'radix-vue'
 
 import Button from '@/components/ui/Button.vue'
 import { findSettingsScope } from '@/components/settings/settingsScopeCatalog'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
+import PermissionBulkActions from './permissions/PermissionBulkActions.vue'
 import PermissionRuleTable from './permissions/PermissionRuleTable.vue'
 import type { PermissionRuleKind, PermissionRuleRow } from './permissions/permissionRuleTable'
 import PermissionAccessToolbar from './permissions/PermissionAccessToolbar.vue'
 import PermissionPolicyRow from './permissions/PermissionPolicyRow.vue'
 import PermissionHelp from './permissions/PermissionHelp.vue'
+import SettingsSourceControl from './SettingsSourceControl.vue'
+import SandboxSettingsPanel from './SandboxSettingsPanel.vue'
 import {
   isPermissionAccessView,
+  legacyPermissionAccessScope,
   PERMISSION_ACCESS_VIEW,
   permissionAccessHash,
   permissionSectionFromHash,
+  permissionWorkspaceTarget,
   type PermissionAccessSection,
 } from './permissions/permissionNavigation'
 import { apiJson } from '@/lib/api'
 import { confirmAction } from '@/lib/appConfirm'
-import { deleteRuntimeSetting, setRuntimeSetting } from '@/lib/runtimeSettings'
+import { deleteRuntimeSetting, setRuntimeSetting, type RuntimeSettingReadResponse } from '@/lib/runtimeSettings'
+import { runtimeSettingBaseValue } from '@/lib/runtimeSettingLayer'
+import {
+  DEFAULT_PERMISSION_PROFILE_ID,
+  permissionProfileDisplayName,
+  permissionProfilesForLayer,
+  type PermissionProfile,
+} from '@/lib/permissionProfiles'
 import { useChatStoreUnscoped } from '@/stores/chat'
 import { lastSessionId } from '@/lib/lastSession'
 import { resolveSettingsSessionId } from './settingsSessionScope'
@@ -45,10 +65,13 @@ import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
 import {
+  SHELL_COMMAND_RULE_GROUP,
   canonicalPermissionPath,
   canonicalPermissionToolEntries,
   canonicalPermissionToolName,
+  completePermissionConfig,
   isPathPermissionMode,
+  mergeNetworkPermissionConfig,
   parsePermissionConfig,
   parseNetworkPermissionConfig,
   permissionConfigErrorMessage,
@@ -62,38 +85,64 @@ import {
 } from '@/lib/permissionConfig'
 
 type PermissionSource = 'global' | 'workspace' | 'session' | 'effective'
-type SettingsResponse = { value?: JsonValue; inherited_value?: JsonValue; config_found?: boolean; config_path?: string }
+type SettingsResponse = RuntimeSettingReadResponse
+type SessionPermissionState = {
+  selected_permission?: PermissionConfig
+  effective_permission?: PermissionConfig
+  inherited_permission?: PermissionConfig
+  permission_profile?: string
+}
 type SessionStateResponse = {
-  execution?: {
-    selected_permission?: PermissionConfig
-    effective_permission?: PermissionConfig
-    inherited_permission?: PermissionConfig
-    context?: {
-      selected_permission?: PermissionConfig
-      effective_permission?: PermissionConfig
-      inherited_permission?: PermissionConfig
-    }
-    execution?: {
-      selected_permission?: PermissionConfig
-      effective_permission?: PermissionConfig
-      inherited_permission?: PermissionConfig
-    }
-  }
+  execution?: SessionPermissionState & { context?: SessionPermissionState; execution?: SessionPermissionState }
 }
 type ToolCatalogResponse = { permission_tools?: Array<{ name?: string; summary?: string }> }
 
-const SHELL_LAUNCH_TOOLS = ['agena.shell.exec', 'agena.shell.spawn', 'agena.shell.watch', 'agena.shell.open'] as const
-const SHELL_CAPABLE_TOOLS = [...SHELL_LAUNCH_TOOLS, 'agena.shell.write', 'agena.monitor.start'] as const
-
-const props = defineProps<{ scope: string; sessionId?: string }>()
+const props = defineProps<{
+  scope?: string
+  sessionId?: string
+  draftPermission?: PermissionConfig
+  inheritedDraftPermission?: PermissionConfig | null
+  draftDisabled?: boolean
+  standaloneDraft?: boolean
+}>()
+const emit = defineEmits<{ 'update:draftPermission': [value: PermissionConfig] }>()
+const profileEditor = computed(() => props.draftPermission !== undefined)
 const route = useRoute()
 const router = useRouter()
 const workspacePane = useWorkspacePaneContext()
 const editorElement = ref<HTMLElement | null>(null)
 const sections = computed(() => [
-  { id: 'filesystem' as const, label: st('File access'), icon: RiFolderLine },
-  { id: 'network' as const, label: st('Network access'), icon: RiGlobalLine },
-  { id: 'tools' as const, label: st('Tool execution & approvals'), icon: RiToolsLine },
+  {
+    id: 'filesystem' as const,
+    label: st('File access'),
+    icon: RiFolderLine,
+    help: [
+      st('Choose readonly, readwrite, or deny for workspace and external paths.'),
+      st('Use concrete files or directories. Directories include all descendants; denied paths cannot be reopened.'),
+    ].join(' '),
+  },
+  {
+    id: 'network' as const,
+    label: st('Network access'),
+    icon: RiGlobalLine,
+    help: [
+      st('Each network setting has its own source. Changing one leaves the others unchanged.'),
+      st('Deny rules take precedence over every allow rule.'),
+      st(
+        'macOS does not support per-destination outbound rules. Linux requires inbound and host-loopback access to remain denied.',
+      ),
+    ].join(' '),
+  },
+  {
+    id: 'tools' as const,
+    label: st('Tool execution & approvals'),
+    icon: RiToolsLine,
+    help: [
+      st('Set the fallback policy and access for tools that only read data.'),
+      st('Choose a tool to override its default access policy.'),
+      st('All terminal tools use the same command rules. If several patterns match, the last one wins.'),
+    ].join(' '),
+  },
 ])
 const chat = useChatStoreUnscoped()
 const toasts = useToastsStore()
@@ -104,11 +153,23 @@ const saving = ref(false)
 const error = ref('')
 const saveError = ref('')
 const loaded = ref(false)
+const appliedProfile = ref('')
+const chosenProfile = ref('')
+const hasCustomPermission = ref(false)
+const permissionProfiles = ref<Record<string, PermissionProfile> | null>(null)
+const linkedPermission = computed(() => !profileEditor.value && appliedProfile.value !== '')
+const profileOptions = computed(() =>
+  Object.entries(permissionProfiles.value ?? {}).sort((a, b) => a[1].name.localeCompare(b[1].name)),
+)
 const savedConfig = ref<PermissionConfig>({})
 const rawEditorOpen = ref(false)
+const rawJsonErrorId = useId()
 const rulesPanel = ref<{ refresh: () => Promise<void>; busy?: boolean } | null>(null)
+const sandboxSettings = ref<InstanceType<typeof SandboxSettingsPanel> | null>(null)
 const rawPending = computed(() => rawJson.value !== JSON.stringify(config.value, null, 2))
-const networkPending = computed(() => networkJson.value !== JSON.stringify(config.value.network || {}, null, 2))
+const networkPending = computed(
+  () => networkJson.value !== JSON.stringify(config.value.network || { version: 2 }, null, 2),
+)
 const dirty = computed(
   () =>
     JSON.stringify(config.value) !== JSON.stringify(savedConfig.value) ||
@@ -116,24 +177,139 @@ const dirty = computed(
     networkPending.value ||
     Boolean(networkRuleDraft.value),
 )
-const editingDisabled = computed(() => !canEdit.value || !loaded.value || loading.value || saving.value)
+const sandboxSaving = computed(() => sandboxSettings.value?.saving === true)
+const editingDisabled = computed(
+  () =>
+    !canEdit.value ||
+    !loaded.value ||
+    loading.value ||
+    saving.value ||
+    sandboxSaving.value ||
+    props.draftDisabled ||
+    linkedPermission.value,
+)
 const formDisabled = computed(() => editingDisabled.value || rawPending.value || networkPending.value)
 // The workbench owns source selection; this editor only normalizes the layer.
-const selectedSource = computed<PermissionSource>(() => normalizePermissionSource(props.scope))
+const settingsScope = computed(() => normalizePermissionSource(props.scope))
+const selectedSource = computed(() =>
+  profileEditor.value ? (props.standaloneDraft ? 'global' : 'profile') : settingsScope.value,
+)
 
 function normalizePermissionSource(value: unknown): PermissionSource {
   return value === 'global' || value === 'workspace' || value === 'session' ? value : 'effective'
 }
 const config = ref<PermissionConfig>({})
+// An explicit source choice can precede a value when the parent is unavailable.
+// It remains an editor intent until the user supplies a real local value.
+const localSourceIntents = ref<Set<string>>(new Set())
+function setLocalSourceIntent(key: string, enabled: boolean) {
+  const next = new Set(localSourceIntents.value)
+  if (enabled) next.add(key)
+  else next.delete(key)
+  localSourceIntents.value = next
+}
+function sourceIsReadOnly(source: 'inherit' | 'local'): boolean {
+  return selectedSource.value !== 'global' && source === 'inherit'
+}
+function sourceValueDisabled(source: 'inherit' | 'local'): boolean {
+  return formDisabled.value || sourceIsReadOnly(source)
+}
+function toolRuleSource(tool: string): 'inherit' | 'local' {
+  return hasToolEntry(config.value.tools?.rules, tool) ||
+    localSourceIntents.value.has('tools.rules.' + canonicalPermissionToolName(tool))
+    ? 'local'
+    : 'inherit'
+}
+function inheritedEditError(): string {
+  return st('Switch inherited settings to this scope before editing their values.')
+}
 const rawJson = ref('{}')
 const rawJsonError = ref('')
-const networkJson = ref('{}')
+const networkJson = ref(JSON.stringify({ version: 2 }, null, 2))
 const networkJsonError = ref('')
 const inheritedPermission = ref<PermissionConfig | null>(null)
+const resolvedPermission = ref<PermissionConfig | null>(null)
+const resolvedRawFingerprint = ref('')
+const cleanResolvedPermission = computed(() =>
+  !dirty.value && JSON.stringify(config.value) === resolvedRawFingerprint.value ? resolvedPermission.value : null,
+)
 const configPath = ref('')
 const inheritedNetwork = computed(() => inheritedPermission.value?.network ?? null)
 const inheritedNetworkError = ref('')
+const activeWorkspaceTarget = computed(() => permissionWorkspaceTarget(route.query.targetWorkspaceId))
+const workspaceId = ref<number | null>(null)
+const workspaceConfigIsActive = ref<boolean | undefined>()
+const configRevision = ref<string | undefined>()
 type NetworkRuleList = 'allow' | 'deny'
+type NetworkDefault = 'default' | 'inbound' | 'hostLoopback'
+type NetworkField = NetworkDefault | NetworkRuleList
+const networkRuleLists = ['allow', 'deny'] as const
+const networkFields = ['default', 'inbound', 'hostLoopback', ...networkRuleLists] as const
+const networkFullyLocal = computed(
+  () => selectedSource.value === 'global' || networkFields.every((field) => networkSource(field) === 'local'),
+)
+const networkHasLocal = computed(
+  () => selectedSource.value === 'global' || networkFields.some((field) => networkSource(field) === 'local'),
+)
+const networkJsonReadOnly = computed(
+  () => editingDisabled.value || rawPending.value || Boolean(networkRuleDraft.value) || !networkHasLocal.value,
+)
+const networkJsonDisplay = computed(() =>
+  networkHasLocal.value ? networkJson.value : JSON.stringify(displayedNetwork.value, null, 2),
+)
+const rawJsonReadOnly = computed(
+  () =>
+    editingDisabled.value ||
+    networkPending.value ||
+    Boolean(networkRuleDraft.value) ||
+    (selectedSource.value !== 'global' && !Object.keys(config.value).length && !localSourceIntents.value.size),
+)
+const rawJsonDisplay = computed(() =>
+  selectedSource.value !== 'global' && !Object.keys(config.value).length && !localSourceIntents.value.size
+    ? JSON.stringify(inheritedPermission.value, null, 2)
+    : rawJson.value,
+)
+function editNetworkJson(event: Event) {
+  if (networkJsonReadOnly.value) return
+  networkJson.value = (event.target as HTMLTextAreaElement).value
+  networkJsonError.value = ''
+}
+function editRawJson(event: Event) {
+  if (rawJsonReadOnly.value) return
+  rawJson.value = (event.target as HTMLTextAreaElement).value
+  rawJsonError.value = ''
+}
+function assertEditableOverrides(next: PermissionConfig) {
+  if (selectedSource.value === 'global') return
+  const blocked = (condition: boolean) => {
+    if (condition) throw new Error(inheritedEditError())
+  }
+  for (const scope of ['workspace', 'external'] as const)
+    blocked(sourceIsReadOnly(pathSource(scope)) && Object.hasOwn(next.path || {}, scope))
+  blocked(sourceIsReadOnly(toolDefaultSource.value) && Object.hasOwn(next.tools || {}, 'default'))
+  for (const field of networkFields)
+    blocked(sourceIsReadOnly(networkSource(field)) && Object.hasOwn(next.network || {}, field))
+  for (const path of Object.keys(inheritedPermission.value?.path?.rules || {}))
+    blocked(!Object.hasOwn(config.value.path?.rules || {}, path) && Object.hasOwn(next.path?.rules || {}, path))
+  for (const [name] of canonicalPermissionToolEntries(inheritedPermission.value?.tools?.names))
+    blocked(!hasToolEntry(config.value.tools?.names, name) && hasToolEntry(next.tools?.names, name))
+  for (const [tool] of canonicalPermissionToolEntries(next.tools?.rules))
+    blocked(
+      sourceIsReadOnly(toolRuleSource(tool)) &&
+        (tool === '*' || hasToolEntry(inheritedPermission.value?.tools?.rules, tool)),
+    )
+}
+function settleSourceIntents(next: PermissionConfig) {
+  const declared = (key: string) =>
+    key.startsWith('path.')
+      ? Object.hasOwn(next.path || {}, key.slice(5))
+      : key.startsWith('network.')
+        ? Object.hasOwn(next.network || {}, key.slice(8))
+        : key === 'tools.default'
+          ? Object.hasOwn(next.tools || {}, 'default')
+          : key.startsWith('tools.rules.') && hasToolEntry(next.tools?.rules, key.slice(12))
+  localSourceIntents.value = new Set([...localSourceIntents.value].filter((key) => !declared(key)))
+}
 type NetworkRuleDraft = {
   action: NetworkRuleList
   index: number | null
@@ -145,11 +321,15 @@ type NetworkRuleDraft = {
 const networkRuleDraft = ref<NetworkRuleDraft | null>(null)
 const networkRuleError = ref('')
 const networkCustom = computed(() => config.value.network !== undefined)
-const displayedNetwork = computed(() => config.value.network ?? inheritedNetwork.value)
-const networkSourceOptions = computed(() => [
-  { value: 'inherit', label: st('Inherit parent policy') },
-  { value: 'custom', label: st('Custom network policy') },
-])
+const displayedNetwork = computed(() => {
+  try {
+    if (cleanResolvedPermission.value) return cleanResolvedPermission.value.network ?? null
+    return mergeNetworkPermissionConfig(inheritedNetwork.value, config.value.network)
+  } catch {
+    // Invalid drafts remain in the JSON editor until the user repairs them.
+    return null
+  }
+})
 const networkProtocolOptions = computed(() => [
   ...(['tcp', 'udp', 'icmp'] as const).map((value) => ({ value, label: value.toUpperCase() })),
   { value: 'any', label: st('Any protocol') },
@@ -159,7 +339,6 @@ const newPath = ref('')
 const newPathMode = ref<PathPermissionMode>('readonly')
 const newToolName = ref('')
 const newToolNameMode = ref<PermissionMode>('ask')
-const newCommandTool = ref<string>(SHELL_LAUNCH_TOOLS[0])
 const newCommandPattern = ref('')
 const newCommandMode = ref<PermissionMode>('ask')
 const selectedPathRuleKeys = ref<Set<string>>(new Set())
@@ -170,7 +349,6 @@ const bulkToolNameMode = ref<PermissionMode>('auto')
 const bulkCommandMode = ref<PermissionMode>('ask')
 const pathQuery = ref('')
 const toolQuery = ref('')
-const commandQuery = ref('')
 const newRuleKind = ref<PermissionRuleKind | ''>('')
 
 const activeSessionId = computed(() => {
@@ -196,7 +374,6 @@ const pathModeOptions = computed(() => [
   { value: 'readwrite', label: st('Read and write'), description: st('Read, create, change, and delete files.') },
   { value: 'deny', label: st('Deny'), description: st('Block access to this file or directory tree.') },
 ])
-const shellToolOptions = SHELL_CAPABLE_TOOLS.map((value) => ({ value, label: value }))
 const toolOptions = computed(() =>
   toolCatalog.value.map((tool) => ({ value: tool.name, label: tool.name, description: tool.summary })),
 )
@@ -208,6 +385,17 @@ const networkActionOptions = computed(() => [
   { value: 'allow', label: st('Allow'), description: st('Allow matching network traffic.') },
   { value: 'deny', label: st('Deny'), description: st('Block matching network traffic.') },
 ])
+const networkRuleActionOptions = computed(() =>
+  networkActionOptions.value.map((option) => ({
+    ...option,
+    disabled: sourceIsReadOnly(networkSource(option.value as NetworkRuleList)),
+  })),
+)
+function setNetworkRuleAction(value: string) {
+  if (!networkRuleDraft.value || (value !== 'allow' && value !== 'deny') || sourceValueDisabled(networkSource(value)))
+    return
+  networkRuleDraft.value.action = value
+}
 const networkAdvancedDefaults = computed(() => [
   {
     id: 'inbound' as const,
@@ -220,44 +408,17 @@ const networkAdvancedDefaults = computed(() => [
     description: st('Access to services on the host loopback interface.'),
   },
 ])
-const commandClasses = computed(() => [
-  { id: 'no-op', label: st('No-op commands') },
-  { id: 'routine', label: st('Routine commands') },
-  { id: 'dangerous', label: st('Dangerous commands') },
-])
-
 const pathRules = computed(() => Object.entries(config.value.path?.rules || {}))
 const toolNameRules = computed(() => canonicalPermissionToolEntries(config.value.tools?.names))
-const commandRules = computed(() => {
-  return commandRows(config.value.tools?.rules)
-})
-function commandRows(groups: NonNullable<PermissionConfig['tools']>['rules']) {
-  const rows: Array<{ tool: string; command: string; mode: PermissionMode }> = []
-  for (const [tool, rawRules] of canonicalPermissionToolEntries(groups)) {
-    // Shell launch/input tools and command monitors carry command rules; `*`
-    // carries the read-only class, which applies to every tool whose
-    // permission contract is read-only. Anything else would be inert.
-    if (!isShellCapableTool(tool) && tool !== '*') continue
-    if (isMode(rawRules)) {
-      if (!isShellCapableTool(tool)) continue
-      rows.push({ tool, command: '*', mode: rawRules })
-      continue
-    }
-    if (!rawRules || typeof rawRules !== 'object' || Array.isArray(rawRules)) continue
-    for (const [command, mode] of Object.entries(rawRules)) {
-      if (tool === '*' && !isReadOnlyClass(command)) continue
-      if (isMode(mode)) rows.push({ tool, command, mode })
-    }
-  }
-  return rows
+const commandSource = computed(() => toolRuleSource(SHELL_COMMAND_RULE_GROUP))
+const commandSourceKey = 'tools.rules.' + SHELL_COMMAND_RULE_GROUP
+function commandRuleGroup(permission: PermissionConfig | null) {
+  const rules = permission?.tools?.rules?.[SHELL_COMMAND_RULE_GROUP]
+  return rules && typeof rules === 'object' && !Array.isArray(rules) ? rules : undefined
 }
-// Configured classes are real command rules and remain visible alongside patterns.
-const customCommandRules = computed(() => commandRules.value.filter((row) => row.tool !== '*'))
+const commandRules = computed(() => Object.entries(commandRuleGroup(config.value) || {}))
 const visiblePathRules = computed(() => pathRules.value.filter(([path]) => matchesQuery(path, pathQuery.value)))
 const visibleToolNameRules = computed(() => toolNameRules.value.filter(([name]) => matchesQuery(name, toolQuery.value)))
-const visibleCommandRules = computed(() =>
-  customCommandRules.value.filter((row) => matchesQuery(`${row.tool} ${row.command}`, commandQuery.value)),
-)
 const inheritedPathRules = computed(() =>
   Object.entries(inheritedPermission.value?.path?.rules || {}).filter(
     ([path]) => !Object.hasOwn(config.value.path?.rules || {}, path),
@@ -269,9 +430,9 @@ const inheritedToolNameRules = computed(() =>
   ),
 )
 const inheritedCommandRules = computed(() =>
-  commandRows(inheritedPermission.value?.tools?.rules).filter(
-    (row) => row.tool !== '*' && !hasToolEntry(config.value.tools?.rules, row.tool),
-  ),
+  hasToolEntry(config.value.tools?.rules, SHELL_COMMAND_RULE_GROUP)
+    ? []
+    : Object.entries(commandRuleGroup(inheritedPermission.value) || {}),
 )
 const visibleInheritedPathRules = computed(() =>
   inheritedPathRules.value.filter(([path]) => matchesQuery(path, pathQuery.value)),
@@ -279,11 +440,23 @@ const visibleInheritedPathRules = computed(() =>
 const visibleInheritedToolNameRules = computed(() =>
   inheritedToolNameRules.value.filter(([name]) => matchesQuery(name, toolQuery.value)),
 )
-const visibleInheritedCommandRules = computed(() =>
-  inheritedCommandRules.value.filter((row) => matchesQuery(`${row.tool} ${row.command}`, commandQuery.value)),
-)
-const displayedToolDefault = computed<PermissionMode>(
-  () => config.value.tools?.default || inheritedPermission.value?.tools?.default || 'allow',
+const toolDefaultEditorMode = computed(() => {
+  const mode = config.value.tools?.default
+  if (mode == null) return ''
+  return isMode(mode) ? mode : '__invalid__'
+})
+const displayedToolDefault = computed<PermissionMode | undefined>(() => {
+  const mode = cleanResolvedPermission.value
+    ? cleanResolvedPermission.value.tools?.default
+    : (config.value.tools?.default ?? inheritedPermission.value?.tools?.default)
+  return isMode(mode) ? mode : undefined
+})
+const toolDefaultValueLabel = computed(() =>
+  policyModeLabel(
+    cleanResolvedPermission.value
+      ? cleanResolvedPermission.value.tools?.default
+      : (config.value.tools?.default ?? inheritedPermission.value?.tools?.default),
+  ),
 )
 function readOnlyPolicy(policy: PermissionConfig | null): PermissionMode | undefined {
   const rule = policy?.tools?.rules?.['*']
@@ -296,9 +469,11 @@ function readOnlyPolicy(policy: PermissionConfig | null): PermissionMode | undef
   return mode
 }
 const displayedReadOnlyPolicy = computed(() =>
-  Object.hasOwn(config.value.tools?.rules || {}, '*')
-    ? readOnlyPolicy(config.value)
-    : readOnlyPolicy(inheritedPermission.value),
+  cleanResolvedPermission.value
+    ? readOnlyPolicy(cleanResolvedPermission.value)
+    : Object.hasOwn(config.value.tools?.rules || {}, '*')
+      ? readOnlyPolicy(config.value)
+      : readOnlyPolicy(inheritedPermission.value),
 )
 function invalidReadOnlyPolicy(policy: PermissionConfig | null): boolean {
   const group = policy?.tools?.rules?.['*']
@@ -307,30 +482,44 @@ function invalidReadOnlyPolicy(policy: PermissionConfig | null): boolean {
     !group ||
     typeof group !== 'object' ||
     Array.isArray(group) ||
-    Object.entries(group).some(([name, mode]) => isReadOnlyClass(name) && !isMode(mode))
+    Object.entries(group).some(([name, mode]) => !isReadOnlyClass(name) || !isMode(mode))
   )
 }
 const displayedReadOnlyInvalid = computed(() =>
   invalidReadOnlyPolicy(Object.hasOwn(config.value.tools?.rules || {}, '*') ? config.value : inheritedPermission.value),
 )
+const displayedReadOnlyUnknown = computed(
+  () =>
+    !Object.hasOwn(config.value.tools?.rules || {}, '*') &&
+    inheritedPermission.value === null &&
+    cleanResolvedPermission.value === null &&
+    selectedSource.value !== 'effective',
+)
 const displayedReadOnlyMode = computed<PermissionMode | undefined>(() =>
-  displayedReadOnlyInvalid.value
+  displayedReadOnlyInvalid.value || displayedReadOnlyUnknown.value
     ? undefined
     : displayedReadOnlyPolicy.value === 'auto'
       ? displayedToolDefault.value
       : displayedReadOnlyPolicy.value || 'allow',
 )
-const readOnlyEditorMode = computed(
-  () =>
-    readOnlyPolicy(config.value) ||
-    (Object.hasOwn(config.value.tools?.rules || {}, '*') && !displayedReadOnlyInvalid.value ? 'allow' : ''),
+const readOnlyEditorInvalid = computed(() => invalidReadOnlyPolicy(config.value))
+const readOnlyInheritanceBlocked = computed(() => {
+  const group = config.value.tools?.rules?.['*']
+  // Restoring this one class cannot remove unrelated legacy entries. They must
+  // be repaired in advanced configuration before the group can inherit.
+  return Boolean(group && typeof group === 'object' && Object.keys(group).some((name) => !isReadOnlyClass(name)))
+})
+const readOnlyEditorMode = computed(() =>
+  readOnlyEditorInvalid.value
+    ? '__invalid__'
+    : readOnlyPolicy(config.value) || (Object.hasOwn(config.value.tools?.rules || {}, '*') ? 'allow' : ''),
 )
 const readOnlyModeOptions = computed(() =>
   modeOptions.value.map((option) =>
     option.value === 'auto'
       ? {
           ...option,
-          label: `${modeLabel(displayedToolDefault.value)} · ${st('Follow tool default')}`,
+          label: `${toolDefaultValueLabel.value} · ${st('Follow tool default')}`,
           description: st('Read-only Auto follows the default tool policy; named tool rules take precedence.'),
         }
       : option,
@@ -339,41 +528,98 @@ const readOnlyModeOptions = computed(() =>
 function modeLabel(mode: unknown): string {
   return modeOptions.value.find((option) => option.value === mode)?.label || '—'
 }
+function policyModeLabel(mode: unknown): string {
+  return mode == null ? st('Unavailable') : isMode(mode) ? modeLabel(mode) : st('Invalid configuration')
+}
 function pathModeLabel(mode: unknown): string {
-  return pathModeOptions.value.find((option) => option.value === mode)?.label || '—'
+  return mode == null
+    ? st('Unavailable')
+    : pathModeOptions.value.find((option) => option.value === mode)?.label || st('Invalid configuration')
 }
 function displayedPathMode(scope: 'workspace' | 'external') {
-  return config.value.path?.[scope] || inheritedPermission.value?.path?.[scope]
+  if (cleanResolvedPermission.value) return cleanResolvedPermission.value.path?.[scope]
+  return config.value.path?.[scope] ?? inheritedPermission.value?.path?.[scope]
 }
 function toolInheritanceLabel() {
-  return `${st('Inherit')} · ${modeLabel(inheritedPermission.value?.tools?.default || 'allow')}`
+  return `${baseSourceLabel.value} · ${policyModeLabel(inheritedPermission.value?.tools?.default)}`
+}
+function readOnlyInheritedValueLabel() {
+  if (inheritedPermission.value === null) return st('Unavailable')
+  if (invalidReadOnlyPolicy(inheritedPermission.value)) return st('Invalid configuration')
+  const parent = readOnlyPolicy(inheritedPermission.value)
+  const mode = parent === 'auto' ? displayedToolDefault.value : parent || 'allow'
+  return mode ? modeLabel(mode) : toolDefaultValueLabel.value
 }
 function readOnlyInheritanceLabel() {
-  if (displayedReadOnlyInvalid.value) return '—'
-  const parent = readOnlyPolicy(inheritedPermission.value)
-  return `${st('Inherit')} · ${modeLabel(parent === 'auto' ? displayedToolDefault.value : parent || 'allow')}`
+  return `${baseSourceLabel.value} · ${readOnlyInheritedValueLabel()}`
 }
-function sectionRuleCount(section: PermissionAccessSection) {
-  if (section === 'filesystem') return pathRules.value.length + inheritedPathRules.value.length
-  if (section === 'network') return networkRules('allow').length + networkRules('deny').length
-  return (
-    toolNameRules.value.length +
-    inheritedToolNameRules.value.length +
-    customCommandRules.value.length +
-    inheritedCommandRules.value.length
-  )
+const inheritedSourceLabel = computed(() =>
+  selectedSource.value === 'global'
+    ? defaultPermissionLabel()
+    : selectedSource.value === 'workspace'
+      ? st('Global layer')
+      : st('Parent configuration'),
+)
+function defaultPermissionLabel() {
+  const profile = permissionProfiles.value?.[DEFAULT_PERMISSION_PROFILE_ID]
+  return profile ? permissionProfileDisplayName(DEFAULT_PERMISSION_PROFILE_ID, profile) : st('Built-in default')
 }
-function sectionSummary(section: PermissionAccessSection) {
-  if (section === 'filesystem')
-    return st('Workspace: {workspace} · External: {external}', {
-      workspace: pathModeLabel(displayedPathMode('workspace')),
-      external: pathModeLabel(displayedPathMode('external')),
-    })
-  if (section === 'network') return st('Outbound: {mode}', { mode: modeLabel(networkMode('default')) })
-  return st('Default: {mode} · Read only: {readonly}', {
-    mode: modeLabel(displayedToolDefault.value),
-    readonly: modeLabel(displayedReadOnlyMode.value),
-  })
+const baseSourceLabel = computed(() => (selectedSource.value === 'global' ? st('Default') : st('Inherit')))
+const restoreSourceLabel = computed(() =>
+  selectedSource.value === 'global' ? st('Reset to defaults') : st('Use inherited value'),
+)
+function pathSource(scope: 'workspace' | 'external'): 'inherit' | 'local' {
+  return modeAt(scope) === '' && !localSourceIntents.value.has('path.' + scope) ? 'inherit' : 'local'
+}
+const toolDefaultSource = computed(() =>
+  toolDefaultEditorMode.value === '' && !localSourceIntents.value.has('tools.default') ? 'inherit' : 'local',
+)
+const readOnlySource = computed(() => toolRuleSource('*'))
+const readOnlyValueMode = computed(() =>
+  displayedReadOnlyUnknown.value
+    ? '__unavailable__'
+    : displayedReadOnlyInvalid.value
+      ? '__invalid__'
+      : displayedReadOnlyPolicy.value || 'allow',
+)
+const readOnlyValueLabel = computed(() =>
+  displayedReadOnlyInvalid.value
+    ? st('Invalid configuration')
+    : displayedReadOnlyMode.value
+      ? modeLabel(displayedReadOnlyMode.value)
+      : st('Unavailable'),
+)
+function setPathSource(scope: 'workspace' | 'external', source: 'inherit' | 'local') {
+  if (selectedSource.value === 'global' && source === 'local') return
+  if (formDisabled.value || pathSource(scope) === source) return
+  if (source === 'inherit') {
+    setLocalSourceIntent('path.' + scope, false)
+    writePathDefault(scope, '')
+  } else {
+    const mode = inheritedPermission.value?.path?.[scope]
+    if (isPathPermissionMode(mode)) writePathDefault(scope, mode)
+    else setLocalSourceIntent('path.' + scope, true)
+  }
+}
+function setToolDefaultSource(source: 'inherit' | 'local') {
+  if (selectedSource.value === 'global' && source === 'local') return
+  if (formDisabled.value || toolDefaultSource.value === source) return
+  if (source === 'inherit') {
+    setLocalSourceIntent('tools.default', false)
+    writeToolDefault('')
+  } else if (isMode(inheritedPermission.value?.tools?.default))
+    writeToolDefault(inheritedPermission.value.tools.default)
+  else setLocalSourceIntent('tools.default', true)
+}
+function setReadOnlySource(source: 'inherit' | 'local') {
+  if (selectedSource.value === 'global' && source === 'local') return
+  if (formDisabled.value || readOnlySource.value === source) return
+  if (source === 'inherit') {
+    setLocalSourceIntent('tools.rules.*', false)
+    writeReadOnlyValue('')
+  } else if (inheritedPermission.value && !displayedReadOnlyInvalid.value)
+    writeReadOnlyValue(readOnlyPolicy(inheritedPermission.value) || 'allow')
+  else setLocalSourceIntent('tools.rules.*', true)
 }
 
 const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>(() => {
@@ -384,8 +630,17 @@ const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>
     command: [],
   }
   const localSource = selectedSource.value === 'effective' ? 'effective' : 'local'
+  const global = selectedSource.value === 'global'
   const sourceLabel = (source: PermissionRuleRow['source']) =>
-    source === 'inherited' ? st('Inherited') : source === 'effective' ? st('Effective') : st('This scope')
+    global
+      ? ''
+      : source === 'inherited'
+        ? inheritedSourceLabel.value
+        : source === 'effective'
+          ? st('Effective')
+          : profileEditor.value
+            ? st('This profile')
+            : st('This scope')
   function add(
     kind: PermissionRuleKind,
     target: string,
@@ -394,7 +649,31 @@ const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>
     source: PermissionRuleRow['source'],
     key: string,
   ) {
-    const editable = canEdit.value && source === 'local'
+    const editable = canEdit.value && (global || source === 'local')
+    const ownEditable = canEdit.value && source === 'local'
+    const inheritedMatch =
+      kind === 'filesystem'
+        ? Object.hasOwn(inheritedPermission.value?.path?.rules || {}, target)
+        : kind === 'tool-name'
+          ? hasToolEntry(inheritedPermission.value?.tools?.names, target)
+          : false
+    const sourceAction =
+      canEdit.value && !global && kind !== 'command' && source !== 'effective'
+        ? source === 'inherited'
+          ? ('local' as const)
+          : inheritedMatch
+            ? ('inherit' as const)
+            : undefined
+        : undefined
+    const sourceActionLabel = sourceAction
+      ? (sourceAction === 'local'
+          ? profileEditor.value
+            ? st('Set in this profile')
+            : st('Set in this layer')
+          : restoreSourceLabel.value) +
+        ' · ' +
+        target
+      : undefined
     rows[kind].push({
       key,
       kind,
@@ -403,11 +682,15 @@ const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>
       mode,
       source,
       sourceLabel: sourceLabel(source),
+      readOnly: !global && source === 'inherited',
       modeLabel: kind === 'filesystem' ? pathModeLabel(mode) : modeLabel(mode),
-      targetEditable: editable && (kind === 'filesystem' || kind === 'tool-name'),
-      conditionEditable: editable && kind === 'command',
-      selectable: editable && kind !== 'network',
-      removable: editable,
+      targetEditable: ownEditable && !(global && inheritedMatch) && kind !== 'network',
+      selectable: ownEditable && kind !== 'network',
+      removable: ownEditable && (kind === 'command' || !inheritedMatch),
+      sourceAction,
+      sourceActionLabel,
+      resetAction: global && ownEditable && inheritedMatch,
+      resetActionLabel: global && ownEditable && inheritedMatch ? st('Reset to defaults') + ': ' + target : undefined,
       modeOptions:
         editable && kind !== 'network'
           ? kind === 'filesystem'
@@ -422,8 +705,9 @@ const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>
     add('filesystem', path, '', pathRuleMode(mode), 'inherited', `parent:path:${path}`)
   for (const action of ['allow', 'deny'] as const)
     for (const [index, rule] of networkRules(action).entries()) {
-      const source = selectedSource.value === 'effective' ? 'effective' : networkCustom.value ? 'local' : 'inherited'
-      const editable = canEdit.value && networkCustom.value
+      const source =
+        selectedSource.value === 'effective' ? 'effective' : networkSource(action) === 'local' ? 'local' : 'inherited'
+      const editable = canEdit.value && !sourceIsReadOnly(networkSource(action))
       rows.network.push({
         key: `network:${action}:${index}`,
         kind: 'network',
@@ -439,6 +723,7 @@ const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>
         modeLabel: modeLabel(action),
         source,
         sourceLabel: sourceLabel(source),
+        readOnly: !global && source === 'inherited',
         networkAction: action,
         removable: editable,
         editAction: editable,
@@ -447,37 +732,40 @@ const ruleRowsByKind = computed<Record<PermissionRuleKind, PermissionRuleRow[]>>
   for (const [name, mode] of toolNameRules.value) add('tool-name', name, '', mode, localSource, `name:${name}`)
   for (const [name, mode] of inheritedToolNameRules.value)
     add('tool-name', name, '', mode, 'inherited', `parent:name:${name}`)
-  for (const row of customCommandRules.value)
-    add('command', row.tool, row.command, row.mode, localSource, `command:${commandRuleKey(row.tool, row.command)}`)
-  for (const row of inheritedCommandRules.value)
-    add(
-      'command',
-      row.tool,
-      row.command,
-      row.mode,
-      'inherited',
-      `parent:command:${commandRuleKey(row.tool, row.command)}`,
-    )
+  for (const [pattern, mode] of commandRules.value) add('command', pattern, '', mode, localSource, `command:${pattern}`)
+  for (const [pattern, mode] of inheritedCommandRules.value)
+    add('command', pattern, '', mode, 'inherited', `parent:command:${pattern}`)
   return rows
 })
 const selectedRuleKeysByKind = computed<Record<PermissionRuleKind, string[]>>(() => ({
   filesystem: selectedPathRules.value.map(([path]) => `path:${path}`),
   network: [],
   'tool-name': selectedToolNameRules.value.map(([name]) => `name:${name}`),
-  command: selectedCommandRules.value.map((row) => `command:${commandRuleKey(row.tool, row.command)}`),
+  command: selectedCommandRules.value.map(([pattern]) => `command:${pattern}`),
 }))
 const ruleGroups = computed(() =>
   [
-    { kind: 'filesystem' as const, label: st('Path Rules'), addLabel: st('Add path rule') },
-    { kind: 'network' as const, label: st('Network Rules'), addLabel: st('Add network rule') },
-    { kind: 'tool-name' as const, label: st('Name Rules'), addLabel: st('Add tool name') },
-    { kind: 'command' as const, label: st('Command Rules'), addLabel: st('Add command rule') },
+    { section: 'filesystem', kind: 'filesystem' as const, label: st('Path Rules'), addLabel: st('Add path rule') },
+    { section: 'network', kind: 'network' as const, label: st('Network Rules'), addLabel: st('Add network rule') },
+    { section: 'tools', kind: 'tool-name' as const, label: st('Name Rules'), addLabel: st('Add tool name') },
+    { section: 'tools', kind: 'command' as const, label: st('Command Rules'), addLabel: st('Add command rule') },
   ].map((group) => ({
     ...group,
     rows: ruleRowsByKind.value[group.kind],
     selectedKeys: selectedRuleKeysByKind.value[group.kind],
   })),
 )
+const domainColumns = computed(() => {
+  const domains = sections.value.map((section) => ({
+    ...section,
+    groups: ruleGroups.value.filter((group) => group.section === section.id),
+  }))
+  return [
+    { id: 'resources', domains: domains.filter((domain) => domain.id !== 'tools') },
+    { id: 'tools', domains: domains.filter((domain) => domain.id === 'tools') },
+  ]
+})
+
 function selectRuleRow(row: PermissionRuleRow, selected: boolean) {
   if (!row.selectable) return
   const state =
@@ -486,10 +774,9 @@ function selectRuleRow(row: PermissionRuleRow, selected: boolean) {
       : row.kind === 'tool-name'
         ? selectedToolNameRuleKeys
         : selectedCommandRuleKeys
-  const key = row.kind === 'command' ? commandRuleKey(row.target, row.condition) : row.target
   const keys = new Set(state.value)
-  if (selected) keys.add(key)
-  else keys.delete(key)
+  if (selected) keys.add(row.target)
+  else keys.delete(row.target)
   state.value = keys
 }
 function selectVisibleRuleRows(kind: PermissionRuleKind, rows: PermissionRuleRow[], selected: boolean) {
@@ -498,11 +785,12 @@ function selectVisibleRuleRows(kind: PermissionRuleKind, rows: PermissionRuleRow
 function setRuleRowMode(row: PermissionRuleRow, mode: string) {
   if (row.kind === 'filesystem') setPathRuleMode(row.target, mode)
   else if (row.kind === 'tool-name') setToolNameMode(row.target, mode)
-  else if (row.kind === 'command') setCommandMode(row.target, row.condition, mode)
+  else if (row.kind === 'command') setCommandMode(row.target, mode)
 }
 function renameRuleTarget(row: PermissionRuleRow, event: Event) {
   if (row.kind === 'filesystem') renamePathRule(row.target, event)
   else if (row.kind === 'tool-name') renameToolName(row.target, event)
+  else if (row.kind === 'command') renameCommandRule(row.target, event)
 }
 function editRuleRow(row: PermissionRuleRow) {
   if (row.kind === 'network' && row.networkAction) editNetworkRule(row.networkAction, Number(row.key.split(':').at(-1)))
@@ -510,12 +798,71 @@ function editRuleRow(row: PermissionRuleRow) {
 function removeRuleRow(row: PermissionRuleRow) {
   if (row.kind === 'filesystem') removePathRule(row.target)
   else if (row.kind === 'tool-name') removeToolName(row.target)
-  else if (row.kind === 'command') removeCommandRule(row.target, row.condition)
+  else if (row.kind === 'command') removeCommandRule(row.target)
   else if (row.networkAction) removeNetworkRule(row.networkAction, Number(row.key.split(':').at(-1)))
+}
+async function changeRuleSource(row: PermissionRuleRow) {
+  if (selectedSource.value === 'global') return
+  if (formDisabled.value || !row.sourceAction || row.kind === 'network') return
+  if (row.sourceAction === 'inherit') removeRuleRow(row)
+  else if (
+    (row.kind === 'filesystem' && isPathPermissionMode(row.mode)) ||
+    (row.kind === 'tool-name' && isMode(row.mode))
+  )
+    mutate((next) => {
+      if (row.kind === 'filesystem') ((next.path ||= {}).rules ||= {})[row.target] = row.mode as PathPermissionMode
+      else writeToolEntry(((next.tools ||= {}).names ||= {}), row.target, row.mode as PermissionMode)
+    })
+}
+async function resetRuleRow(row: PermissionRuleRow) {
+  if (selectedSource.value !== 'global' || formDisabled.value || !row.resetAction) return
+  if (row.kind === 'filesystem' || row.kind === 'tool-name') removeRuleRow(row)
+}
+function copyCommandRules() {
+  if (selectedSource.value === 'global' || formDisabled.value || commandSource.value === 'local') return
+  if (!inheritedPermission.value) {
+    setLocalSourceIntent(commandSourceKey, true)
+    return
+  }
+  mutate((next) => {
+    const rules = ((next.tools ||= {}).rules ||= {})
+    rules[SHELL_COMMAND_RULE_GROUP] = clone(commandRuleGroup(inheritedPermission.value) ?? {})
+  })
+}
+async function restoreCommandRules() {
+  if (formDisabled.value) return
+  if (!hasToolEntry(config.value.tools?.rules, SHELL_COMMAND_RULE_GROUP)) {
+    setLocalSourceIntent(commandSourceKey, false)
+    return
+  }
+  const context = contextKey.value
+  const before = JSON.stringify(commandRuleGroup(config.value))
+  const global = selectedSource.value === 'global'
+  const confirmed = await confirmAction({
+    title: global ? st('Restore default command rules?') : st('Restore inherited command rules?'),
+    description: st('This removes all command rules defined in this layer. Save to apply.'),
+    confirmText: restoreSourceLabel.value,
+    cancelText: st('Cancel'),
+  })
+  if (
+    !confirmed ||
+    formDisabled.value ||
+    context !== contextKey.value ||
+    before !== JSON.stringify(commandRuleGroup(config.value))
+  )
+    return
+  mutate((next) => {
+    if (!next.tools?.rules) return
+    delete next.tools.rules[SHELL_COMMAND_RULE_GROUP]
+    if (!Object.keys(next.tools.rules).length) delete next.tools.rules
+    if (isEmptyToolSection(next.tools)) delete next.tools
+  })
 }
 function beginRule(kind: PermissionRuleKind) {
   if (kind === 'network') {
-    if (networkCustom.value) editNetworkRule('allow')
+    const action = networkRuleLists.find((field) => !sourceIsReadOnly(networkSource(field)))
+    if (!action) return
+    editNetworkRule(action)
     return
   }
   newRuleKind.value = newRuleKind.value === kind ? '' : kind
@@ -523,48 +870,14 @@ function beginRule(kind: PermissionRuleKind) {
 function matchesQuery(value: string, query: string) {
   return value.toLowerCase().includes(query.trim().toLowerCase())
 }
-function isCommandClass(tool: string, command: string) {
-  const keyword = normalizedClassKeyword(command)
-  return canonicalPermissionToolName(tool) === 'agena.shell.write'
-    ? keyword === 'dangerous'
-    : ['no-op', 'noop', 'routine', 'dangerous'].includes(keyword)
-}
 function normalizedClassKeyword(value: string): string {
   return value
     .trim()
     .replace(/[A-Z]/g, (letter) => letter.toLowerCase())
     .replaceAll('_', '-')
 }
-function commandClassIdentity(value: string): string {
-  const keyword = normalizedClassKeyword(value)
-  return keyword === 'noop' ? 'no-op' : keyword
-}
 function isReadOnlyClass(value: string): boolean {
   return ['read-only', 'readonly'].includes(normalizedClassKeyword(value))
-}
-function readClassMode(
-  rules: PermissionMode | Record<string, PermissionMode> | undefined,
-  command: string,
-): PermissionMode | '' {
-  if (!rules || typeof rules !== 'object') return ''
-  let mode: PermissionMode | '' = ''
-  for (const [name, value] of Object.entries(rules))
-    if (commandClassIdentity(name) === commandClassIdentity(command) && isMode(value)) mode = value
-  return mode
-}
-function classMode(tool: string, command: string): PermissionMode | '' {
-  if (tool === '*' && command === 'read-only') return readOnlyPolicy(config.value) || ''
-  return readClassMode(toolEntry(config.value.tools?.rules, tool), command)
-}
-function classInheritanceLabel(tool: string, command: string): string {
-  if (hasToolEntry(config.value.tools?.rules, tool)) return st('Default / unset')
-  const parent = readClassMode(toolEntry(inheritedPermission.value?.tools?.rules, tool), command)
-  return `${st('Inherit')} · ${parent ? modeLabel(parent) : st('Default / unset')}`
-}
-function displayedClassLabel(tool: string, command: string): string {
-  const policy = hasToolEntry(config.value.tools?.rules, tool) ? config.value : inheritedPermission.value
-  const mode = readClassMode(toolEntry(policy?.tools?.rules, tool), command)
-  return mode ? modeLabel(mode) : st('Default / unset')
 }
 function toolEntry<T>(entries: Record<string, T> | undefined, name: string): T | undefined {
   return canonicalPermissionToolEntries(entries).find(([key]) => key === canonicalPermissionToolName(name))?.[1]
@@ -584,7 +897,7 @@ const selectedToolNameRules = computed(() =>
   toolNameRules.value.filter(([name]) => selectedToolNameRuleKeys.value.has(name)),
 )
 const selectedCommandRules = computed(() =>
-  customCommandRules.value.filter((row) => selectedCommandRuleKeys.value.has(commandRuleKey(row.tool, row.command))),
+  commandRules.value.filter(([pattern]) => selectedCommandRuleKeys.value.has(pattern)),
 )
 const allPathRulesSelected = computed(() =>
   areAllSelected(
@@ -598,13 +911,6 @@ const allToolNameRulesSelected = computed(() =>
     selectedToolNameRuleKeys.value,
   ),
 )
-const allCommandRulesSelected = computed(() =>
-  areAllSelected(
-    visibleCommandRules.value.map((row) => commandRuleKey(row.tool, row.command)),
-    selectedCommandRuleKeys.value,
-  ),
-)
-
 function areAllSelected(keys: string[], selected: Set<string>): boolean {
   return keys.length > 0 && keys.every((key) => selected.has(key))
 }
@@ -629,10 +935,6 @@ function clearSelection(selection: Ref<Set<string>>) {
   selection.value = new Set()
 }
 
-function commandRuleKey(tool: string, command: string): string {
-  return `${tool}\u0000${command}`
-}
-
 function pruneSelection(selection: Ref<Set<string>>, keys: string[]) {
   const available = new Set(keys)
   const next = new Set([...selection.value].filter((key) => available.has(key)))
@@ -645,9 +947,6 @@ function togglePathRule(path: string, event: Event) {
 function toggleToolNameRule(name: string, event: Event) {
   toggleSelection(selectedToolNameRuleKeys, name, event)
 }
-function toggleCommandRule(tool: string, command: string, event: Event) {
-  toggleSelection(selectedCommandRuleKeys, commandRuleKey(tool, command), event)
-}
 function toggleAllPathRules() {
   toggleAllSelection(
     selectedPathRuleKeys,
@@ -658,12 +957,6 @@ function toggleAllToolNameRules() {
   toggleAllSelection(
     selectedToolNameRuleKeys,
     visibleToolNameRules.value.map(([name]) => name),
-  )
-}
-function toggleAllCommandRules() {
-  toggleAllSelection(
-    selectedCommandRuleKeys,
-    visibleCommandRules.value.map((row) => commandRuleKey(row.tool, row.command)),
   )
 }
 function clearPathRuleSelection() {
@@ -685,7 +978,7 @@ function clearAllRuleSelections() {
 }
 
 watch(
-  [visiblePathRules, visibleToolNameRules, visibleCommandRules],
+  [visiblePathRules, visibleToolNameRules, commandRules],
   () => {
     pruneSelection(
       selectedPathRuleKeys,
@@ -697,36 +990,34 @@ watch(
     )
     pruneSelection(
       selectedCommandRuleKeys,
-      visibleCommandRules.value.map((row) => commandRuleKey(row.tool, row.command)),
+      commandRules.value.map(([pattern]) => pattern),
     )
   },
   { flush: 'sync' },
 )
 
-// A first class edit copies the complete inherited tool group before overriding it.
-function writeRule(tool: string, command: string, value: string) {
+function setReadOnlyMode(value: string) {
+  if (sourceValueDisabled(readOnlySource.value)) return
+  writeReadOnlyValue(value)
+}
+function writeReadOnlyValue(value: string) {
+  setLocalSourceIntent('tools.rules.*', false)
+  if (!isMode(value) && readOnlyInheritanceBlocked.value) return
   mutate((next) => {
-    if (tool !== '*' && isCommandClass(tool, command)) {
-      const group = hasToolEntry(next.tools?.rules, tool)
-        ? toolEntry(next.tools?.rules, tool)
-        : toolEntry(inheritedPermission.value?.tools?.rules, tool)
-      const keys =
-        group && typeof group === 'object'
-          ? Object.keys(group).filter((key) => commandClassIdentity(key) === commandClassIdentity(command))
-          : []
-      if (isMode(value)) setCommandRuleInConfig(next, tool, keys.at(-1) || command, value)
-      else for (const key of keys) setCommandRuleInConfig(next, tool, key, '')
-    } else setCommandRuleInConfig(next, tool, command, value)
-    if (isEmptyToolSection(next.tools)) delete next.tools
+    const tools = (next.tools ||= {})
+    const groups = (tools.rules ||= {})
+    const current = groups['*']
+    const rules = current && typeof current === 'object' ? current : {}
+    for (const key of Object.keys(rules)) if (isReadOnlyClass(key)) delete rules[key]
+    if (isMode(value)) rules['read-only'] = value
+    writeToolEntry(groups, '*', Object.keys(rules).length ? rules : undefined)
+    if (!Object.keys(groups).length) delete tools.rules
+    if (isEmptyToolSection(tools)) delete next.tools
   })
 }
 
 function isMode(value: unknown): value is PermissionMode {
   return value === 'allow' || value === 'auto' || value === 'ask' || value === 'deny'
-}
-
-function isShellCapableTool(value: string): boolean {
-  return (SHELL_CAPABLE_TOOLS as readonly string[]).includes(canonicalPermissionToolName(value))
 }
 
 function clone<T>(value: T): T {
@@ -743,11 +1034,12 @@ function asConfig(value: unknown): PermissionConfig {
   }
 }
 
-function syncRaw() {
+function syncRaw(publish = false) {
   rawJson.value = JSON.stringify(config.value, null, 2)
   rawJsonError.value = ''
-  networkJson.value = JSON.stringify(config.value.network || {}, null, 2)
+  networkJson.value = JSON.stringify(config.value.network || { version: 2 }, null, 2)
   networkJsonError.value = ''
+  if (publish && profileEditor.value) emit('update:draftPermission', clone(config.value))
 }
 
 function mutate(mutator: (next: PermissionConfig) => void): boolean {
@@ -757,32 +1049,40 @@ function mutate(mutator: (next: PermissionConfig) => void): boolean {
   mutator(next)
   try {
     config.value = parsePermissionConfig(next)
-    syncRaw()
+    settleSourceIntents(config.value)
+    syncRaw(true)
     error.value = ''
     return true
   } catch (reason) {
     // Invalid intermediate edits stay local so several legacy rules can be
     // repaired one by one. Save always validates the complete draft again.
     config.value = next
-    syncRaw()
+    settleSourceIntents(config.value)
+    syncRaw(true)
     error.value = permissionConfigErrorMessage(reason, st)
     rawJsonError.value = error.value
     return true
   }
 }
 
-function modeAt(scope: 'workspace' | 'external'): PathPermissionMode | '' {
+function modeAt(scope: 'workspace' | 'external'): PathPermissionMode | '' | '__invalid__' {
   const mode = config.value.path?.[scope]
-  return isPathPermissionMode(mode) ? mode : ''
+  if (mode == null) return ''
+  return isPathPermissionMode(mode) ? mode : '__invalid__'
 }
 
 function pathInheritanceLabel(scope: 'workspace' | 'external'): string {
   const mode = inheritedPermission.value?.path?.[scope]
-  const label = pathModeOptions.value.find((option) => option.value === mode)?.label
-  return label ? `${st('Inherit')} · ${label}` : st('Inherit')
+  if (mode == null) return baseSourceLabel.value
+  return `${baseSourceLabel.value} · ${isPathPermissionMode(mode) ? pathModeLabel(mode) : st('Invalid configuration')}`
 }
 
 function setPathDefault(scope: 'workspace' | 'external', value: string) {
+  if (sourceValueDisabled(pathSource(scope))) return
+  writePathDefault(scope, value)
+}
+function writePathDefault(scope: 'workspace' | 'external', value: string) {
+  setLocalSourceIntent('path.' + scope, false)
   mutate((next) => {
     next.path ||= {}
     if (isPathPermissionMode(value)) next.path[scope] = value
@@ -806,6 +1106,8 @@ function pathRuleMode(rule: unknown): PathPermissionMode | '' {
 }
 
 function setPathRuleMode(path: string, value: string) {
+  if (formDisabled.value || (selectedSource.value !== 'global' && !Object.hasOwn(config.value.path?.rules || {}, path)))
+    return
   mutate((next) => {
     next.path ||= {}
     next.path.rules ||= {}
@@ -816,6 +1118,7 @@ function setPathRuleMode(path: string, value: string) {
 }
 
 function removePathRule(path: string) {
+  if (formDisabled.value || !Object.hasOwn(config.value.path?.rules || {}, path)) return
   mutate((next) => {
     if (next.path?.rules) delete next.path.rules[path]
     if (isEmptyPathSection(next.path)) delete next.path
@@ -858,6 +1161,15 @@ function renamePathRule(path: string, event: Event) {
     input.value = path
     return
   }
+  if (
+    selectedSource.value !== 'global' &&
+    Object.hasOwn(inheritedPermission.value?.path?.rules || {}, nextPath) &&
+    !Object.hasOwn(config.value.path?.rules || {}, nextPath)
+  ) {
+    error.value = inheritedEditError()
+    input.value = path
+    return
+  }
   if (Object.prototype.hasOwnProperty.call(config.value.path?.rules || {}, nextPath)) {
     error.value = st('Path rule already exists: {nextPath}', { nextPath: nextPath })
     input.value = path
@@ -873,43 +1185,66 @@ function renamePathRule(path: string, event: Event) {
   input.value = nextPath
 }
 
-type NetworkDefault = 'default' | 'inbound' | 'hostLoopback'
-
-function networkMode(field: NetworkDefault): NetworkAction {
-  return displayedNetwork.value?.[field] || 'deny'
+function networkMode(field: NetworkDefault): NetworkAction | undefined {
+  return displayedNetwork.value?.[field]
 }
 
-function setNetworkSource(value: string) {
-  if (formDisabled.value || networkRuleDraft.value) return
+function networkSource(field: NetworkField): 'inherit' | 'local' {
+  return Object.hasOwn(config.value.network || {}, field) || localSourceIntents.value.has('network.' + field)
+    ? 'local'
+    : 'inherit'
+}
+
+function networkCanCustomize(field: NetworkField): boolean {
+  return displayedNetwork.value?.[field] !== undefined
+}
+
+function networkRuleListLabel(action: NetworkRuleList): string {
+  return action === 'allow' ? st('Allowed destinations') : st('Denied destinations')
+}
+
+function networkBaseValueLabel(field: NetworkField): string {
+  const value = inheritedNetwork.value?.[field]
+  return value === undefined
+    ? st('Unavailable')
+    : Array.isArray(value)
+      ? st('{count} rules', { count: value.length })
+      : modeLabel(value)
+}
+
+function networkParentError(): string {
+  return st('Network defaults could not be loaded. Refresh before customizing them.')
+}
+
+function setNetworkSource(field: NetworkField, value: 'inherit' | 'local') {
+  if (selectedSource.value === 'global' && value === 'local') return
+  if (formDisabled.value || networkRuleDraft.value || networkSource(field) === value) return
   if (value === 'inherit') {
+    setLocalSourceIntent('network.' + field, false)
     mutate((next) => {
-      delete next.network
+      if (!next.network) return
+      delete next.network[field]
+      if (!networkFields.some((key) => Object.hasOwn(next.network!, key))) delete next.network
     })
-  } else if (value === 'custom' && !networkCustom.value) {
-    if (!inheritedNetwork.value) {
-      inheritedNetworkError.value = st(
-        'The inherited network policy could not be loaded. Refresh before customizing it.',
-      )
+  } else {
+    const current = displayedNetwork.value?.[field]
+    if (current === undefined) {
+      setLocalSourceIntent('network.' + field, true)
       return
     }
     mutate((next) => {
-      next.network = clone(inheritedNetwork.value!)
+      next.network = { ...next.network, version: 2, [field]: clone(current) }
     })
   }
 }
 
 function setNetworkMode(field: NetworkDefault, value: string) {
-  if (formDisabled.value || !networkCustom.value || (value !== 'allow' && value !== 'deny')) return
+  if (sourceValueDisabled(networkSource(field)) || networkRuleDraft.value || (value !== 'allow' && value !== 'deny'))
+    return
+  setLocalSourceIntent('network.' + field, false)
   mutate((next) => {
-    const network = (next.network ||= {})
+    const network = (next.network ||= { version: 2 })
     network[field] = value
-  })
-}
-
-function useNetworkPreset(mode: NetworkAction) {
-  if (formDisabled.value || networkRuleDraft.value) return
-  mutate((next) => {
-    next.network = { default: mode }
   })
 }
 
@@ -923,8 +1258,9 @@ function networkPortsLabel(rule: NetworkRule): string {
 }
 
 function editNetworkRule(action: NetworkRuleList, index: number | null = null) {
-  if (formDisabled.value || !networkCustom.value || networkRuleDraft.value) return
-  const rule = index === null ? undefined : config.value.network?.[action]?.[index]
+  if (sourceValueDisabled(networkSource(action)) || networkRuleDraft.value) return
+  const rule = index === null ? undefined : networkRules(action)[index]
+  if (index !== null && !rule) return
   newRuleKind.value = 'network'
   networkRuleDraft.value = {
     action,
@@ -944,7 +1280,12 @@ function cancelNetworkRule() {
 }
 
 function setNetworkRuleProtocol(value: string) {
-  if (!networkRuleDraft.value || !['tcp', 'udp', 'icmp', 'any'].includes(value)) return
+  if (
+    !networkRuleDraft.value ||
+    sourceValueDisabled(networkSource(networkRuleDraft.value.action)) ||
+    !['tcp', 'udp', 'icmp', 'any'].includes(value)
+  )
+    return
   networkRuleDraft.value.protocol = value as NetworkProtocol
   if (value === 'icmp') networkRuleDraft.value.ports = ''
   networkRuleError.value = ''
@@ -952,7 +1293,8 @@ function setNetworkRuleProtocol(value: string) {
 
 function applyNetworkRule(): boolean {
   const draft = networkRuleDraft.value
-  if (!draft || editingDisabled.value || rawPending.value || networkPending.value) return false
+  if (!draft || sourceValueDisabled(networkSource(draft.action)) || rawPending.value || networkPending.value)
+    return false
   try {
     const rule: NetworkRule = { to: draft.to.trim() }
     if (draft.protocol !== 'any') rule.protocol = draft.protocol
@@ -963,14 +1305,16 @@ function applyNetworkRule(): boolean {
       })
     if (draft.except.trim()) rule.except = draft.except.split(',').map((entry) => entry.trim())
     const next = clone(config.value)
-    const network = (next.network ||= {})
-    const rules = (network[draft.action] ||= [])
+    const network = (next.network ||= { version: 2 })
+    // Editing one list fixes only that list in this layer, including an empty list.
+    const rules = (network[draft.action] ||= clone(networkRules(draft.action)))
     if (draft.index === null) rules.push(rule)
     else rules[draft.index] = rule
     const checked = parsePermissionConfig(next)
     config.value = checked
+    setLocalSourceIntent('network.' + draft.action, false)
     cancelNetworkRule()
-    syncRaw()
+    syncRaw(true)
     error.value = ''
     return true
   } catch (reason) {
@@ -980,21 +1324,22 @@ function applyNetworkRule(): boolean {
 }
 
 function removeNetworkRule(action: NetworkRuleList, index: number) {
-  if (formDisabled.value || networkRuleDraft.value || !networkCustom.value) return
+  if (sourceValueDisabled(networkSource(action)) || networkRuleDraft.value || !networkRules(action)[index]) return
   mutate((next) => {
-    const rules = next.network?.[action]
-    if (!rules) return
+    const network = (next.network ||= { version: 2 })
+    const rules = (network[action] ||= clone(networkRules(action)))
     rules.splice(index, 1)
-    if (!rules.length) delete next.network![action]
   })
 }
 
 function applyNetworkJson(): boolean {
-  if (editingDisabled.value || rawPending.value || networkRuleDraft.value) return false
+  if (networkJsonReadOnly.value) return false
   try {
     const next = clone(config.value)
     next.network = parseNetworkPermissionConfig(JSON.parse(networkJson.value))
+    assertEditableOverrides(next)
     config.value = parsePermissionConfig(next)
+    settleSourceIntents(config.value)
     syncRaw()
     error.value = ''
     return true
@@ -1005,9 +1350,9 @@ function applyNetworkJson(): boolean {
 }
 
 function useNetworkExample() {
-  if (editingDisabled.value || rawPending.value || networkRuleDraft.value) return
+  if (networkJsonReadOnly.value || !networkFullyLocal.value) return
   networkJson.value = JSON.stringify(
-    { default: 'deny', allow: [{ to: '192.0.2.10', protocol: 'tcp', ports: [443, '8000-8099'] }] },
+    { version: 2, default: 'deny', allow: [{ to: '192.0.2.10', protocol: 'tcp', ports: [443, '8000-8099'] }] },
     null,
     2,
   )
@@ -1015,6 +1360,11 @@ function useNetworkExample() {
 }
 
 function setToolDefault(value: string) {
+  if (sourceValueDisabled(toolDefaultSource.value)) return
+  writeToolDefault(value)
+}
+function writeToolDefault(value: string) {
+  setLocalSourceIntent('tools.default', false)
   mutate((next) => {
     next.tools ||= {}
     if (isMode(value)) next.tools.default = value
@@ -1024,6 +1374,8 @@ function setToolDefault(value: string) {
 }
 
 function setToolNameMode(name: string, value: string) {
+  if (formDisabled.value || (selectedSource.value !== 'global' && !hasToolEntry(config.value.tools?.names, name)))
+    return
   mutate((next) => {
     next.tools ||= {}
     next.tools.names ||= {}
@@ -1032,6 +1384,7 @@ function setToolNameMode(name: string, value: string) {
 }
 
 function removeToolName(name: string) {
+  if (formDisabled.value || !hasToolEntry(config.value.tools?.names, name)) return
   mutate((next) => {
     if (next.tools?.names) writeToolEntry(next.tools.names, name, undefined)
     if (isEmptyToolSection(next.tools)) delete next.tools
@@ -1067,6 +1420,15 @@ function renameToolName(name: string, event: Event) {
     input.value = name
     return
   }
+  if (
+    selectedSource.value !== 'global' &&
+    hasToolEntry(inheritedPermission.value?.tools?.names, nextName) &&
+    !hasToolEntry(config.value.tools?.names, nextName)
+  ) {
+    error.value = inheritedEditError()
+    input.value = name
+    return
+  }
   if (hasToolEntry(config.value.tools?.names, nextName)) {
     error.value = st('Tool name rule already exists: {nextName}', { nextName: nextName })
     input.value = name
@@ -1083,103 +1445,83 @@ function renameToolName(name: string, event: Event) {
   input.value = nextName
 }
 
-function setCommandMode(tool: string, command: string, value: string) {
-  if (!isShellCapableTool(tool) && tool !== '*') return
-  mutate((next) => {
-    setCommandRuleInConfig(next, tool, command, value)
-  })
+function setCommandMode(pattern: string, value: string) {
+  if (sourceValueDisabled(commandSource.value) || !isMode(value)) return
+  mutate((next) => setCommandRuleInConfig(next, pattern, value))
 }
 
-function removeCommandRule(tool: string, command: string) {
-  mutate((next) => {
-    setCommandRuleInConfig(next, tool, command, '')
-    if (isEmptyToolSection(next.tools)) delete next.tools
-  })
+function removeCommandRule(pattern: string) {
+  if (sourceValueDisabled(commandSource.value)) return
+  mutate((next) => setCommandRuleInConfig(next, pattern))
 }
 
-function setCommandRuleInConfig(next: PermissionConfig, tool: string, command: string, value: string) {
-  if (!isShellCapableTool(tool) && !(tool === '*' && command === 'read-only')) return
-  tool = canonicalPermissionToolName(tool)
-  next.tools ||= {}
-  next.tools.rules ||= {}
-  // A tool's rule group replaces its parent as a whole. A first local edit
-  // starts with that complete group so other inherited patterns stay active.
-  const current = hasToolEntry(next.tools.rules, tool)
-    ? toolEntry(next.tools.rules, tool)
-    : isMode(value)
-      ? toolEntry(inheritedPermission.value?.tools?.rules, tool)
-      : undefined
-  const rules: Record<string, PermissionMode> = isMode(current)
-    ? tool === '*'
-      ? {}
-      : { '*': current }
-    : current && typeof current === 'object' && !Array.isArray(current)
-      ? ({ ...current } as Record<string, PermissionMode>)
-      : {}
-  if (tool === '*' && command === 'read-only') {
-    for (const key of Object.keys(rules)) if (isReadOnlyClass(key)) delete rules[key]
-  }
-  if (isMode(value)) rules[command] = value
-  else delete rules[command]
-  writeToolEntry(next.tools.rules, tool, Object.keys(rules).length ? rules : undefined)
+function setCommandRuleInConfig(next: PermissionConfig, pattern: string, mode?: PermissionMode) {
+  const groups = ((next.tools ||= {}).rules ||= {})
+  const current = commandRuleGroup(next) || commandRuleGroup(inheritedPermission.value) || {}
+  const entries = new Map(Object.entries(current))
+  if (mode) entries.set(pattern, mode)
+  else entries.delete(pattern)
+  groups[SHELL_COMMAND_RULE_GROUP] = Object.fromEntries(entries)
 }
 
 function setSelectedCommandMode(value: string) {
-  const rows = selectedCommandRules.value.map(({ tool, command }) => ({ tool, command }))
-  if (!rows.length || !isMode(value)) return
+  if (sourceValueDisabled(commandSource.value) || !isMode(value)) return
   mutate((next) => {
-    for (const { tool, command } of rows) setCommandRuleInConfig(next, tool, command, value)
+    for (const [pattern] of selectedCommandRules.value) setCommandRuleInConfig(next, pattern, value)
   })
 }
 
 function removeSelectedCommandRules() {
-  const rows = selectedCommandRules.value.map(({ tool, command }) => ({ tool, command }))
-  if (!rows.length) return
+  if (sourceValueDisabled(commandSource.value)) return
   mutate((next) => {
-    for (const { tool, command } of rows) setCommandRuleInConfig(next, tool, command, '')
-    if (isEmptyToolSection(next.tools)) delete next.tools
+    for (const [pattern] of selectedCommandRules.value) setCommandRuleInConfig(next, pattern)
   })
   clearSelection(selectedCommandRuleKeys)
 }
 
-function renameCommandRule(tool: string, command: string, event: Event) {
+function renameCommandRule(pattern: string, event: Event) {
   const input = event.target as HTMLInputElement
-  if (tool === '*') {
-    input.value = command
+  const name = input.value.trim()
+  const rules = commandRuleGroup(config.value)
+  if (
+    sourceValueDisabled(commandSource.value) ||
+    !name ||
+    name === pattern ||
+    !rules ||
+    !Object.hasOwn(rules, pattern)
+  ) {
+    input.value = pattern
     return
   }
-  const nextCommand = input.value.trim()
-  if (!nextCommand || nextCommand === command) {
-    input.value = command
+  if (Object.hasOwn(rules, name)) {
+    error.value = st('Command pattern already exists: {pattern}', { pattern: name })
+    input.value = pattern
     return
   }
-  const existing = toolEntry(config.value.tools?.rules, tool)
-  const rules = isMode(existing) ? { '*': existing } : existing
-  if (rules && typeof rules === 'object' && Object.prototype.hasOwnProperty.call(rules, nextCommand)) {
-    error.value = st('Command rule already exists for {tool}: {nextCommand}', { tool: tool, nextCommand: nextCommand })
-    input.value = command
-    return
-  }
-  mutate((next) => {
-    const raw = toolEntry(next.tools?.rules, tool)
-    const nextRules: Record<string, PermissionMode> = isMode(raw)
-      ? { '*': raw }
-      : raw && typeof raw === 'object' && !Array.isArray(raw)
-        ? ({ ...raw } as Record<string, PermissionMode>)
-        : {}
-    if (!nextRules[command]) return
-    writeToolEntry(next.tools!.rules!, tool, renamePermissionRule(nextRules, command, nextCommand))
-  })
-  error.value = ''
-  input.value = nextCommand
+  if (
+    mutate((next) => {
+      next.tools!.rules![SHELL_COMMAND_RULE_GROUP] = renamePermissionRule(rules, pattern, name)
+    })
+  )
+    input.value = name
+  else input.value = pattern
 }
 
 function addPathRule() {
+  if (formDisabled.value) return
   let path: string
   try {
     path = canonicalPermissionPath(newPath.value)
   } catch (reason) {
     error.value = permissionConfigErrorMessage(reason, st)
+    return
+  }
+  if (
+    selectedSource.value !== 'global' &&
+    Object.hasOwn(inheritedPermission.value?.path?.rules || {}, path) &&
+    !Object.hasOwn(config.value.path?.rules || {}, path)
+  ) {
+    error.value = inheritedEditError()
     return
   }
   if (Object.prototype.hasOwnProperty.call(config.value.path?.rules || {}, path)) {
@@ -1195,8 +1537,17 @@ function addPathRule() {
 }
 
 function addToolName() {
+  if (formDisabled.value) return
   const name = canonicalPermissionToolName(newToolName.value.trim())
   if (!name) return
+  if (
+    selectedSource.value !== 'global' &&
+    hasToolEntry(inheritedPermission.value?.tools?.names, name) &&
+    !hasToolEntry(config.value.tools?.names, name)
+  ) {
+    error.value = inheritedEditError()
+    return
+  }
   if (hasToolEntry(config.value.tools?.names, name)) {
     error.value = st('Tool name rule already exists: {name}', { name: name })
     return
@@ -1211,29 +1562,43 @@ function addToolName() {
 }
 
 function addCommandRule() {
-  const tool = canonicalPermissionToolName(newCommandTool.value.trim())
-  const command = newCommandPattern.value.trim()
-  if (!isShellCapableTool(tool) || !command) return
-  const existing = toolEntry(config.value.tools?.rules, tool)
-  if (
-    (isMode(existing) && command === '*') ||
-    (existing && typeof existing === 'object' && Object.prototype.hasOwnProperty.call(existing, command))
-  ) {
-    error.value = st('Command rule already exists for {tool}: {nextCommand}', { tool, nextCommand: command })
+  const pattern = newCommandPattern.value.trim()
+  if (!pattern || sourceValueDisabled(commandSource.value)) return
+  const rules = commandRuleGroup(config.value) || commandRuleGroup(inheritedPermission.value)
+  if (Object.hasOwn(rules || {}, pattern)) {
+    error.value = st('Command pattern already exists: {pattern}', { pattern })
     return
   }
-  setCommandMode(tool, command, newCommandMode.value)
-  error.value = ''
-  newCommandPattern.value = ''
+  if (mutate((next) => setCommandRuleInConfig(next, pattern, newCommandMode.value))) newCommandPattern.value = ''
+}
+
+const pendingRule = computed(() =>
+  Boolean(
+    networkRuleDraft.value ||
+    (newRuleKind.value === 'filesystem' && newPath.value) ||
+    (newRuleKind.value === 'tool-name' && newToolName.value) ||
+    (newRuleKind.value === 'command' && newCommandPattern.value),
+  ),
+)
+function applyPendingRule(): boolean {
+  if (networkRuleDraft.value) return applyNetworkRule()
+  if (!pendingRule.value) return true
+  if (newRuleKind.value === 'filesystem') addPathRule()
+  else if (newRuleKind.value === 'tool-name') addToolName()
+  else addCommandRule()
+  return !pendingRule.value
 }
 
 function applyRawJson(): boolean {
-  if (editingDisabled.value || networkPending.value || networkRuleDraft.value) return false
+  if (rawJsonReadOnly.value) return false
   try {
     const parsed = JSON.parse(rawJson.value) as JsonValue
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
       throw new Error(st('Permission config must be a JSON object.'))
-    config.value = parsePermissionConfig(parsed)
+    const next = parsePermissionConfig(parsed)
+    assertEditableOverrides(next)
+    config.value = next
+    settleSourceIntents(config.value)
     syncRaw()
     return true
   } catch (reason) {
@@ -1244,9 +1609,9 @@ function applyRawJson(): boolean {
 }
 
 const contextKey = computed(() => {
+  if (profileEditor.value) return 'profile'
   const source = selectedSource.value
-  // Layer endpoints belong to the server runtime. Only session-backed reads
-  // change their target when the client opens another conversation.
+  if (source === 'workspace') return JSON.stringify([source, activeWorkspaceTarget.value])
   return JSON.stringify(source === 'session' || source === 'effective' ? [source, activeSessionId.value] : [source])
 })
 type PermissionDraft = {
@@ -1255,6 +1620,8 @@ type PermissionDraft = {
   raw: string
   network: string
   networkRule: NetworkRuleDraft | null
+  sourceIntents: string[]
+  revision?: string
 }
 const drafts = new Map<string, PermissionDraft>()
 let loadedContext = ''
@@ -1263,44 +1630,101 @@ let loadController: AbortController | undefined
 
 function rememberDraft() {
   if (!loadedContext || !loaded.value) return
-  if (dirty.value)
+  if (dirty.value || localSourceIntents.value.size)
     drafts.set(loadedContext, {
       config: clone(config.value),
       saved: clone(savedConfig.value),
       raw: rawJson.value,
       network: networkJson.value,
       networkRule: clone(networkRuleDraft.value),
+      sourceIntents: [...localSourceIntents.value],
+      revision: configRevision.value,
     })
   else drafts.delete(loadedContext)
 }
 
-type PolicyRead = { policy: PermissionConfig; inherited?: unknown; configPath?: string }
+type PolicyRead = {
+  policy: PermissionConfig
+  profile?: string
+  inherited?: unknown
+  resolved?: unknown
+  configPath?: string
+  workspaceId?: number | null
+  activeWorkspace?: boolean
+  revision?: string
+}
 async function readPolicy(
   source: PermissionSource,
   sessionId: number | null,
+  workspaceTarget: string,
   signal: AbortSignal,
 ): Promise<PolicyRead> {
+  if (props.draftPermission !== undefined) return { policy: asConfig(props.draftPermission) }
   if (source === 'global' || source === 'workspace') {
-    const response = await apiJson<SettingsResponse>(`/api/v1/settings/layers/${source}?path=permission`, { signal })
-    return { policy: asConfig(response.value), inherited: response.inherited_value, configPath: response.config_path }
+    const params = new URLSearchParams({ path: 'permission' })
+    if (source === 'workspace' && workspaceTarget) params.set('workspace_id', workspaceTarget)
+    const profileParams = new URLSearchParams(params)
+    profileParams.set('path', 'permission_profile')
+    const [response, selection] = await Promise.all([
+      apiJson<SettingsResponse>(`/api/v1/settings/layers/${source}?${params}`, { signal }),
+      apiJson<SettingsResponse>(`/api/v1/settings/layers/${source}?${profileParams}`, { signal }),
+    ])
+    if (
+      source === 'workspace' &&
+      workspaceTarget &&
+      [response, selection].some((item) => item.workspace_id !== Number(workspaceTarget))
+    ) {
+      throw new Error(st('The server did not return the selected workspace.'))
+    }
+    if (response.revision !== selection.revision)
+      throw new Error(st('The configuration changed. Refresh and try again.'))
+    return {
+      policy: asConfig(response.value),
+      profile:
+        source === 'global' && typeof selection.layer_value === 'string'
+          ? selection.layer_value
+          : typeof selection.value === 'string'
+            ? selection.value
+            : '',
+      inherited: runtimeSettingBaseValue(response, source),
+      resolved: response.layer_value,
+      configPath: response.config_path,
+      workspaceId: response.workspace_id,
+      activeWorkspace: response.active_workspace,
+      revision: response.revision,
+    }
   }
   if (sessionId) {
     const session = await apiJson<SessionStateResponse>(`/api/v1/sessions/${sessionId}/state`, { signal })
     const execution = session.execution
+    const effective =
+      execution?.execution?.effective_permission ||
+      execution?.effective_permission ||
+      execution?.context?.effective_permission
     const value =
       source === 'session'
         ? execution?.execution?.selected_permission ||
           execution?.selected_permission ||
           execution?.context?.selected_permission
-        : execution?.execution?.effective_permission ||
-          execution?.effective_permission ||
-          execution?.context?.effective_permission
+        : effective
     const inherited =
       execution?.execution?.inherited_permission ||
       execution?.inherited_permission ||
       execution?.context?.inherited_permission
     const policy = asConfig(value)
-    if (source === 'session' || Object.keys(policy).length) return { policy, inherited }
+    if (source === 'session') {
+      const profile =
+        execution?.execution?.permission_profile ??
+        execution?.permission_profile ??
+        execution?.context?.permission_profile
+      return {
+        policy,
+        inherited,
+        resolved: profile ? effective : undefined,
+        profile,
+      }
+    }
+    if (Object.keys(policy).length) return { policy, inherited }
   }
   if (source === 'session') return { policy: {} }
   const response = await apiJson<SettingsResponse>('/api/v1/settings?source=effective&path=permission', { signal })
@@ -1309,8 +1733,9 @@ async function readPolicy(
 
 async function load() {
   const key = contextKey.value
-  const source = selectedSource.value
+  const source = settingsScope.value
   const sessionId = activeSessionId.value
+  const workspaceTarget = activeWorkspaceTarget.value
   const generation = ++loadGeneration
   loadController?.abort()
   const controller = new AbortController()
@@ -1322,8 +1747,16 @@ async function load() {
     cancelNetworkRule()
     newRuleKind.value = ''
     inheritedPermission.value = null
+    appliedProfile.value = ''
+    chosenProfile.value = ''
+    hasCustomPermission.value = Boolean(draft && Object.keys(draft.saved).length)
+    resolvedPermission.value = null
     configPath.value = ''
+    workspaceId.value = null
+    workspaceConfigIsActive.value = undefined
+    configRevision.value = draft?.revision
     inheritedNetworkError.value = ''
+    localSourceIntents.value = new Set(draft?.sourceIntents || [])
     config.value = clone(draft?.config || {})
     savedConfig.value = clone(draft?.saved || {})
     syncRaw()
@@ -1339,9 +1772,12 @@ async function load() {
   error.value = ''
   saveError.value = ''
   try {
-    const [policy, catalog] = await Promise.allSettled([
-      readPolicy(source, sessionId, controller.signal),
+    const [policy, catalog, profiles] = await Promise.allSettled([
+      readPolicy(source, sessionId, workspaceTarget, controller.signal),
       apiJson<ToolCatalogResponse>('/api/v1/plugins/surface', { signal: controller.signal }),
+      !profileEditor.value && source !== 'effective'
+        ? apiJson<SettingsResponse>('/api/v1/settings/layers/global?path=access_control', { signal: controller.signal })
+        : null,
     ])
     if (generation !== loadGeneration || key !== contextKey.value) return
     if (catalog.status === 'fulfilled') {
@@ -1351,26 +1787,52 @@ async function load() {
         .sort((a, b) => a.name.localeCompare(b.name))
     }
     if (policy.status === 'rejected') throw policy.reason
+    permissionProfiles.value =
+      profiles.status === 'fulfilled' && profiles.value ? permissionProfilesForLayer(profiles.value) : null
     configPath.value = String(policy.value.configPath || '')
+    workspaceId.value = policy.value.workspaceId ?? null
+    workspaceConfigIsActive.value = policy.value.activeWorkspace
     inheritedPermission.value = null
+    resolvedPermission.value = null
     inheritedNetworkError.value = ''
-    if (source !== 'effective') {
+    if (policy.value.resolved !== undefined) {
       try {
-        const parent = parsePermissionConfig(policy.value.inherited)
-        inheritedPermission.value = parent
-        if (parent.network === undefined)
-          throw new Error(st('The inherited network policy could not be loaded. Refresh before customizing it.'))
+        resolvedPermission.value = parsePermissionConfig(policy.value.resolved)
+        resolvedRawFingerprint.value = JSON.stringify(policy.value.policy)
       } catch {
-        inheritedNetworkError.value = st(
-          'The inherited network policy could not be loaded. Refresh before customizing it.',
-        )
+        // The raw editor remains available when resolved metadata is invalid.
+      }
+    }
+    if (profileEditor.value) {
+      inheritedPermission.value = props.inheritedDraftPermission ?? null
+    } else if (source !== 'effective') {
+      try {
+        const defaults =
+          source === 'global' ? permissionProfiles.value?.[DEFAULT_PERMISSION_PROFILE_ID]?.permission : undefined
+        const parent = defaults ? completePermissionConfig(defaults) : parsePermissionConfig(policy.value.inherited)
+        inheritedPermission.value = parent
+        if (parent.network === undefined) throw new Error(networkParentError())
+      } catch {
+        inheritedNetworkError.value = networkParentError()
       }
     }
     // A refresh updates server data only when the editor has no pending work.
     if (!dirty.value || !loaded.value) {
-      config.value = clone(policy.value.policy)
-      savedConfig.value = clone(policy.value.policy)
+      appliedProfile.value = policy.value.profile ?? ''
+      chosenProfile.value = appliedProfile.value
+      hasCustomPermission.value = Boolean(Object.keys(policy.value.policy).length)
+      const next = linkedPermission.value
+        ? (resolvedPermission.value ??
+          completePermissionConfig(permissionProfiles.value?.[appliedProfile.value]?.permission ?? {}))
+        : policy.value.policy
+      config.value = clone(next)
+      savedConfig.value = clone(next)
       syncRaw()
+      configRevision.value = policy.value.revision
+    }
+    if (linkedPermission.value) {
+      inheritedPermission.value = null
+      inheritedNetworkError.value = ''
     }
     loaded.value = true
     try {
@@ -1378,6 +1840,7 @@ async function load() {
     } catch (reason) {
       rawJsonError.value = permissionConfigErrorMessage(reason, st)
       rawEditorOpen.value = true
+      if (profileEditor.value) error.value = rawJsonError.value
     }
   } catch (reason) {
     if (generation === loadGeneration && key === contextKey.value && !controller.signal.aborted)
@@ -1389,6 +1852,7 @@ async function load() {
 
 function discard() {
   if (saving.value) return
+  localSourceIntents.value = new Set()
   cancelNetworkRule()
   config.value = clone(savedConfig.value)
   syncRaw()
@@ -1399,13 +1863,14 @@ function discard() {
 }
 
 async function save() {
-  if (editingDisabled.value || !dirty.value) return
+  if (profileEditor.value || editingDisabled.value || !dirty.value) return
   if (networkRuleDraft.value && !applyNetworkRule()) return
   if (networkPending.value && !applyNetworkJson()) return
   if (rawPending.value && !applyRawJson()) return
   const key = contextKey.value
-  const source = selectedSource.value
+  const source = settingsScope.value
   const sessionId = activeSessionId.value
+  const workspaceTarget = activeWorkspaceTarget.value
   let snapshot: PermissionConfig
   try {
     snapshot = parsePermissionConfig(config.value)
@@ -1422,6 +1887,7 @@ async function save() {
   saveError.value = ''
   try {
     let savedPermission = snapshot
+    let revision = configRevision.value
     if (source === 'session') {
       const response = await chat.setSessionPermission(String(sessionId), snapshot as JsonValue)
       const execution = response.execution as SessionStateResponse['execution']
@@ -1431,25 +1897,32 @@ async function save() {
           execution?.context?.selected_permission,
       )
     } else {
+      const options = {
+        reload: true,
+        workspace_id: source === 'workspace' ? workspaceTarget || undefined : undefined,
+        expected_revision: revision,
+      }
       const response = !Object.keys(snapshot).length
-        ? await deleteRuntimeSetting('permission', { reload: true }, source as 'global' | 'workspace')
-        : await setRuntimeSetting(
-            'permission',
-            snapshot as JsonValue,
-            { reload: true },
-            source as 'global' | 'workspace',
-          )
+        ? await deleteRuntimeSetting('permission', options, source as 'global' | 'workspace')
+        : await setRuntimeSetting('permission', snapshot as JsonValue, options, source as 'global' | 'workspace')
       // `current` is the persisted layer value even when runtime reload is
       // deferred. Do not replace it with a potentially older effective read.
       // Older response shapes must be confirmed by reading the same raw layer.
-      savedPermission = parsePermissionConfig(
-        response.current !== undefined
-          ? (response.current ?? {})
-          : (await readPolicy(source, sessionId, new AbortController().signal)).policy,
-      )
+      if (response.current !== undefined) {
+        savedPermission = parsePermissionConfig(response.current ?? {})
+        revision = response.after_revision
+      } else {
+        const read = await readPolicy(source, sessionId, workspaceTarget, new AbortController().signal)
+        savedPermission = parsePermissionConfig(read.policy)
+        revision = read.revision
+      }
     }
     drafts.delete(key)
     if (key === contextKey.value) {
+      resolvedPermission.value = null
+      localSourceIntents.value = new Set()
+      configRevision.value = revision
+      hasCustomPermission.value = Boolean(Object.keys(savedPermission).length)
       savedConfig.value = clone(savedPermission)
       config.value = clone(savedPermission)
       syncRaw()
@@ -1464,19 +1937,67 @@ async function save() {
   }
 }
 
+async function applyPermissionProfile() {
+  if (profileEditor.value || !canEdit.value || !loaded.value || loading.value || saving.value || sandboxSaving.value)
+    return
+  const id = chosenProfile.value
+  if (id === appliedProfile.value || (id && !Object.hasOwn(permissionProfiles.value ?? {}, id))) return
+  const key = contextKey.value
+  if (dirty.value || pendingRule.value) {
+    const confirmed = await confirmAction({
+      title: st('Discard unsaved permission changes?'),
+      confirmText: st('Discard changes'),
+      cancelText: st('Keep editing'),
+    })
+    if (!confirmed || key !== contextKey.value || id !== chosenProfile.value || saving.value) return
+  }
+  const source = settingsScope.value
+  saving.value = true
+  saveError.value = ''
+  try {
+    if (source === 'session') {
+      await chat.setSessionPermissionProfile(String(activeSessionId.value), id || null)
+    } else if (source === 'global' || source === 'workspace') {
+      const options = {
+        workspace_id: source === 'workspace' ? activeWorkspaceTarget.value || undefined : undefined,
+        expected_revision: configRevision.value,
+      }
+      if (id || source === 'global') await setRuntimeSetting('permission_profile', id, options, source)
+      else await deleteRuntimeSetting('permission_profile', options, source)
+    }
+    drafts.delete(key)
+    if (key === contextKey.value) {
+      loaded.value = false
+      cancelNetworkRule()
+      localSourceIntents.value = new Set()
+      clearAllRuleSelections()
+      await load()
+    }
+  } catch (reason) {
+    if (key === contextKey.value) saveError.value = permissionConfigErrorMessage(reason, st)
+  } finally {
+    saving.value = false
+  }
+}
+
 async function clearSource() {
-  if (editingDisabled.value) return
+  if (profileEditor.value || editingDisabled.value) return
   const key = contextKey.value
   const confirmed = await confirmAction({
-    title: st('Reset permissions in this scope?'),
-    description: st(
-      'This resets all permission overrides in this scope, including advanced fields. Save to apply the reset.',
-    ),
-    confirmText: st('Reset'),
+    title:
+      selectedSource.value === 'global'
+        ? st('Restore default global permissions?')
+        : st('Reset permissions in this scope?'),
+    description:
+      selectedSource.value === 'global'
+        ? st('This restores all global permission settings on this page, including advanced fields. Save to apply.')
+        : st('This resets all permission overrides in this scope, including advanced fields. Save to apply the reset.'),
+    confirmText: selectedSource.value === 'global' ? st('Reset to defaults') : st('Reset'),
     cancelText: st('Cancel'),
   })
   if (!confirmed || editingDisabled.value || key !== contextKey.value) return
   cancelNetworkRule()
+  localSourceIntents.value = new Set()
   config.value = {}
   syncRaw()
   error.value = ''
@@ -1484,7 +2005,7 @@ async function clearSource() {
 }
 
 async function canLeave() {
-  if (saving.value || rulesPanel.value?.busy) return false
+  if (saving.value || sandboxSaving.value || rulesPanel.value?.busy) return false
   if (!dirty.value && !drafts.size) return true
   return confirmAction({
     title: st('Discard unsaved permission changes?'),
@@ -1505,7 +2026,7 @@ function ownsNavigation(to: Pick<RouteLocationNormalized, 'query'>): boolean {
 onBeforeRouteUpdate(async (to, from) => {
   // All mounted settings panes share route records. A navigation in another
   // pane must neither ask about nor discard this pane's retained draft.
-  if (!ownsNavigation(to)) return true
+  if (profileEditor.value || !ownsNavigation(to)) return true
   const sourceRoute =
     workspacePane && routeWindowId(from) && routeWindowId(from) !== workspacePane.windowId.value ? route : from
   const source = normalizePermissionSource(sourceRoute.query.scope || selectedSource.value)
@@ -1513,7 +2034,12 @@ onBeforeRouteUpdate(async (to, from) => {
   if (
     to.params.section === 'permissions' &&
     isPermissionAccessView(to.query.view || PERMISSION_ACCESS_VIEW) &&
-    normalizePermissionSource(to.query.scope || source) === source &&
+    normalizePermissionSource(
+      legacyPermissionAccessScope(to.query.view, to.query.scope) || to.query.scope || source,
+    ) === source &&
+    (source !== 'workspace' ||
+      permissionWorkspaceTarget(to.query.targetWorkspaceId) ===
+        permissionWorkspaceTarget(sourceRoute.query.targetWorkspaceId)) &&
     ((source !== 'session' && source !== 'effective') ||
       resolveSettingsSessionId(to.query.targetSessionId, recordedSessionId) ===
         resolveSettingsSessionId(sourceRoute.query.targetSessionId, recordedSessionId))
@@ -1524,7 +2050,7 @@ onBeforeRouteUpdate(async (to, from) => {
   drafts.clear()
   return true
 })
-onBeforeRouteLeave((to) => !ownsNavigation(to) || canLeave())
+onBeforeRouteLeave((to) => profileEditor.value || !ownsNavigation(to) || canLeave())
 function beforeUnload(event: BeforeUnloadEvent) {
   if (!dirty.value && !drafts.size) return
   event.preventDefault()
@@ -1532,9 +2058,15 @@ function beforeUnload(event: BeforeUnloadEvent) {
 }
 async function refresh() {
   if (saving.value) return
-  await Promise.allSettled([load(), rulesPanel.value?.refresh()])
+  await Promise.allSettled([load(), rulesPanel.value?.refresh(), sandboxSettings.value?.refresh()])
 }
-defineExpose({ refresh })
+defineExpose({ refresh, pendingRule, applyPendingRule })
+function sectionHash(section: PermissionAccessSection) {
+  return profileEditor.value ? '#' + rawJsonErrorId + '-' + section : permissionAccessHash(section)
+}
+function ruleGroupHash(kind: PermissionRuleKind) {
+  return profileEditor.value ? '#' + rawJsonErrorId + '-rules-' + kind : '#permission-rules-' + kind
+}
 async function scrollToPermissionElement(selector: string) {
   await nextTick()
   const element = editorElement.value?.querySelector<HTMLElement>(selector)
@@ -1545,22 +2077,23 @@ async function scrollToPermissionElement(selector: string) {
   element.focus({ preventScroll: true })
 }
 function scrollToSection(section: PermissionAccessSection) {
-  return scrollToPermissionElement(`[data-permission-section="${section}"]`)
+  return scrollToPermissionElement(sectionHash(section))
 }
 function selectSection(section: PermissionAccessSection) {
-  const hash = permissionAccessHash(section)
-  if (route.hash === hash) void scrollToSection(section)
+  const hash = sectionHash(section)
+  if (profileEditor.value || route.hash === hash) void scrollToSection(section)
   else void router.replace({ path: route.path, query: route.query, hash })
 }
 function selectRuleGroup(kind: PermissionRuleKind) {
-  const hash = '#permission-rules-' + kind
-  if (route.hash === hash) void scrollToPermissionElement(`[data-permission-rule-table="${kind}"]`)
+  const hash = ruleGroupHash(kind)
+  if (profileEditor.value || route.hash === hash)
+    void scrollToPermissionElement(`[data-permission-rule-table="${kind}"]`)
   else void router.replace({ path: route.path, query: route.query, hash })
 }
 watch(
   [loaded, () => route.hash],
   ([ready, hash]) => {
-    if (!ready) return
+    if (profileEditor.value || !ready) return
     const section = permissionSectionFromHash(hash)
     if (section) void scrollToSection(section)
     else {
@@ -1571,9 +2104,23 @@ watch(
   { flush: 'post' },
 )
 watch(contextKey, () => void load())
+watch(
+  () => props.inheritedDraftPermission,
+  (permission) => {
+    if (profileEditor.value) inheritedPermission.value = permission ?? null
+  },
+)
+watch(
+  () => props.draftPermission,
+  (permission) => {
+    if (!permission || !loaded.value || JSON.stringify(permission) === JSON.stringify(config.value)) return
+    config.value = asConfig(permission)
+    syncRaw()
+  },
+)
 onMounted(() => {
   void load()
-  window.addEventListener('beforeunload', beforeUnload)
+  if (!profileEditor.value) window.addEventListener('beforeunload', beforeUnload)
 })
 onBeforeUnmount(() => {
   loadGeneration += 1
@@ -1583,12 +2130,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section ref="editorElement" class="permission-studio min-w-0" :aria-busy="loading || saving">
+  <section
+    ref="editorElement"
+    class="permission-studio min-w-0"
+    :class="{ 'is-profile': profileEditor }"
+    :aria-busy="loading || saving"
+  >
     <PermissionAccessToolbar
-      :scope="selectedSource"
+      v-if="!profileEditor"
+      :scope="settingsScope"
       :session-id="sessionId"
+      :workspace-target="activeWorkspaceTarget"
       :config-path="configPath"
-      :disabled="saving || Boolean(rulesPanel?.busy)"
+      :disabled="saving || sandboxSaving || Boolean(rulesPanel?.busy)"
     >
       <template #status>
         <span class="permission-status" role="status" aria-live="polite">
@@ -1624,13 +2178,14 @@ onBeforeUnmount(() => {
           >
         </div>
         <IconButton
-          v-if="canEdit"
+          v-if="canEdit && !linkedPermission"
           variant="ghost"
           size="sm"
           class="h-8 w-8"
           :disabled="editingDisabled || !Object.keys(config).length"
-          :tooltip="$st('Reset scope')"
-          :aria-label="$st('Reset scope')"
+          :tooltip="selectedSource === 'global' ? $st('Reset to defaults') : $st('Reset scope')"
+          :aria-label="selectedSource === 'global' ? $st('Reset to defaults') : $st('Reset scope')"
+          data-permission-reset-all
           @click="clearSource"
           ><RiResetLeftLine class="h-4 w-4"
         /></IconButton>
@@ -1656,654 +2211,669 @@ onBeforeUnmount(() => {
     <p v-if="selectedSource === 'session' && !activeSessionId" class="py-3 text-[13px] text-muted-foreground">
       {{ $st('Open a session to edit current-session permission.') }}
     </p>
-    <div v-else-if="!loaded && loading" class="my-2 grid grid-cols-3 gap-2" aria-hidden="true">
-      <div v-for="n in 3" :key="n" class="h-32 animate-pulse rounded border border-border bg-muted/20" />
+    <div v-else-if="!loaded && loading" class="permission-domain-grid" aria-hidden="true">
+      <div v-for="n in 2" :key="n" class="h-36 animate-pulse rounded-xl border border-border/75 bg-card/75" />
     </div>
     <template v-else-if="loaded">
-      <nav class="permission-mobile-summary" :aria-label="$st('Access permission sections')" data-permission-sections>
-        <a
-          v-for="section in sections"
-          :key="section.id"
-          :href="permissionAccessHash(section.id)"
-          :data-permission-summary="section.id"
-          @click.prevent="selectSection(section.id)"
-        >
-          <span class="flex items-center gap-1.5 font-medium"
-            ><component :is="section.icon" class="h-4 w-4 shrink-0" />{{ section.label }}</span
-          >
-          <span class="text-muted-foreground">{{ sectionSummary(section.id) }}</span>
-        </a>
-      </nav>
-
-      <div class="permission-default-grid">
-        <section
-          class="permission-domain"
-          data-permission-section="filesystem"
-          :aria-label="$st('File access')"
-          tabindex="-1"
-        >
-          <header class="permission-domain-heading">
-            <h2>
-              <a :href="permissionAccessHash('filesystem')" @click.prevent="selectSection('filesystem')"
-                ><RiFolderLine class="h-4 w-4" />{{ $st('File access') }}</a
-              >
-            </h2>
-            <PermissionHelp
-              class="ml-auto"
-              :text="
-                $st('Choose readonly, readwrite, or deny for workspace and external paths.') +
-                ' ' +
-                $st(
-                  'Use concrete files or directories. Directories include all descendants; denied paths cannot be reopened.',
-                )
-              "
-            />
-          </header>
-          <PermissionPolicyRow
-            v-for="scope in pathScopes"
-            :key="scope.id"
-            :label="scope.label"
-            :hint="scope.description"
-            :value="pathModeLabel(displayedPathMode(scope.id))"
-            :editable="canEdit"
-            :origin="canEdit && !modeAt(scope.id) ? $st('Inherited') : ''"
-            :data-permission-default="'path.' + scope.id"
-          >
-            <OptionPicker
-              :model-value="modeAt(scope.id)"
-              :options="pathModeOptions"
-              :empty-label="pathInheritanceLabel(scope.id)"
-              :display-label="pathModeLabel(displayedPathMode(scope.id))"
-              :title="$st('Path access mode')"
-              :disabled="formDisabled"
-              size="sm"
-              @update:model-value="setPathDefault(scope.id, $event)"
-            />
-          </PermissionPolicyRow>
-        </section>
-        <section
-          class="permission-domain"
-          data-permission-section="network"
-          :aria-label="$st('Network access')"
-          tabindex="-1"
-        >
-          <header class="permission-domain-heading">
-            <h2>
-              <a :href="permissionAccessHash('network')" @click.prevent="selectSection('network')"
-                ><RiGlobalLine class="h-4 w-4" />{{ $st('Network access') }}</a
-              >
-            </h2>
-            <div v-if="canEdit" class="ml-auto w-28 shrink-0" data-permission-default="network.source">
-              <OptionPicker
-                :model-value="networkCustom ? 'custom' : 'inherit'"
-                :options="networkSourceOptions"
-                :include-empty="false"
-                :display-label="networkCustom ? $st('Custom') : $st('Inherited')"
-                :title="$st('Network configuration')"
-                :disabled="formDisabled || Boolean(networkRuleDraft)"
-                size="sm"
-                @update:model-value="setNetworkSource"
-              />
-            </div>
-            <PermissionHelp
-              :text="
-                $st('Custom network settings replace the parent policy as a whole. Missing values deny access.') +
-                ' ' +
-                $st('Customizing starts with a copy of the inherited policy.') +
-                ' ' +
-                $st('Deny rules take precedence over every allow rule.')
-              "
-            />
-          </header>
-          <PermissionPolicyRow
-            :label="$st('Outbound default')"
-            :hint="$st('Action when no outbound rule matches.')"
-            :value="modeLabel(networkMode('default'))"
-            :editable="canEdit && networkCustom"
-            data-permission-default="network.default"
-            ><OptionPicker
-              :model-value="networkMode('default')"
-              :options="networkActionOptions"
-              :include-empty="false"
-              :title="$st('Outbound default')"
-              :disabled="formDisabled"
-              size="sm"
-              @update:model-value="setNetworkMode('default', $event)"
-          /></PermissionPolicyRow>
-          <PermissionPolicyRow
-            v-for="field in networkAdvancedDefaults"
-            :key="field.id"
-            :label="field.label"
-            :hint="field.description"
-            :value="modeLabel(networkMode(field.id))"
-            :editable="canEdit && networkCustom"
-            :data-permission-default="'network.' + field.id"
-            ><OptionPicker
-              :model-value="networkMode(field.id)"
-              :options="networkActionOptions"
-              :include-empty="false"
-              :title="field.label"
-              :disabled="formDisabled"
-              size="sm"
-              @update:model-value="setNetworkMode(field.id, $event)"
-          /></PermissionPolicyRow>
-          <p v-if="inheritedNetworkError && !networkCustom" role="alert" class="py-1 text-[13px] text-destructive">
-            {{ inheritedNetworkError }}
-          </p>
-        </section>
-        <section
-          class="permission-domain"
-          data-permission-section="tools"
-          :aria-label="$st('Tool execution & approvals')"
-          tabindex="-1"
-        >
-          <header class="permission-domain-heading">
-            <h2>
-              <a :href="permissionAccessHash('tools')" @click.prevent="selectSection('tools')"
-                ><RiToolsLine class="h-4 w-4" />{{ $st('Tool execution & approvals') }}</a
-              >
-            </h2>
-            <PermissionHelp
-              class="ml-auto"
-              :text="
-                $st('Set the fallback policy and access for tools that only read data.') +
-                ' ' +
-                $st('Choose a tool to override its default access policy.') +
-                ' ' +
-                $st(
-                  'Match shell commands with patterns such as git push *. The last matching command rule wins; a denied tool stays denied.',
-                )
-              "
-            />
-          </header>
-          <PermissionPolicyRow
-            :label="$st('Default tool mode')"
-            :hint="$st('Used when no tool-specific rule matches.')"
-            :value="modeLabel(displayedToolDefault)"
-            :editable="canEdit"
-            :origin="canEdit && !config.tools?.default ? $st('Inherited') : ''"
-            data-permission-default="tools.default"
-            ><OptionPicker
-              :model-value="config.tools?.default || ''"
-              :options="modeOptions"
-              :empty-label="toolInheritanceLabel()"
-              :display-label="modeLabel(displayedToolDefault)"
-              :title="$st('Default tool mode')"
-              :disabled="formDisabled"
-              size="sm"
-              @update:model-value="setToolDefault"
-          /></PermissionPolicyRow>
-          <PermissionPolicyRow
-            :label="$st('Read-only tools')"
-            :hint="$st('Read-only Auto follows the default tool policy; named tool rules take precedence.')"
-            :value="modeLabel(displayedReadOnlyMode)"
-            :editable="canEdit"
-            :origin="
-              canEdit && !Object.hasOwn(config.tools?.rules || {}, '*')
-                ? $st('Inherited')
-                : displayedReadOnlyPolicy === 'auto'
-                  ? $st('Auto')
-                  : ''
-            "
-            data-permission-default="tools.read-only"
-            ><OptionPicker
-              :model-value="readOnlyEditorMode"
-              :options="readOnlyModeOptions"
-              :empty-label="readOnlyInheritanceLabel()"
-              :display-label="modeLabel(displayedReadOnlyMode)"
-              :title="$st('Read-only tools')"
-              :disabled="formDisabled"
-              size="sm"
-              @update:model-value="writeRule('*', 'read-only', $event)"
-          /></PermissionPolicyRow>
-        </section>
-      </div>
-      <nav class="permission-rule-navigation" :aria-label="$st('Access rules')">
-        <a
-          v-for="group in ruleGroups"
-          :key="group.kind"
-          :href="'#permission-rules-' + group.kind"
-          :data-permission-rule-link="group.kind"
-          @click.prevent="selectRuleGroup(group.kind)"
-        >
-          {{ group.label }}<span>{{ group.rows.length }}</span>
-        </a>
-      </nav>
-      <PermissionRuleTable
-        v-for="group in ruleGroups"
-        :id="'permission-rules-' + group.kind"
-        :key="group.kind"
-        class="permission-rule-group"
+      <SandboxSettingsPanel
+        v-if="!profileEditor"
+        :id="sectionHash('sandbox').slice(1)"
+        ref="sandboxSettings"
+        class="permission-sandbox"
+        data-permission-section="sandbox"
+        :aria-label="$st('Sandbox & resource preflight')"
         tabindex="-1"
-        :kind="group.kind"
-        :rows="group.rows"
-        :selected-keys="group.selectedKeys"
-        :disabled="formDisabled || Boolean(networkRuleDraft)"
-        @select="selectRuleRow"
-        @select-visible="(rows, selected) => selectVisibleRuleRows(group.kind, rows, selected)"
-        @mode="setRuleRowMode"
-        @rename-target="renameRuleTarget"
-        @rename-condition="(row, event) => renameCommandRule(row.target, row.condition, event)"
-        @edit="editRuleRow"
-        @remove="removeRuleRow"
+        :scope="selectedSource"
+        :workspace-id="activeWorkspaceTarget"
+        :active-workspace="workspaceConfigIsActive"
+        :disabled="saving"
+        @saved="load"
+      />
+      <div
+        v-if="!profileEditor && canEdit"
+        class="settings-toolbar mt-2 rounded-md border border-border/70 px-2.5 py-1.5"
+        data-permission-profile-picker
       >
-        <template v-if="canEdit" #actions>
-          <Button
-            variant="outline"
-            size="sm"
-            class="h-8 px-2 text-[13px]"
-            :disabled="formDisabled || Boolean(networkRuleDraft) || (group.kind === 'network' && !networkCustom)"
-            :data-permission-create-toggle="group.kind"
-            :aria-expanded="newRuleKind === group.kind"
-            @click="beginRule(group.kind)"
-            ><RiAddLine class="mr-1 h-3.5 w-3.5" />{{ group.addLabel }}</Button
+        <label class="flex min-w-0 flex-[1_1_14rem] flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium">
+          {{ $st('Permission profile') }}
+          <select
+            v-model="chosenProfile"
+            :disabled="loading || saving || sandboxSaving"
+            class="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm"
           >
-        </template>
-        <template #bulk>
-          <div v-if="group.kind === 'filesystem' && selectedPathRules.length" class="permission-bulk-group">
-            <span>{{ $st('Path Rules') }} · {{ selectedPathRules.length }}</span
-            ><OptionPicker
-              v-model="bulkPathMode"
-              :options="pathModeOptions"
-              :include-empty="false"
-              :title="$st('Path access mode')"
-              size="sm"
-              :disabled="formDisabled"
-            /><Button variant="outline" size="sm" :disabled="formDisabled" @click="applySelectedPathMode">{{
-              $st('Apply')
-            }}</Button
-            ><Button variant="ghost" size="sm" :disabled="formDisabled" @click="removeSelectedPathRules">{{
-              $st('Remove selected')
-            }}</Button
-            ><IconButton
-              size="sm"
-              variant="ghost"
-              :aria-label="$st('Select none')"
-              :tooltip="$st('Select none')"
-              @click="clearPathRuleSelection"
-              ><RiCloseLine class="h-4 w-4"
-            /></IconButton>
-          </div>
-          <div v-if="group.kind === 'tool-name' && selectedToolNameRules.length" class="permission-bulk-group">
-            <span>{{ $st('Name Rules') }} · {{ selectedToolNameRules.length }}</span
-            ><OptionPicker
-              v-model="bulkToolNameMode"
-              :options="modeOptions"
-              :include-empty="false"
-              :title="$st('Tool name mode')"
-              size="sm"
-              :disabled="formDisabled"
-            /><Button
-              variant="outline"
-              size="sm"
-              :disabled="formDisabled"
-              @click="setSelectedToolNameMode(bulkToolNameMode)"
-              >{{ $st('Apply') }}</Button
-            ><Button variant="ghost" size="sm" :disabled="formDisabled" @click="removeSelectedToolNameRules">{{
-              $st('Remove selected')
-            }}</Button
-            ><IconButton
-              size="sm"
-              variant="ghost"
-              :aria-label="$st('Select none')"
-              :tooltip="$st('Select none')"
-              @click="clearToolNameRuleSelection"
-              ><RiCloseLine class="h-4 w-4"
-            /></IconButton>
-          </div>
-          <div v-if="group.kind === 'command' && selectedCommandRules.length" class="permission-bulk-group">
-            <span>{{ $st('Command Rules') }} · {{ selectedCommandRules.length }}</span
-            ><OptionPicker
-              v-model="bulkCommandMode"
-              :options="modeOptions"
-              :include-empty="false"
-              :title="$st('Command rule mode')"
-              size="sm"
-              :disabled="formDisabled"
-            /><Button
-              variant="outline"
-              size="sm"
-              :disabled="formDisabled"
-              @click="setSelectedCommandMode(bulkCommandMode)"
-              >{{ $st('Apply') }}</Button
-            ><Button variant="ghost" size="sm" :disabled="formDisabled" @click="removeSelectedCommandRules">{{
-              $st('Remove selected')
-            }}</Button
-            ><IconButton
-              size="sm"
-              variant="ghost"
-              :aria-label="$st('Select none')"
-              :tooltip="$st('Select none')"
-              @click="clearCommandRuleSelection"
-              ><RiCloseLine class="h-4 w-4"
-            /></IconButton>
-          </div>
-        </template>
-        <template #create>
-          <fieldset
-            v-if="group.kind === newRuleKind && group.kind !== 'network'"
-            class="permission-rule-form"
-            :disabled="formDisabled"
-            data-permission-create-form
+            <option value="">
+              {{ settingsScope === 'global' || hasCustomPermission ? $st('Custom permissions') : $st('Inherit') }}
+            </option>
+            <option v-if="appliedProfile && !permissionProfiles?.[appliedProfile]" :value="appliedProfile">
+              {{ appliedProfile }}
+            </option>
+            <option v-for="[id, profile] in profileOptions" :key="id" :value="id">
+              {{ permissionProfileDisplayName(id, profile) }}
+            </option>
+          </select>
+        </label>
+        <Button
+          v-if="chosenProfile !== appliedProfile"
+          size="sm"
+          :disabled="loading || saving || sandboxSaving"
+          @click="applyPermissionProfile"
+          >{{ $st('Apply') }}</Button
+        >
+        <RouterLink
+          :to="{ path: '/settings/permissions', query: { ...route.query, view: 'profiles', scope: 'global' } }"
+          class="rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          >{{ $st('Manage permission profiles') }}</RouterLink
+        >
+        <p
+          v-if="linkedPermission && permissionProfiles && !permissionProfiles[appliedProfile]"
+          role="alert"
+          class="basis-full break-words text-xs text-destructive"
+        >
+          {{ $st('The selected permission configuration is missing.') }}
+        </p>
+      </div>
+      <p
+        v-if="selectedSource === 'workspace' && workspaceConfigIsActive === false"
+        class="mt-3 text-xs text-muted-foreground"
+      >
+        {{ $st('This configuration file is loaded when the server starts in this workspace.') }}
+      </p>
+      <div class="permission-domain-grid" data-permission-rule-layout>
+        <div v-for="column in domainColumns" :key="column.id" class="permission-domain-column">
+          <section
+            v-for="domain in column.domains"
+            :id="sectionHash(domain.id).slice(1)"
+            :key="domain.id"
+            class="permission-domain"
+            :data-permission-section="domain.id"
+            :aria-label="domain.label"
+            tabindex="-1"
           >
-            <div class="mb-1 flex items-center justify-between gap-2">
-              <strong class="text-[13px]">{{
-                newRuleKind === 'filesystem'
-                  ? $st('Add path rule')
-                  : newRuleKind === 'tool-name'
-                    ? $st('Add tool name')
-                    : $st('Add command rule')
-              }}</strong
-              ><IconButton
-                variant="ghost"
-                size="sm"
-                :aria-label="$st('Cancel')"
-                :tooltip="$st('Cancel')"
-                @click="newRuleKind = ''"
-                ><RiCloseLine class="h-4 w-4"
-              /></IconButton>
-            </div>
-            <template v-if="newRuleKind === 'filesystem'"
-              ><form class="permission-create-form" @submit.prevent="addPathRule">
-                <label class="permission-control"
-                  ><span>{{ $st('Path') }}</span
-                  ><Input
-                    v-model="newPath"
-                    :placeholder="$st('Exact file or directory')"
-                    :aria-label="$st('Path')"
-                    class="h-8 font-mono text-[13px]"
-                /></label>
-                <div class="permission-create-actions">
+            <header class="permission-domain-heading">
+              <h2>
+                <a :href="sectionHash(domain.id)" @click.prevent="selectSection(domain.id)">
+                  <component :is="domain.icon" class="h-4 w-4 shrink-0" aria-hidden="true" />
+                  {{ domain.label }}
+                </a>
+              </h2>
+              <nav class="permission-rule-navigation" :aria-label="$st('Access rules')">
+                <a
+                  v-for="group in domain.groups"
+                  :key="group.kind"
+                  :href="ruleGroupHash(group.kind)"
+                  :data-permission-rule-link="group.kind"
+                  @click.prevent="selectRuleGroup(group.kind)"
+                >
+                  {{ group.label }}<span class="tabular-nums">{{ group.rows.length }}</span>
+                </a>
+              </nav>
+              <PermissionHelp class="permission-domain-help" :text="domain.help" />
+            </header>
+            <div class="permission-domain-defaults">
+              <template v-if="domain.id === 'filesystem'">
+                <PermissionPolicyRow
+                  :scope="selectedSource"
+                  v-for="scope in pathScopes"
+                  :key="scope.id"
+                  :label="scope.label"
+                  :hint="scope.description"
+                  :value="pathModeLabel(displayedPathMode(scope.id))"
+                  :editable="canEdit"
+                  :source="pathSource(scope.id)"
+                  :inherited-value="pathModeLabel(inheritedPermission?.path?.[scope.id])"
+                  :inherited-source="inheritedSourceLabel"
+                  :disabled="formDisabled"
+                  :data-permission-default="'path.' + scope.id"
+                  @source="setPathSource(scope.id, $event)"
+                >
                   <OptionPicker
-                    v-model="newPathMode"
+                    :model-value="String(displayedPathMode(scope.id) || '__invalid__')"
                     :options="pathModeOptions"
                     :include-empty="false"
-                    :title="$st('New path access mode')"
+                    :display-label="
+                      !isPathPermissionMode(displayedPathMode(scope.id))
+                        ? pathModeLabel(displayedPathMode(scope.id))
+                        : undefined
+                    "
+                    :title="$st('Path access mode')"
+                    :disabled="sourceValueDisabled(pathSource(scope.id))"
                     size="sm"
-                    :disabled="formDisabled"
-                  /><Button type="submit" variant="outline" size="sm" :disabled="formDisabled || !newPath.trim()">{{
-                    $st('Add path rule')
-                  }}</Button>
-                </div>
-              </form></template
-            ><template v-else-if="newRuleKind === 'tool-name'"
-              ><form class="permission-create-form" @submit.prevent="addToolName">
-                <label class="permission-control"
-                  ><span>{{ $st('Tool name') }}</span
+                    @update:model-value="setPathDefault(scope.id, $event)"
+                  />
+                </PermissionPolicyRow>
+              </template>
+              <template v-else-if="domain.id === 'network'">
+                <PermissionPolicyRow
+                  :scope="selectedSource"
+                  :label="$st('Outbound default')"
+                  :hint="$st('Action when no outbound rule matches.')"
+                  :value="modeLabel(networkMode('default'))"
+                  :editable="canEdit"
+                  :source="networkSource('default')"
+                  :inherited-value="networkBaseValueLabel('default')"
+                  :inherited-source="inheritedSourceLabel"
+                  :disabled="formDisabled || Boolean(networkRuleDraft)"
+                  data-permission-default="network.default"
+                  @source="setNetworkSource('default', $event)"
                   ><OptionPicker
-                    v-model="newToolName"
-                    :options="toolOptions"
+                    :model-value="networkMode('default') || ''"
+                    :options="networkActionOptions"
                     :include-empty="false"
-                    :allow-custom="true"
-                    :title="$st('Tool name')"
-                    :placeholder="$st('Choose or enter a tool name')"
-                    :disabled="formDisabled"
+                    :display-label="networkMode('default') ? undefined : $st('Unavailable')"
+                    :title="$st('Outbound default')"
+                    :disabled="sourceValueDisabled(networkSource('default')) || Boolean(networkRuleDraft)"
                     size="sm"
-                    monospace
-                /></label>
-                <div class="permission-create-actions">
-                  <OptionPicker
-                    v-model="newToolNameMode"
+                    @update:model-value="setNetworkMode('default', $event)"
+                /></PermissionPolicyRow>
+                <PermissionPolicyRow
+                  :scope="selectedSource"
+                  v-for="field in networkAdvancedDefaults"
+                  :key="field.id"
+                  :label="field.label"
+                  :hint="field.description"
+                  :value="modeLabel(networkMode(field.id))"
+                  :editable="canEdit"
+                  :source="networkSource(field.id)"
+                  :inherited-value="networkBaseValueLabel(field.id)"
+                  :inherited-source="inheritedSourceLabel"
+                  :disabled="formDisabled || Boolean(networkRuleDraft)"
+                  :data-permission-default="'network.' + field.id"
+                  @source="setNetworkSource(field.id, $event)"
+                  ><OptionPicker
+                    :model-value="networkMode(field.id) || ''"
+                    :options="networkActionOptions"
+                    :include-empty="false"
+                    :display-label="networkMode(field.id) ? undefined : $st('Unavailable')"
+                    :title="field.label"
+                    :disabled="sourceValueDisabled(networkSource(field.id)) || Boolean(networkRuleDraft)"
+                    size="sm"
+                    @update:model-value="setNetworkMode(field.id, $event)"
+                /></PermissionPolicyRow>
+                <p v-if="inheritedNetworkError" role="alert" class="py-1 text-[13px] text-destructive">
+                  {{ inheritedNetworkError }}
+                </p>
+              </template>
+              <template v-else-if="domain.id === 'tools'">
+                <PermissionPolicyRow
+                  :scope="selectedSource"
+                  :label="$st('Default tool mode')"
+                  :hint="$st('Used when no tool-specific rule matches.')"
+                  :value="toolDefaultValueLabel"
+                  :editable="canEdit"
+                  :source="toolDefaultSource"
+                  :inherited-value="policyModeLabel(inheritedPermission?.tools?.default)"
+                  :inherited-source="inheritedSourceLabel"
+                  :disabled="formDisabled"
+                  data-permission-default="tools.default"
+                  @source="setToolDefaultSource"
+                  ><OptionPicker
+                    :model-value="displayedToolDefault || '__invalid__'"
                     :options="modeOptions"
                     :include-empty="false"
-                    :title="$st('Tool name mode')"
-                    :disabled="formDisabled"
+                    :display-label="!displayedToolDefault ? toolDefaultValueLabel : undefined"
+                    :title="$st('Default tool mode')"
+                    :disabled="sourceValueDisabled(toolDefaultSource)"
                     size="sm"
-                  /><Button type="submit" variant="outline" size="sm" :disabled="formDisabled || !newToolName.trim()">{{
-                    $st('Add tool name')
-                  }}</Button>
-                </div>
-              </form></template
-            ><template v-else
-              ><form class="permission-create-form" @submit.prevent="addCommandRule">
-                <label class="permission-control"
-                  ><span>{{ $st('Tool name') }}</span
+                    @update:model-value="setToolDefault"
+                /></PermissionPolicyRow>
+                <PermissionPolicyRow
+                  :scope="selectedSource"
+                  :label="$st('Read-only tools')"
+                  :hint="$st('Read-only Auto follows the default tool policy; named tool rules take precedence.')"
+                  :value="readOnlyValueLabel"
+                  :editable="canEdit"
+                  :source="readOnlySource"
+                  :inherited-value="readOnlyInheritedValueLabel()"
+                  :inherited-source="inheritedSourceLabel"
+                  :disabled="formDisabled"
+                  :inherit-disabled="readOnlyInheritanceBlocked"
+                  data-permission-default="tools.read-only"
+                  @source="setReadOnlySource"
                   ><OptionPicker
-                    v-model="newCommandTool"
-                    :options="shellToolOptions"
+                    :model-value="readOnlyValueMode"
+                    :options="readOnlyModeOptions"
                     :include-empty="false"
-                    :title="$st('Shell-capable tool')"
-                    :disabled="formDisabled"
+                    :display-label="
+                      displayedReadOnlyInvalid || displayedReadOnlyUnknown ? readOnlyValueLabel : undefined
+                    "
+                    :title="$st('Read-only tools')"
+                    :disabled="sourceValueDisabled(readOnlySource)"
                     size="sm"
-                    monospace /></label
-                ><label class="permission-control"
-                  ><span>{{ $st('Command pattern') }}</span
-                  ><Input
-                    v-model="newCommandPattern"
-                    class="h-8 font-mono text-[13px]"
-                    placeholder="git push *"
-                    :aria-label="$st('Command pattern')"
-                /></label>
-                <div class="permission-create-actions">
-                  <OptionPicker
-                    v-model="newCommandMode"
-                    :options="modeOptions"
-                    :include-empty="false"
-                    :title="$st('Command rule mode')"
+                    @update:model-value="setReadOnlyMode($event)"
+                /></PermissionPolicyRow>
+              </template>
+            </div>
+            <div class="permission-domain-rules">
+              <PermissionRuleTable
+                v-for="group in domain.groups"
+                :id="ruleGroupHash(group.kind).slice(1)"
+                :key="group.kind"
+                class="permission-rule-group"
+                tabindex="-1"
+                :kind="group.kind"
+                :scope="selectedSource"
+                :rows="group.rows"
+                :selected-keys="group.selectedKeys"
+                :disabled="formDisabled || Boolean(networkRuleDraft)"
+                @select="selectRuleRow"
+                @select-visible="(rows, selected) => selectVisibleRuleRows(group.kind, rows, selected)"
+                @mode="setRuleRowMode"
+                @rename-target="renameRuleTarget"
+                @edit="editRuleRow"
+                @remove="removeRuleRow"
+                @source="changeRuleSource"
+                @reset="resetRuleRow"
+              >
+                <template v-if="canEdit" #actions>
+                  <SettingsSourceControl
+                    v-if="group.kind === 'command'"
+                    :scope="selectedSource"
+                    :model-value="commandSource"
+                    :label="group.label"
+                    :inherited-source="inheritedSourceLabel"
+                    :show-inherited-summary="false"
                     :disabled="formDisabled"
-                    size="sm"
-                  /><Button
-                    type="submit"
+                    @update:model-value="$event === 'local' ? copyCommandRules() : restoreCommandRules()"
+                  />
+                  <PopoverRoot v-if="group.kind === 'network'">
+                    <PopoverTrigger as-child>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        class="permission-network-source-trigger gap-1 px-2 text-[13px] text-muted-foreground"
+                        data-permission-network-sources
+                        :aria-label="group.label + ' · ' + $st('Source')"
+                        :title="$st('Source')"
+                        :disabled="formDisabled || Boolean(networkRuleDraft)"
+                      >
+                        <RiListSettingsLine class="h-4 w-4" aria-hidden="true" />
+                        <span>{{ $st('Source') }}</span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverPortal>
+                      <PopoverContent
+                        class="permission-network-source-popover"
+                        align="end"
+                        :side-offset="6"
+                        :collision-padding="12"
+                        :aria-label="group.label + ' · ' + $st('Source')"
+                        data-permission-network-source-menu
+                      >
+                        <div
+                          v-for="action in networkRuleLists"
+                          :key="action"
+                          class="permission-network-list-source"
+                          :data-permission-default="'network.' + action"
+                        >
+                          <span>{{ networkRuleListLabel(action) }}</span>
+                          <SettingsSourceControl
+                            :scope="selectedSource"
+                            :model-value="networkSource(action)"
+                            :label="networkRuleListLabel(action)"
+                            :inherited-value="networkBaseValueLabel(action)"
+                            :inherited-source="inheritedSourceLabel"
+                            :show-inherited-summary="false"
+                            :disabled="formDisabled || Boolean(networkRuleDraft)"
+                            @update:model-value="setNetworkSource(action, $event)"
+                          />
+                        </div>
+                        <p class="text-xs leading-snug text-muted-foreground">
+                          {{
+                            $st(
+                              'Each list replaces only the same list from the base settings. An empty local list clears those rules.',
+                            )
+                          }}
+                        </p>
+                      </PopoverContent>
+                    </PopoverPortal>
+                  </PopoverRoot>
+                  <Button
                     variant="outline"
                     size="sm"
-                    :disabled="formDisabled || !newCommandPattern.trim()"
-                    >{{ $st('Add command rule') }}</Button
+                    class="h-8 px-2 text-[13px]"
+                    :disabled="
+                      formDisabled ||
+                      Boolean(networkRuleDraft) ||
+                      (group.kind === 'command' && sourceIsReadOnly(commandSource)) ||
+                      (group.kind === 'network' &&
+                        networkRuleLists.every((action) => sourceIsReadOnly(networkSource(action))))
+                    "
+                    :data-permission-create-toggle="group.kind"
+                    :aria-expanded="newRuleKind === group.kind"
+                    @click="beginRule(group.kind)"
+                    ><RiAddLine class="mr-1 h-3.5 w-3.5" />{{ group.addLabel }}</Button
                   >
-                </div>
-              </form></template
-            >
-          </fieldset>
-          <form
-            v-if="group.kind === 'network' && networkRuleDraft"
-            class="permission-create-form my-1.5 rounded border border-primary/20 bg-primary/5 p-2"
-            @submit.prevent="applyNetworkRule"
-            data-permission-create-form
-          >
-            <label v-if="networkRuleDraft.index === null" class="permission-control"
-              ><span>{{ $st('Mode') }}</span
-              ><OptionPicker
-                v-model="networkRuleDraft.action"
-                :options="networkActionOptions"
-                :include-empty="false"
-                :title="$st('Mode')"
-                size="sm"
-                :disabled="editingDisabled"
-            /></label>
-            <label class="permission-control"
-              ><span>{{ $st('Destination') }}</span
-              ><Input
-                v-model="networkRuleDraft.to"
-                class="h-8 font-mono text-[13px]"
-                placeholder="192.0.2.10"
-                :disabled="editingDisabled"
-                :aria-label="$st('Destination')"
-                :title="$st('One IP address, CIDR, or * for all destinations.')"
-                @update:model-value="networkRuleError = ''"
-            /></label>
-            <div class="permission-create-actions">
-              <label class="permission-control"
-                ><span>{{ $st('Protocol') }}</span
-                ><OptionPicker
-                  :model-value="networkRuleDraft.protocol"
-                  :options="networkProtocolOptions"
-                  :include-empty="false"
-                  :title="$st('Protocol')"
-                  :disabled="editingDisabled"
-                  size="sm"
-                  @update:model-value="setNetworkRuleProtocol" /></label
-              ><label class="permission-control"
-                ><span>{{ $st('Ports') }}</span
-                ><Input
-                  v-model="networkRuleDraft.ports"
-                  data-permission-network-ports
-                  class="h-8 font-mono text-[13px]"
-                  placeholder="443, 8000-8099"
-                  :disabled="editingDisabled || networkRuleDraft.protocol === 'icmp'"
-                  :aria-label="$st('Ports')"
-                  :title="$st('Separate ports and ranges with commas. Leave blank for all ports.')"
-                  @update:model-value="networkRuleError = ''"
-              /></label>
-            </div>
-            <details :open="Boolean(networkRuleDraft.except)">
-              <summary class="cursor-pointer text-[13px]">{{ $st('Excluded subnets') }}</summary>
-              <Input
-                v-model="networkRuleDraft.except"
-                class="mt-1 h-8 font-mono text-[13px]"
-                placeholder="10.20.10.0/24"
-                :disabled="editingDisabled"
-                :aria-label="$st('Excluded subnets')"
-                :title="$st('Exclude subnets from this rule only. Use a deny rule to block them everywhere.')"
-                @update:model-value="networkRuleError = ''"
-              />
-            </details>
-            <p v-if="networkRuleError" role="alert" class="text-[13px] text-destructive">{{ networkRuleError }}</p>
-            <div class="flex gap-1">
-              <Button
-                type="submit"
-                variant="outline"
-                size="sm"
-                :disabled="editingDisabled"
-                data-permission-network-apply
-                >{{ $st('Apply rule') }}</Button
-              ><Button type="button" variant="ghost" size="sm" :disabled="editingDisabled" @click="cancelNetworkRule">{{
-                $st('Cancel')
-              }}</Button>
-            </div>
-          </form>
-        </template>
-      </PermissionRuleTable>
-      <div class="permission-secondary-grid">
-        <PermissionsPanel :scope="selectedSource" :session-id="sessionId" compact ref="rulesPanel" />
-        <section class="permission-advanced min-w-0">
-          <div
-            v-if="canEdit"
-            class="permission-presets"
-            :title="$st('Presets replace the current network draft. Save to apply.')"
-          >
-            <Button
-              variant="ghost"
-              size="sm"
-              :disabled="formDisabled || Boolean(networkRuleDraft)"
-              @click="useNetworkPreset('deny')"
-              >{{ $st('Block external network') }}</Button
-            >
-            <Button
-              variant="ghost"
-              size="sm"
-              :disabled="formDisabled || Boolean(networkRuleDraft)"
-              @click="useNetworkPreset('allow')"
-              >{{ $st('Allow outbound by default') }}</Button
-            >
-          </div>
-          <details v-if="networkCustom" class="permission-details">
-            <summary class="permission-summary">
-              <RiCodeSSlashLine class="h-4 w-4" />{{ $st('Network policy JSON')
-              }}<span v-if="networkPending" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
-            </summary>
-            <div class="permission-json-body">
-              <p class="text-[13px] text-muted-foreground">
-                {{
-                  $st(
-                    'This object defines the complete network policy. Empty lists and omitted fields do not inherit parent rules.',
-                  )
-                }}
-              </p>
-              <textarea
-                v-model="networkJson"
-                class="permission-json"
-                rows="10"
-                spellcheck="false"
-                :readonly="editingDisabled || rawPending || Boolean(networkRuleDraft)"
-                :aria-label="$st('Network policy JSON')"
-                :aria-invalid="Boolean(networkJsonError)"
-                @input="networkJsonError = ''"
-              />
-              <p v-if="networkJsonError" class="text-[13px] text-destructive" role="alert">{{ networkJsonError }}</p>
-              <div v-if="canEdit" class="flex flex-wrap gap-1">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="editingDisabled || rawPending || Boolean(networkRuleDraft) || !networkPending"
-                  @click="applyNetworkJson"
-                  >{{ $st('Apply JSON') }}</Button
-                ><Button
-                  variant="ghost"
-                  size="sm"
-                  :disabled="editingDisabled || rawPending || Boolean(networkRuleDraft)"
-                  @click="useNetworkExample"
-                  >{{ $st('Load CIDR example') }}</Button
-                >
-              </div>
-            </div>
-          </details>
-          <details class="permission-details" data-command-classes>
-            <summary class="permission-summary">
-              <RiTerminalBoxLine class="h-4 w-4" />{{ $st('Command categories')
-              }}<PermissionHelp :text="$st('Review no-op, routine, and dangerous commands for each shell tool.')" />
-            </summary>
-            <div class="permission-json-body">
-              <div v-for="tool in SHELL_CAPABLE_TOOLS" :key="tool" class="command-class-row">
-                <code class="permission-target-text">{{ tool }}</code
-                ><PermissionPolicyRow
-                  v-for="category in commandClasses.filter(
-                    (item) => tool !== 'agena.shell.write' || item.id === 'dangerous',
-                  )"
-                  :key="category.id"
-                  :label="category.label"
-                  :value="displayedClassLabel(tool, category.id)"
-                  :editable="canEdit"
-                  ><OptionPicker
-                    :model-value="classMode(tool, category.id)"
-                    :options="modeOptions"
-                    :empty-label="classInheritanceLabel(tool, category.id)"
-                    :title="category.label"
+                </template>
+                <template #bulk="{ count }">
+                  <PermissionBulkActions
+                    v-if="group.kind === 'filesystem'"
+                    v-model="bulkPathMode"
+                    :count="count"
+                    :options="pathModeOptions"
                     :disabled="formDisabled"
-                    size="sm"
-                    @update:model-value="writeRule(tool, category.id, $event)"
-                /></PermissionPolicyRow>
-              </div>
+                    @apply="applySelectedPathMode"
+                    @clear="clearPathRuleSelection"
+                    @remove="removeSelectedPathRules"
+                  />
+                  <PermissionBulkActions
+                    v-else-if="group.kind === 'tool-name'"
+                    v-model="bulkToolNameMode"
+                    :count="count"
+                    :options="modeOptions"
+                    :disabled="formDisabled"
+                    @apply="setSelectedToolNameMode(bulkToolNameMode)"
+                    @clear="clearToolNameRuleSelection"
+                    @remove="removeSelectedToolNameRules"
+                  />
+                  <PermissionBulkActions
+                    v-else-if="group.kind === 'command'"
+                    v-model="bulkCommandMode"
+                    :count="count"
+                    :options="modeOptions"
+                    :disabled="formDisabled"
+                    @apply="setSelectedCommandMode(bulkCommandMode)"
+                    @clear="clearCommandRuleSelection"
+                    @remove="removeSelectedCommandRules"
+                  />
+                </template>
+                <template #create>
+                  <fieldset
+                    v-if="group.kind === newRuleKind && group.kind !== 'network'"
+                    class="permission-rule-form"
+                    :disabled="formDisabled"
+                    data-permission-create-form
+                  >
+                    <div class="mb-1 flex items-center justify-between gap-2">
+                      <strong class="text-[13px]">{{
+                        newRuleKind === 'filesystem'
+                          ? $st('Add path rule')
+                          : newRuleKind === 'tool-name'
+                            ? $st('Add tool name')
+                            : $st('Add command rule')
+                      }}</strong
+                      ><IconButton
+                        variant="ghost"
+                        size="sm"
+                        :aria-label="$st('Cancel')"
+                        :tooltip="$st('Cancel')"
+                        @click="newRuleKind = ''"
+                        ><RiCloseLine class="h-4 w-4"
+                      /></IconButton>
+                    </div>
+                    <template v-if="newRuleKind === 'filesystem'"
+                      ><form class="permission-create-form" @submit.prevent="addPathRule">
+                        <label class="permission-control"
+                          ><span>{{ $st('Path') }}</span
+                          ><Input
+                            v-model="newPath"
+                            :placeholder="$st('Exact file or directory')"
+                            :aria-label="$st('Path')"
+                            class="h-8 font-mono text-[13px]"
+                        /></label>
+                        <div class="permission-create-actions">
+                          <OptionPicker
+                            v-model="newPathMode"
+                            :options="pathModeOptions"
+                            :include-empty="false"
+                            :title="$st('New path access mode')"
+                            size="sm"
+                            :disabled="formDisabled"
+                          /><Button
+                            type="submit"
+                            variant="outline"
+                            size="sm"
+                            :disabled="formDisabled || !newPath.trim()"
+                            >{{ $st('Add path rule') }}</Button
+                          >
+                        </div>
+                      </form></template
+                    ><template v-else-if="newRuleKind === 'tool-name'"
+                      ><form class="permission-create-form" @submit.prevent="addToolName">
+                        <label class="permission-control"
+                          ><span>{{ $st('Tool name') }}</span
+                          ><OptionPicker
+                            v-model="newToolName"
+                            :options="toolOptions"
+                            :include-empty="false"
+                            :allow-custom="true"
+                            :title="$st('Tool name')"
+                            :placeholder="$st('Choose or enter a tool name')"
+                            :disabled="formDisabled"
+                            size="sm"
+                            monospace
+                        /></label>
+                        <div class="permission-create-actions">
+                          <OptionPicker
+                            v-model="newToolNameMode"
+                            :options="modeOptions"
+                            :include-empty="false"
+                            :title="$st('Tool name mode')"
+                            :disabled="formDisabled"
+                            size="sm"
+                          /><Button
+                            type="submit"
+                            variant="outline"
+                            size="sm"
+                            :disabled="formDisabled || !newToolName.trim()"
+                            >{{ $st('Add tool name') }}</Button
+                          >
+                        </div>
+                      </form></template
+                    ><template v-else
+                      ><form class="permission-create-form" @submit.prevent="addCommandRule">
+                        <label class="permission-control"
+                          ><span>{{ $st('Command pattern') }}</span
+                          ><Input
+                            v-model="newCommandPattern"
+                            :disabled="sourceValueDisabled(commandSource)"
+                            class="h-8 font-mono text-[13px]"
+                            placeholder="git push *"
+                            :aria-label="$st('Command pattern')"
+                        /></label>
+                        <div class="permission-create-actions">
+                          <OptionPicker
+                            v-model="newCommandMode"
+                            :options="modeOptions"
+                            :include-empty="false"
+                            :title="$st('Command rule mode')"
+                            :disabled="sourceValueDisabled(commandSource)"
+                            size="sm"
+                          /><Button
+                            type="submit"
+                            variant="outline"
+                            size="sm"
+                            :disabled="sourceValueDisabled(commandSource) || !newCommandPattern.trim()"
+                            >{{ $st('Add command rule') }}</Button
+                          >
+                        </div>
+                      </form></template
+                    >
+                  </fieldset>
+                  <form
+                    v-if="group.kind === 'network' && networkRuleDraft"
+                    class="permission-create-form my-1.5 rounded border border-primary/20 bg-primary/5 p-2"
+                    @submit.prevent="applyNetworkRule"
+                    data-permission-create-form
+                  >
+                    <label v-if="networkRuleDraft.index === null" class="permission-control"
+                      ><span>{{ $st('Mode') }}</span
+                      ><OptionPicker
+                        :model-value="networkRuleDraft.action"
+                        :options="networkRuleActionOptions"
+                        @update:model-value="setNetworkRuleAction"
+                        :include-empty="false"
+                        :title="$st('Mode')"
+                        size="sm"
+                        :disabled="editingDisabled"
+                    /></label>
+                    <label class="permission-control"
+                      ><span>{{ $st('Destination') }}</span
+                      ><Input
+                        v-model="networkRuleDraft.to"
+                        class="h-8 font-mono text-[13px]"
+                        placeholder="192.0.2.10"
+                        :disabled="editingDisabled"
+                        :aria-label="$st('Destination')"
+                        :title="$st('One IP address, CIDR, or * for all destinations.')"
+                        @update:model-value="networkRuleError = ''"
+                    /></label>
+                    <div class="permission-create-actions">
+                      <label class="permission-control"
+                        ><span>{{ $st('Protocol') }}</span
+                        ><OptionPicker
+                          :model-value="networkRuleDraft.protocol"
+                          :options="networkProtocolOptions"
+                          :include-empty="false"
+                          :title="$st('Protocol')"
+                          :disabled="editingDisabled"
+                          size="sm"
+                          @update:model-value="setNetworkRuleProtocol" /></label
+                      ><label class="permission-control"
+                        ><span>{{ $st('Ports') }}</span
+                        ><Input
+                          v-model="networkRuleDraft.ports"
+                          data-permission-network-ports
+                          class="h-8 font-mono text-[13px]"
+                          placeholder="443, 8000-8099"
+                          :disabled="editingDisabled || networkRuleDraft.protocol === 'icmp'"
+                          :aria-label="$st('Ports')"
+                          :title="$st('Separate ports and ranges with commas. Leave blank for all ports.')"
+                          @update:model-value="networkRuleError = ''"
+                      /></label>
+                    </div>
+                    <details :open="Boolean(networkRuleDraft.except)">
+                      <summary class="cursor-pointer text-[13px]">{{ $st('Excluded subnets') }}</summary>
+                      <Input
+                        v-model="networkRuleDraft.except"
+                        class="mt-1 h-8 font-mono text-[13px]"
+                        placeholder="10.20.10.0/24"
+                        :disabled="editingDisabled"
+                        :aria-label="$st('Excluded subnets')"
+                        :title="$st('Exclude subnets from this rule only. Use a deny rule to block them everywhere.')"
+                        @update:model-value="networkRuleError = ''"
+                      />
+                    </details>
+                    <p v-if="networkRuleError" role="alert" class="text-[13px] text-destructive">
+                      {{ networkRuleError }}
+                    </p>
+                    <div class="flex gap-1">
+                      <Button
+                        type="submit"
+                        variant="outline"
+                        size="sm"
+                        :disabled="editingDisabled"
+                        data-permission-network-apply
+                        >{{ $st('Apply rule') }}</Button
+                      ><Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        :disabled="editingDisabled"
+                        @click="cancelNetworkRule"
+                        >{{ $st('Cancel') }}</Button
+                      >
+                    </div>
+                  </form>
+                </template>
+              </PermissionRuleTable>
             </div>
-          </details>
-          <details
-            class="permission-details permission-raw-editor"
-            :open="rawEditorOpen"
-            @toggle="rawEditorOpen = ($event.target as HTMLDetailsElement).open"
-          >
-            <summary class="permission-summary">
-              <RiCodeSSlashLine class="h-4 w-4" />{{ $st('Advanced permission configuration')
-              }}<span v-if="rawPending" class="h-1.5 w-1.5 rounded-full bg-primary" />
-            </summary>
-            <div class="permission-json-body">
-              <p class="text-[13px] text-muted-foreground">
-                {{ $st('Edit file, network, and tool permissions together as JSON for this scope.') }}
-              </p>
-              <textarea
-                v-model="rawJson"
-                rows="12"
-                spellcheck="false"
-                class="permission-json"
-                :aria-label="$st('Raw PermissionConfig')"
-                :readonly="editingDisabled || networkPending || Boolean(networkRuleDraft)"
-                :aria-invalid="Boolean(rawJsonError)"
-              />
-              <p v-if="rawJsonError" class="text-[13px] text-destructive" role="alert">{{ rawJsonError }}</p>
-              <div v-if="canEdit" class="flex justify-end">
-                <Button variant="outline" size="sm" :disabled="editingDisabled || !rawPending" @click="applyRawJson">{{
-                  $st('Apply JSON')
-                }}</Button>
-              </div>
+            <div v-if="domain.id === 'network' && !profileEditor" class="permission-domain-extras">
+              <details class="permission-details">
+                <summary class="permission-summary">
+                  <RiCodeSSlashLine class="h-4 w-4" />{{ $st('Network policy JSON')
+                  }}<span v-if="networkPending" class="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />
+                </summary>
+                <div class="permission-json-body">
+                  <p class="text-[13px] text-muted-foreground">
+                    {{
+                      $st(
+                        'Version 2 stores only local overrides. Omitted fields use base settings; empty lists clear the corresponding rules.',
+                      )
+                    }}
+                  </p>
+                  <textarea
+                    :value="networkJsonDisplay"
+                    class="permission-json"
+                    :class="{ 'is-inherited': !networkHasLocal }"
+                    rows="10"
+                    spellcheck="false"
+                    :readonly="networkJsonReadOnly"
+                    :aria-label="$st('Network policy JSON')"
+                    :aria-invalid="Boolean(networkJsonError)"
+                    @input="editNetworkJson"
+                  />
+                  <p v-if="networkJsonError" class="text-[13px] text-destructive" role="alert">
+                    {{ networkJsonError }}
+                  </p>
+                  <div v-if="canEdit" class="flex flex-wrap gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      :disabled="networkJsonReadOnly || !networkPending"
+                      @click="applyNetworkJson"
+                      >{{ $st('Apply JSON') }}</Button
+                    ><Button
+                      variant="ghost"
+                      size="sm"
+                      :disabled="networkJsonReadOnly || !networkFullyLocal"
+                      @click="useNetworkExample"
+                      >{{ $st('Load CIDR example') }}</Button
+                    >
+                  </div>
+                </div>
+              </details>
             </div>
-          </details>
-          <div class="flex items-center justify-end">
-            <PermissionHelp
-              :text="
-                $st(
-                  'macOS does not support per-destination outbound rules. Linux requires inbound and host-loopback access to remain denied.',
-                )
-              "
+          </section>
+        </div>
+      </div>
+      <div v-if="!profileEditor" class="permission-secondary">
+        <PermissionsPanel ref="rulesPanel" :scope="settingsScope" :session-id="sessionId" :workspace-id="workspaceId" />
+        <details
+          class="permission-details permission-advanced"
+          data-permission-advanced
+          :open="rawEditorOpen"
+          @toggle="rawEditorOpen = ($event.target as HTMLDetailsElement).open"
+        >
+          <summary class="permission-summary permission-advanced-heading">
+            <RiCodeSSlashLine class="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <span class="min-w-0 flex-1">{{ $st('Advanced permission configuration') }}</span>
+            <span v-if="rawPending" class="text-xs font-medium text-primary">{{ $st('Unsaved') }}</span>
+          </summary>
+          <div class="permission-advanced-body">
+            <p class="text-[13px] text-muted-foreground">
+              {{
+                rawJsonReadOnly
+                  ? $st('Read-only')
+                  : $st('Edit file, network, and tool permissions together as JSON for this scope.')
+              }}
+            </p>
+            <textarea
+              :value="rawJsonDisplay"
+              class="permission-json"
+              :class="{ 'is-inherited': rawJsonReadOnly }"
+              rows="12"
+              dir="ltr"
+              spellcheck="false"
+              autocapitalize="off"
+              :readonly="rawJsonReadOnly"
+              :aria-label="$st('Raw PermissionConfig')"
+              :aria-invalid="Boolean(rawJsonError)"
+              :aria-describedby="rawJsonError ? rawJsonErrorId : undefined"
+              @input="editRawJson"
             />
+            <p v-if="rawJsonError" :id="rawJsonErrorId" class="break-words text-[13px] text-destructive" role="alert">
+              {{ rawJsonError }}
+            </p>
+            <div v-if="!rawJsonReadOnly" class="permission-advanced-footer">
+              <p class="text-xs text-muted-foreground">
+                {{ $st('Changes take effect after you select {action}.', { action: $st('Save permission') }) }}
+              </p>
+              <Button variant="outline" size="sm" :disabled="!rawPending" @click="applyRawJson">
+                {{ $st('Apply JSON') }}
+              </Button>
+            </div>
           </div>
-        </section>
+        </details>
       </div>
     </template>
   </section>
@@ -2311,97 +2881,126 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @reference '../../style.css';
+
 .permission-studio {
   container: permissions / inline-size;
-  font-size: 13px;
+  width: 100%;
+  max-width: 92rem;
+  margin-inline: auto;
+  font-size: 0.8125rem;
 }
 .permission-status {
-  @apply text-muted-foreground;
+  @apply inline-flex items-center gap-1 rounded-full bg-muted/40 px-2 py-0.5 text-muted-foreground;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+.permission-sandbox {
+  margin-block-start: 0.875rem;
+  scroll-margin-top: 8rem;
+}
+.permission-domain-grid,
+.permission-domain-column {
+  display: grid;
+  align-content: start;
+  align-items: start;
+  gap: 0.875rem;
+  min-width: 0;
+}
+.permission-domain-grid {
+  margin-block-start: 0.875rem;
+}
+.is-profile .permission-domain-grid {
+  margin-block-start: 0;
+}
+.permission-domain {
+  @apply rounded-xl border border-border/75 bg-card/75;
+  container: permission-domain / inline-size;
+  min-width: 0;
+  scroll-margin-top: 8rem;
+}
+.permission-domain:focus,
+.permission-rule-group:focus {
+  outline: none;
+}
+.permission-domain:focus-visible .permission-domain-heading h2,
+.permission-rule-group:focus-visible :deep(.rule-table-title) {
+  @apply text-primary decoration-primary underline underline-offset-4;
+}
+.permission-domain-heading {
+  @apply rounded-t-xl border-b border-border/65 bg-muted/18;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: 0.375rem;
+  min-height: 2.75rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.75rem;
+}
+.permission-domain-heading h2 {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+.permission-domain-heading h2 a {
+  @apply rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
-  font-size: 13px;
+  gap: 0.4375rem;
 }
-.permission-default-grid {
-  display: grid;
-  gap: 0.75rem;
-  align-items: start;
-  margin: 0.5rem 0;
-}
-.permission-rule-group {
-  @apply border-t border-border/60;
-  margin-top: 0.75rem;
-  min-width: 0;
-  scroll-margin-top: 5rem;
-  outline: none;
+.permission-domain-heading h2 svg {
+  @apply text-primary;
 }
 .permission-rule-navigation {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
-  padding-block: 0.25rem;
+  gap: 0.125rem;
 }
 .permission-rule-navigation a {
-  @apply text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+  @apply rounded-md px-1.5 text-muted-foreground hover:bg-muted/55 hover:text-foreground
+    focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.3125rem;
   min-height: 1.75rem;
-  font-size: 13px;
+  font-size: 0.75rem;
+  line-height: 1.25;
 }
 .permission-rule-navigation span {
-  @apply text-foreground;
-  font-variant-numeric: tabular-nums;
+  @apply font-medium text-foreground;
 }
-.permission-domain {
+.permission-domain-defaults {
+  padding: 0.1875rem 0.75rem;
+}
+.permission-domain-defaults :deep(.permission-policy-row + .permission-policy-row) {
+  @apply border-t border-border/50;
+}
+.permission-domain-rules {
+  @apply border-t border-border/75;
   min-width: 0;
-  padding: 0 0.5rem 0.375rem;
-  scroll-margin-top: 5rem;
-  outline: none;
 }
-.permission-domain-heading {
-  @apply border-b border-border/60;
-  display: flex;
+.permission-rule-group {
   min-width: 0;
-  min-height: 40px;
-  align-items: center;
-  gap: 0.375rem;
-  margin-bottom: 0.25rem;
+  scroll-margin-top: 8rem;
 }
-.permission-domain-heading h2 {
+.permission-domain-extras {
+  @apply rounded-b-xl border-t border-border/75 bg-muted/12;
   min-width: 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-.permission-domain-heading h2 a {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-}
-.permission-presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0 0.25rem;
-  padding-bottom: 0.25rem;
-}
-.permission-presets :deep(button) {
-  padding-inline: 0.375rem;
-  font-size: 13px;
+  padding-inline: 0.75rem;
 }
 .permission-control {
   display: grid;
-  flex: 1 1 14rem;
+  flex: 1 1 12rem;
   min-width: 0;
   gap: 0.25rem;
 }
 .permission-control > span {
   @apply text-muted-foreground;
-  font-size: 13px;
 }
 .permission-rule-form {
-  @apply rounded border border-primary/20 bg-primary/5;
-  margin: 0.375rem 0;
-  padding: 0.5rem;
+  @apply rounded-lg border border-primary/20 bg-primary/5;
+  margin-block: 0.375rem;
+  padding: 0.625rem;
   min-width: 0;
 }
 .permission-create-form {
@@ -2413,120 +3012,157 @@ onBeforeUnmount(() => {
 }
 .permission-create-actions {
   display: grid;
-  flex: 1 1 20rem;
+  flex: 1 1 17rem;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: end;
   gap: 0.5rem;
 }
 .permission-create-actions :deep(button) {
-  font-size: 13px;
+  max-width: 100%;
+  white-space: normal;
 }
 .permission-create-form > details,
 .permission-create-form > p {
   flex: 1 1 100%;
 }
-.permission-bulk-group {
+.permission-network-source-popover {
+  @apply z-[80] grid gap-1 rounded-lg border border-border bg-popover p-2.5 text-popover-foreground shadow-lg outline-none;
+  width: min(22rem, calc(100vw - 1.5rem));
+  max-width: var(--radix-popover-content-available-width);
+}
+.permission-network-source-trigger[data-state='open'] {
+  @apply bg-muted text-foreground;
+}
+@container permission-rules (max-width: 26rem) {
+  .permission-network-source-trigger > span {
+    @apply sr-only;
+  }
+}
+.permission-network-list-source {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.375rem;
-  font-size: 13px;
+  justify-content: space-between;
+  gap: 0.25rem 0.5rem;
+  min-width: 0;
+  min-height: 2rem;
+  font-size: 0.8125rem;
+  line-height: 1.25;
 }
-.permission-bulk-group > :deep(.relative) {
-  width: 10rem;
-}
-.permission-secondary-grid {
+.permission-secondary {
   display: grid;
-  gap: 0.75rem;
-  align-items: start;
-  margin-top: 0.75rem;
+  gap: 0.875rem;
+  margin-block-start: 0.875rem;
+}
+.permission-advanced {
+  @apply rounded-xl border border-border/75 bg-card/75;
+}
+.permission-summary.permission-advanced-heading {
+  @apply rounded-xl hover:bg-muted/25;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.permission-advanced[open] > .permission-advanced-heading {
+  @apply rounded-b-none border-b border-border/65 bg-muted/18;
+}
+.permission-advanced-body {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.75rem;
+}
+.permission-advanced-body .permission-json[aria-invalid='true'] {
+  @apply border-destructive/60;
+}
+.permission-advanced-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.375rem 0.75rem;
+}
+.permission-advanced-footer > button {
+  margin-inline-start: auto;
 }
 .permission-details {
-  @apply border-t border-border/60;
   min-width: 0;
 }
 .permission-summary {
-  @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+  @apply rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
   display: flex;
-  min-height: 34px;
+  min-height: 2.375rem;
   cursor: pointer;
   list-style: none;
   align-items: center;
-  gap: 0.375rem;
-  font-size: 13px;
-  font-weight: 500;
+  gap: 0.4375rem;
+  font-size: 0.8125rem;
+  font-weight: 550;
 }
 .permission-summary::-webkit-details-marker {
   display: none;
+}
+.permission-summary::after {
+  @apply ml-auto text-muted-foreground;
+  content: '';
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  transform: rotate(45deg) translateY(-2px);
+  margin-inline-end: 0.25rem;
+  flex-shrink: 0;
+}
+.permission-details[open] > .permission-summary::after {
+  transform: rotate(225deg) translateY(-1px);
 }
 .permission-json-body {
   display: grid;
   gap: 0.5rem;
   min-width: 0;
-  padding: 0.5rem 0;
+  padding: 0.25rem 0 0.625rem;
 }
 .permission-json {
-  @apply rounded border border-input bg-background p-2 outline-none focus-visible:ring-1 focus-visible:ring-ring;
+  @apply rounded-md border border-input bg-background p-2 outline-none focus-visible:ring-1 focus-visible:ring-ring;
   width: 100%;
   min-width: 0;
   resize: vertical;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 0.8125rem;
   line-height: 1.5;
 }
-.command-class-row {
-  @apply border-t border-border/40;
-  padding: 0.375rem 0;
-}
-.permission-target-text {
-  display: block;
-  overflow-wrap: anywhere;
-  font-size: 13px;
-  line-height: 1.4;
-}
-.permission-mobile-summary {
-  display: grid;
-  margin-top: 0.5rem;
-}
-.permission-mobile-summary a {
-  @apply border-b border-border/50;
-  display: grid;
-  grid-template-columns: minmax(6.5rem, 35%) minmax(0, 1fr);
-  gap: 0.375rem;
-  align-items: center;
-  padding: 0.375rem 0;
-  font-size: 13px;
-  line-height: 1.4;
+.permission-json.is-inherited {
+  color: var(--color-muted-foreground);
 }
 .permission-studio :deep(button[aria-haspopup='dialog']) {
-  min-height: 32px;
+  min-height: 2rem;
   height: auto;
-  font-size: 13px;
-  padding: 0.25rem 0.375rem;
+  font-size: 0.8125rem;
 }
 .permission-domain :deep(button[aria-haspopup='dialog'] .truncate) {
   overflow: visible;
+  overflow-wrap: anywhere;
   text-overflow: clip;
   white-space: normal;
 }
-@container permissions (min-width:56rem) {
-  .permission-default-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .permission-domain + .permission-domain {
-    @apply border-l border-border/60;
-  }
-  .permission-secondary-grid {
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-  }
-  .permission-mobile-summary {
-    display: none;
+@container permissions (min-width: 58rem) {
+  .permission-domain-grid {
+    grid-template-columns: minmax(0, 0.94fr) minmax(0, 1.06fr);
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .permission-studio :deep(*) {
-    animation: none;
-    transition: none;
+@container permission-domain (max-width: 24rem) {
+  .permission-domain-heading {
+    column-gap: 0.125rem;
+    padding-inline-start: 0.625rem;
+  }
+  .permission-domain-heading h2 {
+    flex: 1 1 9rem;
+  }
+  .permission-domain-defaults,
+  .permission-domain-extras {
+    padding-inline: 0.625rem;
   }
 }
 </style>

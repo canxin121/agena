@@ -104,7 +104,7 @@ onBeforeUnmount(() => { disposed = true; generation++; previewGeneration++; cont
       <p v-if="error" role="alert" class="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{{ error }}</p>
       <p v-if="loading && !items.length" role="status" class="p-6 text-center text-sm text-muted-foreground">{{ st('Loading capabilities…') }}</p>
       <p v-else-if="!filtered.length" class="rounded-xl border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground">{{ query ? st('No matching capabilities.') : st('This service did not advertise any entries in this category.') }}</p>
-      <div v-else class="grid min-w-0 gap-4 xl:grid-cols-[minmax(12rem,0.8fr)_minmax(0,1.2fr)]">
+      <div v-else class="settings-columns">
         <div class="min-w-0 space-y-2">
           <div class="max-h-80 space-y-1 overflow-y-auto rounded-xl border border-border/70 p-1.5">
             <button v-for="(item, index) in filtered" :key="String(item.name || item.uri || item.uriTemplate || index)" type="button" :aria-pressed="selected === item" :aria-label="title(item)" :aria-describedby="item.description ? fieldId + '-description-' + index : undefined" class="w-full min-w-0 rounded-lg border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :class="selected === item ? 'border-primary/25 bg-primary/10' : 'border-transparent hover:bg-muted/40'" @click="choose(item)">

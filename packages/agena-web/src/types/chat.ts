@@ -1,5 +1,6 @@
 import type { SseEvent } from '../lib/sse'
 import type { JsonValue as JsonLike } from './json'
+import type { RequestPerformance } from './usage'
 import {
   EXECUTION_PHASES,
   SESSION_STATE_ATTENTION_KINDS,
@@ -306,6 +307,7 @@ export type SessionRunConfig = {
 }
 
 export type SessionUsage = {
+  last_performance?: RequestPerformance | null
   measured_prompt_tokens?: number | null
   current_tokens?: number
   projected_tokens?: number | null

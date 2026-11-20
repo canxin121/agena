@@ -1,5 +1,9 @@
 import type { JsonValue } from '@/types/json'
+import { settingsText as st } from '@/i18n/settingsText'
 import type { PermissionConfig } from './permissionConfig'
+import type { RuntimeSettingReadResponse } from './runtimeSettings'
+
+export const DEFAULT_PERMISSION_PROFILE_ID = '@default'
 
 export type ChannelProfileGrant = {
   tools: string[]
@@ -14,12 +18,14 @@ export type PermissionProfile = {
   description: string
   revision: number
   permission: PermissionConfig
+  complete?: boolean
   grant?: ChannelProfileGrant
 }
 export type PermissionGroup = { name: string; priority: number; profile_id?: string }
 export type AccessIdentity = { platform: string; tenant: string; account: string }
 export type PermissionUser = AccessIdentity & {
   actor: string
+  resource?: string
   group_ids: string[]
   profile_id?: string
   overrides: PermissionConfig
@@ -81,8 +87,29 @@ export function readPermissionCatalog(value: JsonValue | undefined): PermissionC
   return JSON.parse(JSON.stringify({ ...value, profiles, groups, users, conversations })) as PermissionCatalog
 }
 
+export function permissionProfilesForLayer(
+  layer: RuntimeSettingReadResponse | undefined,
+): PermissionCatalog['profiles'] {
+  return {
+    ...readPermissionCatalog(layer?.default_value).profiles,
+    ...readPermissionCatalog(layer?.value).profiles,
+  }
+}
+
+export function permissionProfileDisplayName(id: string, profile: PermissionProfile): string {
+  return id === DEFAULT_PERMISSION_PROFILE_ID && profile.name === 'Default permissions'
+    ? st('Default permissions')
+    : profile.name || id
+}
+
 export function permissionIdentityKey(identity: AccessIdentity, subject: string): string {
   return JSON.stringify([identity.platform, identity.tenant, identity.account, subject])
+}
+
+export function permissionUserKey(user: AccessIdentity & { actor: string; resource?: string }): string {
+  return user.resource
+    ? JSON.stringify([user.platform, user.tenant, user.account, user.actor, user.resource])
+    : permissionIdentityKey(user, user.actor)
 }
 
 export function permissionProfileReferences(catalog: PermissionCatalog, id: string): string[] {
@@ -90,7 +117,7 @@ export function permissionProfileReferences(catalog: PermissionCatalog, id: stri
     ...Object.entries(catalog.groups)
       .filter(([, group]) => group.profile_id === id)
       .map(([key]) => key),
-    ...catalog.users.filter((user) => user.profile_id === id).map((user) => permissionIdentityKey(user, user.actor)),
+    ...catalog.users.filter((user) => user.profile_id === id).map(permissionUserKey),
     ...catalog.conversations
       .filter((conversation) => conversation.default_profile_id === id)
       .map((conversation) => permissionIdentityKey(conversation, conversation.resource)),
@@ -98,9 +125,7 @@ export function permissionProfileReferences(catalog: PermissionCatalog, id: stri
 }
 
 export function permissionGroupReferences(catalog: PermissionCatalog, id: string): string[] {
-  return catalog.users
-    .filter((user) => user.group_ids.includes(id))
-    .map((user) => permissionIdentityKey(user, user.actor))
+  return catalog.users.filter((user) => user.group_ids.includes(id)).map(permissionUserKey)
 }
 
 /** Command-rule insertion order is meaningful, so retain it when comparing saved drafts. */

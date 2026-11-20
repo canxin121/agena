@@ -11,6 +11,7 @@ export type RunOptionsPayload = {
   thinking_mode?: string
   speed_mode?: string
   verbosity?: string
+  parallel_tool_calls?: boolean
   system?: string
   temperature?: number
   max_output_tokens?: number
@@ -37,6 +38,7 @@ export function buildRunRequestBody(options?: RunOptionsPayload): JsonObject {
     const value = source[key]
     if (typeof value === 'string' && value.trim()) body[key] = value.trim()
   }
+  if (typeof source.parallel_tool_calls === 'boolean') body.parallel_tool_calls = source.parallel_tool_calls
   // An explicit empty system override disables the inherited addition.
   if (typeof source.system === 'string') body.system = source.system
   if (typeof source.temperature === 'number' && Number.isFinite(source.temperature))

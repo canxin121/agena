@@ -15,11 +15,15 @@ export type PermissionRuleRow = {
   modeLabel: string
   source: PermissionRuleSource
   sourceLabel: string
+  readOnly?: boolean
   targetEditable?: boolean
-  conditionEditable?: boolean
   modeOptions?: PickerOption[]
   selectable?: boolean
   removable?: boolean
   editAction?: boolean
+  sourceAction?: 'local' | 'inherit'
+  sourceActionLabel?: string
+  resetAction?: boolean
+  resetActionLabel?: string
   networkAction?: 'allow' | 'deny'
 }

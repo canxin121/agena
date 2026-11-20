@@ -1,6 +1,40 @@
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 import type { SettingsSidebarDestination, SettingsTab } from './sidebar/settingsSidebarNavigation'
 import { pluginTabForSettingsView } from './pluginSettingsNavigation'
+import { normalizeSettingsSubpageId } from './workbench/settingsSectionNavigation'
+
+export const AGENT_PROFILE_DEFAULTS_HASH = '#settings-default-agent-profiles'
+
+export function isAgentProfileDefaultsHash(hash: string): boolean {
+  return hash === AGENT_PROFILE_DEFAULTS_HASH || hash === '#default-agent-profiles'
+}
+
+export function movedSettingsPage(
+  section: SettingsTab,
+  view: unknown,
+  hash = '',
+): SettingsSidebarDestination | undefined {
+  const id = normalizeSettingsSubpageId(view)
+  if (
+    (section === 'models-providers' && ['model-settings', 'defaults', 'approval-model'].includes(id)) ||
+    (section === 'runtime-session' && id === 'agent-profiles' && isAgentProfileDefaultsHash(hash))
+  ) {
+    return { section: 'runtime-session', view: 'session-behavior' }
+  }
+  return undefined
+}
+
+export function agentProfileDefaultsDestination(scope: 'global' | 'workspace', query: LocationQuery) {
+  return {
+    path: '/settings/runtime-session',
+    query: settingsQueryForDestination(
+      { section: 'runtime-session', view: 'session-behavior', scope },
+      'runtime-session',
+      query,
+    ),
+    hash: AGENT_PROFILE_DEFAULTS_HASH,
+  }
+}
 
 export function settingsQueryForDestination(
   destination: SettingsSidebarDestination,

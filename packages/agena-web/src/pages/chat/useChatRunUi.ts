@@ -7,6 +7,7 @@ import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
 import { formatTokensK, sessionContextUsage } from './contextUsage'
 import type { SessionState } from '@/types/chat'
+import type { RequestPerformance } from '@/types/usage'
 import type { CancellationOutcome } from '@/stores/chat/api'
 
 type ToastsStore = { push: (kind: 'success' | 'error', message: string) => void }
@@ -49,6 +50,7 @@ type SessionUsage = {
   lastCacheReadTokens?: number | null
   lastCacheInputTokens?: number | null
   lastCacheHitRate?: number | null
+  lastPerformance?: RequestPerformance | null
 }
 
 type CanonicalSessionUsage = {
@@ -60,6 +62,7 @@ type CanonicalSessionUsage = {
   last_cache_read_tokens?: number | null
   last_cache_input_tokens?: number | null
   last_cache_hit_rate?: number | null
+  last_performance?: RequestPerformance | null
 }
 
 type TokenUsageLike = {
@@ -223,6 +226,7 @@ export function useChatRunUi(opts: {
         lastCacheReadTokens: canonical.last_cache_read_tokens,
         lastCacheInputTokens: canonical.last_cache_input_tokens,
         lastCacheHitRate: canonical.last_cache_hit_rate,
+        lastPerformance: canonical.last_performance,
       }
     }
 
@@ -272,6 +276,7 @@ export function useChatRunUi(opts: {
       lastCacheReadTokens: null,
       lastCacheInputTokens: null,
       lastCacheHitRate: null,
+      lastPerformance: null,
     }
   })
 

@@ -310,16 +310,20 @@ const useChatStoreDefinition = defineStore('chat', () => {
     transcriptCache.touch(sid)
     visibleSessions.set(sid, (visibleSessions.get(sid) || 0) + 1)
     if (!sessionResourceSubscriptions.has(sid)) {
-      const releaseState = subscribeResource(`session:${sid}:state`, (event) => {
-        if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
-        scheduleSessionStatusRefresh(sid)
-      }, {
-        onInvalidate: (reason) => {
-          if (reason === 'mutation') {
-            void refreshExecutionStatus(sid, true).catch(() => scheduleSessionStatusRefresh(sid))
-          }
+      const releaseState = subscribeResource(
+        `session:${sid}:state`,
+        (event) => {
+          if (event?.type === 'runtime_signal' && event.properties?.kind === 'activity') return
+          scheduleSessionStatusRefresh(sid)
         },
-      })
+        {
+          onInvalidate: (reason) => {
+            if (reason === 'mutation') {
+              void refreshExecutionStatus(sid, true).catch(() => scheduleSessionStatusRefresh(sid))
+            }
+          },
+        },
+      )
       const releaseTranscript = subscribeResource(`session:${sid}:parts`, (event) => {
         if (event?.type === 'session_changed') return
         transcriptRecovery.add(sid)
@@ -1518,7 +1522,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const existing = refreshExecutionInFlightBySession.get(sid)
     if (existing) {
       if (forceFresh) await existing.catch(() => undefined)
-      else { await existing; return }
+      else {
+        await existing
+        return
+      }
     }
 
     const request = refreshExecutionStatusInternal(sid, forceFresh)
@@ -2062,10 +2069,21 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   async function setSessionPermission(sessionId: string, permission: JsonValue) {
+    return persistSessionPermission(sessionId, (id) => chatApi.setSessionPermission(id, permission))
+  }
+
+  async function setSessionPermissionProfile(sessionId: string, profile: string | null) {
+    return persistSessionPermission(sessionId, (id) => chatApi.setSessionPermissionProfile(id, profile))
+  }
+
+  async function persistSessionPermission(
+    sessionId: string,
+    write: (id: string) => ReturnType<typeof chatApi.setSessionPermission>,
+  ) {
     const sid = sessionId.trim()
     const generation = transcriptCacheGeneration
     const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
-    const state = await chatApi.setSessionPermission(sid, permission)
+    const state = await write(sid)
     // Editing a policy updates an existing row without opening or promoting its conversation.
     if (applyExecutionResource(state, generation, activityGeneration, false)) reconcileExecutionAfterWrite(sid)
     return state
@@ -2688,6 +2706,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     sendMessage,
     continueSession,
     setSessionPermission,
+    setSessionPermissionProfile,
     uploadWorkspaceAttachment,
     resolveSessionWorkspace,
     compactSession,

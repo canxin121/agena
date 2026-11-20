@@ -106,7 +106,7 @@ const groups = computed(() => [
     title: t('settings.appearance.language.label'),
     icon: RiTranslate2,
     description: st(
-      'This locale is consumed by server-backed TUI clients. The Web interface language is configured separately on the Web appearance page.',
+      'This locale is used by terminal clients connected to this server.',
     ),
     fields: [
       {
@@ -116,7 +116,7 @@ const groups = computed(() => [
         options: localeOptions.value,
         defaultValue: '',
         includeEmpty: true,
-        emptyLabel: st('Use runtime/default locale'),
+        emptyLabel: st('Runtime locale'),
       },
     ],
   },
@@ -137,7 +137,7 @@ const groups = computed(() => [
         description: t('settings.tui.fields.themeDescription'),
         options: themeOptions.value,
         includeEmpty: true,
-        emptyLabel: st('Default TUI theme'),
+        emptyLabel: st('Built-in palette'),
       },
       {
         path: 'ui.tui.graphics',
@@ -172,7 +172,7 @@ onBeforeUnmount(() => catalogController?.abort())
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="settings-columns">
     <SettingsCard
       v-for="(group, index) in groups"
       :key="index"

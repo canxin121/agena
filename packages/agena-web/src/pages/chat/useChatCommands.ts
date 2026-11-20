@@ -5,6 +5,7 @@ import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 import { readPluginCommandCatalog } from '../../lib/pluginCommandRead'
 import { isImeComposing } from '@/lib/imeKeyboard'
 import { getComposerInput, type ComposerExpose } from './composerInput'
+import type { ComposerPickerKind } from './composerPickerTypes'
 import {
   clientCommandsFromCatalog,
   commandAppliesToSession,
@@ -97,7 +98,7 @@ function commandArguments(command: Command): string {
 export function useChatCommands(opts: {
   draft: Ref<string>
   composerRef: Ref<ComposerExpose | null>
-  composerPickerOpen: Ref<null | 'model' | 'thinking' | 'speed'>
+  composerPickerOpen: Ref<null | ComposerPickerKind>
   /** Whether the rendered conversation is the operator Bot. */
   isBotSession: Ref<boolean>
   onSend: () => Promise<void>

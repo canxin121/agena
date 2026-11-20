@@ -23,6 +23,7 @@ import {
   type SessionSelection,
 } from './modelSelectionSession'
 import { useModelSelectionPickerUi } from './modelSelectionPickerUi'
+import type { ComposerPickerKind } from './composerPickerTypes'
 import { createStringMapPersister, loadStringMapFromStorage, normalizeStringMapEntry } from './modelSelectionStorage'
 import { localStorageKeys } from '../../lib/persistence/storageKeys'
 import type { SessionRunConfig } from '@/types/chat'
@@ -54,8 +55,6 @@ export type ModelSlugOption = {
   modelId: string
   description: string
 }
-
-type PickerKind = 'model' | 'thinking' | 'speed'
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -94,7 +93,7 @@ let sharedSessionManualModels: Ref<Record<string, string>> | null = null
 
 export function useChatModelSelection(opts: {
   chat: ChatLike
-  composerPickerOpen: Ref<null | PickerKind>
+  composerPickerOpen: Ref<null | ComposerPickerKind>
   modelPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
   commandOpen: Ref<boolean>

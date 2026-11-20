@@ -2244,11 +2244,11 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
 </script>
 
 <template>
-  <section class="grid min-w-0 gap-4">
-    <div class="flex min-w-0 flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-card/30 p-3 sm:p-4">
+  <section class="settings-stack">
+    <div class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
       <SearchInput
         v-model="providerQuery"
-        class="min-w-0 basis-full sm:basis-48 sm:flex-1"
+        class="settings-toolbar-search"
         :placeholder="$st('Search providers by ID, adapter, or configured model')"
         :input-aria-label="$st('Search providers')"
         @search="applyProviderSearch"
@@ -2290,12 +2290,12 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
     >
       {{ $st('Loading provider draft…') }}
     </div>
-    <div class="grid min-w-0 gap-3">
+    <div class="grid min-w-0 gap-2">
       <SettingsDisclosureRow
         v-for="row in filteredProviderRows"
         :key="row.key"
-        class="min-w-0 rounded-xl bg-card/30"
-        body-class="p-2 sm:p-4 lg:p-4"
+        class="min-w-0 rounded-lg bg-card/30"
+        body-class="p-2.5"
         :disabled="loading || mutationBusy"
         :open="expandedProviderKey === row.key"
         :label="providerRowLabel(row)"
@@ -2346,14 +2346,14 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
         <fieldset
           v-if="draft && expandedProviderKey === row.key"
           :disabled="loading || mutationBusy"
-          class="grid min-w-0 gap-4"
+          class="settings-stack"
         >
           <SettingsCard
             :title="$st('Provider configuration')"
             :description="$st('Set the provider identifier and connection time limits.')"
             :icon="RiSettings3Line"
           >
-            <div class="grid min-w-0 gap-4 md:grid-cols-3">
+            <div class="settings-control-grid">
               <label class="grid min-w-0 gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Provider ID') }}</span>
                 <Input
@@ -2405,7 +2405,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                 >
               </div>
             </template>
-            <div class="grid min-w-0 gap-4 sm:grid-cols-2">
+            <div class="settings-columns">
               <label class="grid min-w-0 gap-1.5">
                 <span class="text-xs text-muted-foreground">{{ $st('Auth mode') }}</span>
                 <OptionPicker
@@ -2493,7 +2493,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                   }}
                 </div>
               </div>
-              <div class="grid gap-3 sm:grid-cols-2">
+              <div class="settings-control-grid">
                 <label v-for="field in visibleAuthFields" :key="field.path" class="grid min-w-0 gap-1.5">
                   <span class="text-xs text-muted-foreground">{{ field.label }}</span>
                   <div
@@ -2812,7 +2812,7 @@ watch(visible, onAuthVisibility, { flush: 'sync' })
                         />
                         <section v-for="group in modelFieldGroups" :key="group.title" class="min-w-0">
                           <h3 class="mb-3 border-b border-border/60 pb-2 text-sm font-medium">{{ group.title }}</h3>
-                          <div class="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                          <div class="settings-control-grid">
                             <div
                               v-for="field in group.fields"
                               :key="field.key"

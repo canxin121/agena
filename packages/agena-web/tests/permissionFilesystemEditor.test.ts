@@ -19,8 +19,10 @@ describe('filesystem permission editor persistence', () => {
       const { panel, writes } = await createPermissionEditor({}, undefined, { section: 'filesystem', scope })
       expect(panel.modeAt('workspace')).toBe('')
       expect(panel.modeAt('external')).toBe('')
-      expect(panel.pathInheritanceLabel('workspace')).toBe('Inherit · Read and write')
-      expect(panel.pathInheritanceLabel('external')).toBe('Inherit · Deny')
+      expect(panel.pathInheritanceLabel('workspace')).toBe(
+        `${scope === 'global' ? 'Default' : 'Inherit'} · Read and write`,
+      )
+      expect(panel.pathInheritanceLabel('external')).toBe(`${scope === 'global' ? 'Default' : 'Inherit'} · Deny`)
       expect(panel.networkMode('default')).toBe('allow')
       expect(panel.networkMode('inbound')).toBe('deny')
       expect(panel.networkMode('hostLoopback')).toBe('deny')
@@ -41,7 +43,7 @@ describe('filesystem permission editor persistence', () => {
     expect(panel.networkMode('default')).toBe('deny')
     await panel.clearSource()
     expect(panel.rawJson.value).toBe('{}')
-    expect(panel.pathInheritanceLabel('workspace')).toBe('Inherit · Read and write')
+    expect(panel.pathInheritanceLabel('workspace')).toBe('Default · Read and write')
     expect(panel.networkMode('default')).toBe('allow')
     await panel.save()
     expect(writes).toEqual([{ path: 'permission', value: undefined, scope: 'global' }])
@@ -55,7 +57,7 @@ describe('filesystem permission editor persistence', () => {
       { path: { workspace: 'readonly', external: 'deny' }, network: { default: 'deny' } },
       { section: 'filesystem' },
     )
-    expect(panel.pathInheritanceLabel('workspace')).toBe('Inherit · Read only')
+    expect(panel.pathInheritanceLabel('workspace')).toBe('Default · Read only')
     expect(panel.networkMode('default')).toBe('deny')
     expect(panel.config.value).toEqual({})
   })
@@ -129,12 +131,17 @@ describe('filesystem permission editor persistence', () => {
       scope: 'workspace',
       useRuntimeTransport: true,
     })
+    panel.setPathSource('workspace', 'local')
+    panel.setPathSource('external', 'local')
     panel.setPathDefault('workspace', 'readwrite')
     panel.setPathDefault('external', 'readonly')
     setSaveResponse({ current: undefined })
     const before = reads.length
     await panel.save()
-    expect(reads.slice(before)).toEqual(['/api/v1/settings/layers/workspace?path=permission'])
+    expect(reads.slice(before)).toEqual([
+      '/api/v1/settings/layers/workspace?path=permission',
+      '/api/v1/settings/layers/workspace?path=permission_profile',
+    ])
     expect(panel.savedConfig.value).toEqual({ path: { workspace: 'readwrite', external: 'readonly' } })
     expect(panel.dirty.value).toBe(false)
   })
@@ -231,7 +238,11 @@ describe('filesystem permission editor persistence', () => {
     panel.setPathDefault('workspace', 'readwrite')
     panel.setPathDefault('external', 'readonly')
     await panel.save()
-    expect(writes[0]?.value).toEqual({ ...original, path: { workspace: 'readwrite', external: 'readonly' } })
+    expect(writes[0]?.value).toEqual({
+      ...original,
+      network: { version: 2, inbound: 'deny', hostLoopback: 'deny', deny: [], ...original.network },
+      path: { workspace: 'readwrite', external: 'readonly' },
+    })
   })
 
   test('backend rejection keeps the full editable draft and error, and retry saves the same candidate', async () => {
@@ -282,7 +293,11 @@ describe('filesystem permission editor persistence', () => {
       method: 'PUT',
       body: {
         path: 'permission',
-        value: { path: { rules }, network: { default: 'deny' }, approval_model: approvalModel },
+        value: {
+          path: { rules },
+          network: { version: 2, default: 'deny', inbound: 'deny', hostLoopback: 'deny', allow: [], deny: [] },
+          approval_model: approvalModel,
+        },
         dry_run: false,
         validate: true,
         reload: true,

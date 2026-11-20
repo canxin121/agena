@@ -55,6 +55,16 @@ test('mode reset requests preserve explicit empty strings only at the selection 
   expect(buildRunRequestBody({ thinking_mode: '', speed_mode: '' })).toEqual({})
 })
 
+test('selection requests keep false parallel preferences distinct from omitted inheritance', () => {
+  expect(buildSessionSelectionRequest({ parallel_tool_calls: false })).toEqual({ parallel_tool_calls: false })
+  expect(buildSessionSelectionRequest({ thinking_mode: '', parallel_tool_calls: false })).toEqual({
+    thinking_mode: '',
+    parallel_tool_calls: false,
+  })
+  expect(buildSessionSelectionRequest({})).toEqual({})
+  expect(buildRunRequestBody({ parallel_tool_calls: true })).toEqual({ parallel_tool_calls: true })
+})
+
 const runtimeSettingsSource = readFileSync(new URL('../src/lib/runtimeSettings.ts', import.meta.url), 'utf8')
 const compiled = transformSync(runtimeSettingsSource, { loader: 'ts', format: 'cjs' }).code
 function settingsTransport() {
@@ -111,4 +121,21 @@ test('dry-run and deferred profile writes leave live model state alone', async (
   await transport.setRuntimeSetting('profiles.review', {}, { reload: false }, 'global')
   expect(invalidations).toEqual([])
   expect(notifications).toEqual([])
+})
+
+test('real settings writes notify sibling editors while validation and unsubscribed views stay quiet', async () => {
+  const { transport } = settingsTransport()
+  let changes = 0
+  const unsubscribe = transport.subscribeRuntimeSettingsChanges(() => {
+    changes++
+  })
+  await transport.deleteRuntimeSetting('ui.tui', { dry_run: true }, 'workspace')
+  expect(changes).toBe(0)
+  await transport.deleteRuntimeSetting('ui.tui', { reload: true }, 'workspace')
+  expect(changes).toBe(1)
+  await transport.setRuntimeSetting('ui.theme', 'dark', { reload: false }, 'global')
+  expect(changes).toBe(2)
+  unsubscribe()
+  await transport.setRuntimeSetting('ui.theme', 'light', undefined, 'global')
+  expect(changes).toBe(2)
 })

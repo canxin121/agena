@@ -4,9 +4,12 @@ import {
   agentProfileCatalog,
   agentProfileInstructions,
   agentProfileLineage,
+  agentProfileMetadata,
+  selectableAgentProfiles,
   agentProfileReferences,
   isValidAgentProfileName,
   mergedAgentProfiles,
+  withBuiltinAgentProfiles,
   withAgentProfileInstructions,
 } from '../src/lib/agentProfiles'
 import { normalizePromptLayer } from '../src/lib/promptLayers'
@@ -85,4 +88,94 @@ test('agent profiles have a distinct AI settings entry and a current-session sco
     'workspace',
     'session',
   ])
+})
+
+test('role modes and model visibility inherit independently with all as the legacy default', () => {
+  const catalog = {
+    main: { mode: 'primary' as const },
+    explore: { mode: 'subagent' as const, hidden: true },
+    custom: { extends: 'explore' },
+    public: { extends: 'custom', hidden: false },
+    reviewer: { mode: 'all' as const },
+    legacy: {},
+  }
+  expect(agentProfileMetadata(catalog, 'custom')).toEqual({ mode: 'subagent', hidden: true })
+  expect(agentProfileMetadata(catalog, 'public')).toEqual({ mode: 'subagent', hidden: false })
+  expect(agentProfileMetadata(catalog, 'legacy')).toEqual({ mode: 'all', hidden: false })
+  expect(Object.keys(selectableAgentProfiles(catalog, false))).toEqual(['main', 'reviewer', 'legacy'])
+  expect(Object.keys(selectableAgentProfiles(catalog, true))).toEqual([
+    'explore',
+    'custom',
+    'public',
+    'reviewer',
+    'legacy',
+  ])
+  expect(() => agentProfileMetadata({ bad: { mode: 'invalid' as any } }, 'bad')).toThrow('Invalid profile mode')
+  expect(() => agentProfileMetadata({ bad: { hidden: 'yes' as any } }, 'bad')).toThrow('boolean')
+})
+
+test('partial built-in overrides retain role behavior while file scopes replace raw named entries', () => {
+  const builtins = {
+    explore: {
+      title: 'Explore',
+      description: 'Search the code',
+      mode: 'subagent' as const,
+      permission: { path: { workspace: 'readonly', external: 'readonly' } },
+      prompts: { order: ['explore'], inline: [{ id: 'explore', body: 'Inspect and report' }] },
+    },
+  }
+  const merged = withBuiltinAgentProfiles(builtins, { explore: { model: { model: 'fast' } } })
+  expect(merged.explore).toMatchObject({ mode: 'subagent', description: 'Search the code', model: { model: 'fast' } })
+  expect(merged.explore!.permission).toEqual(builtins.explore.permission)
+  expect(merged.explore!.prompts).toEqual(builtins.explore.prompts)
+  const raw = mergedAgentProfiles(
+    { explore: { description: 'Global override', hidden: true } },
+    { explore: { model: { model: 'project' } } },
+  )
+  const scoped = withBuiltinAgentProfiles(builtins, raw)
+  expect(scoped.explore!.description).toBe('Search the code')
+  expect(scoped.explore!.hidden).toBeUndefined()
+  expect(scoped.explore!.model).toEqual({ model: 'project' })
+})
+
+test('built-in prompt overlays honor disabled fragments, order changes and explicit replacement', () => {
+  const builtins = {
+    main: {
+      prompts: {
+        order: ['one', 'two'],
+        inline: [
+          { id: 'one', body: 'One' },
+          { id: 'two', body: 'Two' },
+        ],
+      },
+      permission: {
+        path: { workspace: 'readonly', rules: { '/old': 'deny' } },
+        network: { default: 'deny' },
+        tools: { names: { 'agena.shell.exec': 'ask' } },
+      },
+    },
+  }
+  const merged = withBuiltinAgentProfiles(builtins, {
+    main: {
+      prompts: {
+        disabled: ['one'],
+        order: ['custom', 'two'],
+        inline: [
+          { id: 'custom', body: 'Custom' },
+          { id: 'two', body: 'New two' },
+        ],
+      },
+      permission: { path: { rules: { '/new': 'readonly' } }, network: { default: 'allow' } },
+    },
+  })
+  expect(merged.main!.prompts!.order).toEqual(['custom', 'two'])
+  expect(merged.main!.prompts!.inline!.map((fragment) => fragment.body)).toEqual(['Custom', 'New two'])
+  expect(merged.main!.permission).toEqual({
+    path: { workspace: 'readonly', rules: { '/old': 'deny', '/new': 'readonly' } },
+    network: { version: 2, default: 'allow', inbound: 'deny', hostLoopback: 'deny', allow: [], deny: [] },
+    tools: { names: { 'agena.shell.exec': 'ask' } },
+  })
+  const replaced = withBuiltinAgentProfiles(builtins, { main: { prompts: { mode: 'replace' } } })
+  expect(replaced.main!.prompts!.inline).toEqual([])
+  expect(replaced.main!.prompts!.order).toEqual([])
 })

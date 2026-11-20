@@ -294,7 +294,7 @@ async function main() {
     await page.getByRole('button', { name: 'Enable', exact: true }).waitFor()
     await page.getByRole('button', { name: 'Enable', exact: true }).click()
     await page.getByRole('button', { name: 'Disable', exact: true }).waitFor()
-    await page.getByRole('button', { name: 'Preview', exact: true }).last().click()
+    await page.locator('.settings-pane').getByRole('button', { name: 'Preview', exact: true }).click()
     await page.getByText('Updated from the real browser editor.', { exact: true }).waitFor()
     await page.screenshot({ path: path.join(temporary, 'skills-library-desktop.png'), fullPage: true })
 

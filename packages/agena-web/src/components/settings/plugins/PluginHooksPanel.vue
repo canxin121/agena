@@ -98,7 +98,7 @@ const activeCount = computed(() => props.hooks.filter((hook) => hook.state === '
               <summary class="cursor-pointer select-none font-medium text-foreground">
                 {{ $st('Registration details') }}
               </summary>
-              <dl class="mt-3 grid gap-3 sm:grid-cols-2">
+              <dl class="settings-control-grid mt-2.5">
                 <div v-if="hook.source">
                   <dt>{{ $st('Registration source') }}</dt>
                   <dd class="mt-1 break-all font-mono text-foreground">{{ hook.source }}</dd>

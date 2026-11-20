@@ -144,15 +144,15 @@ onMounted(() => void refresh())
 </script>
 
 <template>
-  <div class="min-w-0 space-y-4">
+  <div class="settings-columns">
     <p
       v-if="error"
       role="alert"
-      class="break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+      class="settings-columns-wide break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
     >
       {{ error }}
     </p>
-    <SettingsCard :title="$st('Runtime snapshot')" :icon="RiPulseLine">
+    <SettingsCard class="settings-columns-wide" :title="$st('Runtime snapshot')" :icon="RiPulseLine">
       <template #actions>
         <div class="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" :disabled="loading || actionBusy" @click="refresh"
@@ -170,7 +170,7 @@ onMounted(() => void refresh())
       </template>
       <p v-if="loading && !runtime" class="py-4 text-center text-sm text-muted-foreground">{{ $st('Loading...') }}</p>
       <template v-if="runtime">
-        <dl class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <dl class="settings-control-grid">
           <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3">
             <dt class="text-xs text-muted-foreground">{{ $st('Generation') }}</dt>
             <dd class="mt-1 font-mono text-lg font-semibold">{{ runtime.generation ?? '—' }}</dd>
@@ -188,12 +188,12 @@ onMounted(() => void refresh())
             <dd class="mt-2 break-words font-mono text-xs">{{ runtime.loaded_at || '—' }}</dd>
           </div>
         </dl>
-        <dl class="mt-4 divide-y divide-border/50 text-xs">
-          <div class="grid gap-1.5 py-2.5 sm:grid-cols-[9rem_minmax(0,1fr)]">
+        <dl class="mt-2.5 divide-y divide-border/50 text-xs">
+          <div class="settings-field-row py-2">
             <dt class="text-muted-foreground">{{ $st('Workspace:') }}</dt>
             <dd class="break-all font-mono">{{ runtime.workspace_root || '—' }}</dd>
           </div>
-          <div class="grid gap-1.5 py-2.5 sm:grid-cols-[9rem_minmax(0,1fr)]">
+          <div class="settings-field-row py-2">
             <dt class="text-muted-foreground">{{ $st('Config:') }}</dt>
             <dd class="break-all font-mono">
               {{ runtime.config_path || '—' }}
@@ -202,7 +202,7 @@ onMounted(() => void refresh())
               }}</span>
             </dd>
           </div>
-          <div class="grid gap-1.5 pt-2.5 sm:grid-cols-[9rem_minmax(0,1fr)]">
+          <div class="settings-field-row pt-2">
             <dt class="text-muted-foreground">{{ $st('Session runtime:') }}</dt>
             <dd class="flex items-center gap-2">
               <span
@@ -227,7 +227,7 @@ onMounted(() => void refresh())
       />
     </SettingsCard>
     <SettingsCard v-if="resolved" :title="$st('Configuration sources')" :icon="RiFileList2Line">
-      <dl class="grid gap-3 sm:grid-cols-2">
+      <dl class="settings-control-grid">
         <div class="min-w-0 rounded-lg border border-border/50 bg-muted/20 p-3">
           <dt class="text-xs font-medium">
             {{ $st('Global file:') }}
@@ -279,7 +279,7 @@ onMounted(() => void refresh())
         }}</pre>
       </details>
     </SettingsCard>
-    <SettingsCard v-if="validation || reloadInfo" :title="$st('Last action')" :icon="RiCheckboxCircleLine">
+    <SettingsCard v-if="validation || reloadInfo" class="settings-columns-wide" :title="$st('Last action')" :icon="RiCheckboxCircleLine">
       <details v-if="validation" class="min-w-0 rounded-lg border border-border/50">
         <summary class="cursor-pointer px-3 py-2.5 text-sm">{{ $st('Runtime settings are valid') }}</summary>
         <pre dir="ltr" class="max-h-64 overflow-auto border-t border-border/50 p-3 font-mono text-xs">{{

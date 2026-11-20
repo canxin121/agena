@@ -1,23 +1,15 @@
 import { nextTick, type Ref } from 'vue'
-
-type PickerKind = 'model' | 'thinking' | 'speed'
+import type { ComposerPickerKind } from './composerPickerTypes'
 
 export function useModelSelectionPickerUi(opts: {
-  composerPickerOpen: Ref<null | PickerKind>
+  composerPickerOpen: Ref<null | ComposerPickerKind>
   modelPickerQuery: Ref<string>
   onOpenComposerPicker: () => void
   commandOpen: Ref<boolean>
   commandQuery: Ref<string>
   commandIndex: Ref<number>
 }) {
-  const {
-    composerPickerOpen,
-    modelPickerQuery,
-    onOpenComposerPicker,
-    commandOpen,
-    commandQuery,
-    commandIndex,
-  } = opts
+  const { composerPickerOpen, modelPickerQuery, onOpenComposerPicker, commandOpen, commandQuery, commandIndex } = opts
 
   function closeComposerPicker() {
     composerPickerOpen.value = null
@@ -25,7 +17,7 @@ export function useModelSelectionPickerUi(opts: {
 
   let pickerToggleSeq = 0
 
-  async function toggleComposerPicker(kind: PickerKind) {
+  async function toggleComposerPicker(kind: ComposerPickerKind) {
     const seq = ++pickerToggleSeq
     if (composerPickerOpen.value === kind) {
       composerPickerOpen.value = null

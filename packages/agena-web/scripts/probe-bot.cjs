@@ -324,6 +324,10 @@ async function main() {
   const input = '[data-chat-input="true"]'
   const permissionFixture =
     process.env.PERMISSIONS_PROBE_ONLY === '1' ? require('./probe-permissions.cjs').createFixture({ execution }) : null
+  const layeredSettingsFixture =
+    process.env.LAYERED_SETTINGS_PROBE_ONLY === '1'
+      ? require('./probe-layered-settings.cjs').createFixture({ execution })
+      : null
   try {
     await fs.writeFile(
       path.join(temporary, 'entry.ts'),
@@ -383,6 +387,7 @@ window.__botProbe = {activeComposerSession: () => {
               }
               if (/^\/(api|auth|health)(\/|$)/.test(p)) {
                 requests.push({ method: req.method, path: p })
+                if (layeredSettingsFixture && (await layeredSettingsFixture.handle(req, url, json))) return
                 if (permissionFixture && (await permissionFixture.handle(req, url, json))) return
                 if (/^\/api\/v1\/(tasks(?:\/|$)|chatbot\/messages$)/.test(p))
                   return json({ error: 'Retired endpoint' }, 404)
@@ -787,6 +792,24 @@ window.__botProbe = {activeComposerSession: () => {
       deviceScaleFactor: 1,
       mobile: false,
     })
+    if (layeredSettingsFixture) {
+      await require('./probe-layered-settings.cjs').run({
+        cdp,
+        base,
+        evidence,
+        wait,
+        check,
+        visible,
+        fixture: layeredSettingsFixture,
+      })
+      check(sent.length === 0, 'layered settings editing never sends a model message')
+      check(errors.length === 0, `no browser exceptions (${errors.length})`)
+      await fs.writeFile(
+        path.join(evidence, 'web-layered-settings-browser-report.json'),
+        JSON.stringify({ checks, requests, writes: layeredSettingsFixture.writes, errors }, null, 2),
+      )
+      return
+    }
     if (permissionFixture) {
       await require('./probe-permissions.cjs').run({ cdp, base, evidence, wait, check, visible, permissionFixture })
       check(sent.length === 0, 'permission editing never sends a model message')

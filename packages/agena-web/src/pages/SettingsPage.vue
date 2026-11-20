@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import {
   RiRefreshLine,
   RiResetLeftLine,
-  RiTranslate2,
   RiPaletteLine,
   RiFontSize,
   RiLayoutLine,
@@ -29,12 +28,18 @@ import SearchInput from '@/components/ui/SearchInput.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
-import { settingsQueryForDestination } from '@/components/settings/settingsDestination'
+import {
+  AGENT_PROFILE_DEFAULTS_HASH,
+  isAgentProfileDefaultsHash,
+  movedSettingsPage,
+  settingsQueryForDestination,
+} from '@/components/settings/settingsDestination'
 import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
-import { permissionAccessHash } from '@/components/settings/permissions/permissionNavigation'
+import { legacyPermissionAccessScope, permissionAccessHash } from '@/components/settings/permissions/permissionNavigation'
 import { useSettingsSessionTarget } from '@/components/settings/settingsSessionScope'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import {
+  normalizeSettingsSubpageId,
   resolveSettingsSubpage,
   settingsSubpageStorageKey,
 } from '@/components/settings/workbench/settingsSectionNavigation'
@@ -56,7 +61,6 @@ import {
 import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { apiJson } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
@@ -113,11 +117,13 @@ function readInitialSection(): SettingsTab {
   return DEFAULT_SECTION
 }
 
-const activeSection = computed<SettingsTab>(
-  () => settingsTabFromRouteValue(route.params.section) || readInitialSection(),
-)
+const requestedSection = computed(readInitialSection)
+const requestedView = computed(() => normalizeSettingsSubpageId(route.query.view))
+const movedPage = computed(() => movedSettingsPage(requestedSection.value, requestedView.value, route.hash))
+const activeSection = computed(() => movedPage.value?.section ?? requestedSection.value)
 const activePages = computed(() => buildSettingsSubpages(activeSection.value))
 const activeView = computed(() => {
+  if (movedPage.value) return movedPage.value.view
   let remembered = ''
   try {
     remembered = localStorage.getItem(settingsSubpageStorageKey(activeSection.value)) || ''
@@ -133,10 +139,25 @@ const activeView = computed(() => {
 // Every scoped page resolves the same configuration layers; its workbench owns
 // the visible selector while the route keeps the choice shareable.
 const activeScopes = computed(() => buildSettingsScopes(activeSection.value, activeView.value))
+// Session settings and profile definitions remember their scopes independently.
+const scopeStorageKey = computed(() =>
+  settingsScopeStorageKey(activeView.value === 'session-behavior' ? 'runtime-session.session-behavior' : activeSection.value),
+)
 const activeScope = computed(() => {
+  if (activeSection.value === 'permissions') {
+    const legacyScope = legacyPermissionAccessScope(requestedView.value, route.query.scope)
+    if (legacyScope) return legacyScope
+  }
+  if (
+    activeView.value === 'session-behavior' &&
+    (requestedView.value === 'compaction' ||
+      (requestedView.value === 'agent-profiles' && isAgentProfileDefaultsHash(route.hash)))
+  ) {
+    return route.query.scope === 'workspace' ? 'workspace' : 'global'
+  }
   let remembered = ''
   try {
-    remembered = localStorage.getItem(settingsScopeStorageKey(activeSection.value)) || ''
+    remembered = localStorage.getItem(scopeStorageKey.value) || ''
   } catch {}
   return resolveSettingsScope(route.query.scope, remembered, activeScopes.value)
 })
@@ -150,6 +171,22 @@ const sessionTarget = useSettingsSessionTarget()
 // every other settings page.
 const activeSubpageDefinition = computed(() => activePages.value.find((page) => page.id === activeView.value) || null)
 const contentFillsViewport = computed(() => activeSubpageDefinition.value?.fillsViewport === true)
+const settingsPane = ref<HTMLElement | null>(null)
+
+watch([activeSection, activeView], () => {
+  if (!route.hash) settingsPane.value?.scrollTo({ top: 0 })
+}, { flush: 'post' })
+
+function legacyViewAnchor(): string {
+  if (activeSection.value === 'permissions') return permissionAccessHash(requestedView.value)
+  if (activeSection.value === 'interface' && ['conversation', 'notifications'].includes(requestedView.value))
+    return '#settings-' + requestedView.value
+  if (activeView.value === 'session-behavior') {
+    if (requestedView.value === 'compaction') return '#settings-context-management'
+    if (requestedView.value === 'approval-model' && activeScope.value !== 'session') return '#settings-approval-model'
+  }
+  return ''
+}
 
 watch(
   () =>
@@ -158,6 +195,7 @@ watch(
       route.query.view,
       route.query.scope,
       route.query.pluginTab,
+      route.hash,
       activeView.value,
       activeScope.value,
     ] as const,
@@ -165,7 +203,7 @@ watch(
     if (!settingsTabFromRouteValue(route.params.section)) return
     try {
       localStorage.setItem(settingsSubpageStorageKey(activeSection.value), activeView.value)
-      localStorage.setItem(settingsScopeStorageKey(activeSection.value), activeScope.value)
+      localStorage.setItem(scopeStorageKey.value, activeScope.value)
     } catch {}
     const { pluginTab: _pluginTab, scope: _scope, sessionId: _sessionId, ...query } = route.query
     if (activeScope.value) query.scope = activeScope.value
@@ -174,18 +212,26 @@ watch(
       const tab = pluginTabForSettingsView(route.query.view || activeView.value, route.query.pluginTab)
       if (tab && tab !== 'overview') query.pluginTab = tab
     } else delete query.plugin
+    const hash =
+      activeView.value === 'agent-profiles' && route.hash === '#settings-prompt-library'
+        ? ''
+        : activeView.value === 'session-behavior' && isAgentProfileDefaultsHash(route.hash)
+          ? AGENT_PROFILE_DEFAULTS_HASH
+          : route.hash || legacyViewAnchor()
     if (
+      requestedSection.value === activeSection.value &&
       query.view === activeView.value &&
-      query.scope === (activeScope.value || undefined) &&
+      route.query.scope === query.scope &&
       route.query.pluginTab === query.pluginTab &&
       route.query.sessionId === undefined &&
+      hash === route.hash &&
       (isPluginView || route.query.plugin === undefined)
     )
       return
     void router.replace({
       path: settingsPathForTab(activeSection.value),
       query: { ...query, view: activeView.value },
-      hash: route.hash || (activeSection.value === 'permissions' ? permissionAccessHash(route.query.view) : ''),
+      hash,
     })
   },
   { immediate: true },
@@ -203,7 +249,7 @@ const permissionsPanel = ref<{ refresh: () => Promise<void> } | null>(null)
 function goToSettingsDestination(destination: SettingsSidebarDestination) {
   const path = settingsPathForTab(destination.section)
   const query = settingsQueryForDestination(destination, activeSection.value, route.query)
-  void router.push({ path, query, hash: route.hash })
+  void router.push({ path, query })
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
 
@@ -442,7 +488,7 @@ const toolCatalogError = ref('')
 const toolCatalogQuery = ref('')
 let toolCatalogLoaded = false
 let toolCatalogController: AbortController | undefined
-const needsChatToolCatalog = computed(() => activeSection.value === 'interface' && activeView.value === 'conversation')
+const needsChatToolCatalog = computed(() => activeSection.value === 'interface' && activeView.value === 'web-appearance')
 
 async function loadChatToolCatalog() {
   if (!visible.value || !needsChatToolCatalog.value || toolCatalogLoading.value) return
@@ -605,18 +651,13 @@ const dirtyHint = computed(
 
       <!-- Content -->
       <main
-        class="flex-1 min-w-0 overflow-y-auto bg-background"
+        ref="settingsPane"
+        class="settings-pane flex-1 min-w-0 overflow-y-auto bg-background"
         v-show="!ui.isCompactLayout || !ui.isSessionSwitcherOpen"
       >
         <div
-          :class="
-            cn(
-              'w-full',
-              contentFillsViewport
-                ? 'mx-auto flex max-w-6xl flex-col gap-4 p-4 lg:mx-0 lg:h-full lg:max-w-none lg:min-h-0 lg:gap-6 lg:p-6'
-                : 'space-y-6 p-4 lg:p-6',
-            )
-          "
+          class="w-full space-y-3 p-3 sm:p-4"
+          :class="{ 'settings-pane-fill': contentFillsViewport }"
         >
           <div
             v-if="dirtyHint"
@@ -625,7 +666,7 @@ const dirtyHint = computed(
             {{ dirtyHint }}
           </div>
 
-          <!-- Interface: TUI, Web appearance, and conversation display are independent subpages. -->
+          <!-- Browser preferences and server-backed TUI preferences each have their own scope. -->
           <SettingsSectionWorkbench
             v-if="activeSection === 'interface'"
             section="interface"
@@ -635,144 +676,144 @@ const dirtyHint = computed(
             v-slot="{ activePage }"
           >
             <InterfaceSettingsPanel v-if="activePage === 'tui'" ref="interfacePanel" />
-            <div v-else-if="activePage === 'web-appearance'" class="space-y-4">
-              <div class="grid gap-4 xl:grid-cols-2">
-                <SettingsCard
-                  :title="t('settings.appearance.language.label')"
-                  :description="t('settings.appearance.language.help')"
-                  :icon="RiTranslate2"
-                >
-                  <OptionPicker
-                    v-model="uiLocale"
-                    :options="localePickerOptions"
-                    :title="t('settings.appearance.language.label')"
-                    :search-placeholder="t('settings.appearance.language.label')"
-                    :include-empty="false"
-                  />
-                </SettingsCard>
+            <div v-else class="settings-columns">
+              <div class="settings-stack">
                 <SettingsCard :title="t('settings.appearance.theme.label')" :icon="RiPaletteLine">
+                  <SettingsRow
+                    :title="t('settings.appearance.language.label')"
+                    :description="t('settings.appearance.language.help')"
+                  >
+                    <OptionPicker
+                      v-model="uiLocale"
+                      :options="localePickerOptions"
+                      :title="t('settings.appearance.language.label')"
+                      :search-placeholder="t('settings.appearance.language.label')"
+                      :include-empty="false"
+                      size="sm"
+                    />
+                  </SettingsRow>
                   <SettingsRow :title="t('settings.appearance.theme.useSystem')" toggle>
                     <SettingsToggle v-model="useSystemTheme" :label="t('settings.appearance.theme.useSystem')" />
                   </SettingsRow>
-                  <OptionPicker
-                    v-model="themeVariant"
-                    class="mt-3"
-                    :disabled="useSystemTheme"
-                    :options="themeVariantPickerOptions"
-                    :title="t('settings.appearance.theme.pickerTitle')"
-                    :search-placeholder="t('settings.appearance.theme.pickerSearch')"
-                    :include-empty="false"
-                  />
+                  <SettingsRow :title="t('settings.appearance.theme.pickerTitle')">
+                    <OptionPicker
+                      v-model="themeVariant"
+                      :disabled="useSystemTheme"
+                      :options="themeVariantPickerOptions"
+                      :title="t('settings.appearance.theme.pickerTitle')"
+                      :search-placeholder="t('settings.appearance.theme.pickerSearch')"
+                      :include-empty="false"
+                      size="sm"
+                    />
+                  </SettingsRow>
+                </SettingsCard>
+                <SettingsCard :title="t('settings.appearance.fonts.label')" :icon="RiFontSize">
+                  <div class="settings-control-grid">
+                    <div class="min-w-0 space-y-1">
+                      <div class="text-xs font-medium text-muted-foreground">{{ t('settings.appearance.fonts.ui') }}</div>
+                      <OptionPicker
+                        v-model="uiFont"
+                        :options="uiFontPickerOptions"
+                        :title="t('settings.appearance.fonts.ui')"
+                        :search-placeholder="t('settings.appearance.fonts.search')"
+                        :include-empty="false"
+                      />
+                    </div>
+                    <div class="min-w-0 space-y-1">
+                      <div class="text-xs font-medium text-muted-foreground">
+                        {{ t('settings.appearance.fonts.mono') }}
+                      </div>
+                      <OptionPicker
+                        v-model="monoFont"
+                        :options="monoFontPickerOptions"
+                        :title="t('settings.appearance.fonts.mono')"
+                        :search-placeholder="t('settings.appearance.fonts.search')"
+                        :include-empty="false"
+                      />
+                    </div>
+                  </div>
+                </SettingsCard>
+                <SettingsCard :title="t('settings.appearance.sizing.label')" :icon="RiLayoutLine">
+                  <div class="settings-control-grid">
+                    <label class="grid min-w-0 gap-1 text-xs font-medium text-muted-foreground">
+                      {{ t('settings.appearance.sizing.fontSize') }}
+                      <input v-model.number="fontSize" type="number" min="70" max="140" class="settings-number-input" />
+                    </label>
+                    <label class="grid min-w-0 gap-1 text-xs font-medium text-muted-foreground">
+                      {{ t('settings.appearance.sizing.padding') }}
+                      <input v-model.number="padding" type="number" min="70" max="140" class="settings-number-input" />
+                    </label>
+                    <label class="grid min-w-0 gap-1 text-xs font-medium text-muted-foreground">
+                      {{ t('settings.appearance.sizing.cornerRadius') }}
+                      <input v-model.number="cornerRadius" type="number" min="0" max="28" class="settings-number-input" />
+                    </label>
+                    <label class="grid min-w-0 gap-1 text-xs font-medium text-muted-foreground">
+                      {{ t('settings.appearance.sizing.inputBarOffset') }}
+                      <input
+                        v-model.number="inputBarOffset"
+                        type="number"
+                        min="-40"
+                        max="80"
+                        class="settings-number-input"
+                      />
+                    </label>
+                  </div>
                 </SettingsCard>
               </div>
-              <SettingsCard :title="t('settings.appearance.fonts.label')" :icon="RiFontSize">
-                <div class="grid gap-4 sm:grid-cols-2">
-                  <div class="min-w-0 space-y-2">
-                    <div class="text-xs font-medium text-muted-foreground">{{ t('settings.appearance.fonts.ui') }}</div>
-                    <OptionPicker
-                      v-model="uiFont"
-                      :options="uiFontPickerOptions"
-                      :title="t('settings.appearance.fonts.ui')"
-                      :search-placeholder="t('settings.appearance.fonts.search')"
-                      :include-empty="false"
-                    />
-                  </div>
-                  <div class="min-w-0 space-y-2">
-                    <div class="text-xs font-medium text-muted-foreground">
-                      {{ t('settings.appearance.fonts.mono') }}
-                    </div>
-                    <OptionPicker
-                      v-model="monoFont"
-                      :options="monoFontPickerOptions"
-                      :title="t('settings.appearance.fonts.mono')"
-                      :search-placeholder="t('settings.appearance.fonts.search')"
-                      :include-empty="false"
-                    />
-                  </div>
-                </div>
-              </SettingsCard>
-              <SettingsCard :title="t('settings.appearance.sizing.label')" :icon="RiLayoutLine">
-                <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <label class="grid min-w-0 gap-2 text-xs font-medium text-muted-foreground">
-                    {{ t('settings.appearance.sizing.fontSize') }}
-                    <input v-model.number="fontSize" type="number" min="70" max="140" class="settings-number-input" />
-                  </label>
-                  <label class="grid min-w-0 gap-2 text-xs font-medium text-muted-foreground">
-                    {{ t('settings.appearance.sizing.padding') }}
-                    <input v-model.number="padding" type="number" min="70" max="140" class="settings-number-input" />
-                  </label>
-                  <label class="grid min-w-0 gap-2 text-xs font-medium text-muted-foreground">
-                    {{ t('settings.appearance.sizing.cornerRadius') }}
-                    <input v-model.number="cornerRadius" type="number" min="0" max="28" class="settings-number-input" />
-                  </label>
-                  <label class="grid min-w-0 gap-2 text-xs font-medium text-muted-foreground">
-                    {{ t('settings.appearance.sizing.inputBarOffset') }}
-                    <input
-                      v-model.number="inputBarOffset"
-                      type="number"
-                      min="-40"
-                      max="80"
-                      class="settings-number-input"
-                    />
-                  </label>
-                </div>
-              </SettingsCard>
-              <p v-if="!dirtyHint" class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                {{ $st('Saved automatically') }}
-              </p>
-            </div>
-            <BrowserNotificationsPanel v-else-if="activePage === 'notifications'" />
-            <div v-else class="space-y-4">
-              <SettingsCard :title="t('settings.appearance.chat.label')" :icon="RiChat3Line">
-                <SettingsRow :title="t('settings.appearance.chat.showTimestamps')" toggle>
-                  <SettingsToggle v-model="showChatTimestamps" :label="t('settings.appearance.chat.showTimestamps')" />
-                </SettingsRow>
-                <SettingsRow :title="t('settings.appearance.chat.showReasoning')" toggle>
-                  <SettingsToggle v-model="showReasoningTraces" :label="t('settings.appearance.chat.showReasoning')" />
-                </SettingsRow>
-                <SettingsRow :title="t('settings.appearance.chat.autoCollapseActivity')" toggle>
-                  <SettingsToggle
-                    v-model="chatActivityAutoCollapseOnIdle"
-                    :label="t('settings.appearance.chat.autoCollapseActivity')"
-                  />
-                </SettingsRow>
-                <SettingsRow
-                  :title="t('settings.appearance.chat.transcriptVim')"
-                  :description="t('settings.appearance.chat.transcriptVimHint')"
-                  toggle
-                >
-                  <SettingsToggle v-model="chatTranscriptVim" :label="t('settings.appearance.chat.transcriptVim')" />
-                </SettingsRow>
-              </SettingsCard>
-              <SettingsCard :title="t('settings.appearance.chat.activityDetails')" :icon="RiListCheck2">
-                <SettingsRow :title="$st('Expand activity parts by default unless a type has its own setting')" toggle>
-                  <SettingsToggle
-                    v-model="transcriptActivityDefaultExpanded"
-                    :label="$st('Expand activity parts by default unless a type has its own setting')"
-                  />
-                </SettingsRow>
-                <div class="mt-3 grid gap-2 xl:grid-cols-2">
-                  <div
-                    v-for="opt in activityKindOptions"
-                    :key="opt.id"
-                    class="flex min-w-0 items-center gap-3 rounded-lg border border-border/50 bg-background/30 p-3"
-                  >
-                    <div class="min-w-0 flex-1">
-                      <div class="text-sm font-medium">{{ activityKindLabel(opt) }}</div>
-                      <p class="mt-1 text-xs leading-relaxed text-muted-foreground">
-                        {{ activityKindDescription(opt) }}
-                      </p>
-                    </div>
+              <div class="settings-stack">
+                <SettingsCard id="settings-conversation" :title="t('settings.appearance.chat.label')" :icon="RiChat3Line">
+                  <SettingsRow :title="t('settings.appearance.chat.showTimestamps')" toggle>
+                    <SettingsToggle v-model="showChatTimestamps" :label="t('settings.appearance.chat.showTimestamps')" />
+                  </SettingsRow>
+                  <SettingsRow :title="t('settings.appearance.chat.showReasoning')" toggle>
+                    <SettingsToggle v-model="showReasoningTraces" :label="t('settings.appearance.chat.showReasoning')" />
+                  </SettingsRow>
+                  <SettingsRow :title="t('settings.appearance.chat.autoCollapseActivity')" toggle>
                     <SettingsToggle
-                      :model-value="activityKindDefaultExpandedEnabled(opt.id)"
-                      :label="activityKindLabel(opt)"
-                      @update:model-value="toggleActivityKindDefaultExpanded(opt.id)"
+                      v-model="chatActivityAutoCollapseOnIdle"
+                      :label="t('settings.appearance.chat.autoCollapseActivity')"
                     />
+                  </SettingsRow>
+                  <SettingsRow
+                    :title="t('settings.appearance.chat.transcriptVim')"
+                    :description="t('settings.appearance.chat.transcriptVimHint')"
+                    toggle
+                  >
+                    <SettingsToggle v-model="chatTranscriptVim" :label="t('settings.appearance.chat.transcriptVim')" />
+                  </SettingsRow>
+                </SettingsCard>
+                <BrowserNotificationsPanel id="settings-notifications" />
+                <SettingsCard :title="t('settings.appearance.chat.activityDetails')" :icon="RiListCheck2">
+                  <SettingsRow :title="$st('Expand activity parts by default unless a type has its own setting')" toggle>
+                    <SettingsToggle
+                      v-model="transcriptActivityDefaultExpanded"
+                      :label="$st('Expand activity parts by default unless a type has its own setting')"
+                    />
+                  </SettingsRow>
+                  <div class="mt-2 divide-y divide-border/50">
+                    <div
+                      v-for="opt in activityKindOptions"
+                      :key="opt.id"
+                      class="flex min-w-0 items-center gap-2 py-1.5"
+                    >
+                      <div class="min-w-0 flex-1">
+                        <div class="text-sm font-medium">{{ activityKindLabel(opt) }}</div>
+                        <p class="mt-0.5 text-xs leading-snug text-muted-foreground">
+                          {{ activityKindDescription(opt) }}
+                        </p>
+                      </div>
+                      <SettingsToggle
+                        :model-value="activityKindDefaultExpandedEnabled(opt.id)"
+                        :label="activityKindLabel(opt)"
+                        @update:model-value="toggleActivityKindDefaultExpanded(opt.id)"
+                      />
+                    </div>
                   </div>
-                </div>
-              </SettingsCard>
+                </SettingsCard>
+              </div>
               <SettingsCard
                 :title="t('settings.appearance.chat.toolDetails')"
+                class="settings-columns-wide"
                 :icon="RiToolsLine"
                 :count="toolActivityOptions.length"
               >
@@ -808,11 +849,11 @@ const dirtyHint = computed(
                 >
                   {{ t('settings.appearance.chat.loadingTools') }}
                 </p>
-                <div v-else-if="filteredToolActivityOptions.length" class="divide-y divide-border/50">
+                <div v-else-if="filteredToolActivityOptions.length" class="max-h-96 divide-y divide-border/50 overflow-y-auto">
                   <div
                     v-for="opt in filteredToolActivityOptions"
                     :key="opt.id"
-                    class="flex min-w-0 items-center gap-3 py-3 first:pt-0"
+                    class="flex min-w-0 items-center gap-2 py-1.5 first:pt-0"
                   >
                     <div class="min-w-0 flex-1">
                       <div class="break-all font-mono text-xs font-medium">{{ opt.label }}</div>
@@ -852,8 +893,6 @@ const dirtyHint = computed(
           <ModelsProvidersPanel
             ref="modelsProvidersPanel"
             :active-page="activeView"
-            :scope="activeScope"
-            :session-id="sessionTarget.sessionId.value"
             v-else-if="activeSection === 'models-providers'"
           />
 
@@ -919,6 +958,19 @@ const dirtyHint = computed(
 
 <style scoped>
 @reference '../style.css';
+.settings-pane {
+  container: settings-pane / inline-size;
+}
+
+@container settings-pane (min-width: 44rem) {
+  .settings-pane-fill {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+}
+
 .settings-number-input {
   @apply h-9 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm font-normal text-foreground outline-none focus:border-ring;
 }

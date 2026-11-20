@@ -7,6 +7,10 @@ import { useI18n } from 'vue-i18n'
 import { useBotConversation } from './chat/useBotConversation'
 import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
+import type { ComposerPickerKind } from './chat/composerPickerTypes'
+import { useChatProfilePicker } from './chat/useChatProfilePicker'
+import { settingsText as st } from '@/i18n/settingsText'
+import { agentProfileDefaultsDestination } from '@/components/settings/settingsDestination'
 
 import { deferKeyboardFocus } from '@/lib/deferredKeyboardFocus'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -407,7 +411,7 @@ watch(
 )
 const composerControlsRef = ref<HTMLDivElement | null>(null)
 const composerPickerRef = ref<OptionMenuExpose | null>(null)
-const composerPickerOpen = ref<null | 'model' | 'thinking' | 'speed'>(null)
+const composerPickerOpen = ref<null | ComposerPickerKind>(null)
 const modelPickerQuery = ref('')
 const thinkingPickerQuery = ref('')
 const speedPickerQuery = ref('')
@@ -450,6 +454,7 @@ function returnFromSide() {
 }
 
 const modelTriggerRef = ref<HTMLElement | null>(null)
+const profileTriggerRef = ref<HTMLElement | null>(null)
 const thinkingTriggerRef = ref<HTMLElement | null>(null)
 const speedTriggerRef = ref<HTMLElement | null>(null)
 
@@ -556,7 +561,19 @@ modelSelection = useChatModelSelection({
   commandIndex,
 })
 
+const profilePicker = useChatProfilePicker({
+  chat,
+  open: composerPickerOpen,
+  directory: () => directoryStore.currentDirectory,
+  locallyBusy: () => sending.value || compactingSessionId.value === chat.selectedSessionId,
+  close: closeComposerPickerMenu,
+  openDefaults: (scope, targetSessionId) => {
+    void router.push(agentProfileDefaultsDestination(scope, { targetSessionId }))
+  },
+})
+
 const composerPickerTitle = computed(() => {
+  if (composerPickerOpen.value === 'profile') return st('Agent profiles')
   if (composerPickerOpen.value === 'model') return String(t('chat.composer.picker.modelTitle'))
   if (composerPickerOpen.value === 'thinking') return String(t('chat.composer.picker.thinkingTitle'))
   if (composerPickerOpen.value === 'speed') return String(t('chat.composer.picker.speedTitle'))
@@ -568,6 +585,7 @@ const composerPickerSearchable = computed(() => {
 })
 
 const composerPickerSearchPlaceholder = computed(() => {
+  if (composerPickerOpen.value === 'profile') return st('Search profiles…')
   if (composerPickerOpen.value === 'model') return String(t('chat.composer.picker.searchModels'))
   if (composerPickerOpen.value === 'thinking') return String(t('chat.composer.picker.searchThinkingModes'))
   if (composerPickerOpen.value === 'speed') return String(t('chat.composer.picker.searchSpeedModes'))
@@ -575,6 +593,7 @@ const composerPickerSearchPlaceholder = computed(() => {
 })
 
 const composerPickerQuery = computed(() => {
+  if (composerPickerOpen.value === 'profile') return profilePicker.query.value
   if (composerPickerOpen.value === 'model') return modelPickerQuery.value
   if (composerPickerOpen.value === 'thinking') return thinkingPickerQuery.value
   if (composerPickerOpen.value === 'speed') return speedPickerQuery.value
@@ -583,6 +602,10 @@ const composerPickerQuery = computed(() => {
 
 function setComposerPickerQuery(value: string) {
   const next = String(value || '')
+  if (composerPickerOpen.value === 'profile') {
+    profilePicker.query.value = next
+    return
+  }
   if (composerPickerOpen.value === 'model') {
     modelPickerQuery.value = next
     return
@@ -596,9 +619,12 @@ function setComposerPickerQuery(value: string) {
   }
 }
 
-const composerPickerHelperText = computed(() => '')
+const composerPickerHelperText = computed(() =>
+  composerPickerOpen.value === 'profile' ? profilePicker.helperText.value : '',
+)
 
 const composerPickerEmptyText = computed(() => {
+  if (composerPickerOpen.value === 'profile') return st('No compatible profiles found.')
   if (composerPickerOpen.value === 'model') return String(t('chat.composer.picker.emptyModels'))
   if (composerPickerOpen.value === 'thinking') return String(t('chat.composer.picker.emptyThinkingModes'))
   if (composerPickerOpen.value === 'speed') return String(t('chat.composer.picker.emptySpeedModes'))
@@ -606,6 +632,7 @@ const composerPickerEmptyText = computed(() => {
 })
 
 const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
+  if (composerPickerOpen.value === 'profile') return profilePicker.groups.value
   if (composerPickerOpen.value === 'model') {
     const groups: OptionMenuGroup[] = [
       {
@@ -737,13 +764,20 @@ const composerPickerGroups = computed<OptionMenuGroup[]>(() => {
 })
 
 const composerPickerLoading = computed(() => {
+  if (composerPickerOpen.value === 'profile') return profilePicker.loading.value
   return composerPickerOpen.value === 'model' && modelSelection.catalogLoading.value
 })
 
-const composerPickerRefreshable = computed(() => composerPickerOpen.value === 'model')
+const composerPickerRefreshable = computed(
+  () => composerPickerOpen.value === 'model' || (composerPickerOpen.value === 'profile' && !profilePicker.saving.value),
+)
 
 function refreshComposerPickerOptions() {
   if (!composerPickerRefreshable.value) return
+  if (composerPickerOpen.value === 'profile') {
+    void profilePicker.load()
+    return
+  }
   void modelSelection.loadProvidersAndModels()
 }
 
@@ -752,6 +786,7 @@ function closeComposerPickerMenu() {
   modelPickerQuery.value = ''
   thinkingPickerQuery.value = ''
   speedPickerQuery.value = ''
+  profilePicker.query.value = ''
 }
 
 function closeAttachmentsPanel() {
@@ -885,6 +920,10 @@ function setComposerPickerOpen(next: boolean) {
 
 function handleComposerPickerSelect(item: OptionMenuItem) {
   const id = String(item.id || '')
+  if (id.startsWith('profile:')) {
+    void profilePicker.select(id)
+    return
+  }
   if (id === 'model:default') {
     void modelSelection.chooseModelDefault()
     return
@@ -2420,6 +2459,7 @@ const viewCtx = {
   composerControlsRef,
   composerPickerRef,
   modelTriggerRef,
+  profileTriggerRef,
   thinkingTriggerRef,
   speedTriggerRef,
 

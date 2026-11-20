@@ -1,6 +1,7 @@
 import type { JsonValue } from '@/types/json'
 
 export type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
+export const SHELL_COMMAND_RULE_GROUP = 'shell.*'
 export type PathPermissionMode = 'readonly' | 'readwrite' | 'deny'
 export type NetworkAction = 'allow' | 'deny'
 export type NetworkProtocol = 'tcp' | 'udp' | 'icmp' | 'any'
@@ -11,6 +12,7 @@ export type NetworkRule = {
   except?: string[]
 }
 export type NetworkPermissionConfig = {
+  version?: 2
   default?: NetworkAction
   allow?: NetworkRule[]
   deny?: NetworkRule[]
@@ -30,6 +32,24 @@ export type PermissionConfig = {
     rules?: Record<string, PermissionMode | Record<string, PermissionMode>>
   }
   approval_model?: JsonValue
+}
+
+/** Match the runtime defaults for an independent permission configuration. */
+export function completePermissionConfig(config: PermissionConfig): PermissionConfig {
+  return {
+    ...config,
+    path: { workspace: 'deny', external: 'deny', ...config.path },
+    network: {
+      version: 2,
+      default: 'deny',
+      inbound: 'deny',
+      hostLoopback: 'deny',
+      allow: [],
+      deny: [],
+      ...config.network,
+    },
+    tools: { default: 'deny', ...config.tools },
+  }
 }
 
 // Keep the registered identities in agena-domain/tool_permission_config.rs.
@@ -202,6 +222,60 @@ function modeMap(value: unknown, field: string): Record<string, PermissionMode> 
   )
 }
 
+const legacyCommandTools = new Set([
+  'agena.shell.exec',
+  'agena.shell.spawn',
+  'agena.shell.watch',
+  'agena.shell.open',
+  'agena.shell.write',
+])
+const commandRulePriority: Record<PermissionMode, number> = { allow: 0, auto: 1, ask: 2, deny: 3 }
+
+function commandClassKeyword(pattern: string): string | undefined {
+  const keyword = pattern.replace(/[A-Z]/g, (letter) => letter.toLowerCase()).replaceAll('_', '-')
+  if (keyword === 'noop') return 'no-op'
+  if (['no-op', 'routine', 'dangerous'].includes(keyword)) return keyword
+}
+
+function shareLegacyCommandRules(rules: NonNullable<NonNullable<PermissionConfig['tools']>['rules']>) {
+  const seen = new Map<string, PermissionMode | Record<string, PermissionMode>>()
+  const groups = new Map<string, Record<string, PermissionMode>>()
+  for (const name of Object.keys(rules).sort()) {
+    const tool = canonicalPermissionToolName(name)
+    const entries = rules[name]!
+    if (!legacyCommandTools.has(tool)) continue
+    const previous = seen.get(tool)
+    if (previous && JSON.stringify(previous) !== JSON.stringify(entries))
+      throw new PermissionConfigError('Conflicting command rules for {tool}.', { tool })
+    seen.set(tool, entries)
+    if (typeof entries === 'object') {
+      groups.set(tool, entries)
+      delete rules[name]
+    }
+  }
+  if (!groups.size || Object.hasOwn(rules, SHELL_COMMAND_RULE_GROUP)) return
+
+  const merged = new Map<string, PermissionMode>()
+  const patternLists = new Set<string>()
+  for (const tool of [...groups.keys()].sort()) {
+    const entries = Object.entries(groups.get(tool)!)
+    const patterns = entries.filter(([pattern]) => !commandClassKeyword(pattern))
+    if (patterns.length) patternLists.add(JSON.stringify(patterns))
+    const normalized = new Map(entries.map(([pattern, mode]) => [commandClassKeyword(pattern) || pattern, mode]))
+    for (const [pattern, mode] of normalized) {
+      const previous = merged.get(pattern)
+      if (!previous || commandRulePriority[previous] < commandRulePriority[mode]) merged.set(pattern, mode)
+    }
+  }
+  const entries = [...merged]
+  if (patternLists.size > 1) {
+    const priority = ([pattern, mode]: [string, PermissionMode]) =>
+      commandClassKeyword(pattern) ? 0 : 1 + commandRulePriority[mode]
+    entries.sort((left, right) => priority(left) - priority(right))
+  }
+  rules[SHELL_COMMAND_RULE_GROUP] = Object.fromEntries(entries)
+}
+
 function networkAction(value: unknown, field: string): NetworkAction {
   if (value === 'allow' || value === 'deny') return value
   throw new PermissionConfigError('Invalid permission value at {field}: expected {expected}.', {
@@ -341,17 +415,40 @@ function networkRules(value: unknown, field: string): NetworkRule[] {
   })
 }
 
-/** A present network object is a complete policy; absent fields use deny/empty defaults. */
+/** Legacy policies are complete; version 2 preserves omitted fields for per-field inheritance. */
 export function parseNetworkPermissionConfig(value: unknown): NetworkPermissionConfig {
   const field = 'permission.network'
   const raw = objectAt(value, field)
-  knownFields(raw, ['default', 'allow', 'deny', 'inbound', 'hostLoopback'], field)
-  const result: NetworkPermissionConfig = {}
-  for (const action of ['default', 'inbound', 'hostLoopback'] as const)
+  knownFields(raw, ['version', 'default', 'allow', 'deny', 'inbound', 'hostLoopback'], field)
+  const legacy = raw.version === undefined
+  if (!legacy && raw.version !== 2)
+    throw new PermissionConfigError('Invalid permission value at {field}: expected {expected}.', {
+      field: field + '.version',
+      expected: '2',
+    })
+  const result: NetworkPermissionConfig = { version: 2 }
+  for (const action of ['default', 'inbound', 'hostLoopback'] as const) {
     if (raw[action] !== undefined) result[action] = networkAction(raw[action], field + '.' + action)
-  for (const action of ['allow', 'deny'] as const)
+    else if (legacy) result[action] = 'deny'
+  }
+  for (const action of ['allow', 'deny'] as const) {
     if (raw[action] !== undefined) result[action] = networkRules(raw[action], field + '.' + action)
+    else if (legacy) result[action] = []
+  }
   return result
+}
+
+/** Resolve only known layers; a local field replaces its parent field, including an empty rule list. */
+export function mergeNetworkPermissionConfig(
+  parent: NetworkPermissionConfig | null | undefined,
+  local: NetworkPermissionConfig | null | undefined,
+): NetworkPermissionConfig | null {
+  if (parent == null && local == null) return null
+  return {
+    ...(parent == null ? {} : parseNetworkPermissionConfig(parent)),
+    ...(local == null ? {} : parseNetworkPermissionConfig(local)),
+    version: 2,
+  }
 }
 
 /** Normalize deterministic legacy values, then validate before replacing a draft or submitting it. */
@@ -410,15 +507,17 @@ export function parsePermissionConfig(value: unknown): PermissionConfig {
     result.tools = {}
     if (tools.default != null) result.tools.default = permissionMode(tools.default, 'permission.tools.default')
     if (tools.names !== undefined) result.tools.names = modeMap(tools.names, 'permission.tools.names')
-    if (tools.rules !== undefined)
+    if (tools.rules !== undefined) {
       result.tools.rules = Object.fromEntries(
         Object.entries(objectAt(tools.rules, 'permission.tools.rules')).map(([tool, rules]) => [
           tool,
-          typeof rules === 'string'
+          typeof rules === 'string' && tool !== SHELL_COMMAND_RULE_GROUP
             ? permissionMode(rules, `permission.tools.rules[${JSON.stringify(tool)}]`)
             : modeMap(rules, `permission.tools.rules[${JSON.stringify(tool)}]`),
         ]),
       )
+      shareLegacyCommandRules(result.tools.rules)
+    }
   }
   if (raw.approval_model != null) result.approval_model = raw.approval_model as JsonValue
   return result

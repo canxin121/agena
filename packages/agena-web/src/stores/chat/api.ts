@@ -1,6 +1,7 @@
 import { i18n } from '@/i18n'
 import { withInterfaceLocale } from '@/i18n/interfaceLocale'
 import type { SessionActivity } from '@/types/activity'
+import type { RequestPerformance } from '@/types/usage'
 // Agena REST API client for the chat subsystem.
 //
 // All endpoints live under /api/v1. Ids are numeric; timestamps are RFC3339
@@ -151,7 +152,11 @@ export type AgenaExecutionState = {
     model_speed_mode?: string | null
     model_verbosity?: string | null
     model_parallel_tool_calls?: boolean | null
+    /** Raw saved choices and the profile/runtime baseline, independent of effective model_* values. */
+    selected_selection?: JsonValue
+    inherited_selection?: JsonValue
     profile?: string | null
+    profile_is_default?: boolean
     permission_ceiling?: PermissionConfig
     permission_ceiling_layers?: PermissionConfig[]
     prompts?: PromptLayer
@@ -159,6 +164,7 @@ export type AgenaExecutionState = {
     [k: string]: JsonValue
   }
   usage?: {
+    last_performance?: RequestPerformance | null
     measured_prompt_tokens?: number | null
     current_tokens?: number
     projected_tokens?: number | null
@@ -967,7 +973,10 @@ export async function patchSessionMetadata(sessionId: string, patch: SessionUpda
   })
   const session = toSession(updated, scope)
   if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
-  const change = Object.prototype.hasOwnProperty.call(patch, 'prompts') || Object.prototype.hasOwnProperty.call(patch, 'profile') ? 'execution' : 'metadata'
+  const change =
+    Object.prototype.hasOwnProperty.call(patch, 'prompts') || Object.prototype.hasOwnProperty.call(patch, 'profile')
+      ? 'execution'
+      : 'metadata'
   reconcileSessionMutation(session.id, change, scope, patch)
   return session
 }
@@ -1239,11 +1248,22 @@ export async function setSessionSelection(sessionId: string, options: RunOptions
 
 /** PUT /api/v1/sessions/{id}/permission — update the session policy. */
 export async function setSessionPermission(sessionId: string, permission: JsonValue): Promise<AgenaExecutionState> {
+  return updateSessionPermission(sessionId, { permission })
+}
+
+export async function setSessionPermissionProfile(
+  sessionId: string,
+  profile: string | null,
+): Promise<AgenaExecutionState> {
+  return updateSessionPermission(sessionId, { permission_profile: profile })
+}
+
+async function updateSessionPermission(sessionId: string, update: JsonObject): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/permission`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ permission }),
+    body: JSON.stringify(update),
   })
   toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)

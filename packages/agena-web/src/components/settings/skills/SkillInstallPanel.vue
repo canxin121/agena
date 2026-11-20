@@ -277,19 +277,20 @@ defineExpose({
 </script>
 
 <template>
-  <div class="mx-auto grid max-w-5xl gap-5" :aria-busy="busy">
+  <div class="settings-columns" :aria-busy="busy">
     <SettingsCard
+      :class="{ 'settings-columns-wide': !preview && !result }"
       :title="$st('Choose a source')"
       :description="$st('Preview validates packages without installing. Select the skills you want, then install.')"
     >
-      <div class="grid grid-cols-2 gap-2 lg:grid-cols-4" role="group" :aria-label="$st('Installation source')">
+      <div class="settings-control-grid" role="group" :aria-label="$st('Installation source')">
         <button
           v-for="source in sourceKinds"
           :key="source.value"
           type="button"
           :disabled="busy"
           :aria-pressed="kind === source.value"
-          class="flex min-w-0 flex-col gap-1 rounded-xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+          class="flex min-w-0 flex-col gap-1 rounded-md border p-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           :class="
             kind === source.value
               ? 'border-primary/40 bg-primary/5 ring-1 ring-inset ring-primary/10'
@@ -306,7 +307,7 @@ defineExpose({
           <span class="text-[11px] leading-relaxed text-muted-foreground">{{ source.description }}</span>
         </button>
       </div>
-      <form class="mt-5 space-y-4" @submit.prevent="inspect">
+      <form class="settings-stack mt-3" @submit.prevent="inspect">
         <template v-if="kind === 'github'">
           <label class="block space-y-1.5 text-xs font-medium"
             >{{ $st('GitHub repository or skill URL') }}
@@ -318,7 +319,7 @@ defineExpose({
               class="block w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </label>
-          <div class="grid gap-4 sm:grid-cols-2">
+          <div class="settings-control-grid">
             <label class="block space-y-1.5 text-xs font-medium"
               >{{ $st('Branch, tag, or commit (optional)') }}
               <input
@@ -410,7 +411,7 @@ defineExpose({
           </p>
         </div>
         <div class="flex flex-wrap items-end justify-between gap-4 border-t border-border/60 pt-4">
-          <div class="min-w-48 space-y-1.5 text-xs font-medium">
+          <div class="min-w-0 flex-[1_1_10rem] space-y-1.5 text-xs font-medium">
             <span>{{ $st('Install scope') }}</span>
             <OptionPicker
               :model-value="scope"
@@ -431,7 +432,7 @@ defineExpose({
     <p
       v-if="error"
       role="alert"
-      class="whitespace-pre-wrap break-words rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+      class="settings-columns-wide whitespace-pre-wrap break-words rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
     >
       {{ error }}
     </p>
@@ -532,7 +533,7 @@ defineExpose({
       <p class="mb-3 text-sm text-muted-foreground">
         {{ $st('{count} skills installed', { count: result.installed.length }) }}
       </p>
-      <div class="grid gap-2 sm:grid-cols-2">
+      <div class="settings-control-grid">
         <button
           v-for="skill in result.installed"
           :key="skill.id"

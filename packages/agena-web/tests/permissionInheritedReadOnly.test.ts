@@ -54,7 +54,7 @@ function nodes(root: any, expandSlots = true): any[] {
     ...(expandSlots && child && typeof child === 'object' && !Array.isArray(child)
       ? Object.entries(child)
           .filter(([key, value]) => key !== '_' && typeof value === 'function')
-          .flatMap(([, value]) => nodes((value as () => unknown)(), expandSlots))
+          .flatMap(([, value]) => nodes((value as (props: object) => unknown)({}), expandSlots))
       : []),
   ]
 }
@@ -80,7 +80,6 @@ describe('inherited permissions are visible and read-only', () => {
       panel.setReadOnlyMode('allow')
       panel.setCommandMode('dangerous', 'allow')
       for (const field of ['default', 'inbound', 'hostLoopback']) panel.setNetworkMode(field, 'deny')
-      panel.useNetworkPreset('deny')
       await panel.save()
       expect(panel.config.value).toEqual({})
       expect(writes).toHaveLength(0)
@@ -198,7 +197,7 @@ describe('inherited permissions are visible and read-only', () => {
     expect(panel.networkSource('deny')).toBe('inherit')
   })
 
-  test('JSON and presets cannot materialize inherited values without an explicit source choice', async () => {
+  test('JSON cannot materialize inherited values without an explicit source choice', async () => {
     const { panel } = await createPermissionEditor({ tools: { default: 'ask' } }, parent, { scope: 'workspace' })
     expect(panel.networkJsonReadOnly.value).toBe(true)
     expect(JSON.parse(panel.networkJsonDisplay.value)).toEqual(parent.network)
@@ -217,11 +216,23 @@ describe('inherited permissions are visible and read-only', () => {
     panel.networkJson.value = JSON.stringify({ version: 2, allow: [] })
     expect(panel.applyNetworkJson()).toBe(true)
     expect(panel.networkSource('deny')).toBe('inherit')
-    panel.useNetworkPreset('deny')
+    const offline = { version: 2, default: 'deny', inbound: 'deny', hostLoopback: 'deny', allow: [], deny: [] }
+    panel.networkJson.value = JSON.stringify(offline)
+    expect(panel.applyNetworkJson()).toBe(false)
     expect(panel.config.value.network).toEqual({ version: 2, allow: [] })
+    panel.syncRaw()
     for (const field of ['default', 'inbound', 'hostLoopback', 'deny']) panel.setNetworkSource(field, 'local')
-    panel.useNetworkPreset('deny')
-    expect(panel.config.value.network).toEqual({
+    panel.networkJson.value = JSON.stringify(offline)
+    expect(panel.applyNetworkJson()).toBe(true)
+    expect(panel.config.value.network).toEqual(offline)
+  })
+
+  test('a complete JSON policy consumes explicit local intents so omitted fields can inherit again', async () => {
+    const { panel } = await createPermissionEditor({}, null, { scope: 'workspace' })
+    for (const field of ['default', 'inbound', 'hostLoopback', 'allow', 'deny']) panel.setNetworkSource(field, 'local')
+    expect(panel.config.value).toEqual({})
+    expect(panel.localSourceIntents.value.size).toBe(5)
+    panel.networkJson.value = JSON.stringify({
       version: 2,
       default: 'deny',
       inbound: 'deny',
@@ -229,14 +240,7 @@ describe('inherited permissions are visible and read-only', () => {
       allow: [],
       deny: [],
     })
-  })
-
-  test('a preset consumes explicit local intents so omitted JSON fields inherit again', async () => {
-    const { panel } = await createPermissionEditor({}, null, { scope: 'workspace' })
-    for (const field of ['default', 'inbound', 'hostLoopback', 'allow', 'deny']) panel.setNetworkSource(field, 'local')
-    expect(panel.config.value).toEqual({})
-    expect(panel.localSourceIntents.value.size).toBe(5)
-    panel.useNetworkPreset('deny')
+    expect(panel.applyNetworkJson()).toBe(true)
     expect(panel.localSourceIntents.value.size).toBe(0)
     panel.networkJson.value = JSON.stringify({ version: 2, default: 'deny' })
     expect(panel.applyNetworkJson()).toBe(true)

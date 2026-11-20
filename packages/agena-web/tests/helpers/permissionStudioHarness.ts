@@ -130,6 +130,12 @@ export async function createPermissionEditor(
       }),
     },
     '@remixicon/vue': {},
+    'radix-vue': {
+      PopoverContent: { name: 'PopoverContent' },
+      PopoverPortal: { name: 'PopoverPortal' },
+      PopoverRoot: { name: 'PopoverRoot' },
+      PopoverTrigger: { name: 'PopoverTrigger' },
+    },
     '@/components/settings/settingsScopeCatalog': { findSettingsScope: () => ({ label: 'Permissions' }) },
     '@/lib/api': {
       apiJson: async (url: string, init?: RequestInit) => {

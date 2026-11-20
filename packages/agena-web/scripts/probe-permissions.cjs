@@ -330,6 +330,17 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   }
   const defaultTrigger = (key) => `[data-permission-default="${key}"] button[aria-haspopup="dialog"]`
   const sourceChoice = (key, source) => `[data-permission-default="${key}"] [data-setting-source-choice="${source}"]`
+  const networkSourcesMenu = '[data-permission-network-source-menu]'
+  const withNetworkSources = async (run) => {
+    await cdp.click('[data-permission-network-sources]')
+    await wait(() => visible(networkSourcesMenu), 'network rule sources open from the table header')
+    await frame()
+    const result = await run()
+    await cdp.key('Escape', 'Escape', 27)
+    await wait(async () => !(await visible(networkSourcesMenu)), 'network rule sources close with Escape')
+    return result
+  }
+  const setNetworkListSource = (key, source) => withNetworkSources(() => cdp.click(sourceChoice(key, source)))
   const makeLocal = async (key) => {
     const inherited = await cdp.evaluate(
       'document.querySelector(' +
@@ -356,7 +367,7 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
     cdp.evaluate(`(() => {
       const controls = [...document.querySelectorAll('.permission-studio [data-setting-source]')]
         .filter(control => !control.closest('[data-sandbox-settings]'));
-      return controls.length >= 9 && controls.every(control => {
+      return controls.length >= 8 && controls.every(control => {
         const inherit = control.querySelector('[data-setting-source-choice="inherit"]');
         const local = control.querySelector('[data-setting-source-choice="local"]');
         return inherit?.textContent.trim() === ${JSON.stringify(inheritLabel)} &&
@@ -383,6 +394,15 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
             .every(el=>el.getBoundingClientRect().right<=innerWidth+1);
       })()`,
     )
+  const bulkFits = (selector, stacked) =>
+    cdp.evaluate(`(() => {
+      const bar = document.querySelector(${JSON.stringify(selector)});
+      const selection = bar?.querySelector('.permission-bulk-selection')?.getBoundingClientRect();
+      const controls = bar?.querySelector('.permission-bulk-controls')?.getBoundingClientRect();
+      return !!selection && !!controls && bar.querySelectorAll('[role="status"]').length === 1 &&
+        bar.scrollWidth <= bar.clientWidth + 1 &&
+        (${stacked} ? controls.top >= selection.bottom : Math.abs(selection.top - controls.top) <= 1);
+    })()`)
   const densityMeasurements = []
   const pageTop = async () => {
     await cdp.evaluate(
@@ -406,11 +426,6 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
         const rect=element.getBoundingClientRect(), style=getComputedStyle(element);
         return {key:element.dataset.permissionDefault||element.dataset.permissionRule||'',text:element.innerText.trim().replace(/\\s+/g,' '),x:Math.round(rect.x),y:Math.round(rect.y),width:Math.round(rect.width),height:Math.round(rect.height),bottom:Math.round(rect.bottom),fontSize:style.fontSize,visible:rect.width>0&&rect.height>0&&rect.top>=0&&rect.bottom<=innerHeight-48};
       };
-      const networkSourceGaps=[...document.querySelectorAll('.permission-network-list-source')].flatMap(row=>{
-        const label=row.querySelector('.permission-network-list-label'), control=row.querySelector('[data-setting-source],[data-setting-reset]');
-        if(!label||!control)return [];
-        return [Math.round(Math.max(0,control.getBoundingClientRect().left-label.getBoundingClientRect().right))];
-      });
       const domains=[...document.querySelectorAll('[data-permission-section]')].map(element=>({id:element.dataset.permissionSection,...describe(element),defaults:[...element.querySelectorAll('.permission-domain-defaults [data-permission-default]')].map(describe)}));
       const ruleGroups=[...document.querySelectorAll('[data-permission-rule-table]')].map(group=>({
         kind:group.dataset.permissionRuleTable,
@@ -420,7 +435,7 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
         rows:[...group.querySelectorAll('[data-permission-rule]')].map(row=>({kind:row.dataset.permissionRule,...describe(row)}))
       }));
       const clippedModes=[...document.querySelectorAll('[data-permission-default] button[aria-haspopup="dialog"] .truncate,[data-permission-mode] .truncate')].filter(element=>element.getBoundingClientRect().height>0&&element.scrollWidth>element.clientWidth+1).map(element=>element.innerText);
-      return {ruleLayout:describe(document.querySelector('[data-permission-rule-layout]')),viewport:{width:innerWidth,height:innerHeight},dark:document.documentElement.classList.contains('dark'),toolbar:document.querySelector('[data-permission-toolbar]')?describe(document.querySelector('[data-permission-toolbar]')):null,domains,ruleGroups,clippedModes,networkSourceGaps,horizontalOverflow:document.documentElement.scrollWidth>innerWidth+1};
+      return {ruleLayout:describe(document.querySelector('[data-permission-rule-layout]')),viewport:{width:innerWidth,height:innerHeight},dark:document.documentElement.classList.contains('dark'),toolbar:document.querySelector('[data-permission-toolbar]')?describe(document.querySelector('[data-permission-toolbar]')):null,domains,ruleGroups,clippedModes,horizontalOverflow:document.documentElement.scrollWidth>innerWidth+1};
     })()`)
     densityMeasurements.push({ name, ...measurement })
     await fs.writeFile(
@@ -431,10 +446,6 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
     check(measurement.dark === (theme === 'dark'), name + ': requested theme is rendered')
     check(!measurement.horizontalOverflow && (await noOverflow()), name + ': no horizontal overflow')
     check(measurement.clippedModes.length === 0, name + ': permission values are readable without ellipsis')
-    check(
-      measurement.networkSourceGaps.every((gap) => gap <= 24),
-      name + ': network list source controls stay adjacent to their labels',
-    )
     const [sandbox, files, network, tools] = measurement.domains
     check(
       sandbox?.id === 'sandbox' &&
@@ -687,6 +698,9 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
     ),
     'select-all and bulk controls are scoped to each independent rule group',
   )
+  const toolBulk = ruleGroup('tool-name') + ' .permission-bulk-actions'
+  check(await bulkFits(toolBulk, false), 'tool-name bulk actions fit in a single row with one selection count')
+  await screenshot('web-permissions-tool-bulk-desktop')
   await cdp.click(`${ruleGroup('filesystem')} button[aria-label="Select none"]`)
   check(
     await cdp.evaluate(
@@ -773,6 +787,15 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
       'network.hostLoopback': 'Deny',
     })) && fixture.writes.length === 0,
     'an explicit offline JSON policy can be drafted without selecting a local source',
+  )
+  check(
+    await cdp.evaluate(`(() => {
+      const domain = document.querySelector('[data-permission-section="network"]');
+      return !domain.querySelector('.rule-table-empty, [data-permission-default="network.allow"], [data-permission-default="network.deny"]') &&
+        !/Block external network|Allow outbound by default/.test(domain.innerText) &&
+        !!domain.querySelector('[data-permission-create-toggle="network"]');
+    })()`),
+    'an empty network table keeps its add action without the summary, empty message or presets',
   )
   await cdp.clickText('[data-permission-savebar] button', 'Discard changes')
   await cdp.clickText('.permission-summary', 'Network policy JSON')
@@ -942,7 +965,7 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   )
   const networkKeys = ['network.default', 'network.inbound', 'network.hostLoopback', 'network.allow', 'network.deny']
   check(
-    (await defaultSourcesMatch('inherit', networkKeys)) &&
+    (await withNetworkSources(() => defaultSourcesMatch('inherit', networkKeys))) &&
       (await cdp.evaluate(`['network.default','network.inbound','network.hostLoopback'].every(key=>
         document.querySelector('[data-permission-default="'+key+'"] button[aria-haspopup="dialog"]')?.disabled
       )`)),
@@ -976,10 +999,10 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   await select(defaultTrigger('network.default'), 'Allow')
   check(
     (await defaultSourcesMatch('local', ['network.default'])) &&
-      (await defaultSourcesMatch(
+      (await withNetworkSources(() => defaultSourcesMatch(
         'inherit',
         networkKeys.filter((key) => key !== 'network.default'),
-      )),
+      ))),
     'editing outbound creates only an outbound override',
   )
   await save()
@@ -1014,17 +1037,17 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
     'restoring the last local field removes the empty network object',
   )
 
-  await cdp.click(sourceChoice('network.allow', 'local'))
+  await setNetworkListSource('network.allow', 'local')
   await save()
   check(
     JSON.stringify(fixture.values.session.network.allow) === JSON.stringify(networkParent.allow) &&
       Object.keys(fixture.values.session.network).length === 2 &&
-      (await defaultSourcesMatch('inherit', [
+      (await withNetworkSources(() => defaultSourcesMatch('inherit', [
         'network.default',
         'network.inbound',
         'network.hostLoopback',
         'network.deny',
-      ])),
+      ]))),
     'pinning the allow list stores that list alone',
   )
   check(
@@ -1034,26 +1057,28 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
     })()`),
     'the inherited deny list cannot be edited or removed before selecting this scope',
   )
-  await makeLocal('network.deny')
+  await setNetworkListSource('network.deny', 'local')
   await cdp.click(`${rule('network', '192.0.2.13')} [data-permission-row-action="remove"]`)
   await save()
   check(
     Array.isArray(fixture.values.session.network.deny) &&
       fixture.values.session.network.deny.length === 0 &&
       JSON.stringify(fixture.values.session.network.allow) === JSON.stringify(networkParent.allow) &&
-      (await defaultSourcesMatch('local', ['network.allow', 'network.deny'])),
+      (await withNetworkSources(() => defaultSourcesMatch('local', ['network.allow', 'network.deny']))),
     'deleting the last rule after explicitly selecting this scope keeps an empty local deny list and preserves allow rules',
   )
-  await cdp.click(sourceChoice('network.allow', 'inherit'))
+  await setNetworkListSource('network.allow', 'inherit')
   await save()
   check(
     !Object.hasOwn(fixture.values.session.network, 'allow') &&
       fixture.values.session.network.deny.length === 0 &&
-      (await defaultSourcesMatch('inherit', ['network.allow'])) &&
-      (await defaultSourcesMatch('local', ['network.deny'])),
+      (await withNetworkSources(async () =>
+        (await defaultSourcesMatch('inherit', ['network.allow'])) &&
+        (await defaultSourcesMatch('local', ['network.deny'])),
+      )),
     'allow-list inheritance can be restored while deny remains explicitly empty',
   )
-  await cdp.click(sourceChoice('network.deny', 'inherit'))
+  await setNetworkListSource('network.deny', 'inherit')
   await save()
   check(
     JSON.stringify(fixture.values.session) === '{}' &&
@@ -1099,8 +1124,7 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   )
   await makeLocal('path.workspace')
   await select('[data-permission-default="path.workspace"] button[aria-haspopup="dialog"]', 'Read only')
-  for (const key of networkKeys) await makeLocal(key)
-  await cdp.clickText('.permission-presets button', 'Block external network')
+  await makeLocal('network.default')
   await makeLocal('tools.default')
   await select(defaultTrigger('tools.default'), 'Auto')
   await save()
@@ -1450,10 +1474,11 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
     await cdp.evaluate(`document.querySelectorAll('${savedRow} input:checked').length === 3 && !!document.querySelector('.saved-rules-bulk')`),
     'select all from the results header exposes bulk actions for the visible rules',
   )
-  await cdp.clickText(approvals + ' button', '全不选', true)
-
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 740, deviceScaleFactor: 1, mobile: true })
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
+  await frame()
+  check(await bulkFits(approvals + ' .saved-rules-bulk', true), 'saved-rule bulk actions stack at 320 px without overflow')
+  await cdp.click(approvals + ' button[aria-label="全不选"]')
   await scrollTo(approvals)
   await checkSecondaryLayout(false)
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })

@@ -250,7 +250,7 @@ describe('flat network permission editor', () => {
     },
   )
 
-  test('presets replace the complete network draft without saving automatically', async () => {
+  test('a complete network JSON draft replaces network settings only on save', async () => {
     const { panel, writes } = await editor({
       network: {
         default: 'allow',
@@ -260,12 +260,14 @@ describe('flat network permission editor', () => {
         hostLoopback: 'allow',
       },
     })
-    panel.useNetworkPreset('deny')
+    panel.networkJson.value = JSON.stringify(offline)
+    expect(panel.applyNetworkJson()).toBe(true)
     expect(panel.config.value.network).toEqual(offline)
     expect(writes).toHaveLength(0)
     await panel.save()
     expect(writes[0]?.value).toEqual({ network: offline })
-    panel.useNetworkPreset('allow')
+    panel.networkJson.value = JSON.stringify(builtIn)
+    expect(panel.applyNetworkJson()).toBe(true)
     expect(panel.config.value.network).toEqual(builtIn)
   })
 
@@ -331,12 +333,10 @@ describe('flat network permission editor', () => {
     expect(panel.config.value.network.allow).toEqual([{ to: '192.0.2.10', protocol: 'icmp' }])
   })
 
-  test('default edits preserve existing rules while presets explicitly replace them', async () => {
+  test('editing the outbound default preserves existing rules', async () => {
     const { panel } = await editor({ network: { version: 2, default: 'allow', deny: [{ to: '192.0.2.10' }] } })
     panel.setNetworkMode('default', 'deny')
     expect(panel.config.value.network).toEqual({ version: 2, default: 'deny', deny: [{ to: '192.0.2.10' }] })
-    panel.useNetworkPreset('deny')
-    expect(panel.config.value.network).toEqual(offline)
   })
 
   test('session customization uses a sparse v2 policy and the session save API', async () => {

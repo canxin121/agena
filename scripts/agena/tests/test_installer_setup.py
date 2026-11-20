@@ -396,6 +396,20 @@ class InstallerSetupTests(unittest.TestCase):
         self.assertEqual(self.calls("sudo"), [])
         self.assertEqual(self.calls("apparmor_parser"), [])
 
+    def test_apparmor_check_defers_to_sandbox_when_profile_listing_cannot_be_read(self):
+        self.write_system("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "1\n")
+        self.run_setup(self.host())
+        active = self.system / "sys/kernel/security/apparmor/profiles"
+        active.write_text("unrelated-profile (enforce)\n")
+        result = self.run_setup(self.host(mode="check"), expected=1)
+        self.assertIn("exists but is not loaded", result.stderr)
+
+        active.unlink()
+        active.mkdir()
+        result = self.run_setup(self.host(mode="check"))
+        self.assertIn("will verify actual sandbox execution", result.stderr)
+        self.assertEqual(len(self.calls("apparmor_parser")), 1)
+
     def test_preserves_unmanaged_apparmor_file(self):
         self.write_system("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", "1\n")
         path = self.profile_path()

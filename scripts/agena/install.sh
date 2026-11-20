@@ -788,7 +788,7 @@ agena_setup_managed_file() {
 }
 
 agena_setup_apparmor() {
-  local mode="$1" install_dir="$2" restriction executable digest name profile body active
+  local mode="$1" install_dir="$2" restriction executable digest name profile body active status=0
   restriction="$(agena_setup_system_path /proc/sys/kernel/apparmor_restrict_unprivileged_userns)"
   [[ -r "$restriction" && "$(cat "$restriction")" == 1 ]] || return 0
   if [[ ! -r "$(agena_setup_system_path /etc/apparmor.d/abi/4.0)" ||
@@ -820,7 +820,10 @@ agena_setup_apparmor() {
     }
   else
     active="$(agena_setup_system_path /sys/kernel/security/apparmor/profiles)"
-    if [[ -r "$active" ]] && ! grep -Fq "$name (" "$active"; then
+    # securityfs may advertise read access but require privileges to open the
+    # listing. If it cannot be read, let the native sandbox check verify it.
+    grep -Fq "$name (" "$active" 2>/dev/null || status=$?
+    if (( status == 1 )); then
       agena_setup_error "The Agena AppArmor profile exists but is not loaded: $profile"; return 1
     fi
   fi

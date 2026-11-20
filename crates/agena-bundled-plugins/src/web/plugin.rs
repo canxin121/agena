@@ -3,9 +3,7 @@ mod downloads;
 mod fetch_transport;
 mod managed_preview;
 mod network_policy;
-mod playwright;
 mod rendered_fetch;
-use playwright::BrowserInteractionBackend;
 mod search_aggregate;
 mod search_provider;
 mod search_selection;
@@ -387,8 +385,6 @@ impl Default for WebStoreRetentionConfig {
 /// Browser settings of the web plugin.
 pub struct WebBrowserConfig {
     pub enabled: bool,
-    /// Optional mature click/fill/wait adapter; browser ownership stays native.
-    pub interaction_backend: BrowserInteractionBackend,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable_path: Option<String>,
     pub wait: WebBrowserWaitConfig,
@@ -405,7 +401,6 @@ impl Default for WebBrowserConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            interaction_backend: BrowserInteractionBackend::default(),
             executable_path: None,
             wait: WebBrowserWaitConfig::default(),
             idle_timeout_secs: default_web_browser_idle_timeout_secs(),
@@ -683,11 +678,6 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/browser/enabled",
             "Enabled",
             "Allows rendered fetches and crawls to use a local browser.",
-        ),
-        (
-            "/browser/interaction_backend",
-            "Interaction Backend",
-            "Native CDP or optional Playwright click/fill/wait; Playwright requires AGENA_BROWSER_PYTHON with the playwright package installed.",
         ),
         (
             "/browser/executable_path",
@@ -1321,10 +1311,6 @@ struct BrowserClickInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 4096)]
     selector: Option<String>,
-    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    frame_selector: Option<String>,
     /// Snapshot-local index returned by `browser_snapshot.elements[].ref`.
     /// It is valid only while the page DOM has not materially changed.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
@@ -1351,10 +1337,6 @@ struct BrowserTypeInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 4096)]
     selector: Option<String>,
-    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    frame_selector: Option<String>,
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 0, max = 199))]
     element_ref: Option<u16>,
@@ -1383,10 +1365,6 @@ struct BrowserWaitInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 4096)]
     selector: Option<String>,
-    /// Optional CSS iframe selector (Playwright backend only; use CSS selectors, not snapshot refs).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    frame_selector: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 4096)]
     text: Option<String>,
@@ -2182,54 +2160,6 @@ impl WebPlugin {
             .await
             .insert(target_id.to_string(), client.clone());
         Ok(client)
-    }
-
-    fn validate_browser_frame(
-        &self,
-        frame: Option<&str>,
-        element_ref: Option<u16>,
-    ) -> SdkResult<()> {
-        if let Some(frame) = frame {
-            if frame.trim().is_empty() || element_ref.is_some() {
-                return Err(PluginError::invalid_params(
-                    "frame_selector requires a nonempty CSS iframe selector and cannot be combined with snapshot refs",
-                ));
-            }
-            if self.config()?.browser.interaction_backend != BrowserInteractionBackend::Playwright {
-                return Err(PluginError::invalid_params(
-                    "frame_selector requires browser.interaction_backend=playwright",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    async fn playwright_action(
-        &self,
-        request: playwright::Request<'_>,
-    ) -> SdkResult<serde_json::Value> {
-        // Downloads change browser-level CDP behavior; prevent bridge attach
-        // while a native download holds that lease.
-        let _download_guard = self.browser_download_lock.lock().await;
-        let _native = self.browser_client(Some(request.target_id)).await?;
-        _native.refresh_callback_context()?;
-        let endpoint = self.browser_endpoint().await?;
-        let context_id = self
-            .browser_state
-            .meta
-            .lock()
-            .await
-            .get(request.target_id)
-            .and_then(|meta| meta.browser_context_id.clone())
-            .ok_or_else(|| {
-                PluginError::invalid_params("owned browser context is unavailable; reopen the page")
-            })?;
-        let scoped = playwright::Request {
-            endpoint: &endpoint,
-            context_id: &context_id,
-            ..request
-        };
-        playwright::run(&scoped).await
     }
 
     async fn forget_browser_client(&self, target_id: &str) {
@@ -3290,7 +3220,7 @@ impl WebPlugin {
                 "The managed browser is not running. Use browser_open to start it.",
                 Some(serde_json::json!({
                     "browser_running": false,
-                    "interaction_backend": self.config()?.browser.interaction_backend,
+                    "interaction_backend": "native",
                     "sessions": [],
                     "previews": previews,
                 })),
@@ -3329,7 +3259,7 @@ impl WebPlugin {
             format!("{} managed browser page target(s).", sessions.len()),
             Some(serde_json::json!({
                 "browser_running": true,
-                "interaction_backend": self.config()?.browser.interaction_backend,
+                "interaction_backend": "native",
                 "sessions": sessions,
                 "previews": previews,
             })),
@@ -3642,7 +3572,6 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserClickInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.validate_browser_frame(input.frame_selector.as_deref(), input.element_ref)?;
         let target = browser_element_expression(
             input.selector.as_deref(),
             input.element_ref,
@@ -3652,31 +3581,13 @@ impl WebPlugin {
             "(() => {{ const el = {target}; if (!el) return {{ok:false,error:'browser element not found'}}; if (el.disabled) return {{ok:false,error:'element is disabled'}}; el.scrollIntoView({{block:'center'}}); el.focus(); el.click(); return {{ok:true}}; }})()"
         );
         self.with_browser_action(context, input.session_id.as_str(), async {
-            let result = if self.config()?.browser.interaction_backend
-                == BrowserInteractionBackend::Playwright
-            {
-                self.playwright_action(playwright::Request {
-                    endpoint: "",
-                    context_id: "",
-                    target_id: &input.session_id,
-                    action: "click",
-                    selector: input.selector.as_deref(),
-                    frame_selector: input.frame_selector.as_deref(),
-                    element_expression: input.element_ref.map(|_| target.as_str()),
-                    text: None,
-                    press_enter: false,
-                    timeout_ms: input.timeout_ms,
-                })
-                .await?
-            } else {
-                let client = self.browser_client(Some(input.session_id.as_str())).await?;
-                agena_plugin_host::sdk::permission_wait::timeout(
-                    Duration::from_millis(input.timeout_ms),
-                    client.evaluate(expression.as_str()),
-                )
-                .await
-                .map_err(|_| PluginError::internal("browser click timed out"))??
-            };
+            let client = self.browser_client(Some(input.session_id.as_str())).await?;
+            let result = agena_plugin_host::sdk::permission_wait::timeout(
+                Duration::from_millis(input.timeout_ms),
+                client.evaluate(expression.as_str()),
+            )
+            .await
+            .map_err(|_| PluginError::internal("browser click timed out"))??;
             ensure_browser_action(&result)?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
@@ -3742,7 +3653,6 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserTypeInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.validate_browser_frame(input.frame_selector.as_deref(), input.element_ref)?;
         let expression = browser_type_expression(
             input.selector.as_deref(),
             input.element_ref,
@@ -3751,36 +3661,13 @@ impl WebPlugin {
             input.press_enter,
         )?;
         self.with_browser_action(context, input.session_id.as_str(), async {
-            let result = if self.config()?.browser.interaction_backend
-                == BrowserInteractionBackend::Playwright
-            {
-                let target = browser_element_expression(
-                    input.selector.as_deref(),
-                    input.element_ref,
-                    input.snapshot_id.as_deref(),
-                )?;
-                self.playwright_action(playwright::Request {
-                    endpoint: "",
-                    context_id: "",
-                    target_id: &input.session_id,
-                    action: "fill",
-                    selector: input.selector.as_deref(),
-                    frame_selector: input.frame_selector.as_deref(),
-                    element_expression: input.element_ref.map(|_| target.as_str()),
-                    text: Some(&input.text),
-                    press_enter: input.press_enter,
-                    timeout_ms: input.timeout_ms,
-                })
-                .await?
-            } else {
-                let client = self.browser_client(Some(input.session_id.as_str())).await?;
-                agena_plugin_host::sdk::permission_wait::timeout(
-                    Duration::from_millis(input.timeout_ms),
-                    client.evaluate(expression.as_str()),
-                )
-                .await
-                .map_err(|_| PluginError::internal("browser type timed out"))??
-            };
+            let client = self.browser_client(Some(input.session_id.as_str())).await?;
+            let result = agena_plugin_host::sdk::permission_wait::timeout(
+                Duration::from_millis(input.timeout_ms),
+                client.evaluate(expression.as_str()),
+            )
+            .await
+            .map_err(|_| PluginError::internal("browser type timed out"))??;
             ensure_browser_action(&result)?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
@@ -3837,36 +3724,19 @@ impl WebPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserWaitInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.validate_browser_frame(input.frame_selector.as_deref(), None)?;
         if input.selector.is_some() && input.text.is_some() {
             return Err(PluginError::invalid_params(
                 "browser_wait accepts selector or text, not both",
             ));
         }
         self.with_browser_action(context, input.session_id.as_str(), async {
-            if self.config()?.browser.interaction_backend == BrowserInteractionBackend::Playwright {
-                self.playwright_action(playwright::Request {
-                    endpoint: "",
-                    context_id: "",
-                    target_id: &input.session_id,
-                    action: "wait",
-                    selector: input.selector.as_deref(),
-                    frame_selector: input.frame_selector.as_deref(),
-                    element_expression: None,
-                    text: input.text.as_deref(),
-                    press_enter: false,
-                    timeout_ms: input.timeout_ms,
-                })
-                .await?;
-            } else {
-                self.wait_for_browser_condition(
-                    input.session_id.as_str(),
-                    input.selector.as_deref(),
-                    input.text.as_deref(),
-                    input.timeout_ms,
-                )
-                .await?;
-            }
+            self.wait_for_browser_condition(
+                input.session_id.as_str(),
+                input.selector.as_deref(),
+                input.text.as_deref(),
+                input.timeout_ms,
+            )
+            .await?;
             let snapshot = self
                 .ensure_browser_final_url(input.session_id.as_str())
                 .await?;

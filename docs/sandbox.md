@@ -632,7 +632,7 @@ MCP 配置位于 `plugins.list["agena.mcp"]`。该插件的 `settings.servers.<n
 
 cdylib 插件与 Agena 宿主在同一进程中运行，必须作为受信任代码配置；对子进程的 MXC 启动包装不能隔离已载入的动态库。
 
-Playwright Python/Node 辅助进程已有独立的私有 HOME、暂存区和受限 CDP 通道；Chrome 主进程尚未获得同样的资源边界，因此启用沙盒时，浏览器功能通过入口检查拒绝执行。已运行的外部浏览器不会被视为具备当前会话的 MXC 隔离。
+浏览器通过原生 CDP 控制 Chrome。Chrome 主进程尚未接入 MXC 的进程和网络隔离，因此启用沙盒的会话会在浏览器入口收到 `HostUnavailable`。
 
 后续浏览器服务需要按会话权限创建独立进程/profile，统一约束文件、控制通道与实际网络连接。需要加载不受信任动态库的能力时，同样应迁移到受限工作进程。
 

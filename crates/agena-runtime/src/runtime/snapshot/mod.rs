@@ -39,6 +39,29 @@ pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
 
 type SnapshotState = agena_runtime::RuntimeSnapshotState<Arc<ResolvedConfig>, RuntimeServices>;
 
+fn resolve_bundled_plugins(
+    configured: agena_plugin_host::PluginsConfig,
+) -> Result<agena_plugin_host::PluginsConfig, AppError> {
+    let mut plugins = agena_runtime::merge_bundled_plugin_config(
+        configured,
+        agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
+    )
+    .map_err(AppError::Config)?;
+    // Strip retired browser settings after applying profiles and before manifest validation.
+    if let Some(web) = plugins
+        .list
+        .get_mut(agena_bundled_plugins::tool::web_plugin_id())
+        && matches!(web.package, agena_plugin_host::PluginPackage::Static {})
+        && let Some(browser) = web
+            .settings
+            .get_mut("browser")
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        browser.remove("interaction_backend");
+    }
+    Ok(plugins)
+}
+
 /// Connections handed to snapshot composition. The chat database backs
 /// session and model-catalog storage; the scheduler database backs the cron
 /// scheduler (`None` degrades the scheduler to its in-memory store).
@@ -151,16 +174,9 @@ impl RuntimeSnapshot {
         // config crate cannot depend on concrete plugin factories. Inject the
         // bundled entries before any plugin-dependent service is built so
         // user entries still override the bundled defaults by plugin id.
-        resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
-            resolution.config.plugins.clone(),
-            agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
-        )
-        .map_err(AppError::Config)?;
-        global_resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
-            global_resolution.config.plugins.clone(),
-            agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
-        )
-        .map_err(AppError::Config)?;
+        resolution.config.plugins = resolve_bundled_plugins(resolution.config.plugins)?;
+        global_resolution.config.plugins =
+            resolve_bundled_plugins(global_resolution.config.plugins)?;
         // Only process initialization uses this instance location. Per-session
         // executors clear it when binding a global session.
         let global_internal_root = global_resolution
@@ -804,6 +820,32 @@ mod global_plugin_tests {
     use super::*;
     use agena_plugin_host::sdk::host_api::HostClient;
 
+    #[test]
+    fn legacy_browser_profile_keeps_supported_settings() {
+        let configured = serde_json::from_value(serde_json::json!({
+            "active_profiles": ["legacy-browser"],
+            "profiles": {
+                "legacy-browser": {
+                    "plugins": {
+                        "agena.web": {
+                            "action": "patch",
+                            "settings_patch": {
+                                "browser": {"interaction_backend": "playwright", "enabled": true}
+                            }
+                        }
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        let plugins = resolve_bundled_plugins(configured).unwrap();
+        assert_eq!(
+            plugins.list["agena.web"].settings,
+            serde_json::json!({"browser": {"enabled": true}}),
+        );
+    }
+
     #[tokio::test]
     async fn global_and_project_plugin_hosts_and_mcp_config_are_isolated() {
         let root =
@@ -836,11 +878,8 @@ mod global_plugin_tests {
         let mut global = loader.load_global(&request).unwrap();
         let mut merged = loader.load(&request).unwrap();
         for resolution in [&mut global, &mut merged] {
-            resolution.config.plugins = agena_runtime::merge_bundled_plugin_config(
-                resolution.config.plugins.clone(),
-                agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
-            )
-            .unwrap();
+            resolution.config.plugins =
+                resolve_bundled_plugins(resolution.config.plugins.clone()).unwrap();
         }
         let global_mcp =
             agena_runtime_config::mcp_config_from_plugins(&global.config.plugins).unwrap();
